@@ -15,9 +15,6 @@ import pandas as pd
 
 from .selection import TableName, ApiVer, FileType
 
-load_dotenv()
-
-
 @click.command()
 @click.option(
     "--ext",
@@ -215,6 +212,7 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         If there is a request error while downloading the file.
 
     """
+    load_dotenv()
     username = os.getenv("ESDC_USER")
     password = os.getenv("ESDC_PASS")
 
@@ -289,7 +287,8 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
                 )
             cursor.execute(insert_stmt, row)
         logging.debug("Creating uuid column for table %s", table_name)
-        cursor.executescript(_create_table_uuid(table_name))
+        uuid_query = _load_sql_script("create_column_uuid.sql")
+        cursor.executescript(uuid_query.replace("{table_name}", table_name))
 
         if table_name == "project_resources":
             logging.debug("creating project_stage column in project_resources")
@@ -329,25 +328,6 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
     for row in reader:
         data.append(row)
     return data, header
-
-
-def _create_table_uuid(table_name: str):
-    return f"""
-    -- add new column to store project_uuid
-    ALTER TABLE {table_name}
-    ADD COLUMN uuid TEXT;
-
-    -- generate UUID v4 in {table_name} table. UUID format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-    UPDATE {table_name}
-    SET uuid = (
-        lower(hex(randomblob(4))) || '-' ||
-        lower(hex(randomblob(2))) || '-' ||
-        '4' || substr(hex(randomblob(2)), 2) || '-' ||
-        substr('89ab', 1 + (abs(random()) % 4), 1) || substr(hex(randomblob(2)), 2) || '-' ||
-        lower(hex(randomblob(6)))
-    );
-    """
-
 
 def _load_sql_script(script_file: str) -> str:
     file = Path(__file__).parent / "sql" / script_file
