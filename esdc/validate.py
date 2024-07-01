@@ -1,13 +1,10 @@
 from typing import Tuple, List
-from enum import Enum
 import pandas as pd
 
-from esdc import re0
+from .selection import Severity
+from . import re0
 
-class Severity(Enum):
-    STRICT = 1
-    WARNING = 2
-    INFO = 3
+
 
 class RuleEngine:
     def __init__(self, project_resources: pd.DataFrame):

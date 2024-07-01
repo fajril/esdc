@@ -8,12 +8,13 @@ import logging
 from typing import Union, List, Tuple, Iterable
 
 import requests
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from tqdm import tqdm
 import click
 import pandas as pd
 
 from .selection import TableName, ApiVer, FileType
+from .validate import RuleEngine
 
 @click.command()
 @click.option(
@@ -26,12 +27,13 @@ from .selection import TableName, ApiVer, FileType
 @click.option("--update", "-u", is_flag=True, help="Update the database.")
 @click.option("--reload", "-r", is_flag=True, help="Reload db from bin files.")
 @click.option("--verbose", "-v", count=True, help="Set log message level.")
-@click.option("--output", "-o", is_flag=True, help="Write query result to file.")
+@click.option("--output", "-o", is_flag=True, help="Level of detail in the output data.")
+@click.option("--save", "-s", is_flag=True, help="Write query result to file.")
 @click.option("--show", default=None)
 @click.option("--like", default="", type=str)
-@click.option("--year", default=2023)
-def main(ext, update, reload, verbose, show, like, year, output):
-    load_dotenv()
+@click.option("--year")
+def main(ext, update, reload, verbose, output, save, show, like, year):
+    load_dotenv(find_dotenv())
     logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
     logger = logging.getLogger(__name__)
     if verbose >= 2:
@@ -41,16 +43,24 @@ def main(ext, update, reload, verbose, show, like, year, output):
     else:
         logger.setLevel(logging.WARNING)
     logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
+
+    logging.info("year: %s", year)
     if update is not None:
         load_esdc_data(update=update, reload=reload, ext=FileType(ext), to_file=True)
     if show is not None:
         logging.info("show %s", show)
-        run_query(table=TableName(show), like=like, year=year, output=output)
+        run_query(table=TableName(show), like=like, year=year, output=output, save=save)
 
 
-def run_query(table: TableName, like: str, year: str, output: bool):
+def run_query(table: TableName, like: str, year: str, output: int, save: bool):
 
     queries = _load_sql_script("view_resources.sql")
+    output = min(output, 4)
+
+    if table == TableName.PROJECT_RESOURCES:
+        if output > 1:
+            query = queries.split(";")[output - 1].strip()
+    
 
     if table == TableName.PROJECT_RESOURCES:
         query = queries.split(";")[0].strip()
@@ -62,16 +72,23 @@ def run_query(table: TableName, like: str, year: str, output: bool):
         query = queries.split(";")[3].strip()
 
     # Replace placeholders with actual values
-    query = query.replace("{like}", like).replace("{year}", str(year))
+    if year is None:
+        query = query.replace("AND year = {year}", "")
+    else:
+        query = query.replace("{like}", like).replace("{year}", str(year))
 
     # Execute the query
     with sqlite3.connect("esdc.db") as conn:
         df = pd.read_sql_query(query, conn)
         print(df)
 
-    if output:
+    if save:
         df.to_csv(f"view_{table.value}.csv")
+    return df
 
+def run_validation(project_resources: pd.DataFrame):
+    engine = RuleEngine(project_resources=project_resources)
+    return engine.run()
 
 def load_esdc_data(
     update: bool = False,
@@ -166,6 +183,8 @@ def esdc_url_builder(
     The URL is constructed by concatenating the base ESDC URL, API version,
     table name, verbosity level, and file type.
     If a report year is provided, it is added as a query parameter.
+    For example, the url for project_resources table is:
+    https://esdc.skkmigas.go.id/api/v2/project-resources?verbose=3&output=csv
     """
 
     url = os.getenv("ESDC_URL")
@@ -212,7 +231,7 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         If there is a request error while downloading the file.
 
     """
-    load_dotenv()
+    load_dotenv(find_dotenv())
     username = os.getenv("ESDC_USER")
     password = os.getenv("ESDC_PASS")
 
