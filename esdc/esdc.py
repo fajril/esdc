@@ -186,8 +186,11 @@ def esdc_url_builder(
     For example, the url for project_resources table is:
     https://esdc.skkmigas.go.id/api/v2/project-resources?verbose=3&output=csv
     """
-
+    load_dotenv(find_dotenv())
     url = os.getenv("ESDC_URL")
+    if url is None:
+        logging.error("Could not find Environment Variables.")
+        raise FileNotFoundError()
 
     url += api_ver.value
     tables = {
