@@ -11,32 +11,76 @@ import requests
 from dotenv import load_dotenv
 from tqdm import tqdm
 import click
+import pandas as pd
 
 from .selection import TableName, ApiVer, FileType
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s"
-)
 
-click.command()
-click.option(
+@click.command()
+@click.option(
     "--ext",
     "-e",
     default="csv",
     type=str,
     help="Format of the downloaded file. Options: csv",
 )
-click.option("--update", "-u", default=True, type=bool, help="Update the database.")
+@click.option("--update", "-u", is_flag=True, help="Update the database.")
+@click.option("--reload", "-r", is_flag=True, help="Reload db from bin files.")
+@click.option("--verbose", "-v", count=True, help="Set log message level.")
+@click.option("--output", "-o", is_flag=True, help="Write query result to file.")
+@click.option("--show", default=None)
+@click.option("--like", default="", type=str)
+@click.option("--year", default=2023)
+def main(ext, update, reload, verbose, show, like, year, output):
+    load_dotenv()
+    logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
+    logger = logging.getLogger(__name__)
+    if verbose >= 2:
+        logger.setLevel(logging.DEBUG)
+    elif verbose == 1:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.WARNING)
+    logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
+    if update is not None:
+        load_esdc_data(update=update, reload=reload, ext=FileType(ext), to_file=True)
+    if show is not None:
+        logging.info("show %s", show)
+        run_query(table=TableName(show), like=like, year=year, output=output)
 
 
-def _cli(ext: str = "csv", update: bool = True) -> None:
-    load_esdc_data(update=update, ext=FileType(ext), to_file=True)
+def run_query(table: TableName, like: str, year: str, output: bool):
+
+    queries = _load_sql_script("view_resources.sql")
+
+    if table == TableName.PROJECT_RESOURCES:
+        query = queries.split(";")[0].strip()
+    elif table == TableName.FIELD_RESOURCES:
+        query = queries.split(";")[1].strip()
+    elif table == TableName.WA_RESOURCES:
+        query = queries.split(";")[2].strip()
+    else:
+        query = queries.split(";")[3].strip()
+
+    # Replace placeholders with actual values
+    query = query.replace("{like}", like).replace("{year}", str(year))
+
+    # Execute the query
+    with sqlite3.connect("esdc.db") as conn:
+        df = pd.read_sql_query(query, conn)
+        print(df)
+
+    if output:
+        df.to_csv(f"view_{table.value}.csv")
 
 
 def load_esdc_data(
-    update: bool = False, ext: FileType = FileType.CSV, to_file=True
+    update: bool = False,
+    reload: bool = False,
+    ext: FileType = FileType.CSV,
+    to_file=True,
 ) -> None:
     """
     Downloads and loads data into the ESDC database.
@@ -64,30 +108,32 @@ def load_esdc_data(
         If an invalid file extension is provided.
 
     """
+    tables = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
     if update:
-        for table, url in TableName:
+        for table in tables:
             logging.info("Downloading %s table.", table.value)
             url = esdc_url_builder(table_name=table)
+            logging.info("downloading from %s", url)
             data = esdc_downloader(url)
             if data is None:
                 logging.warning("Failed to download %s data.", table.value)
                 break
             if to_file:
-                logging.debug("Save data as %s.bin", table.value)
+                logging.debug("Save data as %s .bin", table.value)
                 with open(table.value + ".bin", "wb") as f:
                     f.write(data)
-            if ext == "csv":
+            if ext == FileType.CSV:
                 data = data.decode("utf-8").splitlines()
                 # read_csv is used to handle remarks column that might
                 # have commas in the string.
                 data, header = _read_csv(data)
             db_data_loader(data, header, table.value)
-    else:
+    if reload:
         for table in TableName:
             if Path(table.value + ".bin").exists():
                 _load_bin_as_csv(table.value + ".bin", table.value)
             else:
-                logging.warning("File %s.bin is not found.")
+                logging.warning("File %s.bin is not found.", table.value)
 
 
 def esdc_url_builder(
@@ -128,11 +174,15 @@ def esdc_url_builder(
     url = os.getenv("ESDC_URL")
 
     url += api_ver.value
-    url += f"/{table_name.value}?"
+    tables = {
+        TableName.PROJECT_RESOURCES: "project-resources",
+        TableName.PROJECT_TIMESERIES: "project-timeseries",
+    }
+    url += f"/{tables[table_name]}?"
     url += f"verbose={verbose}"
     if report_year is not None:
         url += f"&report_year={report_year}"
-    url += f"output={file_type.value}"
+    url += f"&output={file_type.value}"
 
     return url
 
@@ -303,7 +353,3 @@ def _load_sql_script(script_file: str) -> str:
     file = Path(__file__).parent / "sql" / script_file
     with open(file, "r", encoding="utf-8") as f:
         return f.read()
-
-
-if __name__ == "__main__":
-    _cli()

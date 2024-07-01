@@ -19,11 +19,14 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/fajril/esdc"
 
-[tool.setuptools]
-packages = ["esdc"]
+[tool.setuptools.packages.find]
+where = ["."]
 
 [tool.setuptools.package-data]
 esdc = ["data/*"]
 
 [tool.setuptools.exclude-package-data]
 esdc = ["tests"]
+
+[project.scripts]
+esdc = "esdc:main"

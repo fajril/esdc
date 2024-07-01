@@ -12,7 +12,7 @@ class ApiVer(Enum):
         V2 (str): API version 2.
     """
     V1 = 1
-    V2 = "/api/v2"
+    V2 = "api/v2"
 
 
 class TableName(Enum):
@@ -24,6 +24,9 @@ class TableName(Enum):
         PROJECt_TIMESERIES (str): Table name for project timeseries.
     """
     PROJECT_RESOURCES = "project_resources"
+    FIELD_RESOURCES = "field_resources"
+    WA_RESOURCES = "wa_resources"
+    NKRI_RESOURCES = "nkri_resources"
     PROJECT_TIMESERIES = "project_timeseries"
 
 
@@ -39,4 +42,5 @@ class FileType(Enum):
     CSV = "csv"
     JSON = "json"
     ZIP = "zip"
+
 
