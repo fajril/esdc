@@ -15,7 +15,7 @@ from tqdm import tqdm
 import click
 import pandas as pd
 
-from .selection import TableName, ApiVer, FileType, Severity
+from .selection import TableName, ApiVer, FileType
 from .validate import RuleEngine
 
 
@@ -65,18 +65,6 @@ def main(
 
     if validate:
         run_validation()
-
-        # if results:
-        #     for result in results:
-        #         logging.info(
-        #             "Column: %s, error code: %s, severity: %s}",
-        #             result[0],
-        #             result[1],
-        #             result[2].value,
-        #         )
-
-        # else:
-        #     logging.info("Validated Successfully")
 
     if update is not None:
         load_esdc_data(update=update, reload=reload, ext=FileType(ext), to_file=True)
@@ -157,8 +145,10 @@ def run_validation():
     project_resources = run_query(TableName.PROJECT_RESOURCES, output=4)
     engine = RuleEngine(project_resources=project_resources)
     results = engine.run()
-
-    # engine.print_validation(results)
+    if results.empty:
+        logging.info("Validation results: All checks have passed.")
+    else:
+        results.to_csv("validation.csv", index=False)
 
 
 def load_esdc_data(

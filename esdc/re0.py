@@ -4,6 +4,7 @@ import pandas as pd
 
 from .validate import Severity
 
+
 def re0007(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
     ### RE0007 - Oil GRR/CR/PR: 1R/1C/1U must be higher than or equal to 0
@@ -14,12 +15,17 @@ def re0007(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
 
     $$\Delta N_{pn}^{\text{P90}} \geq 0$$
     """
+    severity = Severity.STRICT
     invalid = ~(
-        (project_resources["rec_oil"] >= 0)
-        & (project_resources["uncert_lvl"] == "1. Low Value")
+        (
+            project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
+                "rec_oil"
+            ]
+            >= 0
+        )
     )
-    logging.debug("RE0007 is called: %s", invalid)
-    return "rec_oil", "RE0007", Severity.STRICT, invalid
+    logging.debug("RE0007: %s %s", invalid.sum(), severity.value)
+    return "rec_oil", "RE0007", severity, invalid
 
 
 def re0008(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
@@ -33,11 +39,18 @@ def re0008(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
     $$\Delta N_{pn}^{c \text{ P90}} \geq 0$$
 
     """
+    severity = Severity.STRICT
     invalid = ~(
-        (project_resources["rec_con"] >= 0)
-        & (project_resources["uncert_lvl"] == "1. Low Value")
+        (
+            project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
+                "rec_con"
+            ]
+            >= 0
+        )
     )
-    return "rec_con", "RE0008", Severity.STRICT, invalid
+    logging.debug("RE0008: %s %s", invalid.sum(), severity.value)
+    return "rec_con", "RE0008", severity, invalid
+
 
 def re0009(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
@@ -49,11 +62,18 @@ def re0009(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
 
     $$\Delta G_{pn}^{a \text{ P90}} \geq 0$$
     """
+    severity = Severity.STRICT
     invalid = ~(
-        (project_resources["rec_ga"] >= 0)
-        & (project_resources["uncert_lvl"] == "1. Low Value")
+        (
+            project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
+                "rec_ga"
+            ]
+            >= 0
+        )
     )
-    return "rec_ga", "RE0009", Severity.STRICT, invalid
+    logging.debug("RE0009: %s %s", invalid.sum(), severity.value)
+    return "rec_ga", "RE0009", severity, invalid
+
 
 def re0010(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
@@ -65,11 +85,18 @@ def re0010(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
 
     $$\Delta G_{pn}^{\text{P90}} \geq 0$$
     """
+    severity = Severity.STRICT
     invalid = ~(
-        (project_resources["rec_gn"] >= 0)
-        & (project_resources["uncert_lvl"] == "1. Low Value")
+        (
+            project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
+                "rec_gn"
+            ]
+            >= 0
+        )
     )
-    return "rec_gn", "RE0010", Severity.STRICT, invalid
+    logging.debug("RE0010: %s %s", invalid.sum(), severity.value)
+    return "rec_gn", "RE0010", severity, invalid
+
 
 def re0011(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
@@ -81,11 +108,18 @@ def re0011(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
 
     $$\Delta N_{ps}^{\text{1P}} \geq 0$$
     """
+    severity = Severity.STRICT
     invalid = ~(
-        (project_resources["res_oil"] >= 0)
-        & (project_resources["uncert_lvl"] == "1. Low Value")
+        (
+            project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
+                "res_oil"
+            ]
+            >= 0
+        )
     )
-    return "rec_gn", "RE0011", Severity.STRICT, invalid
+    logging.debug("RE0011: %s %s", invalid.sum(), severity.value)
+    return "res_oil", "RE0011", severity, invalid
+
 
 def re0012(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
@@ -97,8 +131,14 @@ def re0012(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
 
     $$\Delta N_{ps}^{c\text{ 1P}} \geq 0$$
     """
+    severity = Severity.STRICT
     invalid = ~(
-        (project_resources["res_con"] >= 0)
-        & (project_resources["uncert_lvl"] == "1. Low Value")
+        (
+            project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
+                "res_con"
+            ]
+            >= 0
+        )
     )
-    return "rec_gn", "RE0012", Severity.STRICT, invalid
+    logging.debug("RE0012: %s %s", invalid.sum(), severity.value)
+    return "res_con", "RE0012", severity, invalid
