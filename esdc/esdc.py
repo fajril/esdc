@@ -1,11 +1,13 @@
 import os
 import io
+from datetime import date
 from pathlib import Path
 import csv
 import sqlite3
 from contextlib import closing
 import logging
-from typing import Union, List, Tuple, Iterable
+import re
+from typing import Union, List, Tuple, Iterable, Optional
 
 import requests
 from dotenv import load_dotenv, find_dotenv
@@ -13,8 +15,9 @@ from tqdm import tqdm
 import click
 import pandas as pd
 
-from .selection import TableName, ApiVer, FileType
+from .selection import TableName, ApiVer, FileType, Severity
 from .validate import RuleEngine
+
 
 @click.command()
 @click.option(
@@ -26,16 +29,32 @@ from .validate import RuleEngine
 )
 @click.option("--update", "-u", is_flag=True, help="Update the database.")
 @click.option("--reload", "-r", is_flag=True, help="Reload db from bin files.")
+@click.option("--validate", is_flag=True, help="Run Validation Engine")
+@click.option("--file", default="", type=str)
 @click.option("--verbose", "-v", count=True, help="Set log message level.")
-@click.option("--output", "-o", is_flag=True, help="Level of detail in the output data.")
+@click.option("--output", "-o", count=True, help="Level of detail in the output data.")
 @click.option("--save", "-s", is_flag=True, help="Write query result to file.")
 @click.option("--show", default=None)
 @click.option("--like", default="", type=str)
 @click.option("--year")
-def main(ext, update, reload, verbose, output, save, show, like, year):
+@click.option("--columns", type=str)
+def main(
+    ext,
+    update,
+    reload,
+    validate,
+    file,
+    verbose,
+    output,
+    save,
+    show,
+    like,
+    year,
+    columns,
+):
     load_dotenv(find_dotenv())
     logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger()
     if verbose >= 2:
         logger.setLevel(logging.DEBUG)
     elif verbose == 1:
@@ -44,51 +63,103 @@ def main(ext, update, reload, verbose, output, save, show, like, year):
         logger.setLevel(logging.WARNING)
     logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
 
-    logging.info("year: %s", year)
+    if validate:
+        run_validation()
+
+        # if results:
+        #     for result in results:
+        #         logging.info(
+        #             "Column: %s, error code: %s, severity: %s}",
+        #             result[0],
+        #             result[1],
+        #             result[2].value,
+        #         )
+
+        # else:
+        #     logging.info("Validated Successfully")
+
     if update is not None:
         load_esdc_data(update=update, reload=reload, ext=FileType(ext), to_file=True)
     if show is not None:
-        logging.info("show %s", show)
-        run_query(table=TableName(show), like=like, year=year, output=output, save=save)
+        df = run_query(
+            table=TableName(show),
+            like=like,
+            year=year,
+            output=output,
+            save=save,
+            columns=columns,
+        )
+        pd.options.display.float_format = "{:,.2f}".format
+        print(df)
 
 
-def run_query(table: TableName, like: str, year: str, output: int, save: bool):
+def run_query(
+    table: TableName,
+    like: Optional[str] = None,
+    year: Optional[str] = None,
+    output: Optional[int] = 0,
+    save: bool = False,
+    columns: Optional[List[str]] = None,
+) -> pd.DataFrame:
 
-    queries = _load_sql_script("view_resources.sql")
     output = min(output, 4)
 
     if table == TableName.PROJECT_RESOURCES:
-        if output > 1:
-            query = queries.split(";")[output - 1].strip()
-    
-
-    if table == TableName.PROJECT_RESOURCES:
-        query = queries.split(";")[0].strip()
+        queries = _load_sql_script("view_project_resources.sql")
     elif table == TableName.FIELD_RESOURCES:
-        query = queries.split(";")[1].strip()
+        queries = _load_sql_script("view_field_resources.sql")
     elif table == TableName.WA_RESOURCES:
-        query = queries.split(";")[2].strip()
+        queries = _load_sql_script("view_wa_resources.sql")
     else:
-        query = queries.split(";")[3].strip()
+        queries = _load_sql_script("view_nkri_resources.sql")
+
+    if output > 1:
+        query = queries.split(";")[output - 1].strip()
+    else:
+        query = queries.split(";")[0].strip()
+
+    if columns is not None:
+        pattern = r".*?(?=world)"
+        query = re.sub(pattern, "", query)
+        select_query = "SELECT"
+        for col in columns:
+            select_query += f" {col},"
+        query = select_query[:-1] + query
 
     # Replace placeholders with actual values
-    if year is None:
-        query = query.replace("AND year = {year}", "")
+    if table == TableName.NKRI_RESOURCES:
+        if year is None:
+            query = query.replace("WHERE report_year = {year}", "")
+        else:
+            query = query.replace("{year}", str(year))
     else:
-        query = query.replace("{like}", like).replace("{year}", str(year))
+        if like is None:
+            query = query.replace("{like}", "")
+        else:
+            query = query.replace("{like}", like)
+
+        if year is None:
+            query = query.replace("AND report_year = {year}", "")
+        else:
+            query = query.replace("{year}", str(year))
 
     # Execute the query
     with sqlite3.connect("esdc.db") as conn:
         df = pd.read_sql_query(query, conn)
-        print(df)
 
     if save:
-        df.to_csv(f"view_{table.value}.csv")
+        today = date.today().strftime("%Y%m%d")
+        df.to_csv(f"view_{table.value}_{today}.csv")
     return df
 
-def run_validation(project_resources: pd.DataFrame):
+
+def run_validation():
+    project_resources = run_query(TableName.PROJECT_RESOURCES, output=4)
     engine = RuleEngine(project_resources=project_resources)
-    return engine.run()
+    results = engine.run()
+
+    # engine.print_validation(results)
+
 
 def load_esdc_data(
     update: bool = False,
@@ -136,14 +207,15 @@ def load_esdc_data(
                 logging.debug("Save data as %s .bin", table.value)
                 with open(table.value + ".bin", "wb") as f:
                     f.write(data)
-            if ext == FileType.CSV:
-                data = data.decode("utf-8").splitlines()
-                # read_csv is used to handle remarks column that might
-                # have commas in the string.
-                data, header = _read_csv(data)
-            db_data_loader(data, header, table.value)
+            if reload:
+                if ext == FileType.CSV:
+                    data = data.decode("utf-8").splitlines()
+                    # read_csv is used to handle remarks column that might
+                    # have commas in the string.
+                    data, header = _read_csv(data)
+                db_data_loader(data, header, table.value)
     if reload:
-        for table in TableName:
+        for table in tables:
             if Path(table.value + ".bin").exists():
                 _load_bin_as_csv(table.value + ".bin", table.value)
             else:
@@ -199,8 +271,13 @@ def esdc_url_builder(
     }
     url += f"/{tables[table_name]}?"
     url += f"verbose={verbose}"
+    # TODO this is temporary fix since as of 2024-07-06
+    # the API for time series does not support all year selection
+    # remove this conditional if the API for project_timeseries is fixed.
+    if table_name == TableName.PROJECT_TIMESERIES:
+        report_year = 2023
     if report_year is not None:
-        url += f"&report_year={report_year}"
+        url += f"&report-year={report_year}"
     url += f"&output={file_type.value}"
 
     return url
@@ -293,7 +370,6 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
         cursor = conn.cursor()
         logging.debug("creating table %s in database", table_name)
         cursor.executescript(_load_sql_script(create_table_query[table_name]))
-
         column_names = ", ".join(["?" for _ in header])
         logging.debug("Inserting table data %s into the database.", table_name)
         insert_stmt = (
@@ -307,7 +383,13 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
                     len(row),
                     len(header),
                 )
-            cursor.execute(insert_stmt, row)
+            try:
+                cursor.execute(insert_stmt, row)
+            except Exception as e:
+                logging.debug("insert statement: %s", insert_stmt)
+                logging.debug("row data: %s", row)
+                raise Exception(e)
+
         logging.debug("Creating uuid column for table %s", table_name)
         uuid_query = _load_sql_script("create_column_uuid.sql")
         cursor.executescript(uuid_query.replace("{table_name}", table_name))
@@ -320,6 +402,7 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
 
             logging.debug("Creating table view for field, working area, nkri.")
             cursor.executescript(_load_sql_script("create_esdc_view.sql"))
+        cursor.execute("VACUUM;")
         conn.commit()
 
         logging.info("Table %s is loaded into database.", table_name)
@@ -338,18 +421,26 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
         Tuple[List[List[str]], List[str]]: A tuple containing the data and header of the CSV file.
     """
 
-    if isinstance(file, list):
-        reader = csv.reader(file)
+    class EsdcDialect(csv.Dialect):
+        delimiter = ";"
+        quotechar = '"'
+        doublequote = True
+        lineterminator = "\n"
+        quoting = csv.QUOTE_STRINGS
+
+    csv.register_dialect("esdc", EsdcDialect)
+
     if isinstance(file, str):
         with open(file, "r", newline="", encoding="utf-8") as csvfile:
-            reader = csv.reader(csvfile)
+            reader = csv.reader(csvfile, dialect="esdc")
     else:
-        reader = csv.reader(file)
+        reader = csv.reader(file, dialect="esdc")
     header = next(reader)
     data = []
     for row in reader:
         data.append(row)
     return data, header
+
 
 def _load_sql_script(script_file: str) -> str:
     file = Path(__file__).parent / "sql" / script_file

@@ -44,6 +44,6 @@ class FileType(Enum):
     ZIP = "zip"
 
 class Severity(Enum):
-    STRICT = 1
-    WARNING = 2
-    INFO = 3
+    STRICT = "strict"
+    WARNING = "warning"
+    INFO = "info"

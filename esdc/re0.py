@@ -1,3 +1,4 @@
+import logging
 from typing import Tuple
 import pandas as pd
 
@@ -17,6 +18,7 @@ def re0007(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
         (project_resources["rec_oil"] >= 0)
         & (project_resources["uncert_lvl"] == "1. Low Value")
     )
+    logging.debug("RE0007 is called: %s", invalid)
     return "rec_oil", "RE0007", Severity.STRICT, invalid
 
 

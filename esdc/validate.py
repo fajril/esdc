@@ -4,8 +4,6 @@ import pandas as pd
 from .selection import Severity
 from . import re0
 
-
-
 class RuleEngine:
     def __init__(self, project_resources: pd.DataFrame):
         self.project_resources = project_resources
@@ -18,3 +16,6 @@ class RuleEngine:
             re0.re0010(self.project_resources),
         ]
         return result
+
+    def _val_results_transform(self, results):
+        raise NotImplementedError()
