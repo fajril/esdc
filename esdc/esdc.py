@@ -148,7 +148,9 @@ def run_validation():
     if results.empty:
         logging.info("Validation results: All checks have passed.")
     else:
-        results.to_csv("validation.csv", index=False)
+        logging.info("Saving validation results.")
+        results = results.sort_values(by=["report_year", "wk_name", "field_name", "project_name", "uncert_lvl"])
+        results.to_csv(f"validation_{date.today().strftime("%Y%m%d")}.csv", index=False)
 
 
 def load_esdc_data(

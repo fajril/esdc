@@ -30,18 +30,42 @@ class RuleEngine:
             "prj_igip",
         ]
         self.rules0 = {
-            "re0007": re0.re0007,
-            "re0008": re0.re0008,
-            "re0009": re0.re0009,
-            "re0010": re0.re0010,
-            "re0011": re0.re0011,
-            "re0012": re0.re0012,
+            re0.re0007.__name__: re0.re0007,
+            re0.re0008.__name__: re0.re0008,
+            re0.re0009.__name__: re0.re0009,
+            re0.re0010.__name__: re0.re0010,
+            re0.re0011.__name__: re0.re0011,
+            re0.re0012.__name__: re0.re0012,
+            re0.re0013.__name__: re0.re0013,
+            re0.re0014.__name__: re0.re0014,
+            re0.re0015.__name__: re0.re0015,
+            re0.re0016.__name__: re0.re0016,
+            re0.re0017.__name__: re0.re0017,
+            re0.re0018.__name__: re0.re0018,
+            re0.re0019.__name__: re0.re0019,
+            re0.re0020.__name__: re0.re0020,
+            re0.re0021.__name__: re0.re0021,
+            re0.re0022.__name__: re0.re0022,
         }
 
     def run(self) -> List[Tuple[str, str, Severity, pd.Series]]:
-        results = [
-            func(self.project_resources) for _, func in self.rules0.items()
-        ]
+        """
+        Initiates the validation process.
+
+        This method runs all validation rules.
+        The results of each validation rule are collected and 
+        transformed into a standardized format.
+
+        Returns:
+            A list of tuples, where each tuple contains the following information:
+                - rule_name (str): The name of the validation rule.
+                - message (str): A brief message describing the validation result.
+                - severity (Severity): The severity level of the validation result 
+                  (e.g., error, warning, info).
+                - series (pd.Series): A pandas Series containing the validation result data.
+        """
+        logging.info("Initiate validation process.")
+        results = [func(self.project_resources) for _, func in self.rules0.items()]
         return self._val_results_transform(results)
 
     def _val_results_transform(self, results):
@@ -51,11 +75,11 @@ class RuleEngine:
 
         for result in results:
             if result[3].any():
-                validation_volumetric.loc[result[3], result[0]] += f"{result[1]};"
-            validation_volumetric = validation_volumetric.mask(
-                validation_volumetric == "", np.nan
-            )
-
+                idx = result[3].loc[result[3]].index
+                validation_volumetric.loc[idx, result[0]] += f"{result[1].upper()};"
+        validation_volumetric = validation_volumetric.mask(
+            validation_volumetric == "", np.nan
+        )
         validation_volumetric.dropna(
             subset=self.volumetric_columns[7:], how="all", inplace=True
         )
