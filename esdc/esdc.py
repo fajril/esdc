@@ -12,48 +12,41 @@ from typing import Union, List, Tuple, Iterable, Optional
 import requests
 from dotenv import load_dotenv, find_dotenv
 from tqdm import tqdm
-import click
+import typer
+from typing_extensions import Annotated
+from rich.logging import RichHandler
 import pandas as pd
 
 from .selection import TableName, ApiVer, FileType
 from .validate import RuleEngine
 
+app = typer.Typer(no_args_is_help=True)
 
-@click.command()
-@click.option(
-    "--ext",
-    "-e",
-    default="csv",
-    type=str,
-    help="Format of the downloaded file. Options: csv",
-)
-@click.option("--update", "-u", is_flag=True, help="Update the database.")
-@click.option("--reload", "-r", is_flag=True, help="Reload db from bin files.")
-@click.option("--validate", is_flag=True, help="Run Validation Engine")
-@click.option("--file", default="", type=str)
-@click.option("--verbose", "-v", count=True, help="Set log message level.")
-@click.option("--output", "-o", count=True, help="Level of detail in the output data.")
-@click.option("--save", "-s", is_flag=True, help="Write query result to file.")
-@click.option("--show", default=None)
-@click.option("--like", default="", type=str)
-@click.option("--year")
-@click.option("--columns", type=str)
-def main(
-    ext,
-    update,
-    reload,
-    validate,
-    file,
-    verbose,
-    output,
-    save,
-    show,
-    like,
-    year,
-    columns,
-):
+TABLES = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
+
+@app.callback()
+def main(verbose: int = 0):
+    """
+    Main function to set up logging and log level.
+
+    Args:
+        verbose (int, optional): Verbosity level. Defaults to 0.
+
+    Returns:
+        None
+
+    Notes:
+        This function sets up the logging configuration using the RichHandler.
+        The log level is set based on the verbosity level:
+            - verbose >= 2: DEBUG
+            - verbose == 1: INFO
+            - verbose == 0: WARNING
+    """
     load_dotenv(find_dotenv())
-    logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s")
+    handler = RichHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.root.handlers.clear()
+    logging.root.addHandler(handler)
     logger = logging.getLogger()
     if verbose >= 2:
         logger.setLevel(logging.DEBUG)
@@ -63,22 +56,118 @@ def main(
         logger.setLevel(logging.WARNING)
     logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
 
-    if validate:
-        run_validation()
 
-    if update is not None:
-        load_esdc_data(update=update, reload=reload, ext=FileType(ext), to_file=True)
-    if show is not None:
-        df = run_query(
-            table=TableName(show),
-            like=like,
-            year=year,
-            output=output,
-            save=save,
-            columns=columns,
-        )
-        pd.options.display.float_format = "{:,.2f}".format
-        print(df)
+@app.command()
+def fetch(
+    filetype: Annotated[Optional[str], typer.Argument(help="Options: csv, json, zip")]="csv",
+    save: Annotated[Optional[bool], typer.Argument()]=True
+) -> None:
+    """
+    Fetch data from ESDC and save it to a file.
+
+    Args:
+        filetype (str, optional): The type of file to save the data to. Defaults to "csv".
+        save (bool, optional): Whether to save the data to a file. Defaults to True.
+
+    Returns:
+        None
+
+    Notes:
+        This function fetches data from ESDC and saves it to a file based on the provided filetype.
+        If the filetype is not available, a log message will be printed.
+    """
+    if filetype == "csv":
+        load_esdc_data(filetype=FileType.CSV, to_file=save)
+    else:
+        logging.warning("File type not available.")
+
+
+@app.command()
+def reload(filetype: Annotated[Optional[str], typer.Argument(help="Options: csv, json, zip")]="csv") -> None:
+    """
+    Reload data from binary files and save it to a file.
+
+    Args:
+        filetype (str, optional): The type of file to save the data to. Defaults to "csv".
+
+    Returns:
+        None
+
+    Notes:
+        This function reloads data from binary files and saves it 
+        to a file based on the provided filetype.
+        If the filetype is not supported, a debug message will be printed.
+        If a file is not found, a warning message will be printed.
+    """
+    for table in TABLES:
+        if Path(table.value + ".bin").exists():
+            filename = table.value + ".bin"
+            if filetype == "csv":
+                _load_bin_as_csv(filename, table.value)
+            else:
+                logging.debug("failed to load %s. Unknown %s format", filename, filetype)
+        else:
+            logging.warning("File %s is not found.", filename)
+
+
+@app.command()
+def show(
+    table: Annotated[str, typer.Argument(help="Table name.")],
+    like: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
+    year: Annotated[Optional[str], typer.Option(help="Filter year value")] = None,
+    output: Annotated[Optional[int], typer.Option(help="Detail of output.")] = 0,
+    save: Annotated[Optional[bool], typer.Option(help="Save the output data")] = True
+):
+    """
+    Show data from a specific table.
+
+    Args:
+        table (str): The name of the table to show data from.
+        like (str, optional): A filter value to apply to the data. Defaults to "".
+        year (str, optional): A filter year value to apply to the data. Defaults to None.
+        output (int, optional): The level of detail to show in the output. Defaults to 0.
+        save (bool, optional): Whether to save the output data. Defaults to True.
+
+    Returns:
+        None
+
+    Notes:
+        This function runs a query on the specified table with the provided filters 
+        and displays the result.
+        The output is formatted to display float values with two decimal places.
+        If the save option is True, the output data will be saved.
+    """
+    df = run_query(
+        table=TableName(table),
+        like=like,
+        year=year,
+        output=output,
+        save=save,
+    )
+    pd.options.display.float_format = "{:,.2f}".format
+    print(df)
+
+
+
+@app.command()
+def validate(
+    filename: Annotated[Optional[str], typer.Argument(help="File name.")]=None
+) -> None:
+    """
+    Validate data from a file or run a full validation.
+
+    Args:
+        filename (str, optional): The name of the file to validate. Defaults to None.
+
+    Returns:
+        None
+
+    Notes:
+        This function validates data from a file if a filename is provided, 
+        or runs a full validation if no filename is provided.
+    """
+    if filename is None:
+        run_validation()
 
 
 def run_query(
@@ -146,7 +235,7 @@ def run_validation():
     engine = RuleEngine(project_resources=project_resources)
     results = engine.run()
     if results.empty:
-        logging.info("Validation results: All checks have passed.")
+        logging.info("No validation results.")
     else:
         logging.info("Saving validation results.")
         results = results.sort_values(by=["report_year", "wk_name", "field_name", "project_name", "uncert_lvl"])
@@ -154,9 +243,7 @@ def run_validation():
 
 
 def load_esdc_data(
-    update: bool = False,
-    reload: bool = False,
-    ext: FileType = FileType.CSV,
+    filetype: FileType = FileType.CSV,
     to_file=True,
 ) -> None:
     """
@@ -185,40 +272,32 @@ def load_esdc_data(
         If an invalid file extension is provided.
 
     """
-    tables = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
-    if update:
-        for table in tables:
-            logging.info("Downloading %s table.", table.value)
-            url = esdc_url_builder(table_name=table)
-            logging.info("downloading from %s", url)
-            data = esdc_downloader(url)
-            if data is None:
-                logging.warning("Failed to download %s data.", table.value)
-                break
-            if to_file:
-                logging.debug("Save data as %s .bin", table.value)
-                with open(table.value + ".bin", "wb") as f:
-                    f.write(data)
-            if reload:
-                if ext == FileType.CSV:
-                    data = data.decode("utf-8").splitlines()
-                    # read_csv is used to handle remarks column that might
-                    # have commas in the string.
-                    data, header = _read_csv(data)
-                db_data_loader(data, header, table.value)
-    if reload:
-        for table in tables:
-            if Path(table.value + ".bin").exists():
-                _load_bin_as_csv(table.value + ".bin", table.value)
-            else:
-                logging.warning("File %s.bin is not found.", table.value)
+    for table in TABLES:
+        logging.info("Downloading %s table.", table.value)
+        url = esdc_url_builder(table_name=table, file_type=filetype)
+        logging.info("downloading from %s", url)
+        data = esdc_downloader(url)
+        if data is None:
+            logging.warning("Failed to download %s data.", table.value)
+            break
+        if to_file:
+            logging.debug("Save data as %s .bin", table.value)
+            with open(table.value + ".bin", "wb") as f:
+                f.write(data)
+
+        if filetype == FileType.CSV:
+            data = data.decode("utf-8").splitlines()
+            # read_csv is used to handle remarks column that might
+            # have commas in the string.
+            data, header = _read_csv(data)
+        db_data_loader(data, header, table.value)
 
 
 def esdc_url_builder(
     table_name: TableName,
     api_ver: ApiVer = ApiVer.V2,
     verbose: int = 3,
-    report_year: int = None,
+    report_year: Optional[int] = None,
     file_type: FileType = FileType.CSV,
 ) -> str:
     """
@@ -377,10 +456,10 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
                 )
             try:
                 cursor.execute(insert_stmt, row)
-            except Exception as e:
+            except sqlite3.Error as e:
                 logging.debug("insert statement: %s", insert_stmt)
                 logging.debug("row data: %s", row)
-                raise Exception(e)
+                raise sqlite3.Error(str(e)) from e
 
         logging.debug("Creating uuid column for table %s", table_name)
         uuid_query = _load_sql_script("create_column_uuid.sql")
@@ -438,3 +517,6 @@ def _load_sql_script(script_file: str) -> str:
     file = Path(__file__).parent / "sql" / script_file
     with open(file, "r", encoding="utf-8") as f:
         return f.read()
+
+if __name__ == "__main__":
+    app()

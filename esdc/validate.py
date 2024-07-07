@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from rich.progress import track
 from .selection import Severity
 from . import re0
 
@@ -65,7 +66,12 @@ class RuleEngine:
                 - series (pd.Series): A pandas Series containing the validation result data.
         """
         logging.info("Initiate validation process.")
-        results = [func(self.project_resources) for _, func in self.rules0.items()]
+        if logging.root.getEffectiveLevel() == 10:
+            iter_rules0 = self.rules0.items()
+        else:
+            iter_rules0 = track(self.rules0.items())
+        results = [func(self.project_resources) for _, func in iter_rules0]
+
         return self._val_results_transform(results)
 
     def _val_results_transform(self, results):
