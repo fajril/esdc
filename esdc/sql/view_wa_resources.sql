@@ -5,7 +5,7 @@ SELECT report_year, wk_name, project_stage,
     res_oc as 'reserves_oc', res_an as 'reserves_an'
 FROM wa_resources 
 WHERE wk_name LIKE '%{like}%' AND report_year = {year}
-ORDER BY wk_name, project_stage, project_class, uncert_lvl;
+ORDER BY report_year, wk_name, project_stage, project_class, uncert_lvl;
 
 -- Query for wa_resources table -oo (add in place)
 SELECT report_year, wk_name,
@@ -15,7 +15,7 @@ SELECT report_year, wk_name,
     ioip, igip
 FROM wa_resources 
 WHERE wk_name LIKE '%{like}%' AND report_year = {year}
-ORDER BY wk_name, project_stage, project_class, project_level, uncert_lvl;
+ORDER BY report_year, wk_name, project_stage, project_class, project_level, uncert_lvl;
 
 -- Query for wa_resources table -ooo (add cumprod)
 SELECT report_year, wk_name, project_count,
@@ -27,10 +27,10 @@ SELECT report_year, wk_name, project_count,
     ioip, igip
 FROM wa_resources 
 WHERE wk_name LIKE '%{like}%' AND report_year = {year}
-ORDER BY wk_name, project_stage, project_class, uncert_lvl;
+ORDER BY report_year, wk_name, project_stage, project_class, uncert_lvl;
 
 -- Query for wa_resources table -oooo (all)
 SELECT *
 FROM wa_resources 
 WHERE wk_name LIKE '%{like}%' AND report_year = {year}
-ORDER BY wk_name, project_stage, project_class, project_level, uncert_lvl;
+ORDER BY report_year, wk_name, project_stage, project_class, project_level, uncert_lvl;

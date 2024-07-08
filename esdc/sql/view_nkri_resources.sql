@@ -5,7 +5,7 @@ SELECT report_year, project_stage,
     res_oc as 'reserves_oc', res_an as 'reserves_an'
 FROM nkri_resources 
 WHERE report_year = {year}
-ORDER BY project_stage, project_class, uncert_lvl;
+ORDER BY report_year, project_stage, project_class, uncert_lvl;
 
 -- Query for nkri_resources table -oo (add in place)
 SELECT report_year, wk_name,
@@ -15,7 +15,7 @@ SELECT report_year, wk_name,
     ioip, igip
 FROM nkri_resources 
 WHERE report_year = {year}
-ORDER BY project_stage, project_class, project_level, uncert_lvl;
+ORDER BY report_year, project_stage, project_class, project_level, uncert_lvl;
 
 -- Query for nkri_resources table -ooo (add cumprod)
 SELECT report_year, project_count,
@@ -27,10 +27,10 @@ SELECT report_year, project_count,
     ioip, igip
 FROM nkri_resources 
 WHERE report_year = {year}
-ORDER BY project_stage, project_class, uncert_lvl;
+ORDER BY report_year, project_stage, project_class, uncert_lvl;
 
 -- Query for nkri_resources table -oooo (all)
 SELECT *
 FROM nkri_resources 
 WHERE report_year = {year}
-ORDER BY project_stage, project_class, project_level, uncert_lvl;
+ORDER BY report_year, project_stage, project_class, project_level, uncert_lvl;

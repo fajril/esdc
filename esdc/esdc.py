@@ -14,6 +14,7 @@ from dotenv import load_dotenv, find_dotenv
 from tqdm import tqdm
 import typer
 from typing_extensions import Annotated
+from rich import print
 from rich.logging import RichHandler
 import pandas as pd
 
@@ -23,6 +24,7 @@ from .validate import RuleEngine
 app = typer.Typer(no_args_is_help=True)
 
 TABLES = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
+
 
 @app.callback()
 def main(verbose: int = 0):
@@ -56,11 +58,16 @@ def main(verbose: int = 0):
         logger.setLevel(logging.WARNING)
     logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
 
+@app.command()
+def init():
+    fetch()
 
 @app.command()
 def fetch(
-    filetype: Annotated[Optional[str], typer.Argument(help="Options: csv, json, zip")]="csv",
-    save: Annotated[Optional[bool], typer.Argument()]=True
+    filetype: Annotated[
+        Optional[str], typer.Argument(help="Options: csv, json, zip")
+    ] = "csv",
+    save: Annotated[Optional[bool], typer.Argument()] = True,
 ) -> None:
     """
     Fetch data from ESDC and save it to a file.
@@ -83,7 +90,11 @@ def fetch(
 
 
 @app.command()
-def reload(filetype: Annotated[Optional[str], typer.Argument(help="Options: csv, json, zip")]="csv") -> None:
+def reload(
+    filetype: Annotated[
+        Optional[str], typer.Argument(help="Options: csv, json, zip")
+    ] = "csv"
+) -> None:
     """
     Reload data from binary files and save it to a file.
 
@@ -94,7 +105,7 @@ def reload(filetype: Annotated[Optional[str], typer.Argument(help="Options: csv,
         None
 
     Notes:
-        This function reloads data from binary files and saves it 
+        This function reloads data from binary files and saves it
         to a file based on the provided filetype.
         If the filetype is not supported, a debug message will be printed.
         If a file is not found, a warning message will be printed.
@@ -105,7 +116,9 @@ def reload(filetype: Annotated[Optional[str], typer.Argument(help="Options: csv,
             if filetype == "csv":
                 _load_bin_as_csv(filename, table.value)
             else:
-                logging.debug("failed to load %s. Unknown %s format", filename, filetype)
+                logging.debug(
+                    "failed to load %s. Unknown %s format", filename, filetype
+                )
         else:
             logging.warning("File %s is not found.", filename)
 
@@ -114,9 +127,10 @@ def reload(filetype: Annotated[Optional[str], typer.Argument(help="Options: csv,
 def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
     like: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
-    year: Annotated[Optional[str], typer.Option(help="Filter year value")] = None,
+    year: Annotated[Optional[int], typer.Option(min=2019, help="Filter year value")] = None,
     output: Annotated[Optional[int], typer.Option(help="Detail of output.")] = 0,
-    save: Annotated[Optional[bool], typer.Option(help="Save the output data")] = True
+    save: Annotated[Optional[bool], typer.Option(help="Save the output data")] = True,
+    columns: Annotated[Optional[str], typer.Option(help="select column")] = ""
 ):
     """
     Show data from a specific table.
@@ -132,7 +146,7 @@ def show(
         None
 
     Notes:
-        This function runs a query on the specified table with the provided filters 
+        This function runs a query on the specified table with the provided filters
         and displays the result.
         The output is formatted to display float values with two decimal places.
         If the save option is True, the output data will be saved.
@@ -143,15 +157,15 @@ def show(
         year=year,
         output=output,
         save=save,
+        columns=columns.split(" ")
     )
     pd.options.display.float_format = "{:,.2f}".format
-    print(df)
-
+    print(df.to_string(index=False))
 
 
 @app.command()
 def validate(
-    filename: Annotated[Optional[str], typer.Argument(help="File name.")]=None
+    filename: Annotated[Optional[str], typer.Argument(help="File name.")] = None
 ) -> None:
     """
     Validate data from a file or run a full validation.
@@ -163,7 +177,7 @@ def validate(
         None
 
     Notes:
-        This function validates data from a file if a filename is provided, 
+        This function validates data from a file if a filename is provided,
         or runs a full validation if no filename is provided.
     """
     if filename is None:
@@ -173,7 +187,7 @@ def validate(
 def run_query(
     table: TableName,
     like: Optional[str] = None,
-    year: Optional[str] = None,
+    year: Optional[int] = None,
     output: Optional[int] = 0,
     save: bool = False,
     columns: Optional[List[str]] = None,
@@ -196,11 +210,10 @@ def run_query(
         query = queries.split(";")[0].strip()
 
     if columns is not None:
-        pattern = r".*?(?=world)"
+        pattern = r".*?(?=FROM)"
         query = re.sub(pattern, "", query)
-        select_query = "SELECT"
-        for col in columns:
-            select_query += f" {col},"
+        select_query = "SELECT" + ', '.join(col for col in columns)
+        logging.debug("query: %s", select_query)
         query = select_query[:-1] + query
 
     # Replace placeholders with actual values
@@ -238,8 +251,10 @@ def run_validation():
         logging.info("No validation results.")
     else:
         logging.info("Saving validation results.")
-        results = results.sort_values(by=["report_year", "wk_name", "field_name", "project_name", "uncert_lvl"])
-        results.to_csv(f"validation_{date.today().strftime("%Y%m%d")}.csv", index=False)
+        results = results.sort_values(
+            by=["report_year", "wk_name", "field_name", "project_name", "uncert_lvl"]
+        )
+        results.to_csv(f"validation_{date.today().strftime('%Y%m%d')}.csv", index=False)
 
 
 def load_esdc_data(
@@ -443,9 +458,8 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
         cursor.executescript(_load_sql_script(create_table_query[table_name]))
         column_names = ", ".join(["?" for _ in header])
         logging.debug("Inserting table data %s into the database.", table_name)
-        insert_stmt = (
-            f'INSERT INTO {table_name} ({", ".join(header)}) VALUES ({column_names})'
-        )
+        insert_stmt = f'INSERT INTO {table_name} ({", ".join(header)}) VALUES ({
+                column_names})'
         for i, row in enumerate(data):
             if len(row) != len(header):
                 logging.debug(
@@ -517,6 +531,7 @@ def _load_sql_script(script_file: str) -> str:
     file = Path(__file__).parent / "sql" / script_file
     with open(file, "r", encoding="utf-8") as f:
         return f.read()
+
 
 if __name__ == "__main__":
     app()
