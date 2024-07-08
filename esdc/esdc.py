@@ -130,7 +130,7 @@ def show(
     year: Annotated[Optional[int], typer.Option(min=2019, help="Filter year value")] = None,
     output: Annotated[Optional[int], typer.Option(help="Detail of output.")] = 0,
     save: Annotated[Optional[bool], typer.Option(help="Save the output data")] = True,
-    columns: Annotated[Optional[str], typer.Option(help="select column")] = ""
+    columns: Annotated[Optional[str], typer.Option(help="select column")] = None
 ):
     """
     Show data from a specific table.
@@ -151,13 +151,15 @@ def show(
         The output is formatted to display float values with two decimal places.
         If the save option is True, the output data will be saved.
     """
+    if columns is not None:
+        columns = columns.split(" ")
     df = run_query(
         table=TableName(table),
         like=like,
         year=year,
         output=output,
         save=save,
-        columns=columns.split(" ")
+        columns=columns
     )
     pd.options.display.float_format = "{:,.2f}".format
     print(df.to_string(index=False))
