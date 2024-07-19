@@ -11,10 +11,9 @@ from typing import Union, List, Tuple, Iterable, Optional
 
 import requests
 from dotenv import load_dotenv, find_dotenv
-from tqdm import tqdm
 import typer
 from typing_extensions import Annotated
-from rich import print
+from rich.progress import Progress
 from rich.logging import RichHandler
 import pandas as pd
 
@@ -64,11 +63,10 @@ def init():
 
 @app.command()
 def fetch(
-    filetype: Annotated[
-        Optional[str], typer.Argument(help="Options: csv, json, zip")
-    ] = "csv",
-    save: Annotated[Optional[bool], typer.Argument()] = True,
+    filetype: str = typer.Option("csv", help="Options: csv, json, zip"),
+    save: bool = typer.Option(False, "--save/--no-save", help="Save to file or not"),
 ) -> None:
+
     """
     Fetch data from ESDC and save it to a file.
 
@@ -85,14 +83,16 @@ def fetch(
     """
     if filetype == "csv":
         load_esdc_data(filetype=FileType.CSV, to_file=save)
+    elif filetype == "json":
+        load_esdc_data(filetype=FileType.JSON, to_file=save)
     else:
-        logging.warning("File type not available.")
+        logging.warning("File type %s is not available.", filetype)
 
 
 @app.command()
 def reload(
     filetype: Annotated[
-        Optional[str], typer.Argument(help="Options: csv, json, zip")
+        Optional[str], typer.Option(help="Options: csv, json, zip")
     ] = "csv"
 ) -> None:
     """
@@ -111,7 +111,7 @@ def reload(
         If a file is not found, a warning message will be printed.
     """
     for table in TABLES:
-        if Path(table.value + ".bin").exists():
+        if Path(table.value + "." + filetype.value).exists():
             filename = table.value + ".bin"
             if filetype == "csv":
                 _load_bin_as_csv(filename, table.value)
@@ -298,8 +298,8 @@ def load_esdc_data(
             logging.warning("Failed to download %s data.", table.value)
             break
         if to_file:
-            logging.debug("Save data as %s .bin", table.value)
-            with open(table.value + ".bin", "wb") as f:
+            logging.debug("Save data as %s.%s", table.value, filetype.value)
+            with open(table.value + "." + filetype.value, "wb") as f:
                 f.write(data)
 
         if filetype == FileType.CSV:
@@ -307,7 +307,7 @@ def load_esdc_data(
             # read_csv is used to handle remarks column that might
             # have commas in the string.
             data, header = _read_csv(data)
-        db_data_loader(data, header, table.value)
+            db_data_loader(data, header, table.value)
 
 
 def esdc_url_builder(
@@ -407,20 +407,22 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         response = requests.get(
             url, auth=(username, password), stream=True, timeout=300, verify=False
         )
+
         if response.status_code == 200:
             file_size = int(response.headers.get("Content-Length", 0))
             logging.debug("File size is %s bytes", file_size)
 
-            with closing(io.BytesIO()) as f, tqdm(
-                unit="B", total=file_size, unit_scale=True, leave=True
-            ) as progress_bar:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    progress_bar.update(len(chunk))
-                logging.info(
-                    "File downloaded successfully to memory (Size: %s bytes)", f.tell()
-                )
-                return f.getvalue()
+            with closing(io.BytesIO()) as f:
+                with Progress() as progress:
+                    task_id = progress.add_task(f"[red]Downloading {round(file_size/1E6)} MB...", total=file_size, unit="B", transfer=True, speed_unit="B/s")
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                        progress.update(task_id, advance=len(chunk))
+                    logging.info(
+                        "File downloaded successfully to memory (Size: %s bytes)", f.tell()
+                    )
+                    return f.getvalue()
+
         logging.warning("File download failed. Status code: %s", response.status_code)
         return None
     except requests.exceptions.RequestException as e:
