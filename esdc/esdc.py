@@ -15,6 +15,7 @@ import typer
 from typing_extensions import Annotated
 from rich.progress import Progress
 from rich.logging import RichHandler
+from rich.prompt import Prompt
 import pandas as pd
 
 from .selection import TableName, ApiVer, FileType
@@ -399,9 +400,16 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         If there is a request error while downloading the file.
 
     """
+    username: str = ""
+    password: str = ""
+
     load_dotenv(find_dotenv())
     username = os.getenv("ESDC_USER")
     password = os.getenv("ESDC_PASS")
+
+    if not username:
+        username = Prompt("user: ")
+        password = Prompt("pass: ", password=True)
 
     try:
         response = requests.get(
