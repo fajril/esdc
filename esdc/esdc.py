@@ -3,6 +3,8 @@ import io
 from datetime import date
 from pathlib import Path
 import csv
+import json
+import gzip
 import sqlite3
 from contextlib import closing
 import logging
@@ -14,11 +16,12 @@ from dotenv import load_dotenv, find_dotenv
 import typer
 from typing_extensions import Annotated
 import rich
-from rich.progress import Progress
+from rich.progress import Progress, TransferSpeedColumn, DownloadColumn
 from rich.logging import RichHandler
 from rich.prompt import Prompt
 from platformdirs import PlatformDirs
 import pandas as pd
+from tabulate import tabulate
 
 from .selection import TableName, ApiVer, FileType
 from .validate import RuleEngine
@@ -28,7 +31,7 @@ APP_AUTHOR = "skk"
 dirs = PlatformDirs(appname=APP_NAME, appauthor=APP_AUTHOR)
 DB_PATH = dirs.user_data_path
 BASE_API_URL_V2 = "https://esdc.skkmigas.go.id/api/v2"
-TABLES: Tuple[str] = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
+TABLES: Tuple[TableName, TableName] = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -52,8 +55,9 @@ def main(verbose: int = 0):
             - verbose == 0: WARNING
     """
     load_dotenv(find_dotenv())
-    handler = RichHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    handler = RichHandler(show_time=False)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    #handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     logging.root.handlers.clear()
     logging.root.addHandler(handler)
     logger = logging.getLogger()
@@ -120,8 +124,8 @@ def reload(
         If a file is not found, a warning message will be printed.
     """
     for table in TABLES:
-        if Path(table.value + "." + filetype.value).exists():
-            filename = table.value + ".bin"
+        if Path(f"{table.value}.{filetype}").exists():
+            filename = table.value + f".{filetype}"
             if filetype == "csv":
                 _load_bin_as_csv(filename, table.value)
             else:
@@ -139,9 +143,9 @@ def show(
     year: Annotated[
         Optional[int], typer.Option(min=2019, help="Filter year value")
     ] = None,
-    output: Annotated[Optional[int], typer.Option(help="Detail of output.")] = 0,
-    save: Annotated[Optional[bool], typer.Option(help="Save the output data")] = True,
-    columns: Annotated[Optional[str], typer.Option(help="select column")] = None,
+    output: Annotated[int, typer.Option(help="Detail of output.")] = 0,
+    save: Annotated[bool, typer.Option(help="Save the output data")] = True,
+    columns: Annotated[str, typer.Option(help="select column")] = "",
 ):
     """
     Show data from a specific table.
@@ -162,19 +166,29 @@ def show(
         The output is formatted to display float values with two decimal places.
         If the save option is True, the output data will be saved.
     """
-    if columns is not None:
-        columns = columns.split(" ")
+    if columns.strip():
+        columns_splitted: Union[List[str], str] = columns.split(" ")
+    else:
+        columns_splitted = ""
     df = run_query(
         table=TableName(table),
         like=like,
         year=year,
         output=output,
         save=save,
-        columns=columns,
+        columns=columns_splitted,
     )
     if df is not None:
         pd.options.display.float_format = "{:,.2f}".format
-        rich.print(df.to_string(index=False))
+        formatted_table = tabulate(
+            df.map(lambda x: f"{x:<,.2f}" if isinstance(x, float) else x),
+            headers="keys", tablefmt="psql", showindex=False,
+            stralign="right",
+        )
+        rich.print(formatted_table)
+        # rich.print(df.to_string(index=False, justify="end", col_space=15))
+    else:
+        logging.warning("Unable to show data.")
 
 
 @app.command()
@@ -202,9 +216,9 @@ def run_query(
     table: TableName,
     like: Optional[str] = None,
     year: Optional[int] = None,
-    output: Optional[int] = 0,
+    output: int = 0,
     save: bool = False,
-    columns: Optional[List[str]] = None,
+    columns: Union[str, List[str]] = "",
 ) -> pd.DataFrame | None:
 
     output = min(output, 4)
@@ -223,7 +237,8 @@ def run_query(
     else:
         query = queries.split(";")[0].strip()
 
-    if columns is not None:
+    if columns:
+        logging.debug("selected columns: %s", columns)
         pattern = r".*?(?=FROM)"
         query = re.sub(pattern, "", query)
         select_query = "SELECT" + ", ".join(col for col in columns)
@@ -325,11 +340,11 @@ def load_esdc_data(
                 f.write(data)
 
         if filetype == FileType.CSV:
-            data = data.decode("utf-8").splitlines()
+            decoded_data = data.decode("utf-8").splitlines()
             # read_csv is used to handle remarks column that might
             # have commas in the string.
-            data, header = _read_csv(data)
-            db_data_loader(data, header, table.value)
+            content, header = _read_csv(decoded_data)
+            load_csv_to_db(content, header, table.value)
 
 
 def esdc_url_builder(
@@ -381,8 +396,8 @@ def esdc_url_builder(
         TableName.PROJECT_RESOURCES: "project-resources",
         TableName.PROJECT_TIMESERIES: "project-timeseries",
     }
-    url += f"/{tables[table_name]}?"
-    url += f"verbose={verbose}"
+    url = f"{url}/{tables[table_name]}?"
+    url = f"{url}verbose={verbose}"
     # TODO this is temporary fix since as of 2024-07-06
     # the API for time series does not support all year selection
     # remove this conditional if the API for project_timeseries is fixed.
@@ -398,9 +413,9 @@ def esdc_url_builder(
 def _load_bin_as_csv(file: str, table_name):
     with open(file, "rb") as f:
         data = f.read()
-    data = data.decode("utf-8").splitlines()
-    content, header = _read_csv(data)
-    db_data_loader(content, header, table_name)
+    decoded_data = data.decode("utf-8").splitlines()
+    content, header = _read_csv(decoded_data)
+    load_csv_to_db(content, header, table_name)
 
 
 def esdc_downloader(url: str) -> Union[bytes, None]:
@@ -423,18 +438,20 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         If there is a request error while downloading the file.
 
     """
-    username: str = ""
-    password: str = ""
+    username: Optional[str] = ""
+    password: Optional[str] = ""
 
-    load_dotenv(find_dotenv())
-    username = os.getenv("ESDC_USER")
-    password = os.getenv("ESDC_PASS")
+    env_available = load_dotenv(find_dotenv())
+    if env_available:
+        username = os.getenv("ESDC_USER")
+        password = os.getenv("ESDC_PASS")
 
     if not username:
-        username = Prompt("user: ")
-        password = Prompt("pass: ", password=True)
+        username = Prompt.ask("user: ")
+        password = Prompt.ask("pass: ", password=True)
 
     try:
+        logging.info("requesting data to server...")
         response = requests.get(
             url, auth=(username, password), stream=True, timeout=300, verify=False
         )
@@ -444,17 +461,31 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
             logging.debug("File size is %s bytes", file_size)
 
             with closing(io.BytesIO()) as f:
-                with Progress() as progress:
+                with Progress(
+                    *Progress.get_default_columns(),
+                    TransferSpeedColumn(),
+                    DownloadColumn(binary_units=True),
+                ) as progress:
                     task_id = progress.add_task(
-                        f"[red]Downloading {round(file_size/1E6)} MB...",
+                        f"[magenta]Downloading {round(file_size/1E6)} MB...",
                         total=file_size,
                         unit="B",
                         transfer=True,
                         speed_unit="B/s",
-                    )
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                        progress.update(task_id, advance=len(chunk))
+                        )
+                    if response.headers.get("Content-Encoding") == "gzip":
+                        with gzip.GzipFile(fileobj=response.raw, mode="rb") as gz:
+                            while True:
+                                chunk = gz.read(size=8192)
+                                if not chunk:
+                                    break
+                                f.write(chunk)
+                                progress.update(task_id, advance=len(chunk))
+                    else:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                            progress.update(task_id, advance=len(chunk))
+
                     logging.info(
                         "File downloaded successfully to memory (Size: %s bytes)",
                         f.tell(),
@@ -468,7 +499,7 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         return None
 
 
-def db_data_loader(data: List, header: List[str], table_name: str) -> None:
+def load_csv_to_db(data: List, header: List[str], table_name: str) -> None:
     """
     Load data into the ESDC database.
 
@@ -504,23 +535,14 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
         logging.debug("creating table %s in database", table_name)
         cursor.executescript(_load_sql_script(create_table_query[table_name]))
         column_names = ", ".join(["?" for _ in header])
-        logging.debug("Inserting table data %s into the database.", table_name)
         insert_stmt = f'INSERT INTO {table_name} ({", ".join(header)}) VALUES ({
                 column_names})'
-        for i, row in enumerate(data):
-            if len(row) != len(header):
-                logging.debug(
-                    "row %s, total data column: %s vs %s",
-                    i,
-                    len(row),
-                    len(header),
-                )
-            try:
-                cursor.execute(insert_stmt, row)
-            except sqlite3.Error as e:
-                logging.debug("insert statement: %s", insert_stmt)
-                logging.debug("row data: %s", row)
-                raise sqlite3.Error(str(e)) from e
+        logging.debug("Inserting table data %s into the database.", table_name)
+        try:
+            cursor.executemany(insert_stmt, data)
+        except sqlite3.Error as e:
+            logging.debug("insert statement: %s", insert_stmt)
+            raise sqlite3.Error(str(e)) from e
 
         logging.debug("Creating uuid column for table %s", table_name)
         uuid_query = _load_sql_script("create_column_uuid.sql")
