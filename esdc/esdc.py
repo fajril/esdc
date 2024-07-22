@@ -16,15 +16,19 @@ from typing_extensions import Annotated
 from rich.progress import Progress
 from rich.logging import RichHandler
 from rich.prompt import Prompt
+from platformdirs import PlatformDirs
 import pandas as pd
 
 from .selection import TableName, ApiVer, FileType
 from .validate import RuleEngine
 
+APP_NAME = "esdc"
+APP_AUTHOR = "skk"
+dirs = PlatformDirs(appname=APP_NAME, appauthor=APP_AUTHOR)
+DB_PATH = dirs.user_data_path / "esdc.db"
+TABLES: Tuple[str] = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
+
 app = typer.Typer(no_args_is_help=True)
-
-TABLES = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
-
 
 @app.callback()
 def main(verbose: int = 0):
@@ -237,8 +241,11 @@ def run_query(
             query = query.replace("{year}", str(year))
 
     # Execute the query
-    with sqlite3.connect("esdc.db") as conn:
-        df = pd.read_sql_query(query, conn)
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            df = pd.read_sql_query(query, conn)
+    except sqlite3.OperationalError as e:
+        logging.error("Cannot query data. Database file does not exist. %s", e)
 
     if save:
         today = date.today().strftime("%Y%m%d")
@@ -456,7 +463,8 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
     Raises
     ------
     sqlite3.Error
-        If there is an error while connecting to the database or executing a query.
+        If there is an error while connecting 
+        to the database or executing a query.
 
     """
     create_table_query = {
@@ -464,7 +472,7 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
         "project_timeseries": "create_table_project_timeseries.sql",
     }
     logging.info("Connecting to the database.")
-    with sqlite3.connect("esdc.db") as conn:
+    with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         logging.debug("creating table %s in database", table_name)
         cursor.executescript(_load_sql_script(create_table_query[table_name]))
@@ -508,14 +516,16 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
 def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
     """
     Reads a CSV file and returns its contents as a tuple of two values:
-    a list of lists of strings representing the data, and a list of strings representing the header.
+    a list of lists of strings representing the data, 
+    and a list of strings representing the header.
 
     Args:
         file: The path to the CSV file as a string,
         or an iterable of strings representing the CSV data.
 
     Returns:
-        Tuple[List[List[str]], List[str]]: A tuple containing the data and header of the CSV file.
+        Tuple[List[List[str]], List[str]]: A tuple containing the data 
+        and header of the CSV file.
     """
 
     class EsdcDialect(csv.Dialect):
