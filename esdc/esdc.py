@@ -13,6 +13,7 @@ import requests
 from dotenv import load_dotenv, find_dotenv
 import typer
 from typing_extensions import Annotated
+import rich
 from rich.progress import Progress
 from rich.logging import RichHandler
 from rich.prompt import Prompt
@@ -25,10 +26,12 @@ from .validate import RuleEngine
 APP_NAME = "esdc"
 APP_AUTHOR = "skk"
 dirs = PlatformDirs(appname=APP_NAME, appauthor=APP_AUTHOR)
-DB_PATH = dirs.user_data_path / "esdc.db"
+DB_PATH = dirs.user_data_path
+BASE_API_URL_V2 = "https://esdc.skkmigas.go.id/api/v2"
 TABLES: Tuple[str] = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
 
 app = typer.Typer(no_args_is_help=True)
+
 
 @app.callback()
 def main(verbose: int = 0):
@@ -62,16 +65,17 @@ def main(verbose: int = 0):
         logger.setLevel(logging.WARNING)
     logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
 
+
 @app.command()
 def init():
     fetch()
+
 
 @app.command()
 def fetch(
     filetype: str = typer.Option("csv", help="Options: csv, json, zip"),
     save: bool = typer.Option(False, "--save/--no-save", help="Save to file or not"),
 ) -> None:
-
     """
     Fetch data from ESDC and save it to a file.
 
@@ -132,10 +136,12 @@ def reload(
 def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
     like: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
-    year: Annotated[Optional[int], typer.Option(min=2019, help="Filter year value")] = None,
+    year: Annotated[
+        Optional[int], typer.Option(min=2019, help="Filter year value")
+    ] = None,
     output: Annotated[Optional[int], typer.Option(help="Detail of output.")] = 0,
     save: Annotated[Optional[bool], typer.Option(help="Save the output data")] = True,
-    columns: Annotated[Optional[str], typer.Option(help="select column")] = None
+    columns: Annotated[Optional[str], typer.Option(help="select column")] = None,
 ):
     """
     Show data from a specific table.
@@ -164,10 +170,11 @@ def show(
         year=year,
         output=output,
         save=save,
-        columns=columns
+        columns=columns,
     )
-    pd.options.display.float_format = "{:,.2f}".format
-    print(df.to_string(index=False))
+    if df is not None:
+        pd.options.display.float_format = "{:,.2f}".format
+        rich.print(df.to_string(index=False))
 
 
 @app.command()
@@ -198,7 +205,7 @@ def run_query(
     output: Optional[int] = 0,
     save: bool = False,
     columns: Optional[List[str]] = None,
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
 
     output = min(output, 4)
 
@@ -219,7 +226,7 @@ def run_query(
     if columns is not None:
         pattern = r".*?(?=FROM)"
         query = re.sub(pattern, "", query)
-        select_query = "SELECT" + ', '.join(col for col in columns)
+        select_query = "SELECT" + ", ".join(col for col in columns)
         logging.debug("query: %s", select_query)
         query = select_query[:-1] + query
 
@@ -242,10 +249,17 @@ def run_query(
 
     # Execute the query
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(DB_PATH / "esdc.db") as conn:
             df = pd.read_sql_query(query, conn)
-    except sqlite3.OperationalError as e:
-        logging.error("Cannot query data. Database file does not exist. %s", e)
+    except sqlite3.OperationalError:
+        logging.error(
+            """Cannot query data. Database file does not exist.
+        Try to run this command first:
+        
+        esdc fetch --save  
+        """
+        )
+        return None
 
     if save:
         today = date.today().strftime("%Y%m%d")
@@ -357,8 +371,10 @@ def esdc_url_builder(
     load_dotenv(find_dotenv())
     url = os.getenv("ESDC_URL")
     if url is None:
-        logging.error("Could not find Environment Variables.")
-        raise FileNotFoundError()
+        logging.warning(
+            "Could not find Environment Variables. Url set to: https://esdc.skkmigas.go.id/api/v2/"
+        )
+        url = BASE_API_URL_V2
 
     url += api_ver.value
     tables = {
@@ -429,12 +445,19 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
 
             with closing(io.BytesIO()) as f:
                 with Progress() as progress:
-                    task_id = progress.add_task(f"[red]Downloading {round(file_size/1E6)} MB...", total=file_size, unit="B", transfer=True, speed_unit="B/s")
+                    task_id = progress.add_task(
+                        f"[red]Downloading {round(file_size/1E6)} MB...",
+                        total=file_size,
+                        unit="B",
+                        transfer=True,
+                        speed_unit="B/s",
+                    )
                     for chunk in response.iter_content(chunk_size=8192):
                         f.write(chunk)
                         progress.update(task_id, advance=len(chunk))
                     logging.info(
-                        "File downloaded successfully to memory (Size: %s bytes)", f.tell()
+                        "File downloaded successfully to memory (Size: %s bytes)",
+                        f.tell(),
                     )
                     return f.getvalue()
 
@@ -463,7 +486,7 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
     Raises
     ------
     sqlite3.Error
-        If there is an error while connecting 
+        If there is an error while connecting
         to the database or executing a query.
 
     """
@@ -472,7 +495,11 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
         "project_timeseries": "create_table_project_timeseries.sql",
     }
     logging.info("Connecting to the database.")
-    with sqlite3.connect(DB_PATH) as conn:
+    if not DB_PATH.exists():
+        DB_PATH.mkdir(parents=True, exist_ok=True)
+        logging.info("Database does not exist. Creating new database.")
+        logging.debug("Database location: %s", DB_PATH)
+    with sqlite3.connect(DB_PATH / "esdc.db") as conn:
         cursor = conn.cursor()
         logging.debug("creating table %s in database", table_name)
         cursor.executescript(_load_sql_script(create_table_query[table_name]))
@@ -516,7 +543,7 @@ def db_data_loader(data: List, header: List[str], table_name: str) -> None:
 def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
     """
     Reads a CSV file and returns its contents as a tuple of two values:
-    a list of lists of strings representing the data, 
+    a list of lists of strings representing the data,
     and a list of strings representing the header.
 
     Args:
@@ -524,7 +551,7 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
         or an iterable of strings representing the CSV data.
 
     Returns:
-        Tuple[List[List[str]], List[str]]: A tuple containing the data 
+        Tuple[List[List[str]], List[str]]: A tuple containing the data
         and header of the CSV file.
     """
 
