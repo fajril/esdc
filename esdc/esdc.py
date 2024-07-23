@@ -1,3 +1,37 @@
+"""
+ESDC Data Management Module
+
+This module provides functionality for managing data 
+related to the ESDC (https://esdc.skkmigas.go.id). 
+It includes commands for fetching, validating, and displaying data from various resources,
+as well as loading data into a SQLite database. 
+The module utilizes the Typer library for command-line interface (CLI) interactions 
+and Rich for enhanced logging and output formatting.
+
+Key Features:
+- Fetch data from the ESDC API in various formats (CSV, JSON, ZIP).
+- Load data into a SQLite database.
+- Validate data against predefined rules.
+- Display data from specific tables with filtering options.
+- Save output data to files.
+
+Dependencies:
+- pandas: For data manipulation and storage.
+- requests: For making HTTP requests to the ESDC API.
+- rich: For enhanced terminal output and logging.
+- dotenv: For loading environment variables from a .env file.
+- sqlite3: For database operations.
+
+Commands:
+- init: Initializes the application and fetches data.
+- fetch: Downloads data from the ESDC API and saves it to a specified file type.
+- reload: Reloads data from existing binary files into the database.
+- show: Displays data from a specified table with optional filters.
+- validate: Validates data from a file or performs a full validation.
+
+Usage:
+Run the module from the command line to access the available commands and options.
+"""
 import os
 import io
 from datetime import date
@@ -79,7 +113,7 @@ def init():
 
 @app.command()
 def fetch(
-    filetype: str = typer.Option("csv", help="Options: csv, json, zip"),
+    filetype: str = typer.Option("csv", help="Options: csv, json"),
     save: bool = typer.Option(False, "--save/--no-save", help="Save to file or not"),
 ) -> None:
     """
@@ -459,13 +493,13 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         If there is a request error while downloading the file.
 
     """
-    username: Optional[str] = ""
-    password: Optional[str] = ""
+    username: str = ""
+    password: str = ""
 
     env_available = load_dotenv(find_dotenv())
     if env_available:
-        username = os.getenv("ESDC_USER")
-        password = os.getenv("ESDC_PASS")
+        username = os.getenv("ESDC_USER") or ""
+        password = os.getenv("ESDC_PASS") or ""
 
     if not username:
         username = Prompt.ask("user: ")

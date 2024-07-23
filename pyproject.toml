@@ -21,7 +21,8 @@ dependencies = [
   "pandas==2.2.2",
   "tqdm==4.66.4",
   "typer==0.12.3",
-  "platformdirs==4.2.2"
+  "platformdirs==4.2.2",
+  "tabulate",
 ]
 
 [project.urls]
