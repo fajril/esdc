@@ -31,7 +31,10 @@ APP_AUTHOR = "skk"
 dirs = PlatformDirs(appname=APP_NAME, appauthor=APP_AUTHOR)
 DB_PATH = dirs.user_data_path
 BASE_API_URL_V2 = "https://esdc.skkmigas.go.id/api/v2"
-TABLES: Tuple[TableName, TableName] = (TableName.PROJECT_RESOURCES, TableName.PROJECT_TIMESERIES)
+TABLES: Tuple[TableName, TableName] = (
+    TableName.PROJECT_RESOURCES,
+    TableName.PROJECT_TIMESERIES,
+)
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -57,7 +60,6 @@ def main(verbose: int = 0):
     load_dotenv(find_dotenv())
     handler = RichHandler(show_time=False)
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    #handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     logging.root.handlers.clear()
     logging.root.addHandler(handler)
     logger = logging.getLogger()
@@ -125,9 +127,11 @@ def reload(
     """
     for table in TABLES:
         if Path(f"{table.value}.{filetype}").exists():
-            filename = table.value + f".{filetype}"
+            filename = f"{table.value}.{filetype}"
             if filetype == "csv":
-                _load_bin_as_csv(filename, table.value)
+                _load_file_as_csv(filename, table.value)
+            elif filetype == "json":
+                _load_file_as_json(filename, table.value)
             else:
                 logging.debug(
                     "failed to load %s. Unknown %s format", filename, filetype
@@ -170,7 +174,7 @@ def show(
         columns_splitted: Union[List[str], str] = columns.split(" ")
     else:
         columns_splitted = ""
-    df = run_query(
+    df = _run_query(
         table=TableName(table),
         like=like,
         year=year,
@@ -182,7 +186,9 @@ def show(
         pd.options.display.float_format = "{:,.2f}".format
         formatted_table = tabulate(
             df.map(lambda x: f"{x:<,.2f}" if isinstance(x, float) else x),
-            headers="keys", tablefmt="psql", showindex=False,
+            headers="keys",
+            tablefmt="psql",
+            showindex=False,
             stralign="right",
         )
         rich.print(formatted_table)
@@ -212,7 +218,7 @@ def validate(
         run_validation()
 
 
-def run_query(
+def _run_query(
     table: TableName,
     like: Optional[str] = None,
     year: Optional[int] = None,
@@ -223,22 +229,22 @@ def run_query(
 
     output = min(output, 4)
 
-    if table == TableName.PROJECT_RESOURCES:
-        queries = _load_sql_script("view_project_resources.sql")
-    elif table == TableName.FIELD_RESOURCES:
-        queries = _load_sql_script("view_field_resources.sql")
-    elif table == TableName.WA_RESOURCES:
-        queries = _load_sql_script("view_wa_resources.sql")
-    else:
-        queries = _load_sql_script("view_nkri_resources.sql")
+    sql_script_map = {
+        TableName.PROJECT_RESOURCES: "view_project_resources.sql",
+        TableName.FIELD_RESOURCES: "view_field_resources.sql",
+        TableName.WA_RESOURCES: "view_wa_resources.sql",
+        TableName.NKRI_RESOURCES: "view_nkri_resources.sql",
+    }
+    queries = _load_sql_script(sql_script_map[table])
 
-    if output > 1:
-        query = queries.split(";")[output - 1].strip()
-    else:
-        query = queries.split(";")[0].strip()
+    # Extract the query from the SQL script
+    query = queries.split(";")[max(0, output - 1)].strip()
 
+    # Modify the query based on the provided columns
     if columns:
         logging.debug("selected columns: %s", columns)
+        # Define the regex pattern to match any characters (including none)
+        # that come before the string "FROM" in a non-greedy way.
         pattern = r".*?(?=FROM)"
         query = re.sub(pattern, "", query)
         select_query = "SELECT" + ", ".join(col for col in columns)
@@ -276,6 +282,7 @@ def run_query(
         )
         return None
 
+    # Save the result to a CSV file if requested
     if save:
         today = date.today().strftime("%Y%m%d")
         df.to_csv(f"view_{table.value}_{today}.csv")
@@ -283,7 +290,7 @@ def run_query(
 
 
 def run_validation():
-    project_resources = run_query(TableName.PROJECT_RESOURCES, output=4)
+    project_resources = _run_query(TableName.PROJECT_RESOURCES, output=4)
     engine = RuleEngine(project_resources=project_resources)
     results = engine.run()
     if results.empty:
@@ -344,7 +351,12 @@ def load_esdc_data(
             # read_csv is used to handle remarks column that might
             # have commas in the string.
             content, header = _read_csv(decoded_data)
-            load_csv_to_db(content, header, table.value)
+            load_data_to_db(content, header, table.value)
+        elif filetype == FileType.JSON:
+            parsed_json = json.loads(data)
+            header = parsed_json[0].keys()
+            content = [list(item.values()) for item in parsed_json]
+            load_data_to_db(content, header, table.value)
 
 
 def esdc_url_builder(
@@ -396,26 +408,35 @@ def esdc_url_builder(
         TableName.PROJECT_RESOURCES: "project-resources",
         TableName.PROJECT_TIMESERIES: "project-timeseries",
     }
-    url = f"{url}/{tables[table_name]}?"
-    url = f"{url}verbose={verbose}"
+    url = f"{url}/{tables[table_name]}?verbose={verbose}"
+
     # TODO this is temporary fix since as of 2024-07-06
     # the API for time series does not support all year selection
     # remove this conditional if the API for project_timeseries is fixed.
     if table_name == TableName.PROJECT_TIMESERIES:
         report_year = 2023
     if report_year is not None:
-        url += f"&report-year={report_year}"
-    url += f"&output={file_type.value}"
+        url = f"{url}&report-year={report_year}"
+    url = f"{url}&output={file_type.value}"
 
     return url
 
 
-def _load_bin_as_csv(file: str, table_name):
+def _load_file_as_csv(file: str, table_name):
     with open(file, "rb") as f:
         data = f.read()
     decoded_data = data.decode("utf-8").splitlines()
     content, header = _read_csv(decoded_data)
-    load_csv_to_db(content, header, table_name)
+    load_data_to_db(content, header, table_name)
+
+
+def _load_file_as_json(file: str, table_name):
+    with open(file, "rb") as f:
+        data = f.read()
+    parsed_json = json.loads(data)
+    header = parsed_json[0].keys()
+    content = [list(item.values()) for item in parsed_json]
+    load_data_to_db(content, header, table_name)
 
 
 def esdc_downloader(url: str) -> Union[bytes, None]:
@@ -467,12 +488,12 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
                     DownloadColumn(binary_units=True),
                 ) as progress:
                     task_id = progress.add_task(
-                        f"[magenta]Downloading {round(file_size/1E6)} MB...",
+                        f"[cyan]Downloading {round(file_size/1E6)} MB...",
                         total=file_size,
                         unit="B",
                         transfer=True,
                         speed_unit="B/s",
-                        )
+                    )
                     if response.headers.get("Content-Encoding") == "gzip":
                         with gzip.GzipFile(fileobj=response.raw, mode="rb") as gz:
                             while True:
@@ -499,13 +520,15 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         return None
 
 
-def load_csv_to_db(data: List, header: List[str], table_name: str) -> None:
+def load_data_to_db(
+    content: List[List[str]], header: List[str], table_name: str
+) -> None:
     """
     Load data into the ESDC database.
 
     Parameters
     ----------
-    data : str
+    content : str
         The data to load into the database as a string.
     table_name : str
         The name of the table to load the data into.
@@ -539,7 +562,7 @@ def load_csv_to_db(data: List, header: List[str], table_name: str) -> None:
                 column_names})'
         logging.debug("Inserting table data %s into the database.", table_name)
         try:
-            cursor.executemany(insert_stmt, data)
+            cursor.executemany(insert_stmt, content)
         except sqlite3.Error as e:
             logging.debug("insert statement: %s", insert_stmt)
             raise sqlite3.Error(str(e)) from e
