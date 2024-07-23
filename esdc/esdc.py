@@ -32,6 +32,7 @@ Commands:
 Usage:
 Run the module from the command line to access the available commands and options.
 """
+
 import os
 import io
 from datetime import date
@@ -432,8 +433,8 @@ def esdc_url_builder(
     load_dotenv(find_dotenv())
     url = os.getenv("ESDC_URL")
     if url is None:
-        logging.warning(
-            "Could not find Environment Variables. Url set to: https://esdc.skkmigas.go.id/api/v2/"
+        logging.info(
+            "Environment Variables is not found. Url set to: https://esdc.skkmigas.go.id/api/v2/"
         )
         url = BASE_API_URL_V2
 
@@ -500,10 +501,13 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
     if env_available:
         username = os.getenv("ESDC_USER") or ""
         password = os.getenv("ESDC_PASS") or ""
+    else:
+        logging.debug("Environment variables is not found.")
 
     if not username:
-        username = Prompt.ask("user: ")
-        password = Prompt.ask("pass: ", password=True)
+        logging.debug("Requesting credential from user.")
+        username = Prompt.ask("user")
+        password = Prompt.ask("pass", password=True)
 
     try:
         logging.info("requesting data to server...")
