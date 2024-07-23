@@ -508,7 +508,6 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         logging.debug("Requesting credential from user.")
         username = Prompt.ask("user")
         password = Prompt.ask("pass", password=True)
-        rich.print(password)
 
     try:
         logging.info("requesting data to server...")
