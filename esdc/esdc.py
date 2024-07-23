@@ -65,7 +65,7 @@ APP_NAME = "esdc"
 APP_AUTHOR = "skk"
 dirs = PlatformDirs(appname=APP_NAME, appauthor=APP_AUTHOR)
 DB_PATH = dirs.user_data_path
-BASE_API_URL_V2 = "https://esdc.skkmigas.go.id/api/v2"
+BASE_API_URL_V2 = "https://esdc.skkmigas.go.id/"
 TABLES: Tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
     TableName.PROJECT_TIMESERIES,
@@ -434,7 +434,7 @@ def esdc_url_builder(
     url = os.getenv("ESDC_URL")
     if url is None:
         logging.info(
-            "Environment Variables is not found. Url set to: https://esdc.skkmigas.go.id/api/v2/"
+            "Environment Variables is not found. Url set to: https://esdc.skkmigas.go.id/"
         )
         url = BASE_API_URL_V2
 
@@ -508,6 +508,7 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         logging.debug("Requesting credential from user.")
         username = Prompt.ask("user")
         password = Prompt.ask("pass", password=True)
+        rich.print(password)
 
     try:
         logging.info("requesting data to server...")
