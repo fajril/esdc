@@ -108,33 +108,52 @@ def main(verbose: int = 0):
 
 
 @app.command()
-def init():
-    fetch()
-
-
-@app.command()
 def fetch(
     filetype: str = typer.Option("csv", help="Options: csv, json"),
-    save: bool = typer.Option(False, "--save/--no-save", help="Save to file or not"),
+    save: bool = typer.Option(
+        False,
+        "--save/--no-save",
+        help="Specify whether to save the fetched data to a file.",
+    ),
 ) -> None:
     """
     Fetch data from ESDC and save it to a file.
 
-    Args:
-        filetype (str, optional): The type of file to save the data to. Defaults to "csv".
-        save (bool, optional): Whether to save the data to a file. Defaults to True.
+    This function fetches data from the ESDC API and saves it to a file
+    based on the specified file type. If the file type is not supported,
+    a warning will be logged.
+
+    Parameters:
+        filetype:
+            The type of file to save the data to. Options are "csv" or "json".
+            Defaults to "csv".
+        save:
+            Indicates whether to save the data to a file. Defaults to False.
 
     Returns:
         None
-
-    Notes:
-        This function fetches data from ESDC and saves it to a file based on the provided filetype.
-        If the filetype is not available, a log message will be printed.
     """
+
+    env_available = load_dotenv(find_dotenv())
+    if env_available:
+        username = os.getenv("ESDC_USER") or ""
+        password = os.getenv("ESDC_PASS") or ""
+    else:
+        logging.debug("Environment variables is not found.")
+
+    if not username:
+        logging.debug("Requesting credential from user.")
+        username = Prompt.ask("user")
+        password = Prompt.ask("pass", password=True)
+
     if filetype == "csv":
-        load_esdc_data(filetype=FileType.CSV, to_file=save)
+        load_esdc_data(
+            filetype=FileType.CSV, to_file=save, username=username, password=password
+        )
     elif filetype == "json":
-        load_esdc_data(filetype=FileType.JSON, to_file=save)
+        load_esdc_data(
+            filetype=FileType.JSON, to_file=save, username=username, password=password
+        )
     else:
         logging.warning("File type %s is not available.", filetype)
 
@@ -183,7 +202,11 @@ def show(
         Optional[int], typer.Option(min=2019, help="Filter year value")
     ] = None,
     output: Annotated[int, typer.Option(help="Detail of output.")] = 0,
-    save: Annotated[bool, typer.Option(help="Save the output data")] = True,
+    save: bool = typer.Option(
+        False,
+        "--save/--no-save",
+        help="Specify whether to save the shown data to a file.",
+    ),
     columns: Annotated[str, typer.Option(help="select column")] = "",
 ):
     """
@@ -227,7 +250,6 @@ def show(
             stralign="right",
         )
         rich.print(formatted_table)
-        # rich.print(df.to_string(index=False, justify="end", col_space=15))
     else:
         logging.warning("Unable to show data.")
 
@@ -340,39 +362,42 @@ def run_validation():
 
 def load_esdc_data(
     filetype: FileType = FileType.CSV,
-    to_file=True,
+    to_file: bool = True,
+    username: str = "",
+    password: str = "",
 ) -> None:
     """
-    Downloads and loads data into the ESDC database.
+    Downloads and loads data from the ESDC API into the local database.
 
     This function downloads data from a specified URL and loads it into the ESDC database.
-    If the corresponding file already exists,
-    it can skip downloading and loading the data if the `update` parameter is set to `False`.
+    If the corresponding file already exists, it can skip downloading and loading the data
+    if the `to_file` parameter is set to `False`.
 
     Parameters
     ----------
-    ext : str
-        The file extension for the downloaded data. Currently, only "csv" is supported.
-    update : bool
-        Whether to update the database or skip downloading and loading data
-        if the corresponding file already exists.
+    filetype : FileType
+        The file type for the downloaded data. Currently, supports "csv" and "json".
+    to_file : bool
+        Whether to save the downloaded data to a file. Defaults to True.
+    username : str
+        The username for authenticating with the ESDC API.
+    password : str
+        The password for authenticating with the ESDC API.
 
     Returns
     -------
     None
-        None
 
     Raises
     ------
-    click.exceptions.BadParameter
-        If an invalid file extension is provided.
-
+    Exception
+        Raises an exception if the download fails or if the data format is unsupported.
     """
     for table in TABLES:
         logging.info("Downloading %s table.", table.value)
         url = esdc_url_builder(table_name=table, file_type=filetype)
         logging.info("downloading from %s", url)
-        data = esdc_downloader(url)
+        data = esdc_downloader(url, username, password)
         if data is None:
             logging.warning("Failed to download %s data.", table.value)
             break
@@ -474,7 +499,9 @@ def _load_file_as_json(file: str, table_name):
     load_data_to_db(content, header, table_name)
 
 
-def esdc_downloader(url: str) -> Union[bytes, None]:
+def esdc_downloader(
+    url: str, username: str = "", password: str = ""
+) -> Union[bytes, None]:
     """
     Download a file from a URL using the requests library and return its content.
 
@@ -494,21 +521,6 @@ def esdc_downloader(url: str) -> Union[bytes, None]:
         If there is a request error while downloading the file.
 
     """
-    username: str = ""
-    password: str = ""
-
-    env_available = load_dotenv(find_dotenv())
-    if env_available:
-        username = os.getenv("ESDC_USER") or ""
-        password = os.getenv("ESDC_PASS") or ""
-    else:
-        logging.debug("Environment variables is not found.")
-
-    if not username:
-        logging.debug("Requesting credential from user.")
-        username = Prompt.ask("user")
-        password = Prompt.ask("pass", password=True)
-
     try:
         logging.info("requesting data to server...")
         response = requests.get(
