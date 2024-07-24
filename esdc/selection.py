@@ -43,4 +43,7 @@ class FileType(Enum):
     JSON = "json"
     ZIP = "zip"
 
-
+class Severity(Enum):
+    STRICT = "strict"
+    WARNING = "warning"
+    INFO = "info"
