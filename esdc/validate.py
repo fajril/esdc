@@ -54,14 +54,14 @@ class RuleEngine:
         Initiates the validation process.
 
         This method runs all validation rules.
-        The results of each validation rule are collected and 
+        The results of each validation rule are collected and
         transformed into a standardized format.
 
         Returns:
             A list of tuples, where each tuple contains the following information:
                 - rule_name (str): The name of the validation rule.
                 - message (str): A brief message describing the validation result.
-                - severity (Severity): The severity level of the validation result 
+                - severity (Severity): The severity level of the validation result
                   (e.g., error, warning, info).
                 - series (pd.Series): A pandas Series containing the validation result data.
         """

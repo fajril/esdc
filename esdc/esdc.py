@@ -40,10 +40,8 @@ from pathlib import Path
 import csv
 import json
 import gzip
-import sqlite3
 from contextlib import closing
 import logging
-import re
 from typing import Union, List, Tuple, Iterable, Optional
 
 import requests
@@ -54,18 +52,15 @@ import rich
 from rich.progress import Progress, TransferSpeedColumn, DownloadColumn
 from rich.logging import RichHandler
 from rich.prompt import Prompt
-from platformdirs import PlatformDirs
 import pandas as pd
 from tabulate import tabulate
 
-from .selection import TableName, ApiVer, FileType
-from .validate import RuleEngine
+from esdc.selection import TableName, ApiVer, FileType
+from esdc.validate import RuleEngine
+from esdc.configs import Config
+from esdc.summarizer import describer
+from esdc.dbmanager import run_query, load_data_to_db
 
-APP_NAME = "esdc"
-APP_AUTHOR = "skk"
-dirs = PlatformDirs(appname=APP_NAME, appauthor=APP_AUTHOR)
-DB_PATH = dirs.user_data_path
-BASE_API_URL_V2 = "https://esdc.skkmigas.go.id/"
 TABLES: Tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
     TableName.PROJECT_TIMESERIES,
@@ -140,6 +135,8 @@ def fetch(
         password = os.getenv("ESDC_PASS") or ""
     else:
         logging.debug("Environment variables is not found.")
+        username = ""
+        password = ""
 
     if not username:
         logging.debug("Requesting credential from user.")
@@ -232,12 +229,11 @@ def show(
         columns_splitted: Union[List[str], str] = columns.split(" ")
     else:
         columns_splitted = ""
-    df = _run_query(
+    df = run_query(
         table=TableName(table),
         like=like,
         year=year,
         output=output,
-        save=save,
         columns=columns_splitted,
     )
     if df is not None:
@@ -250,8 +246,25 @@ def show(
             stralign="right",
         )
         rich.print(formatted_table)
+        # Save the result to a CSV file if requested
+        if save:
+            today = date.today().strftime("%Y%m%d")
+            df.to_csv(f"view_{table}_{today}.csv")
     else:
         logging.warning("Unable to show data.")
+
+
+@app.command()
+def describe(
+    table: Annotated[str, typer.Argument(help="Table name.")] = "project_resources",
+):
+    selected_table = TableName(table)
+    articles = describer(table=selected_table)
+    if articles is not None:
+        with open(f"{table}.txt", "w", encoding="utf-8") as f:
+            f.writelines(f"{paragraph}\n" for paragraph in articles)
+        rich.print(articles[0])
+        rich.print("dan seterusnya...")
 
 
 @app.command()
@@ -275,79 +288,8 @@ def validate(
         run_validation()
 
 
-def _run_query(
-    table: TableName,
-    like: Optional[str] = None,
-    year: Optional[int] = None,
-    output: int = 0,
-    save: bool = False,
-    columns: Union[str, List[str]] = "",
-) -> pd.DataFrame | None:
-
-    output = min(output, 4)
-
-    sql_script_map = {
-        TableName.PROJECT_RESOURCES: "view_project_resources.sql",
-        TableName.FIELD_RESOURCES: "view_field_resources.sql",
-        TableName.WA_RESOURCES: "view_wa_resources.sql",
-        TableName.NKRI_RESOURCES: "view_nkri_resources.sql",
-    }
-    queries = _load_sql_script(sql_script_map[table])
-
-    # Extract the query from the SQL script
-    query = queries.split(";")[max(0, output - 1)].strip()
-
-    # Modify the query based on the provided columns
-    if columns:
-        logging.debug("selected columns: %s", columns)
-        # Define the regex pattern to match any characters (including none)
-        # that come before the string "FROM" in a non-greedy way.
-        pattern = r".*?(?=FROM)"
-        query = re.sub(pattern, "", query)
-        select_query = "SELECT" + ", ".join(col for col in columns)
-        logging.debug("query: %s", select_query)
-        query = select_query[:-1] + query
-
-    # Replace placeholders with actual values
-    if table == TableName.NKRI_RESOURCES:
-        if year is None:
-            query = query.replace("WHERE report_year = {year}", "")
-        else:
-            query = query.replace("{year}", str(year))
-    else:
-        if like is None:
-            query = query.replace("{like}", "")
-        else:
-            query = query.replace("{like}", like)
-
-        if year is None:
-            query = query.replace("AND report_year = {year}", "")
-        else:
-            query = query.replace("{year}", str(year))
-
-    # Execute the query
-    try:
-        with sqlite3.connect(DB_PATH / "esdc.db") as conn:
-            df = pd.read_sql_query(query, conn)
-    except sqlite3.OperationalError:
-        logging.error(
-            """Cannot query data. Database file does not exist.
-        Try to run this command first:
-        
-        esdc fetch --save  
-        """
-        )
-        return None
-
-    # Save the result to a CSV file if requested
-    if save:
-        today = date.today().strftime("%Y%m%d")
-        df.to_csv(f"view_{table.value}_{today}.csv")
-    return df
-
-
 def run_validation():
-    project_resources = _run_query(TableName.PROJECT_RESOURCES, output=4)
+    project_resources = run_query(TableName.PROJECT_RESOURCES, output=4)
     engine = RuleEngine(project_resources=project_resources)
     results = engine.run()
     if results.empty:
@@ -461,7 +403,7 @@ def esdc_url_builder(
         logging.info(
             "Environment Variables is not found. Url set to: https://esdc.skkmigas.go.id/"
         )
-        url = BASE_API_URL_V2
+        url = Config.BASE_API_URL_V2
 
     url += api_ver.value
     tables = {
@@ -570,71 +512,6 @@ def esdc_downloader(
         return None
 
 
-def load_data_to_db(
-    content: List[List[str]], header: List[str], table_name: str
-) -> None:
-    """
-    Load data into the ESDC database.
-
-    Parameters
-    ----------
-    content : str
-        The data to load into the database as a string.
-    table_name : str
-        The name of the table to load the data into.
-
-    Returns
-    -------
-    None
-
-    Raises
-    ------
-    sqlite3.Error
-        If there is an error while connecting
-        to the database or executing a query.
-
-    """
-    create_table_query = {
-        "project_resources": "create_table_project_resources.sql",
-        "project_timeseries": "create_table_project_timeseries.sql",
-    }
-    logging.info("Connecting to the database.")
-    if not DB_PATH.exists():
-        DB_PATH.mkdir(parents=True, exist_ok=True)
-        logging.info("Database does not exist. Creating new database.")
-        logging.debug("Database location: %s", DB_PATH)
-    with sqlite3.connect(DB_PATH / "esdc.db") as conn:
-        cursor = conn.cursor()
-        logging.debug("creating table %s in database", table_name)
-        cursor.executescript(_load_sql_script(create_table_query[table_name]))
-        column_names = ", ".join(["?" for _ in header])
-        insert_stmt = f'INSERT INTO {table_name} ({", ".join(header)}) VALUES ({
-                column_names})'
-        logging.debug("Inserting table data %s into the database.", table_name)
-        try:
-            cursor.executemany(insert_stmt, content)
-        except sqlite3.Error as e:
-            logging.debug("insert statement: %s", insert_stmt)
-            raise sqlite3.Error(str(e)) from e
-
-        logging.debug("Creating uuid column for table %s", table_name)
-        uuid_query = _load_sql_script("create_column_uuid.sql")
-        cursor.executescript(uuid_query.replace("{table_name}", table_name))
-
-        if table_name == "project_resources":
-            logging.debug("creating project_stage column in project_resources")
-            cursor.executescript(
-                _load_sql_script("create_project_resources_project_stage.sql")
-            )
-
-            logging.debug("Creating table view for field, working area, nkri.")
-            cursor.executescript(_load_sql_script("create_esdc_view.sql"))
-        cursor.execute("VACUUM;")
-        conn.commit()
-
-        logging.info("Table %s is loaded into database.", table_name)
-
-
 def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
     """
     Reads a CSV file and returns its contents as a tuple of two values:
@@ -669,12 +546,6 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
     for row in reader:
         data.append(row)
     return data, header
-
-
-def _load_sql_script(script_file: str) -> str:
-    file = Path(__file__).parent / "sql" / script_file
-    with open(file, "r", encoding="utf-8") as f:
-        return f.read()
 
 
 if __name__ == "__main__":

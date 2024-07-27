@@ -2,7 +2,7 @@ import logging
 from typing import Tuple
 import pandas as pd
 
-from .validate import Severity
+from esdc.validate import Severity
 
 
 def re0007(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
@@ -212,15 +212,14 @@ def re0015(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
     )
 
     invalid = ~(
-        project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
-            "rec_oil"
-        ]
+        project_resources[project_resources["uncert_lvl"] == "1. Low Value"]["rec_oil"]
         <= project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
             "mid_rec_oil"
         ]
     )
     logging.debug("%s: %s %s", re0015.__name__, invalid.sum(), severity.value)
     return "rec_oil", re0015.__name__, severity, invalid
+
 
 def re0016(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
@@ -254,6 +253,7 @@ def re0016(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
     logging.debug("%s: %s %s", re0016.__name__, invalid.sum(), severity.value)
     return "rec_oil", re0016.__name__, severity, invalid
 
+
 def re0017(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
     ### RE0017 - Condensate GRR/CR/PR: 1R/1C/1U must be less than or equal to 2R/2C/2U
@@ -276,15 +276,14 @@ def re0017(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
     )
 
     invalid = ~(
-        project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
-            "rec_con"
-        ]
+        project_resources[project_resources["uncert_lvl"] == "1. Low Value"]["rec_con"]
         <= project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
             "mid_rec_con"
         ]
     )
     logging.debug("%s: %s %s", re0017.__name__, invalid.sum(), severity.value)
     return "rec_con", re0017.__name__, severity, invalid
+
 
 def re0018(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
@@ -318,6 +317,7 @@ def re0018(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
     logging.debug("%s: %s %s", re0018.__name__, invalid.sum(), severity.value)
     return "rec_con", re0018.__name__, severity, invalid
 
+
 def re0019(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
     ### RE0019 - Associated Gas GRR/CR/PR: 1R/1C/1U must be less than or equal to 2R/2C/2U
@@ -340,15 +340,14 @@ def re0019(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
     )
 
     invalid = ~(
-        project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
-            "rec_ga"
-        ]
+        project_resources[project_resources["uncert_lvl"] == "1. Low Value"]["rec_ga"]
         <= project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
             "mid_rec_ga"
         ]
     )
     logging.debug("%s: %s %s", re0019.__name__, invalid.sum(), severity.value)
     return "rec_ga", re0019.__name__, severity, invalid
+
 
 def re0020(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
@@ -382,6 +381,7 @@ def re0020(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
     logging.debug("%s: %s %s", re0020.__name__, invalid.sum(), severity.value)
     return "rec_ga", re0020.__name__, severity, invalid
 
+
 def re0021(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
     ### RE0021 - Non Associated Gas GRR/CR/PR: 1R/1C/1U must be less than or equal to 2R/2C/2U
@@ -404,15 +404,14 @@ def re0021(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Seri
     )
 
     invalid = ~(
-        project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
-            "rec_gn"
-        ]
+        project_resources[project_resources["uncert_lvl"] == "1. Low Value"]["rec_gn"]
         <= project_resources[project_resources["uncert_lvl"] == "1. Low Value"][
             "mid_rec_gn"
         ]
     )
     logging.debug("%s: %s %s", re0021.__name__, invalid.sum(), severity.value)
     return "rec_gn", re0021.__name__, severity, invalid
+
 
 def re0022(project_resources: pd.DataFrame) -> Tuple[str, str, Severity, pd.Series]:
     r"""
