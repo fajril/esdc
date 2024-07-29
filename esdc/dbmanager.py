@@ -78,11 +78,33 @@ def load_data_to_db(
 
 def run_query(
     table: TableName,
+    where: Optional[str] = None,
     like: Optional[str] = None,
     year: Optional[int] = None,
     output: int = 0,
     columns: Union[str, List[str]] = "",
 ) -> pd.DataFrame | None:
+    """
+    Execute a query on the specified table in the database.
+
+    Args:
+    - table (TableName): The table to query.
+    - where (str, optional): The value for the WHERE clause. Defaults to None.
+    - like (str, optional): The value for the LIKE clause. Defaults to None.
+    - year (int, optional): The year to filter by. Defaults to None.
+    - output (int, optional): The output format. Defaults to 0.
+    - columns (str or list of str, optional): The columns to select. Defaults to "".
+
+    Returns:
+    - pd.DataFrame or None: The query results as a pandas DataFrame, or None if the query fails.
+
+    Notes:
+    - The query is loaded from a SQL script file based on the table name.
+    - The query is modified to include the specified columns, if any.
+    - The query is executed on the database file located at the path specified in the Config.
+    - If the database file does not exist, an error message is logged and None is returned.
+    - If the query fails, an error message is logged and None is returned.
+    """
 
     output = min(output, 4)
 
@@ -111,32 +133,44 @@ def run_query(
     # Replace placeholders with actual values
     if table == TableName.NKRI_RESOURCES:
         if year is None:
-            query = query.replace("WHERE report_year = {year}", "")
+            query = query.replace("WHERE report_year = <year>", "")
         else:
-            query = query.replace("{year}", str(year))
+            query = query.replace("<year>", str(year))
     else:
-        if like is None:
-            query = query.replace("{like}", "")
-        else:
-            query = query.replace("{like}", like)
+        where_clause = {
+            TableName.PROJECT_RESOURCES: "project_name",
+            TableName.FIELD_RESOURCES: "field_name",
+        }.get(table, "wk_name")
+        query = query.replace("<where>", where if where is not None else where_clause)
+        query = query.replace("<like>", like if like is not None else "")
 
-        if year is None:
-            query = query.replace("AND report_year = {year}", "")
-        else:
-            query = query.replace("{year}", str(year))
+        query = (
+            query.replace("AND report_year = <year>", "")
+            if year is None
+            else query.replace("<year>", str(year))
+        )
+
+        query = query.replace("<like>", "" if like is None else like)
+        query = query.replace(
+            "AND report_year = <year>",
+            "" if year is None else query.replace("<year>", str(year)),
+        )
 
     # Execute the query
+    if not Path.exists(Config.get_db_path() / "esdc.db"):
+        logging.error(
+            """
+        Database file does not exist. Try to run this command first:
+        
+            esdc fetch --save
+        """
+        )
+        return None
     try:
         with sqlite3.connect(Config.get_db_path() / "esdc.db") as conn:
             df = pd.read_sql_query(query, conn)
-    except sqlite3.OperationalError:
-        logging.error(
-            """Cannot query data. Database file does not exist.
-        Try to run this command first:
-        
-        esdc fetch --save  
-        """
-        )
+    except sqlite3.OperationalError as e:
+        logging.error("Cannot query data. Message: %s", e)
         return None
 
     return df

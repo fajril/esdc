@@ -194,6 +194,7 @@ def reload(
 @app.command()
 def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
+    where: Annotated[Optional[str], typer.Option(help="Column to search.")] = None,
     like: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
     year: Annotated[
         Optional[int], typer.Option(min=2019, help="Filter year value")
@@ -211,10 +212,12 @@ def show(
 
     Args:
         table (str): The name of the table to show data from.
+        where (str, optional): The column to search. Defaults to None.
         like (str, optional): A filter value to apply to the data. Defaults to "".
-        year (str, optional): A filter year value to apply to the data. Defaults to None.
+        year (int, optional): A filter year value to apply to the data. Defaults to None.
         output (int, optional): The level of detail to show in the output. Defaults to 0.
-        save (bool, optional): Whether to save the output data. Defaults to True.
+        save (bool, optional): Whether to save the output data to a file. Defaults to False.
+        columns (str, optional): A space-separated list of column(s) to select. Defaults to "".
 
     Returns:
         None
@@ -223,7 +226,7 @@ def show(
         This function runs a query on the specified table with the provided filters
         and displays the result.
         The output is formatted to display float values with two decimal places.
-        If the save option is True, the output data will be saved.
+        If the save option is True, the output data will be saved to a CSV file.
     """
     if columns.strip():
         columns_splitted: Union[List[str], str] = columns.split(" ")
@@ -231,6 +234,7 @@ def show(
         columns_splitted = ""
     df = run_query(
         table=TableName(table),
+        where=where,
         like=like,
         year=year,
         output=output,
@@ -527,14 +531,14 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
         and header of the CSV file.
     """
 
-    class EsdcDialect(csv.Dialect):
+    class _EsdcDialect(csv.Dialect):
         delimiter = ";"
         quotechar = '"'
         doublequote = True
         lineterminator = "\n"
         quoting = csv.QUOTE_STRINGS
 
-    csv.register_dialect("esdc", EsdcDialect)
+    csv.register_dialect("esdc", _EsdcDialect)
 
     if isinstance(file, str):
         with open(file, "r", newline="", encoding="utf-8") as csvfile:

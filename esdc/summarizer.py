@@ -12,7 +12,8 @@ def describer(table: TableName) -> List[str] | None:
         df = run_query(table=table)
         if df is not None:
             df.sort_values(
-                by=["report_year", "project_class"], ascending=[False, True],
+                by=["report_year", "project_class"],
+                ascending=[False, True],
                 inplace=True,
             )
         else:
