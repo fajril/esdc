@@ -250,12 +250,14 @@ def show(
             stralign="right",
         )
         rich.print(formatted_table)
-        # Save the result to a CSV file if requested
+        # Save the result to a Excel file if requested
         if save:
             today = date.today().strftime("%Y%m%d")
-            df.to_csv(f"view_{table}_{today}.csv")
+            df.to_excel(
+                f"view_{table}_{today}.xlsx", index=False, sheet_name="resources report"
+            )
     else:
-        logging.warning("Unable to show data.")
+        logging.warning("Unable to show data. The query is none.")
 
 
 @app.command()
