@@ -1,46 +1,121 @@
-import sqlite3
-import pandas as pd
 import logging
+from typing import List
 
 import ollama
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
+from esdc.selection import TableName
+from esdc.dbmanager import run_query
 
-def query_table(table_name: str) -> pd.DataFrame:
-    """
-    Query a table from an SQLite database and return a Pandas DataFrame.
 
-    Parameters
-    ----------
-    table_name : str
-        The name of the table to query.
+def describer(table: TableName) -> List[str] | None:
+    if table == TableName.NKRI_RESOURCES:
+        df = run_query(table=table)
+        if df is not None:
+            df.sort_values(
+                by=["report_year", "project_class"],
+                ascending=[False, True],
+                inplace=True,
+            )
+        else:
+            logging.warning("No query result for %s.", table.value)
+            return None
+    else:
+        df = run_query(table=table, output=4)
+        if df is not None:
+            df.sort_values(
+                by=["report_year", "wk_name", "field_name", "project_class"],
+                ascending=[False, True, True, True],
+                inplace=True,
+            )
+        else:
+            logging.warning("No query result for %s.", table.value)
+            return None
+    article = []
+    df = df[df.uncert_lvl == "2. Middle Value"]
 
-    Returns
-    -------
-    pd.DataFrame
-        A DataFrame containing the queried table.
+    for _, row in df.iterrows():
+        if table == TableName.NKRI_RESOURCES:
 
-    Raises
-    ------
-    sqlite3.Error
-        If there is an error connecting to the database or executing the query.
-    """
-    try:
-        with sqlite3.connect("esdc.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"""SELECT * FROM {table_name}""")
-            results = cursor.fetchall()
-            columns = [col[0] for col in cursor.description]
-            df = pd.DataFrame(results, columns=columns)
-    except sqlite3.Error as e:
-        logging.error("Exception occured: %s", str(e))
-        raise e
+            if row.project_class == "1. Reserves & Recoverables":
+                prj_class = "Government of Indonesia Recoverable Resources (GRR)"
+            else:
+                prj_class = row.project_class[3:]
+            paragraph = f"Berdasarkan laporan status 31.12.{row.report_year},"
+            if prj_class == "Government of Indonesia Recoverable Resources (GRR)":
+                paragraph = (
+                    f"{paragraph}"
+                    f" cadangan nasional 2P (proven + probable reserves)"
+                    f" minyak sebesar {round(row.reserves_oc / 1000)} MMSTB (juta barel)"
+                    f" dan gas sebesar {round(row.reserves_an)} BSCF (milyar kaki kubik)."
+                    f" Potensi {prj_class} untuk {row.project_stage[3:]} secara nasional"
+                    f" minyak sebesar {round(row.resources_oc / 1000)} MMSTB (juta barel)"
+                    f" dan gas sebesar {round(row.resources_an)} BSCF (milyar kaki kubik)."
+                )
+            else:
+                paragraph = (
+                    f"{paragraph}"
+                    f" Potensi {prj_class} untuk {row.project_stage[3:]} secara nasional"
+                    f" minyak sebesar {round(row.resources_oc / 1000)} MMSTB (juta barel)"
+                    f" dan gas sebesar {round(row.resources_an)} BSCF (milyar kaki kubik)."
+                )
 
-    return df
+        elif table == TableName.FIELD_RESOURCES:
 
-def exec_summarizer(text: str="", data:str="", context: str="", model: str="qwen2") -> str:
+            if row.project_class == "1. Reserves & Recoverables":
+                prj_class = "Government of Indonesia Recoverable Resources (GRR)"
+            else:
+                prj_class = row.project_class[3:]
+
+            paragraph = (
+                f"Berdasarkan laporan status 31.12.{row.report_year}, lapangan {row.field_name}"
+                f" (field id: {row.field_id} lat: {row.field_lat} long: {row.field_long})"
+                f" berada di wilayah kerja {row.wk_name} dengan operator {row.operator_name}."
+            )
+            if row.basin86 != "":
+                paragraph = (
+                    f"{paragraph}"
+                    f" Lapangan ini berada di cekungan migas {row.basin86}."
+                    f" Lapangan ini"
+                )
+            else:
+                paragraph = f"{paragraph}" f" Lapangan ini"
+            if prj_class == "Government of Indonesia Recoverable Resources (GRR)":
+                paragraph = (
+                    f"{paragraph}"
+                    f" memiliki cadangan 2P (proven + probable reserves) minyak sebesar {round(row.res_oc)} MSTB"
+                    f" dan gas sebesar {round(row.res_an)} BSCF."
+                    f" Lapangan ini juga memiliki potensi {prj_class}"
+                    f" minyak sebesar {round(row.rec_oc_risked)} MSTB dan gas sebesar {round(row.rec_an_risked)} BSCF."
+                )
+            else:
+                if row.rec_oc_risked + row.rec_an_risked > 0:
+                    paragraph = (
+                        f"{paragraph} memiliki potensi {prj_class} untuk {row.project_stage[3:]}"
+                        f" minyak sebesar {round(row.rec_oc_risked)} MSTB dan gas sebesar {round(row.rec_an_risked)} BSCF."
+                        f" Total proyek dalam klasifikasi {prj_class} untuk {row.project_stage[3:]} sebanyak {row.project_count} proyek."
+                    )
+                else:
+                    paragraph = f"{paragraph} tidak memiliki potensi {prj_class} untuk {row.project_stage[3:]}."
+            paragraph = (
+                f"{paragraph}"
+                f" Volume Initial Oil in Place (IOIP) sebesar {round(row.ioip)} MSTB dan"
+                f" volume Initial Gas in Place (IGIP) sebesar {round(row.igip)} BSCF."
+            )
+            if row.cprd_sls_oc + row.cprd_sls_an > 0:
+                paragraph = (
+                    f"{paragraph}"
+                    f" Produksi kumulatif minyak sebesar {round(row.cprd_sls_oc)} MSTB,"
+                    f" sedangkan gas sebesar {round(row.cprd_sls_an)} BSCF."
+                )
+            if row.field_remarks != "":
+                paragraph = f"{paragraph} Catatan dari tiap proyek sebagai berikut: {row.field_remarks}"
+        article.append(paragraph)
+    return article
+
+
+def exec_summarizer(
+    text: str = "", data: str = "", context: str = "", model: str = "qwen2"
+) -> str:
     SYSTEM_PROMPT = f"""
                 Your role is a petroleum engineering expert. 
                 Your task is to create report in the form of executive summary 
@@ -77,7 +152,7 @@ def exec_summarizer(text: str="", data:str="", context: str="", model: str="qwen
     response = ollama.generate(
         model=model,
         system=SYSTEM_PROMPT,
-        prompt= f"""
+        prompt=f"""
                 Write executive summary for this: 
                 {text}
 
@@ -85,6 +160,6 @@ def exec_summarizer(text: str="", data:str="", context: str="", model: str="qwen
                 {data}
                 """,
         stream=False,
-        options={"temperature": 0}
+        options={"temperature": 0},
     )
     return response["response"]
