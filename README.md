@@ -89,4 +89,4 @@ This project is licensed under the terms of the Apache Software license. See the
 
 ### Contact
 
-For any questions or issues, please contact me at fajril at ambia.id.
+For any questions or issues, please contact me at fambia at skkmigas.go.id or fajril at ambia.id.
