@@ -195,7 +195,7 @@ def reload(
 def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
     where: Annotated[Optional[str], typer.Option(help="Column to search.")] = None,
-    like: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
+    search: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
     year: Annotated[
         Optional[int], typer.Option(min=2019, help="Filter year value")
     ] = None,
@@ -213,7 +213,8 @@ def show(
     Args:
         table (str): The name of the table to show data from.
         where (str, optional): The column to search. Defaults to None.
-        like (str, optional): A filter value to apply to the data. Defaults to "".
+        search (str, optional): A search keyword to apply to the selected column in where clause. 
+            Defaults to "".
         year (int, optional): A filter year value to apply to the data. Defaults to None.
         output (int, optional): The level of detail to show in the output. Defaults to 0.
         save (bool, optional): Whether to save the output data to a file. Defaults to False.
@@ -235,7 +236,7 @@ def show(
     df = run_query(
         table=TableName(table),
         where=where,
-        like=like,
+        like=search,
         year=year,
         output=output,
         columns=columns_splitted,
