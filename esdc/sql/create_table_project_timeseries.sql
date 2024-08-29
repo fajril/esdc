@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS project_timeseries (
     operator_name TEXT,
     field_id TEXT,
     field_name TEXT,
+    project_id TEXT,
+    project_name TEXT,
     onstream_year INTEGER,
     onstream_actual TEXT,
     project_class TEXT,
