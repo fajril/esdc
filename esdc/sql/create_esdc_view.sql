@@ -43,6 +43,7 @@ CREATE VIEW field_resources AS
 				GROUP_CONCAT(CONCAT(project_name, ': ', project_remarks), '\n')), 
 			project_remarks
 		) as field_remarks,
+		MAX(is_discovered) as is_discovered,
 		MIN(project_stage) as project_stage,
 		MIN(project_class) as project_class,
 		MIN(project_level) as project_level,
@@ -168,6 +169,7 @@ CREATE VIEW wa_resources AS
 		MIN(report_year) as report_year,
 		MIN(report_status) as report_status,
 		MAX(is_offshore) as is_offshore,
+		mAX(is_discovered) as is_discovered,
 		MIN(wk_id) as wk_id,
 		MIN(wk_name) as wk_name,
 		MIN(wk_lat) as wk_lat,
@@ -330,6 +332,7 @@ CREATE VIEW nkri_resources AS
 		SUM(project_active_count) as project_active_count,
 		SUM(groovy_count) as groovy_count,
 		SUM(fusion_count) as fusion_count,
+		MAX(is_discovered) as is_discovered,
 		MIN(project_stage) as project_stage,
 		MIN(project_class) as project_class,
 		MIN(uncert_lvl) as uncert_lvl,
