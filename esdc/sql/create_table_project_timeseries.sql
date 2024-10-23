@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS project_timeseries (
     report_status TEXT,
     wk_id TEXT,
     wk_name TEXT,
+    psc_eff_start TEXT,
+    psc_eff_end TEXT,
     wk_lat TEXT,
     wk_long TEXT,
     field_lat TEXT,

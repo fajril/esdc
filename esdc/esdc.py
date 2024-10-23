@@ -479,6 +479,7 @@ def esdc_downloader(
         if response.status_code == 200:
             file_size = int(response.headers.get("Content-Length", 0))
             logging.debug("File size is %s bytes", file_size)
+            logging.debug("Encoding format: %s", response.headers.get("Content-Encoding"))
 
             with closing(io.BytesIO()) as f:
                 with Progress(

@@ -63,14 +63,6 @@ def load_data_to_db(
         cursor.executescript(uuid_query.replace("{table_name}", table_name))
 
         if table_name == "project_resources":
-            logging.debug("creating project_stage column in project_resources")
-            cursor.executescript(
-                _load_sql_script("create_project_resources_project_stage.sql")
-            )
-            cursor.executescript(
-                _load_sql_script("create_project_resources_is_discovered.sql")
-            )
-
             logging.debug("Creating table view for field, working area, nkri.")
             cursor.executescript(_load_sql_script("create_esdc_view.sql"))
         cursor.execute("VACUUM;")
