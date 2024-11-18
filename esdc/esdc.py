@@ -264,14 +264,25 @@ def show(
 @app.command()
 def describe(
     table: Annotated[str, typer.Argument(help="Table name.")] = "project_resources",
+    search: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
+    year: Annotated[
+        Optional[int], typer.Option(min=2019, help="Filter year value")
+    ] = None,
+    save: bool = typer.Option(
+        False,
+        "--save/--no-save",
+        help="Specify whether to save the shown data to a file.",
+    )
 ):
     selected_table = TableName(table)
-    articles = describer(table=selected_table)
+    articles = describer(table=selected_table, year=year, search=search)
     if articles is not None:
-        with open(f"{table}.txt", "w", encoding="utf-8") as f:
-            f.writelines(f"{paragraph}\n" for paragraph in articles)
-        rich.print(articles[0])
-        rich.print("dan seterusnya...")
+        if save:
+            with open(f"{table}.txt", "w", encoding="utf-8") as f:
+                f.writelines(f"{paragraph}\n" for paragraph in articles)
+        for article in articles:
+            rich.print(article)
+        rich.print("======")
 
 
 @app.command()
