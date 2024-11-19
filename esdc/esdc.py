@@ -58,7 +58,7 @@ from tabulate import tabulate
 from esdc.selection import TableName, ApiVer, FileType
 from esdc.validate import RuleEngine
 from esdc.configs import Config
-from esdc.summarizer import describer
+from esdc.summarizer import describer, create_chat_session
 from esdc.dbmanager import run_query, load_data_to_db
 
 TABLES: Tuple[TableName, TableName] = (
@@ -100,6 +100,38 @@ def main(verbose: int = 0):
     else:
         logger.setLevel(logging.WARNING)
     logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
+
+# ... (previous imports remain unchanged)
+
+@app.command()
+def chat():
+    try:
+        # Initialize the chat session
+        chat_function = create_chat_session()
+        if not chat_function:
+            print("Failed to create chat session. Exiting.")
+            return
+
+        print("Chat session started.")
+        print("Type 'exit' or 'quit' to end the conversation.")
+
+        while True:
+            # Get user input
+            user_input = input("You: ").strip()
+
+            # Check if user wants to exit
+            if user_input.lower() in ['exit', 'quit']:
+                print("Ending chat session.")
+                break
+
+            # Send user input to the model and get response
+            response = chat_function(user_input)
+
+            # Print the model's response
+            print("AI:", response)
+
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
 
 
 @app.command()

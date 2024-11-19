@@ -114,54 +114,33 @@ def describer(table: TableName, year: Optional[int], search: Optional[str]) -> L
         article.append(paragraph)
     return article
 
+def create_chat_session(model: str = "qwen2.5:latest", system_prompt: Optional[str] = None):
+    """
+    Create a chat session using the ollama module.
+    
+    Args:
+    model (str): The name of the model to use. Defaults to "qwen2.5:latest".
+    system_prompt (Optional[str]): An optional system prompt to set the context for the chat.
+    
+    Returns:
+    A function that can be used to send messages to the chat session.
+    """
+    try:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
 
-def exec_summarizer(
-    text: str = "", data: str = "", context: str = "", model: str = "qwen2"
-) -> str:
-    SYSTEM_PROMPT = f"""
-                Your role is a petroleum engineering expert. 
-                Your task is to create report in the form of executive summary 
-                from the given information.
-                The executive summary is meant to upper management.
-                They need all the necessary information to make decisions.
-                the full capital text is a project name. for example:
-                TANJUNG - BASE is a name of the project.
-                Think step by step. here's the step you must follow:
-                1. use the context to determine the abbreviation in information: 
-                {context}
-                2. add all the data from the context into the summary.
-                3. decide whether the information is clear or need summarization.
-                4. If it needs summarization, devise a plan to summarize it.
-                5. If it does not need summarization, use the existing information.
-                6. write the summary.
-                The format of executive summary is:
-                EXECUTIVE SUMMARY
-                <<write brief introduction to the executive summary>>
+        def chat_function(user_message: str):
+            nonlocal messages
+            messages.append({"role": "user", "content": user_message})
+            response = ollama.chat(model=model, messages=messages)
+            assistant_message = response['message']['content']
+            messages.append({"role": "assistant", "content": assistant_message})
+            return assistant_message
 
-                RESERVES
-                <<Write all the data related to 1. Reserves & Recoverables here>>
+        return chat_function
 
-                CONTINGENT RESOURCES
-                <<Write all the data related to 2. Contingent Resources here>>
+    except Exception as e:
+        logging.error(f"Error creating chat session: {str(e)}")
+        return None
 
-                PROSPECTIVE RESOURCES
-                <<Write all the data related to 3. Prospective Resources here>>
-
-                CONCLUSION
-                <<Write the conclusion here>>
-"""
-
-    response = ollama.generate(
-        model=model,
-        system=SYSTEM_PROMPT,
-        prompt=f"""
-                Write executive summary for this: 
-                {text}
-
-                use this information to write on DATA section: 
-                {data}
-                """,
-        stream=False,
-        options={"temperature": 0},
-    )
-    return response["response"]
