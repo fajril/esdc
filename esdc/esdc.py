@@ -472,6 +472,7 @@ def esdc_downloader(
     """
     try:
         logging.info("requesting data to server...")
+        logging.debug(url)
         response = requests.get(
             url, auth=(username, password), stream=True, timeout=300, verify=False
         )
