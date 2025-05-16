@@ -87,7 +87,7 @@ def run_query(
     - where (str, optional): The value for the WHERE clause. Defaults to None.
     - like (str, optional): The value for the LIKE clause. Defaults to None.
     - year (int, optional): The year to filter by. Defaults to None.
-    - output (int, optional): The output format. Defaults to 0.
+    - output (int, optional): The output format. Defaults to 0. refer to view sql file.
     - columns (str or list of str, optional): The columns to select. Defaults to "".
 
     Returns:

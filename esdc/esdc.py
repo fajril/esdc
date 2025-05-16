@@ -58,7 +58,7 @@ from tabulate import tabulate
 from esdc.selection import TableName, ApiVer, FileType
 from esdc.validate import RuleEngine
 from esdc.configs import Config
-from esdc.summarizer import describer
+from esdc.summarizer import describer, analyzer
 from esdc.dbmanager import run_query, load_data_to_db
 
 TABLES: Tuple[TableName, TableName] = (
@@ -104,7 +104,7 @@ def main(verbose: int = 0):
 
 @app.command()
 def fetch(
-    filetype: str = typer.Option("csv", help="Options: csv, json"),
+    filetype: str = typer.Option("json", help="Options: csv, json"),
     save: bool = typer.Option(
         False,
         "--save/--no-save",
@@ -121,7 +121,7 @@ def fetch(
     Parameters:
         filetype:
             The type of file to save the data to. Options are "csv" or "json".
-            Defaults to "csv".
+            Defaults to "json".
         save:
             Indicates whether to save the data to a file. Defaults to False.
 
@@ -273,6 +273,13 @@ def describe(
         rich.print(articles[0])
         rich.print("dan seterusnya...")
 
+@app.command()
+def analyze(
+    field: Annotated[str, typer.Argument(help="field name")],
+    wkname: Annotated[str, typer.Argument(help="Working Area name")]
+):
+    rich.print(analyzer(field, wkname))
+
 
 @app.command()
 def validate(
@@ -423,7 +430,7 @@ def esdc_url_builder(
     # the API for time series does not support all year selection
     # remove this conditional if the API for project_timeseries is fixed.
     if table_name == TableName.PROJECT_TIMESERIES:
-        report_year = 2023
+        report_year = 2024
     if report_year is not None:
         url = f"{url}&report-year={report_year}"
     url = f"{url}&output={file_type.value}"
