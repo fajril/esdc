@@ -7,11 +7,15 @@ CREATE TABLE IF NOT EXISTS project_timeseries (
     report_year INTEGER,
     is_offshore INTEGER,
     basin86_id TEXT,
+    basin128 TEXT, -- Basin name in 128 format
     province TEXT,
     operator_group TEXT,
     report_status TEXT,
     wk_id TEXT,
     wk_name TEXT,
+    wk_area REAL, -- new column added
+    wk_regionisasi_ngi TEXT, -- new column added
+    wk_area_perwakilan_skkmigas TEXT, -- new column added
     psc_eff_start TEXT,
     psc_eff_end TEXT,
     wk_lat TEXT,
@@ -24,13 +28,21 @@ CREATE TABLE IF NOT EXISTS project_timeseries (
     field_name TEXT,
     project_id TEXT,
     project_name TEXT,
+    project_isactive INTEGER, -- new column added
+    project_remarks TEXT, -- new column added
+    vol_remarks TEXT, -- new column added
+    frcast_remarks TEXT, -- new column added
+    pod_letter_num TEXT, -- new column added
+    pod_name TEXT, -- new column added
     onstream_year INTEGER,
     onstream_actual TEXT,
     project_class TEXT,
     project_level TEXT,
-    production_stage TEXT,
+    -- production_stage TEXT,
+    prod_stage TEXT, -- new column added. Duplicate with production_stage
+    year INTEGER, --new column added. Duplicate with frcast_year
     hist_year INTEGER,
-    frcast_year INTEGER,
+    -- frcast_year INTEGER,
     cprd_grs_oil REAL,
     cprd_grs_con REAL,
     cprd_grs_ga REAL,
