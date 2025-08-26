@@ -58,7 +58,7 @@ from tabulate import tabulate
 from esdc.selection import TableName, ApiVer, FileType
 from esdc.validate import RuleEngine
 from esdc.configs import Config
-from esdc.summarizer import describer
+from esdc.summarizer import describer, analyzer
 from esdc.dbmanager import run_query, load_data_to_db
 
 TABLES: Tuple[TableName, TableName] = (
@@ -101,10 +101,42 @@ def main(verbose: int = 0):
         logger.setLevel(logging.WARNING)
     logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
 
+# ... (previous imports remain unchanged)
+
+@app.command()
+def chat():
+    try:
+        # Initialize the chat session
+        chat_function = create_chat_session()
+        if not chat_function:
+            print("Failed to create chat session. Exiting.")
+            return
+
+        print("Chat session started.")
+        print("Type 'exit' or 'quit' to end the conversation.")
+
+        while True:
+            # Get user input
+            user_input = input("You: ").strip()
+
+            # Check if user wants to exit
+            if user_input.lower() in ['exit', 'quit']:
+                print("Ending chat session.")
+                break
+
+            # Send user input to the model and get response
+            response = chat_function(user_input)
+
+            # Print the model's response
+            print("AI:", response)
+
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+
 
 @app.command()
 def fetch(
-    filetype: str = typer.Option("csv", help="Options: csv, json"),
+    filetype: str = typer.Option("json", help="Options: csv, json"),
     save: bool = typer.Option(
         False,
         "--save/--no-save",
@@ -121,7 +153,7 @@ def fetch(
     Parameters:
         filetype:
             The type of file to save the data to. Options are "csv" or "json".
-            Defaults to "csv".
+            Defaults to "json".
         save:
             Indicates whether to save the data to a file. Defaults to False.
 
@@ -264,14 +296,30 @@ def show(
 @app.command()
 def describe(
     table: Annotated[str, typer.Argument(help="Table name.")] = "project_resources",
+    search: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
+    year: Annotated[
+        Optional[int], typer.Option(min=2019, help="Filter year value")
+    ] = None,
+    save: bool = typer.Option(
+        False,
+        "--save/--no-save",
+        help="Specify whether to save the shown data to a file.",
+    )
 ):
     selected_table = TableName(table)
-    articles = describer(table=selected_table)
+    articles = describer(table=selected_table, year=year, search=search)
     if articles is not None:
         with open(f"{table}.txt", "w", encoding="utf-8") as f:
             f.writelines(f"{paragraph}\n" for paragraph in articles)
         rich.print(articles[0])
         rich.print("dan seterusnya...")
+
+@app.command()
+def analyze(
+    field: Annotated[str, typer.Argument(help="field name")],
+    wkname: Annotated[str, typer.Argument(help="Working Area name")]
+):
+    rich.print(analyzer(field, wkname))
 
 
 @app.command()
@@ -423,7 +471,7 @@ def esdc_url_builder(
     # the API for time series does not support all year selection
     # remove this conditional if the API for project_timeseries is fixed.
     if table_name == TableName.PROJECT_TIMESERIES:
-        report_year = 2023
+        report_year = 2024
     if report_year is not None:
         url = f"{url}&report-year={report_year}"
     url = f"{url}&output={file_type.value}"
@@ -472,6 +520,7 @@ def esdc_downloader(
     """
     try:
         logging.info("requesting data to server...")
+        logging.debug(url)
         response = requests.get(
             url, auth=(username, password), stream=True, timeout=300, verify=False
         )

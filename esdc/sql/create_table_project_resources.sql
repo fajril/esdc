@@ -12,12 +12,15 @@ CREATE TABLE IF NOT EXISTS project_resources (
 	wk_name TEXT,
 	wk_lat REAL,
 	wk_long REAL,
+	wk_area REAL, -- new column added
 	wk_area_ori REAL,
 	wk_area_latest REAL,
+	psc_eff_start TEXT,
+	psc_eff_end TEXT,
 	wk_subgroup TEXT,
-	psc_start TEXT,
-	psc_end TEXT,
 	operator_group TEXT,
+	wk_area_perwakilan_skkmigas TEXT, -- new column added
+	wk_regionisasi_ngi TEXT, -- new column added
 	operator_name TEXT,
 	basin86_id TEXT,
 	basin86 TEXT,
@@ -27,15 +30,23 @@ CREATE TABLE IF NOT EXISTS project_resources (
 	province TEXT,
 	field_id TEXT,
 	field_name TEXT,
+	field_name_previous TEXT, --new column added
 	field_lat REAL,
 	field_long REAL,
 	field_area REAL,
-	is_unitisasi INTEGER,
+	-- is_unitisasi INTEGER,
 	pod_letter_num TEXT,
 	pod_name TEXT,
+	pod_date TEXT, --new column added
 	project_id TEXT,
 	project_name TEXT,
+	project_name_previous TEXT, --new column added
 	is_discovered INTEGER,
+	is_ltp INTEGER, --new column added
+	is_pse_approved INTEGER, --new column added
+	is_pod_approved INTEGER, --new column added
+	is_report_accepted INTEGER, --new column added
+	is_unitization INTEGER, --new column added. Duplicate with is_unitisasi
 	project_stage TEXT,
 	project_eol INTEGER,
 	project_isactive INTEGER,
@@ -46,20 +57,24 @@ CREATE TABLE IF NOT EXISTS project_resources (
 	project_remarks TEXT,
 	project_class TEXT,
 	project_level TEXT,
+	project_level_previous TEXT, --new column added
 	prod_stage TEXT,
-	uncert_lvl TEXT,
+	-- uncert_lvl TEXT,
+	uncert_level TEXT, --new column added. Duplicate with uncert_lvl
 	rec_oil REAL,
 	rec_con REAL,
 	rec_ga REAL,
 	rec_gn REAL,
 	rec_oc REAL,
 	rec_an REAL,
+	rec_mboe REAL, -- new column added
 	rec_oil_risked REAL,
 	rec_con_risked REAL,
 	rec_ga_risked REAL,
 	rec_gn_risked REAL,
 	rec_oc_risked REAL,
 	rec_an_risked REAL,
+	rec_mboe_risked REAL, -- new column added
 	res_oil REAL,
 	res_con REAL,
 	res_ga REAL,
@@ -141,6 +156,12 @@ CREATE TABLE IF NOT EXISTS project_resources (
 	dcpy_cio_gn REAL,
 	dcpy_cio_oc REAL,
 	dcpy_cio_an REAL,
+	dcpy_gtr_oil REAL,
+	dcpy_gtr_con REAL,
+	dcpy_gtr_ga REAL,
+	dcpy_gtr_gn REAL,
+	dcpy_gtr_oc REAL,
+	dcpy_gtr_an REAL,
 	dcpy_uc_oil REAL,
 	dcpy_uc_con REAL,
 	dcpy_uc_ga REAL,

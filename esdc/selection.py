@@ -24,7 +24,7 @@ class TableName(Enum):
 
     Attributes:
         PROJECT_RESOURCES (str): Table name for project resources.
-        PROJECt_TIMESERIES (str): Table name for project timeseries.
+        PROJECT_TIMESERIES (str): Table name for project timeseries.
     """
 
     PROJECT_RESOURCES = "project_resources"
