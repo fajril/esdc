@@ -29,7 +29,7 @@ CREATE VIEW field_resources AS
 		MIN(field_lat) as field_lat,
 		MIN(field_long) as field_long,
 		MIN(field_area) as field_area,
-		MIN(is_unitisasi) as is_unitisasi,
+		MIN(is_unitization) as is_unitization,
 		COUNT(NULLIF(pod_name, '')) as pod_count,
 		COUNT(uuid) as project_count,
 		SUM(project_isactive) as project_active_count,
@@ -48,7 +48,7 @@ CREATE VIEW field_resources AS
 		MIN(project_class) as project_class,
 		MIN(project_level) as project_level,
 		MIN(prod_stage) as prod_stage,
-		MIN(uncert_lvl) as uncert_lvl,
+		MIN(uncert_level) as uncert_level,
 		IIF(COUNT(uuid) > 1,
 			IIF(vol_remarks = '' OR vol_remarks ISNULL,
 				'',
@@ -157,8 +157,8 @@ CREATE VIEW field_resources AS
 			  lower(hex(randomblob(6)))
 		) as uuid
 	FROM project_resources pr
-	GROUP BY report_year, wk_id, field_id, project_stage, project_class, uncert_lvl
-	ORDER BY report_year DESC, wk_name, field_name, project_stage, project_class, uncert_lvl;
+	GROUP BY report_year, wk_id, field_id, project_stage, project_class, uncert_level
+	ORDER BY report_year DESC, wk_name, field_name, project_stage, project_class, uncert_level;
 
 -- create view wa_resources
 DROP VIEW IF EXISTS wa_resources;
@@ -188,7 +188,7 @@ CREATE VIEW wa_resources AS
 		MIN(prov_id) as prov_id,
 		MIN(province) as province,*/
 		COUNT(uuid) as field_count,
-		SUM(is_unitisasi) as unitisasi_count,
+		SUM(is_unitization) as unitisasi_count,
 		SUM(pod_count) as pod_count,
 		SUM(project_count) as project_count,
 		SUM(project_active_count) as project_active_count,
@@ -206,7 +206,7 @@ CREATE VIEW wa_resources AS
 		MIN(project_class) as project_class,
 		MIN(project_level) as project_level,
 		MIN(prod_stage) as prod_stage,
-		MIN(uncert_lvl) as uncert_lvl,
+		MIN(uncert_level) as uncert_level,
 		IIF(COUNT(uuid) > 1,
 			IIF(field_vol_remarks = '' OR field_vol_remarks ISNULL,
 				'',
@@ -315,8 +315,8 @@ CREATE VIEW wa_resources AS
 			  lower(hex(randomblob(6)))
 		) as uuid
 	FROM field_resources fr
-	GROUP BY report_year, wk_name, project_stage, project_class, uncert_lvl
-	ORDER BY report_year DESC, wk_name, project_stage, project_class, uncert_lvl;
+	GROUP BY report_year, wk_name, project_stage, project_class, uncert_level
+	ORDER BY report_year DESC, wk_name, project_stage, project_class, uncert_level;
 
 DROP VIEW IF EXISTS nkri_resources;
 
@@ -335,7 +335,7 @@ CREATE VIEW nkri_resources AS
 		MAX(is_discovered) as is_discovered,
 		MIN(project_stage) as project_stage,
 		MIN(project_class) as project_class,
-		MIN(uncert_lvl) as uncert_lvl,
+		MIN(uncert_level) as uncert_level,
 		SUM(rec_oil) as rec_oil,
 		SUM(rec_con) as rec_con,
 		SUM(rec_ga) as rec_ga,
@@ -431,5 +431,5 @@ CREATE VIEW nkri_resources AS
 			  lower(hex(randomblob(6)))
 		) as uuid
 	FROM wa_resources wr
-	GROUP BY report_year, project_stage, project_class, uncert_lvl
-	ORDER BY report_year DESC, project_stage, project_class, uncert_lvl;
+	GROUP BY report_year, project_stage, project_class, uncert_level
+	ORDER BY report_year DESC, project_stage, project_class, uncert_level;

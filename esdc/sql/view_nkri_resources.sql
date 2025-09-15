@@ -1,25 +1,25 @@
 -- Query for nkri_resources table -o (resources only)
 SELECT report_year, project_stage,
-    project_class, uncert_lvl,
+    project_class, uncert_level,
     rec_oc_risked as 'resources_mstb', rec_an_risked as 'resources_bscf',
     res_oc as 'reserves_mstb', res_an as 'reserves_bscf'
 FROM nkri_resources 
 WHERE report_year = <year>
-ORDER BY report_year, project_stage, project_class, uncert_lvl;
+ORDER BY report_year, project_stage, project_class, uncert_level;
 
 -- Query for nkri_resources table -oo (add in place)
 SELECT report_year,
-    project_stage, project_class, uncert_lvl,
+    project_stage, project_class, uncert_level,
     rec_oc_risked as 'resources_mstb', rec_an_risked as 'resources_bscf',
     res_oc as 'reserves_mstb', res_an as 'reserves_bscf',
     is_discovered, ioip, igip
 FROM nkri_resources 
 WHERE report_year = <year>
-ORDER BY report_year, project_stage, project_class, uncert_lvl;
+ORDER BY report_year, project_stage, project_class, uncert_level;
 
 -- Query for nkri_resources table -ooo (add cumprod)
 SELECT report_year, project_count,
-    project_stage, project_class, uncert_lvl,
+    project_stage, project_class, uncert_level,
     rec_oc_risked as 'resources_mstb', rec_an_risked as 'resources_bscf',
     res_oc as 'reserves_mstb', res_an as 'reserves_bscf',
     cprd_sls_oc as 'sales_cumprod_mstb',
@@ -27,10 +27,10 @@ SELECT report_year, project_count,
     is_discovered, ioip, igip
 FROM nkri_resources 
 WHERE report_year = <year>
-ORDER BY report_year, project_stage, project_class, uncert_lvl;
+ORDER BY report_year, project_stage, project_class, uncert_level;
 
 -- Query for nkri_resources table -oooo (all)
 SELECT *
 FROM nkri_resources 
 WHERE report_year = <year>
-ORDER BY report_year, project_stage, project_class, uncert_lvl;
+ORDER BY report_year, project_stage, project_class, uncert_level;
