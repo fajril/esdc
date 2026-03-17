@@ -38,11 +38,11 @@ def load_data_to_db(
         "project_timeseries": "create_table_project_timeseries.sql",
     }
     logging.info("Connecting to the database.")
-    if not Config.get_db_path().exists():
-        Config.get_db_path().mkdir(parents=True, exist_ok=True)
+    if not Config.get_db_dir().exists():
+        Config.get_db_dir().mkdir(parents=True, exist_ok=True)
         logging.info("Database does not exist. Creating new database.")
-        logging.debug("Database location: %s", Config.get_db_path())
-    with sqlite3.connect(Config.get_db_path() / "esdc.db") as conn:
+        logging.debug("Database location: %s", Config.get_db_dir())
+    with sqlite3.connect(Config.get_db_file()) as conn:
         cursor = conn.cursor()
         logging.debug("creating table %s in database", table_name)
         cursor.executescript(_load_sql_script(create_table_query[table_name]))
@@ -151,7 +151,7 @@ def run_query(
         )
 
     # Execute the query
-    if not Path.exists(Config.get_db_path() / "esdc.db"):
+    if not Config.get_db_file().exists():
         logging.error(
             """
         Database file does not exist. Try to run this command first:
@@ -161,7 +161,7 @@ def run_query(
         )
         return None
     try:
-        with sqlite3.connect(Config.get_db_path() / "esdc.db") as conn:
+        with sqlite3.connect(Config.get_db_file()) as conn:
             df = pd.read_sql_query(query, conn)
     except sqlite3.OperationalError as e:
         logging.error("Cannot query data. Message: %s", e)

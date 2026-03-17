@@ -192,12 +192,55 @@ tests/
 └── ...
 ```
 
+## Configuration
+
+The application uses `~/.esdc/config.yaml` for configuration. On first run, a default config file is created automatically.
+
+### Config File Location
+
+```
+~/.esdc/
+├── config.yaml    # Configuration settings
+└── esdc.db       # Database file
+```
+
+### Config File Structure
+
+```yaml
+api_url: https://esdc.skkmigas.go.id/
+database_path: ~/.esdc/esdc.db
+```
+
+### Environment Variables
+
+| Variable | Purpose | Priority |
+|----------|---------|----------|
+| `ESDC_USER` | API username | Env > Interactive prompt |
+| `ESDC_PASS` | API password | Env > Interactive prompt |
+| `ESDC_URL` | API URL | Env > config.yaml > Default |
+| `ESDC_DB_FILE` | Database file path | Env > config.yaml > Default |
+| `ESDC_CONFIG_DIR` | Config directory | Env > Default |
+
+### Credentials
+
+Credentials can be provided via:
+1. Environment variables (for CI/CD): `ESDC_USER`, `ESDC_PASS`
+2. Interactive prompt (on first run or when env vars not set)
+
+### Commands
+
+```bash
+# Show database location
+esdc db-info
+```
+
 ## Key Dependencies
 
 - **typer**: CLI framework
 - **pandas**: Data manipulation
 - **rich**: Terminal output formatting
 - **requests**: HTTP client
+- **pyyaml**: Configuration file parsing
 - **pytest**: Testing framework
 
 ## Pull Request Process

@@ -18,7 +18,7 @@ Dependencies:
 - pandas: For data manipulation and storage.
 - requests: For making HTTP requests to the ESDC API.
 - rich: For enhanced terminal output and logging.
-- dotenv: For loading environment variables from a .env file.
+- pyyaml: For loading configuration from config.yaml.
 - sqlite3: For database operations.
 
 Commands:
@@ -43,13 +43,11 @@ import logging
 from collections.abc import Iterable
 
 import requests
-from dotenv import load_dotenv, find_dotenv
 import typer
 from typing_extensions import Annotated
 import rich
 from rich.progress import Progress, TransferSpeedColumn, DownloadColumn
 from rich.logging import RichHandler
-from rich.prompt import Prompt
 import pandas as pd
 from tabulate import tabulate
 
@@ -83,7 +81,7 @@ def main(verbose: int = 0):
             - verbose == 1: INFO
             - verbose == 0: WARNING
     """
-    load_dotenv(find_dotenv())
+    Config.init_config()
     handler = RichHandler(show_time=False)
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logging.root.handlers.clear()
@@ -128,19 +126,7 @@ def fetch(
         None
     """
 
-    env_available = load_dotenv(find_dotenv())
-    if env_available:
-        username = os.getenv("ESDC_USER") or ""
-        password = os.getenv("ESDC_PASS") or ""
-    else:
-        logging.debug("Environment variables is not found.")
-        username = ""
-        password = ""
-
-    if not username:
-        logging.debug("Requesting credential from user.")
-        username = Prompt.ask("user")
-        password = Prompt.ask("pass", password=True)
+    username, password = Config.get_credentials()
 
     if filetype == "csv":
         load_esdc_data(
@@ -355,13 +341,7 @@ def esdc_url_builder(
     For example, the url for project_resources table is:
     https://esdc.skkmigas.go.id/api/v2/project-resources?verbose=3&output=csv
     """
-    load_dotenv(find_dotenv())
-    url = os.getenv("ESDC_URL")
-    if url is None:
-        logging.info(
-            "Environment Variables is not found. Url set to: https://esdc.skkmigas.go.id/"
-        )
-        url = Config.BASE_API_URL_V2
+    url = Config.get_api_url()
 
     url += api_ver.value
     tables = {
@@ -506,6 +486,28 @@ def _read_csv(file: str | Iterable) -> tuple[list[list[str]], list[str]]:
     for row in reader:
         data.append(row)
     return data, header
+
+
+@app.command(name="db-info")
+def db_info() -> None:
+    """Show database location and configuration."""
+    db_dir = Config.get_db_dir()
+    db_file = Config.get_db_file()
+
+    rich.print(f"[bold]Database directory:[/bold] {db_dir}")
+    rich.print(f"[bold]Database file:[/bold] {db_file}")
+
+    if os.environ.get("ESDC_DB_DIR"):
+        rich.print("  (from [cyan]ESDC_DB_DIR[/cyan] environment variable)")
+    if os.environ.get("ESDC_DB_FILE"):
+        rich.print("  (from [cyan]ESDC_DB_FILE[/cyan] environment variable)")
+
+    if db_file.exists():
+        rich.print(f"[green]Database exists: Yes[/green]")
+    else:
+        rich.print(
+            f"[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"
+        )
 
 
 if __name__ == "__main__":
