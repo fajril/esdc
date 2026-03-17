@@ -99,7 +99,7 @@ def _normalize_field_id(field_id: str) -> str:
     """
 
     raw = field_id.strip().upper().replace("-", "")
-    _parse_field_id(raw)
+    _ = _parse_field_id(raw)
     return raw
 
 
@@ -167,7 +167,7 @@ def _parse_project_id(project_id: str) -> tuple[str, int]:
     field_payload = raw[1:8]
     sequence_text = raw[8:10]
 
-    _parse_field_id("F" + field_payload)
+    _ = _parse_field_id("F" + field_payload)
 
     if not sequence_text.isdigit():
         raise ValueError(f"project suffix must be decimal digits: {project_id!r}")
@@ -203,7 +203,7 @@ def _parse_zone_id(zone_id: str) -> tuple[str, str]:
     zone_suffix = raw[8:11]
     checksum = raw[11]
 
-    _parse_field_id("F" + field_payload)
+    _ = _parse_field_id("F" + field_payload)
 
     if not zone_suffix.isdigit():
         raise ValueError(f"zone suffix must be decimal digits: {zone_id!r}")
@@ -547,7 +547,7 @@ def verify_field_id(field_id: str) -> bool:
         return False
 
     try:
-        _parse_field_id(field_id)
+        _ = _parse_field_id(field_id)
     except ValueError:
         return False
     return True
@@ -568,7 +568,7 @@ def verify_zone_id(zone_id: str) -> bool:
         return False
 
     try:
-        _parse_zone_id(zone_id)
+        _ = _parse_zone_id(zone_id)
     except ValueError:
         return False
     return True

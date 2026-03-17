@@ -45,26 +45,26 @@ def load_data_to_db(
     with sqlite3.connect(Config.get_db_file()) as conn:
         cursor = conn.cursor()
         logging.debug("creating table %s in database", table_name)
-        cursor.executescript(_load_sql_script(create_table_query[table_name]))
+        _ = cursor.executescript(_load_sql_script(create_table_query[table_name]))
         column_names = ", ".join(["?" for _ in header])
         insert_stmt = (
             f"INSERT INTO {table_name} ({', '.join(header)}) VALUES ({column_names})"
         )
         logging.debug("Inserting table data %s into the database.", table_name)
         try:
-            cursor.executemany(insert_stmt, content)
+            _ = cursor.executemany(insert_stmt, content)
         except sqlite3.Error as e:
             logging.debug("insert statement: %s", insert_stmt)
             raise sqlite3.Error(str(e)) from e
 
         logging.debug("Creating uuid column for table %s", table_name)
         uuid_query = _load_sql_script("create_column_uuid.sql")
-        cursor.executescript(uuid_query.replace("{table_name}", table_name))
+        _ = cursor.executescript(uuid_query.replace("{table_name}", table_name))
 
         if table_name == "project_resources":
             logging.debug("Creating table view for field, working area, nkri.")
-            cursor.executescript(_load_sql_script("create_esdc_view.sql"))
-        cursor.execute("VACUUM;")
+            _ = cursor.executescript(_load_sql_script("create_esdc_view.sql"))
+        _ = cursor.execute("VACUUM;")
         conn.commit()
 
         logging.info("Table %s is loaded into database.", table_name)

@@ -290,7 +290,7 @@ def load_esdc_data(
         if to_file:
             logging.debug("Save data as %s.%s", table.value, filetype.value)
             with open(table.value + "." + filetype.value, "wb") as f:
-                f.write(data)
+                _ = f.write(data)
 
         if filetype == FileType.CSV:
             decoded_data = data.decode("utf-8").splitlines()
@@ -432,12 +432,12 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
                                 chunk = gz.read(size=8192)
                                 if not chunk:
                                     break
-                                f.write(chunk)
-                                progress.update(task_id, advance=len(chunk))
+                                _ = f.write(chunk)
+                                _ = progress.update(task_id, advance=len(chunk))
                     else:
                         for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                            progress.update(task_id, advance=len(chunk))
+                            _ = f.write(chunk)
+                            _ = progress.update(task_id, advance=len(chunk))
 
                     logging.info(
                         "File downloaded successfully to memory (Size: %s bytes)",
