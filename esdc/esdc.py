@@ -162,8 +162,8 @@ def reload(
         If a file is not found, a warning message will be printed.
     """
     for table in TABLES:
-        if Path(f"{table.value}.{filetype}").exists():
-            filename = f"{table.value}.{filetype}"
+        filename = f"{table.value}.{filetype}"
+        if Path(filename).exists():
             if filetype == "csv":
                 _load_file_as_csv(filename, table.value)
             elif filetype == "json":
