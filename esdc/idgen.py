@@ -59,9 +59,6 @@ def _normalize_grid_token(token: str) -> str:
             non-hexadecimal characters.
     """
 
-    if token is None:
-        raise ValueError("grid token cannot be None")
-
     raw = token.strip().upper()
     if not raw:
         raise ValueError("grid token cannot be empty")
@@ -116,9 +113,6 @@ def _parse_field_id(field_id: str) -> tuple[str, str]:
         ValueError: If the ID structure, digits, or checksum are invalid.
     """
 
-    if field_id is None:
-        raise ValueError("field ID cannot be None")
-
     raw = field_id.strip().upper().replace("-", "")
     if len(raw) != 8 or not raw.startswith("F"):
         raise ValueError(f"invalid field ID format: {field_id!r}")
@@ -157,9 +151,6 @@ def _parse_project_id(project_id: str) -> tuple[str, int]:
         ValueError: If the format, sequence digits, or range are invalid.
     """
 
-    if project_id is None:
-        raise ValueError("project ID cannot be None")
-
     raw = project_id.strip().upper().replace("-", "")
     if len(raw) != 10 or not raw.startswith("P"):
         raise ValueError(f"invalid project ID format: {project_id!r}")
@@ -191,9 +182,6 @@ def _parse_zone_id(zone_id: str) -> tuple[str, str]:
     Raises:
         ValueError: If the format, suffix digits, or checksum are invalid.
     """
-
-    if zone_id is None:
-        raise ValueError("zone ID cannot be None")
 
     raw = zone_id.strip().upper().replace("-", "")
     if len(raw) != 12 or not raw.startswith("Z"):
@@ -543,9 +531,6 @@ def verify_field_id(field_id: str) -> bool:
         checksum rules; otherwise False.
     """
 
-    if not isinstance(field_id, str):
-        return False
-
     try:
         _ = _parse_field_id(field_id)
     except ValueError:
@@ -563,9 +548,6 @@ def verify_zone_id(zone_id: str) -> bool:
         True when the zone ID conforms to structure, uniqueness, and
         checksum rules; otherwise False.
     """
-
-    if not isinstance(zone_id, str):
-        return False
 
     try:
         _ = _parse_zone_id(zone_id)
