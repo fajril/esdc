@@ -139,7 +139,7 @@ except ValueError as e:
 Use Typer decorators for CLI commands:
 
 ```python
-from typing_extensions import Annotated
+from typing import Annotated
 
 @app.command()
 def show(

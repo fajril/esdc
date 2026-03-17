@@ -44,7 +44,7 @@ from collections.abc import Iterable
 
 import requests
 import typer
-from typing_extensions import Annotated
+from typing import Annotated
 import rich
 from rich.progress import Progress, TransferSpeedColumn, DownloadColumn
 from rich.logging import RichHandler
@@ -374,6 +374,8 @@ def _load_file_as_json(file: str, table_name):
     with open(file, "rb") as f:
         data = f.read()
     parsed_json = json.loads(data)
+    if not parsed_json:
+        return
     header = parsed_json[0].keys()
     content = [list(item.values()) for item in parsed_json]
     load_data_to_db(content, header, table_name)
@@ -472,7 +474,7 @@ def _read_csv(file: str | Iterable) -> tuple[list[list[str]], list[str]]:
         quotechar = '"'
         doublequote = True
         lineterminator = "\n"
-        quoting = csv.QUOTE_STRINGS
+        quoting = csv.QUOTE_MINIMAL
 
     csv.register_dialect("esdc", _EsdcDialect)
 

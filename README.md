@@ -22,7 +22,7 @@ pip install .
 Alternatively, you can install the dependencies directly:
 
 ```sh
-pip install requests==2.32.2 pandas==2.2.2 tqdm==4.66.4 typer==0.12.3 tabulate==0.9.0 ollama==0.3.0 basedpyright>=0.1.0 openpyxl==3.1.5 pyyaml>=6.0
+pip install requests==2.32.2 pandas==2.2.2 tqdm==4.66.4 typer>=0.12.4 tabulate==0.9.0 ollama==0.3.0 basedpyright>=0.1.0 openpyxl==3.1.5 pyyaml>=6.0
 ```
 
 ## Configuration
