@@ -118,6 +118,8 @@ def run_query(
         logging.debug("selected columns: %s", columns)
         pattern = r".*?(?=FROM)"
         query_match = re.search(pattern, query)
+        if query_match is None:
+            raise ValueError(f"Could not parse query: {query}")
         query = query[query_match.end() :]
         select_query = "SELECT " + ", ".join(col for col in columns) + " "
         logging.debug("query: %s", select_query)
