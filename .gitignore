@@ -1,5 +1,8 @@
 # Custom Filter
 
+worktrees/
+.worktrees/
+
 notebook
 func_test
 
