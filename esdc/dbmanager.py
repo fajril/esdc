@@ -2,7 +2,6 @@ import sqlite3
 import logging
 import re
 from pathlib import Path
-from typing import Union, List, Optional
 
 import pandas as pd
 
@@ -11,7 +10,7 @@ from esdc.selection import TableName
 
 
 def load_data_to_db(
-    content: List[List[str]], header: List[str], table_name: str
+    content: list[list[str]], header: list[str], table_name: str
 ) -> None:
     """
     Load data into the ESDC database.
@@ -49,7 +48,7 @@ def load_data_to_db(
         cursor.executescript(_load_sql_script(create_table_query[table_name]))
         column_names = ", ".join(["?" for _ in header])
         insert_stmt = (
-            f'INSERT INTO {table_name} ({", ".join(header)}) VALUES ({column_names})'
+            f"INSERT INTO {table_name} ({', '.join(header)}) VALUES ({column_names})"
         )
         logging.debug("Inserting table data %s into the database.", table_name)
         try:
@@ -73,11 +72,11 @@ def load_data_to_db(
 
 def run_query(
     table: TableName,
-    where: Optional[str] = None,
-    like: Optional[str] = None,
-    year: Optional[int] = None,
+    where: str | None = None,
+    like: str | None = None,
+    year: int | None = None,
     output: int = 0,
-    columns: Union[str, List[str]] = "",
+    columns: str | list[str] = "",
 ) -> pd.DataFrame | None:
     """
     Execute a query on the specified table in the database.

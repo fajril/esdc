@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "esdc"
 version = "0.2.1"
 description = "A package for retrieving and managing eSDC data."
+requires-python = ">=3.10"
 authors = [
   { name = "Fajril Ambia", email = "fajril@ambia.id" },
 ]

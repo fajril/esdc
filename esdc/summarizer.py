@@ -1,5 +1,4 @@
 import logging
-from typing import List, Optional
 from datetime import date
 
 from openai import OpenAI
@@ -9,7 +8,9 @@ from esdc.selection import TableName
 from esdc.dbmanager import run_query
 
 
-def describer(table: TableName, year: Optional[int], search: Optional[str]) -> List[str] | None:
+def describer(
+    table: TableName, year: int | None, search: str | None
+) -> list[str] | None:
     if table == TableName.NKRI_RESOURCES:
         df = run_query(table=table)
         if df is not None:
@@ -37,7 +38,6 @@ def describer(table: TableName, year: Optional[int], search: Optional[str]) -> L
 
     for _, row in df.iterrows():
         if table == TableName.NKRI_RESOURCES:
-
             if row.project_class == "1. Reserves & GRR":
                 prj_class = "Government of Indonesia Recoverable Resources (GRR)"
             else:
@@ -62,7 +62,6 @@ def describer(table: TableName, year: Optional[int], search: Optional[str]) -> L
                 )
 
         elif table == TableName.FIELD_RESOURCES:
-
             if row.project_class == "1. Reserves & GRR":
                 prj_class = "Government of Indonesia Recoverable Resources (GRR)"
             else:
@@ -80,7 +79,7 @@ def describer(table: TableName, year: Optional[int], search: Optional[str]) -> L
                     f" Lapangan ini"
                 )
             else:
-                paragraph = f"{paragraph}" f" Lapangan ini"
+                paragraph = f"{paragraph} Lapangan ini"
             if prj_class == "Government of Indonesia Recoverable Resources (GRR)":
                 paragraph = (
                     f"{paragraph}"
@@ -207,22 +206,25 @@ def exec_summarizer(
         model=model,
         messages=[
             {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": f"""
+            {
+                "role": "user",
+                "content": f"""
                 Buat ringkasan eksekutif untuk informasi ini:
                 {text}
 
                 Gunakan informasi ini untuk bagian DATA:
                 {data}
-                """}
+                """,
+            },
         ],
-        temperature=0
+        temperature=0,
     )
 
     return response.choices[0].message.content
 
+
 def analyzer(field_name, wk_name, base_url=None, model="gpt-4.1-mini") -> str | None:
-    """
-    """
+    """ """
     try:
         with open("sys_prompt.md", "r", encoding="utf-8") as file:
             sys_prompt = file.read()
@@ -234,10 +236,10 @@ def analyzer(field_name, wk_name, base_url=None, model="gpt-4.1-mini") -> str | 
     df = run_query(table=TableName.PROJECT_RESOURCES, output=4)
     if df is not None:
         df = df[
-            (df['field_name'].str.contains(field_name, case=False)) &
-            (df['wk_name'].str.contains(wk_name, case=False)) &
-            (df['uncert_lvl'].str.contains("Middle", case=False)) &
-            (df["report_year"] == 2024)
+            (df["field_name"].str.contains(field_name, case=False))
+            & (df["wk_name"].str.contains(wk_name, case=False))
+            & (df["uncert_lvl"].str.contains("Middle", case=False))
+            & (df["report_year"] == 2024)
         ]
         paragraph = (
             f"Tanggal hari ini adalah {date.today()}. "
@@ -260,9 +262,7 @@ def analyzer(field_name, wk_name, base_url=None, model="gpt-4.1-mini") -> str | 
                     f"{row.cprd_sls_oc} MSTB dan {row.cprd_sls_an} BSCF. "
                 )
             if row.prj_ioip + row.prj_igip > 0:
-                filler_ipip = (
-                    f"Proyek ini memiliki IOIP P50 {row.prj_ioip} MSTB. dan IGIP P50 {row.prj_igip} BSCF. "
-                )
+                filler_ipip = f"Proyek ini memiliki IOIP P50 {row.prj_ioip} MSTB. dan IGIP P50 {row.prj_igip} BSCF. "
             else:
                 filler_ipip = "Proyek ini tidak memberikan tambahan in place baru."
             project_detail = (
@@ -289,13 +289,12 @@ def analyzer(field_name, wk_name, base_url=None, model="gpt-4.1-mini") -> str | 
         model=model,
         messages=[
             {"role": "system", "content": sys_prompt},
-            {"role": "user", 
-             "content": f"Berikut adalah data yang perlu dianalisa: {paragraph}"
-            }
+            {
+                "role": "user",
+                "content": f"Berikut adalah data yang perlu dianalisa: {paragraph}",
+            },
         ],
-        temperature=0
+        temperature=0,
     )
 
     return response.choices[0].message.content
-
-

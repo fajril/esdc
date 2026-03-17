@@ -1,11 +1,11 @@
 """
 ESDC Data Management Module
 
-This module provides functionality for managing data 
-related to the ESDC (https://esdc.skkmigas.go.id). 
+This module provides functionality for managing data
+related to the ESDC (https://esdc.skkmigas.go.id).
 It includes commands for fetching, validating, and displaying data from various resources,
-as well as loading data into a SQLite database. 
-The module utilizes the Typer library for command-line interface (CLI) interactions 
+as well as loading data into a SQLite database.
+The module utilizes the Typer library for command-line interface (CLI) interactions
 and Rich for enhanced logging and output formatting.
 
 Key Features:
@@ -42,7 +42,7 @@ import json
 import gzip
 from contextlib import closing
 import logging
-from typing import Union, List, Tuple, Iterable, Optional
+from collections.abc import Iterable
 
 import requests
 from dotenv import load_dotenv, find_dotenv
@@ -61,7 +61,7 @@ from esdc.configs import Config
 from esdc.summarizer import describer, analyzer
 from esdc.dbmanager import run_query, load_data_to_db
 
-TABLES: Tuple[TableName, TableName] = (
+TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
     TableName.PROJECT_TIMESERIES,
 )
@@ -101,7 +101,9 @@ def main(verbose: int = 0):
         logger.setLevel(logging.WARNING)
     logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
 
+
 # ... (previous imports remain unchanged)
+
 
 @app.command()
 def chat():
@@ -120,7 +122,7 @@ def chat():
             user_input = input("You: ").strip()
 
             # Check if user wants to exit
-            if user_input.lower() in ['exit', 'quit']:
+            if user_input.lower() in ["exit", "quit"]:
                 print("Ending chat session.")
                 break
 
@@ -190,8 +192,8 @@ def fetch(
 @app.command()
 def reload(
     filetype: Annotated[
-        Optional[str], typer.Option(help="Options: csv, json, zip")
-    ] = "csv"
+        str | None, typer.Option(help="Options: csv, json, zip")
+    ] = "csv",
 ) -> None:
     """
     Reload data from binary files and save it to a file.
@@ -226,10 +228,10 @@ def reload(
 @app.command()
 def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
-    where: Annotated[Optional[str], typer.Option(help="Column to search.")] = None,
-    search: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
+    where: Annotated[str | None, typer.Option(help="Column to search.")] = None,
+    search: Annotated[str | None, typer.Option(help="Filter value")] = "",
     year: Annotated[
-        Optional[int], typer.Option(min=2019, help="Filter year value")
+        int | None, typer.Option(min=2019, help="Filter year value")
     ] = None,
     output: Annotated[int, typer.Option(help="Detail of output.")] = 0,
     save: bool = typer.Option(
@@ -245,7 +247,7 @@ def show(
     Args:
         table (str): The name of the table to show data from.
         where (str, optional): The column to search. Defaults to None.
-        search (str, optional): A search keyword to apply to the selected column in where clause. 
+        search (str, optional): A search keyword to apply to the selected column in where clause.
             Defaults to "".
         year (int, optional): A filter year value to apply to the data. Defaults to None.
         output (int, optional): The level of detail to show in the output. Defaults to 0.
@@ -262,7 +264,7 @@ def show(
         If the save option is True, the output data will be saved to a CSV file.
     """
     if columns.strip():
-        columns_splitted: Union[List[str], str] = columns.split(" ")
+        columns_splitted: list[str] | str = columns.split(" ")
     else:
         columns_splitted = ""
     df = run_query(
@@ -296,15 +298,15 @@ def show(
 @app.command()
 def describe(
     table: Annotated[str, typer.Argument(help="Table name.")] = "project_resources",
-    search: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
+    search: Annotated[str | None, typer.Option(help="Filter value")] = "",
     year: Annotated[
-        Optional[int], typer.Option(min=2019, help="Filter year value")
+        int | None, typer.Option(min=2019, help="Filter year value")
     ] = None,
     save: bool = typer.Option(
         False,
         "--save/--no-save",
         help="Specify whether to save the shown data to a file.",
-    )
+    ),
 ):
     selected_table = TableName(table)
     articles = describer(table=selected_table, year=year, search=search)
@@ -314,17 +316,18 @@ def describe(
         rich.print(articles[0])
         rich.print("dan seterusnya...")
 
+
 @app.command()
 def analyze(
     field: Annotated[str, typer.Argument(help="field name")],
-    wkname: Annotated[str, typer.Argument(help="Working Area name")]
+    wkname: Annotated[str, typer.Argument(help="Working Area name")],
 ):
     rich.print(analyzer(field, wkname))
 
 
 @app.command()
 def validate(
-    filename: Annotated[Optional[str], typer.Argument(help="File name.")] = None
+    filename: Annotated[str | None, typer.Argument(help="File name.")] = None,
 ) -> None:
     """
     Validate data from a file or run a full validation.
@@ -420,7 +423,7 @@ def esdc_url_builder(
     table_name: TableName,
     api_ver: ApiVer = ApiVer.V2,
     verbose: int = 3,
-    report_year: Optional[int] = None,
+    report_year: int | None = None,
     file_type: FileType = FileType.CSV,
 ) -> str:
     """
@@ -496,9 +499,7 @@ def _load_file_as_json(file: str, table_name):
     load_data_to_db(content, header, table_name)
 
 
-def esdc_downloader(
-    url: str, username: str = "", password: str = ""
-) -> Union[bytes, None]:
+def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes | None:
     """
     Download a file from a URL using the requests library and return its content.
 
@@ -509,7 +510,7 @@ def esdc_downloader(
 
     Returns
     -------
-    Union[bytes, None]
+    bytes | None
         The content of the downloaded file as bytes, or None if the download failed.
 
     Raises
@@ -528,7 +529,9 @@ def esdc_downloader(
         if response.status_code == 200:
             file_size = int(response.headers.get("Content-Length", 0))
             logging.debug("File size is %s bytes", file_size)
-            logging.debug("Encoding format: %s", response.headers.get("Content-Encoding"))
+            logging.debug(
+                "Encoding format: %s", response.headers.get("Content-Encoding")
+            )
 
             with closing(io.BytesIO()) as f:
                 with Progress(
@@ -537,7 +540,7 @@ def esdc_downloader(
                     DownloadColumn(binary_units=True),
                 ) as progress:
                     task_id = progress.add_task(
-                        f"[cyan]Downloading {round(file_size/1E6)} MB...",
+                        f"[cyan]Downloading {round(file_size / 1e6)} MB...",
                         total=file_size,
                         unit="B",
                         transfer=True,
@@ -569,7 +572,7 @@ def esdc_downloader(
         return None
 
 
-def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
+def _read_csv(file: str | Iterable) -> tuple[list[list[str]], list[str]]:
     """
     Reads a CSV file and returns its contents as a tuple of two values:
     a list of lists of strings representing the data,
@@ -580,7 +583,7 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
         or an iterable of strings representing the CSV data.
 
     Returns:
-        Tuple[List[List[str]], List[str]]: A tuple containing the data
+        tuple[list[list[str]], list[str]]: A tuple containing the data
         and header of the CSV file.
     """
 

@@ -1,4 +1,3 @@
-from typing import Tuple, List
 import logging
 import numpy as np
 import pandas as pd
@@ -49,7 +48,7 @@ class RuleEngine:
             re0.re0022.__name__: re0.re0022,
         }
 
-    def run(self) -> List[Tuple[str, str, Severity, pd.Series]]:
+    def run(self) -> list[tuple[str, str, Severity, pd.Series]]:
         """
         Initiates the validation process.
 
