@@ -163,6 +163,67 @@ providers:
             assert result is False
 
 
+class TestGetProviderConfig:
+    """Tests for get_provider_config()."""
+
+    def test_get_provider_config_returns_default_provider(self, tmp_path):
+        """Test get_provider_config returns the default provider's config."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+default_provider: ollama
+providers:
+  openai:
+    provider_type: openai
+    api_key: sk-test
+    model: gpt-4o
+  ollama:
+    provider_type: ollama
+    base_url: http://localhost:11434
+    model: llama3.2
+"""
+            )
+            Config._config_cache = None  # Clear cache
+            provider_config = Config.get_provider_config()
+            assert provider_config is not None
+            assert provider_config["provider_type"] == "ollama"
+            assert provider_config["base_url"] == "http://localhost:11434"
+            assert provider_config["model"] == "llama3.2"
+
+    def test_get_provider_config_no_default_provider(self, tmp_path):
+        """Test get_provider_config returns None when no default set."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+providers:
+  openai:
+    provider_type: openai
+    model: gpt-4o
+"""
+            )
+            Config._config_cache = None  # Clear cache
+            provider_config = Config.get_provider_config()
+            assert provider_config is None
+
+    def test_get_provider_config_no_providers_section(self, tmp_path):
+        """Test get_provider_config returns None when no providers section."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text("api_url: https://example.com\n")
+            Config._config_cache = None  # Clear cache
+            provider_config = Config.get_provider_config()
+            assert provider_config is None
+
+    def test_get_provider_config_no_config(self, tmp_path):
+        """Test get_provider_config returns None when no config file."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            Config._config_cache = None  # Clear cache
+            provider_config = Config.get_provider_config()
+            assert provider_config is None
+
+
 class TestSetDefaultProvider:
     """Tests for set_default_provider()."""
 

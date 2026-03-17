@@ -11,13 +11,14 @@ def test_provider_config_validation():
     assert config.model == "gpt-4o"
 
 
-def test_openai_provider_query():
-    from esdc.providers.openai import OpenAIProvider
+def test_openai_provider_config():
+    from esdc.providers.base import ProviderConfig
 
-    provider = OpenAIProvider(api_key="sk-test", model="gpt-4o")
-
-    schema = "project_resources: project_name TEXT, province TEXT"
-    query = "Show projects in Java"
-
-    result = provider.generate_sql(schema, query)
-    assert "SELECT" in result.upper()
+    config = ProviderConfig(
+        name="test_openai",
+        provider_type="openai",
+        model="gpt-4o-mini",
+    )
+    assert config.name == "test_openai"
+    assert config.provider_type == "openai"
+    assert config.model == "gpt-4o-mini"

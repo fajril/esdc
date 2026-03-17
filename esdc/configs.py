@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any
 
 
+# Note: frozen=True was removed to allow method-based configuration updates
+# (e.g., update_provider_config). The Config class uses classmethods for
+# configuration management, so immutability is handled at the application level.
 @dataclass
 class Config:
     APP_NAME: str = "esdc"
@@ -196,19 +199,26 @@ class Config:
 
     @classmethod
     def get_provider_config(cls) -> dict[str, Any] | None:
-        """Get provider configuration from config file."""
+        """Get provider configuration from config file.
+
+        Returns the config for the default provider.
+        """
         config = cls._load_config()
-        if config and "provider" in config:
-            return config["provider"]
-        return None
+        if not config:
+            return None
+
+        default_provider = config.get("default_provider")
+        if not default_provider:
+            return None
+
+        providers = config.get("providers", {})
+        return providers.get(default_provider)
 
     @classmethod
     def get_default_provider(cls) -> str:
         """Get default provider name."""
-        provider_config = cls.get_provider_config()
-        if provider_config and "name" in provider_config:
-            return provider_config["name"]
-        return "openai"
+        config = cls._load_config() or {}
+        return config.get("default_provider", "ollama")
 
     @classmethod
     def get_provider_api_key(cls) -> str:
@@ -238,3 +248,42 @@ class Config:
         if provider_config and "base_url" in provider_config:
             return provider_config["base_url"]
         return ""
+
+    @classmethod
+    def get_chat_db_path(cls) -> Path:
+        """Get database path for chat from config."""
+        config = cls._load_config() or {}
+        db_config = config.get("database", {})
+        if db_path := db_config.get("path"):
+            return Path(db_path).expanduser()
+        return cls.get_db_dir() / f"{cls.APP_NAME}.db"
+
+    @classmethod
+    def set_chat_db_path(cls, path: Path) -> None:
+        """Set database path for chat in config."""
+        config = cls._load_config() or {}
+        if "database" not in config:
+            config["database"] = {}
+        config["database"]["path"] = str(path)
+        cls._save_config(config)
+
+    @classmethod
+    def get_provider_config_by_name(cls, name: str) -> dict[str, Any] | None:
+        """Get provider configuration by name."""
+        providers = cls.get_providers()
+        return providers.get(name)
+
+    @classmethod
+    def update_provider_config(cls, name: str, config_data: dict[str, Any]) -> None:
+        """Update a provider configuration."""
+        config = cls._load_config() or {}
+        if "providers" not in config:
+            config["providers"] = {}
+        config["providers"][name] = config_data
+        cls._save_config(config)
+
+    @classmethod
+    def has_chat_config(cls) -> bool:
+        """Check if chat configuration exists."""
+        config = cls._load_config() or {}
+        return "providers" in config and len(config.get("providers", {})) > 0
