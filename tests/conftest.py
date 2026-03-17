@@ -32,7 +32,7 @@ def isolated_config(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def mock_esdc_api(responses):
+def mock_esdc_api():
     """Factory to add mock ESDC API responses.
 
     Usage:
@@ -41,22 +41,28 @@ def mock_esdc_api(responses):
         mock.add_csv("https://esdc.skkmigas.go.id/api/v2/...", "col1,col2\nval1,val2")
     """
     import re
+    import responses as responses_lib
+
+    responses_lib.start()
 
     def _add_response(method, pattern, **kwargs):
         url_pattern = re.compile(pattern)
-        responses.add(method, url_pattern, **kwargs)
+        responses_lib.add(method, url_pattern, **kwargs)
 
     class MockAPI:
         def add_json(self, pattern, json_data, status=200):
-            _add_response(responses.GET, pattern, json=json_data, status=status)
+            _add_response(responses_lib.GET, pattern, json=json_data, status=status)
 
         def add_csv(self, pattern, body, status=200):
-            _add_response(responses.GET, pattern, body=body, status=status)
+            _add_response(responses_lib.GET, pattern, body=body, status=status)
 
         def add_status(self, pattern, status):
-            _add_response(responses.GET, pattern, status=status)
+            _add_response(responses_lib.GET, pattern, status=status)
 
-    return MockAPI()
+    yield MockAPI()
+
+    responses_lib.stop()
+    responses_lib.reset()
 
 
 @pytest.fixture
