@@ -1,5 +1,3 @@
-import pytest
-
 from esdc.idgen import (
     _luhn_mod16,
     gen_field_id,
@@ -76,6 +74,7 @@ def test_gen_zone_id_advances_existing():
         "Z-2C0123B-015-5",
     ]
 
+
 def test_verify_field_id():
     assert verify_field_id("F-2C-0123-B")
     assert not verify_field_id("F-2C-0123-C")
@@ -84,4 +83,3 @@ def test_verify_field_id():
 def test_verify_zone_id():
     assert verify_zone_id("Z-2C0123B-012-B")
     assert not verify_zone_id("Z-2C0123B-012-C")
-

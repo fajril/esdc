@@ -2,7 +2,6 @@ import sqlite3
 import logging
 import re
 from pathlib import Path
-from typing import Union, List, Optional
 
 import pandas as pd
 
@@ -11,7 +10,7 @@ from esdc.selection import TableName
 
 
 def load_data_to_db(
-    content: List[List[str]], header: List[str], table_name: str
+    content: list[list[str]], header: list[str], table_name: str
 ) -> None:
     """
     Load data into the ESDC database.
@@ -39,33 +38,33 @@ def load_data_to_db(
         "project_timeseries": "create_table_project_timeseries.sql",
     }
     logging.info("Connecting to the database.")
-    if not Config.get_db_path().exists():
-        Config.get_db_path().mkdir(parents=True, exist_ok=True)
+    if not Config.get_db_dir().exists():
+        Config.get_db_dir().mkdir(parents=True, exist_ok=True)
         logging.info("Database does not exist. Creating new database.")
-        logging.debug("Database location: %s", Config.get_db_path())
-    with sqlite3.connect(Config.get_db_path() / "esdc.db") as conn:
+        logging.debug("Database location: %s", Config.get_db_dir())
+    with sqlite3.connect(Config.get_db_file()) as conn:
         cursor = conn.cursor()
         logging.debug("creating table %s in database", table_name)
-        cursor.executescript(_load_sql_script(create_table_query[table_name]))
+        _ = cursor.executescript(_load_sql_script(create_table_query[table_name]))
         column_names = ", ".join(["?" for _ in header])
         insert_stmt = (
-            f'INSERT INTO {table_name} ({", ".join(header)}) VALUES ({column_names})'
+            f"INSERT INTO {table_name} ({', '.join(header)}) VALUES ({column_names})"
         )
         logging.debug("Inserting table data %s into the database.", table_name)
         try:
-            cursor.executemany(insert_stmt, content)
+            _ = cursor.executemany(insert_stmt, content)
         except sqlite3.Error as e:
             logging.debug("insert statement: %s", insert_stmt)
             raise sqlite3.Error(str(e)) from e
 
         logging.debug("Creating uuid column for table %s", table_name)
         uuid_query = _load_sql_script("create_column_uuid.sql")
-        cursor.executescript(uuid_query.replace("{table_name}", table_name))
+        _ = cursor.executescript(uuid_query.replace("{table_name}", table_name))
 
         if table_name == "project_resources":
             logging.debug("Creating table view for field, working area, nkri.")
-            cursor.executescript(_load_sql_script("create_esdc_view.sql"))
-        cursor.execute("VACUUM;")
+            _ = cursor.executescript(_load_sql_script("create_esdc_view.sql"))
+        _ = cursor.execute("VACUUM;")
         conn.commit()
 
         logging.info("Table %s is loaded into database.", table_name)
@@ -73,11 +72,11 @@ def load_data_to_db(
 
 def run_query(
     table: TableName,
-    where: Optional[str] = None,
-    like: Optional[str] = None,
-    year: Optional[int] = None,
+    where: str | None = None,
+    like: str | None = None,
+    year: int | None = None,
     output: int = 0,
-    columns: Union[str, List[str]] = "",
+    columns: str | list[str] = "",
 ) -> pd.DataFrame | None:
     """
     Execute a query on the specified table in the database.
@@ -117,13 +116,14 @@ def run_query(
     # Modify the query based on the provided columns
     if columns:
         logging.debug("selected columns: %s", columns)
-        # Define the regex pattern to match any characters (including none)
-        # that come before the string "FROM" in a non-greedy way.
         pattern = r".*?(?=FROM)"
-        query = re.sub(pattern, "", query)
-        select_query = "SELECT" + ", ".join(col for col in columns)
+        query_match = re.search(pattern, query)
+        if query_match is None:
+            raise ValueError(f"Could not parse query: {query}")
+        query = query[query_match.end() :]
+        select_query = "SELECT " + ", ".join(col for col in columns) + " "
         logging.debug("query: %s", select_query)
-        query = select_query[:-1] + query
+        query = select_query + query
 
     # Replace placeholders with actual values
     if table == TableName.NKRI_RESOURCES:
@@ -152,7 +152,7 @@ def run_query(
         )
 
     # Execute the query
-    if not Path.exists(Config.get_db_path() / "esdc.db"):
+    if not Config.get_db_file().exists():
         logging.error(
             """
         Database file does not exist. Try to run this command first:
@@ -162,7 +162,7 @@ def run_query(
         )
         return None
     try:
-        with sqlite3.connect(Config.get_db_path() / "esdc.db") as conn:
+        with sqlite3.connect(Config.get_db_file()) as conn:
             df = pd.read_sql_query(query, conn)
     except sqlite3.OperationalError as e:
         logging.error("Cannot query data. Message: %s", e)

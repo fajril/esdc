@@ -20,7 +20,7 @@ Dependencies:
 from __future__ import annotations
 
 from itertools import cycle
-from typing import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 
 _HEX_DIGITS = "0123456789ABCDEF"
 _SUFFIX_RANGE = range(10_000)
@@ -59,9 +59,6 @@ def _normalize_grid_token(token: str) -> str:
             non-hexadecimal characters.
     """
 
-    if token is None:
-        raise ValueError("grid token cannot be None")
-
     raw = token.strip().upper()
     if not raw:
         raise ValueError("grid token cannot be empty")
@@ -99,7 +96,7 @@ def _normalize_field_id(field_id: str) -> str:
     """
 
     raw = field_id.strip().upper().replace("-", "")
-    _parse_field_id(raw)
+    _ = _parse_field_id(raw)
     return raw
 
 
@@ -115,9 +112,6 @@ def _parse_field_id(field_id: str) -> tuple[str, str]:
     Raises:
         ValueError: If the ID structure, digits, or checksum are invalid.
     """
-
-    if field_id is None:
-        raise ValueError("field ID cannot be None")
 
     raw = field_id.strip().upper().replace("-", "")
     if len(raw) != 8 or not raw.startswith("F"):
@@ -157,9 +151,6 @@ def _parse_project_id(project_id: str) -> tuple[str, int]:
         ValueError: If the format, sequence digits, or range are invalid.
     """
 
-    if project_id is None:
-        raise ValueError("project ID cannot be None")
-
     raw = project_id.strip().upper().replace("-", "")
     if len(raw) != 10 or not raw.startswith("P"):
         raise ValueError(f"invalid project ID format: {project_id!r}")
@@ -167,16 +158,14 @@ def _parse_project_id(project_id: str) -> tuple[str, int]:
     field_payload = raw[1:8]
     sequence_text = raw[8:10]
 
-    _parse_field_id("F" + field_payload)
+    _ = _parse_field_id("F" + field_payload)
 
     if not sequence_text.isdigit():
         raise ValueError(f"project suffix must be decimal digits: {project_id!r}")
 
     sequence_number = int(sequence_text)
     if sequence_number < 1 or sequence_number > 99:
-        raise ValueError(
-            f"project sequence must be within 01-99: {project_id!r}"
-        )
+        raise ValueError(f"project sequence must be within 01-99: {project_id!r}")
 
     return field_payload, sequence_number
 
@@ -194,9 +183,6 @@ def _parse_zone_id(zone_id: str) -> tuple[str, str]:
         ValueError: If the format, suffix digits, or checksum are invalid.
     """
 
-    if zone_id is None:
-        raise ValueError("zone ID cannot be None")
-
     raw = zone_id.strip().upper().replace("-", "")
     if len(raw) != 12 or not raw.startswith("Z"):
         raise ValueError(f"invalid zone ID format: {zone_id!r}")
@@ -205,7 +191,7 @@ def _parse_zone_id(zone_id: str) -> tuple[str, str]:
     zone_suffix = raw[8:11]
     checksum = raw[11]
 
-    _parse_field_id("F" + field_payload)
+    _ = _parse_field_id("F" + field_payload)
 
     if not zone_suffix.isdigit():
         raise ValueError(f"zone suffix must be decimal digits: {zone_id!r}")
@@ -442,9 +428,7 @@ def gen_field_id(
     if total_id < 1:
         raise ValueError("total_id must be at least 1")
 
-    existing_grid_order, grid_suffixes = _collect_existing_grids(
-        current_field_id or []
-    )
+    existing_grid_order, grid_suffixes = _collect_existing_grids(current_field_id or [])
     ordered_grids = _resolve_ordered_grids(
         current_grid, existing_grid_order, grid_suffixes
     )
@@ -535,6 +519,7 @@ def gen_zone_id(
 
     return results
 
+
 def verify_field_id(field_id: str) -> bool:
     """Return whether the supplied field ID passes checksum validation.
 
@@ -546,11 +531,8 @@ def verify_field_id(field_id: str) -> bool:
         checksum rules; otherwise False.
     """
 
-    if not isinstance(field_id, str):
-        return False
-
     try:
-        _parse_field_id(field_id)
+        _ = _parse_field_id(field_id)
     except ValueError:
         return False
     return True
@@ -567,11 +549,8 @@ def verify_zone_id(zone_id: str) -> bool:
         checksum rules; otherwise False.
     """
 
-    if not isinstance(zone_id, str):
-        return False
-
     try:
-        _parse_zone_id(zone_id)
+        _ = _parse_zone_id(zone_id)
     except ValueError:
         return False
     return True
