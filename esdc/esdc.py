@@ -341,9 +341,7 @@ def esdc_url_builder(
     For example, the url for project_resources table is:
     https://esdc.skkmigas.go.id/api/v2/project-resources?verbose=3&output=csv
     """
-    url = Config.get_api_url()
-
-    url += api_ver.value
+    url = Config.get_api_url().rstrip("/") + api_ver.value
     tables = {
         TableName.PROJECT_RESOURCES: "project-resources",
         TableName.PROJECT_TIMESERIES: "project-timeseries",

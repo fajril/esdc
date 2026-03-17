@@ -10,12 +10,12 @@ class ApiVer(Enum):
     Enum for API versions.
 
     Attributes:
-        V1 (int): API version 1.
-        V2 (str): API version 2.
+        V1 (str): API version 1 path.
+        V2 (str): API version 2 path.
     """
 
-    V1 = 1
-    V2 = "api/v2"
+    V1 = "/api/v1"
+    V2 = "/api/v2"
 
 
 class TableName(Enum):
