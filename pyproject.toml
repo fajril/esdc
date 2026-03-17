@@ -33,6 +33,7 @@ dev = [
   "responses>=0.25.0",
   "pylint>=4.0.1",
   "basedpyright>=0.1.0",
+  "pandas-stubs>=2.2.2",
 ]
 
 [project.urls]
