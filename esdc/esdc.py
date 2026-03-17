@@ -3,7 +3,7 @@ ESDC Data Management Module
 
 This module provides functionality for managing data
 related to the ESDC (https://esdc.skkmigas.go.id).
-It includes commands for fetching, validating, and displaying data from various resources,
+It includes commands for fetching and displaying data from various resources,
 as well as loading data into a SQLite database.
 The module utilizes the Typer library for command-line interface (CLI) interactions
 and Rich for enhanced logging and output formatting.
@@ -11,7 +11,6 @@ and Rich for enhanced logging and output formatting.
 Key Features:
 - Fetch data from the ESDC API in various formats (CSV, JSON, ZIP).
 - Load data into a SQLite database.
-- Validate data against predefined rules.
 - Display data from specific tables with filtering options.
 - Save output data to files.
 
@@ -27,7 +26,6 @@ Commands:
 - fetch: Downloads data from the ESDC API and saves it to a specified file type.
 - reload: Reloads data from existing binary files into the database.
 - show: Displays data from a specified table with optional filters.
-- validate: Validates data from a file or performs a full validation.
 
 Usage:
 Run the module from the command line to access the available commands and options.
@@ -56,9 +54,7 @@ import pandas as pd
 from tabulate import tabulate
 
 from esdc.selection import TableName, ApiVer, FileType
-from esdc.validate import RuleEngine
 from esdc.configs import Config
-from esdc.summarizer import describer, analyzer
 from esdc.dbmanager import run_query, load_data_to_db
 
 TABLES: tuple[TableName, TableName] = (
@@ -103,37 +99,6 @@ def main(verbose: int = 0):
 
 
 # ... (previous imports remain unchanged)
-
-
-@app.command()
-def chat():
-    try:
-        # Initialize the chat session
-        chat_function = create_chat_session()
-        if not chat_function:
-            print("Failed to create chat session. Exiting.")
-            return
-
-        print("Chat session started.")
-        print("Type 'exit' or 'quit' to end the conversation.")
-
-        while True:
-            # Get user input
-            user_input = input("You: ").strip()
-
-            # Check if user wants to exit
-            if user_input.lower() in ["exit", "quit"]:
-                print("Ending chat session.")
-                break
-
-            # Send user input to the model and get response
-            response = chat_function(user_input)
-
-            # Print the model's response
-            print("AI:", response)
-
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
 
 
 @app.command()
@@ -293,71 +258,6 @@ def show(
             )
     else:
         logging.warning("Unable to show data. The query is none.")
-
-
-@app.command()
-def describe(
-    table: Annotated[str, typer.Argument(help="Table name.")] = "project_resources",
-    search: Annotated[str | None, typer.Option(help="Filter value")] = "",
-    year: Annotated[
-        int | None, typer.Option(min=2019, help="Filter year value")
-    ] = None,
-    save: bool = typer.Option(
-        False,
-        "--save/--no-save",
-        help="Specify whether to save the shown data to a file.",
-    ),
-):
-    selected_table = TableName(table)
-    articles = describer(table=selected_table, year=year, search=search)
-    if articles is not None:
-        with open(f"{table}.txt", "w", encoding="utf-8") as f:
-            f.writelines(f"{paragraph}\n" for paragraph in articles)
-        rich.print(articles[0])
-        rich.print("dan seterusnya...")
-
-
-@app.command()
-def analyze(
-    field: Annotated[str, typer.Argument(help="field name")],
-    wkname: Annotated[str, typer.Argument(help="Working Area name")],
-):
-    rich.print(analyzer(field, wkname))
-
-
-@app.command()
-def validate(
-    filename: Annotated[str | None, typer.Argument(help="File name.")] = None,
-) -> None:
-    """
-    Validate data from a file or run a full validation.
-
-    Args:
-        filename (str, optional): The name of the file to validate. Defaults to None.
-
-    Returns:
-        None
-
-    Notes:
-        This function validates data from a file if a filename is provided,
-        or runs a full validation if no filename is provided.
-    """
-    if filename is None:
-        run_validation()
-
-
-def run_validation():
-    project_resources = run_query(TableName.PROJECT_RESOURCES, output=4)
-    engine = RuleEngine(project_resources=project_resources)
-    results = engine.run()
-    if results.empty:
-        logging.info("No validation results.")
-    else:
-        logging.info("Saving validation results.")
-        results = results.sort_values(
-            by=["report_year", "wk_name", "field_name", "project_name", "uncert_lvl"]
-        )
-        results.to_csv(f"validation_{date.today().strftime('%Y%m%d')}.csv", index=False)
 
 
 def load_esdc_data(

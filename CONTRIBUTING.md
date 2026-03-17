@@ -33,8 +33,8 @@ pytest -v tests/
 # Run pylint on source
 pylint esdc/
 
-# Run mypy type checking
-mypy esdc/
+# Run basedpyright type checking
+basedpyright esdc/
 ```
 
 ### Running the CLI
