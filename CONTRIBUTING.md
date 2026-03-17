@@ -60,7 +60,6 @@ Organize imports in three groups, separated by blank lines:
 ```python
 import os
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 from rich import print
