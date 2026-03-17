@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-@dataclass(frozen=True)
+@dataclass
 class Config:
     APP_NAME: str = "esdc"
     BASE_API_URL_V2: str = "https://esdc.skkmigas.go.id/"

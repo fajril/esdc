@@ -3,6 +3,7 @@ from typing import Any
 from textual.app import App
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Static, Input, Button
+from textual.events import Key
 
 
 class ChatMessage(Static):
@@ -21,17 +22,6 @@ class ChatPanel(Vertical):
         self.mount(ChatMessage(role, content))
 
 
-class SQLPanel(Vertical):
-    def __init__(self):
-        super().__init__()
-        self.sql_query = ""
-        self.query_result: Any = None
-
-    def set_query(self, sql: str, result: Any):
-        self.sql_query = sql
-        self.query_result = result
-
-
 class ResultsPanel(Vertical):
     def __init__(self):
         super().__init__()
@@ -41,6 +31,12 @@ class ResultsPanel(Vertical):
     def set_results(self, sql: str, results: str):
         self.sql_content = sql
         self.results_content = results
+        self.update_display()
+
+    def update_display(self):
+        content = f"[bold]SQL Query:[/bold]\n{self.sql_content}\n\n[bold]Results:[/bold]\n{self.results_content}"
+        self.remove_children()
+        self.mount(Static(content))
 
 
 class ESDCChatApp(App):
@@ -78,6 +74,7 @@ class ESDCChatApp(App):
         super().__init__()
         self.chat_panel: ChatPanel | None = None
         self.results_panel: ResultsPanel | None = None
+        self.user_input: Input | None = None
 
     def compose(self):
         yield Horizontal(
@@ -95,9 +92,26 @@ class ESDCChatApp(App):
         chat_container.mount(self.chat_panel)
         results_container.mount(self.results_panel)
 
-        self.chat_panel.mount(
-            Input(placeholder="Ask about your data...", id="user_input")
-        )
+        self.user_input = Input(placeholder="Ask about your data...", id="user_input")
+        self.chat_panel.mount(self.user_input)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle user input submission."""
+        user_input = event.value.strip()
+        if not user_input:
+            return
+
+        self.display_message("user", user_input)
+
+        # Clear input
+        event.input.value = ""
+
+        # Process query
+        sql, results = self.handle_query(user_input)
+
+        # Display results
+        self.set_results(sql, results)
+        self.display_message("ai", f"Generated SQL:\n{sql}")
 
     def display_message(self, role: str, content: str) -> None:
         if self.chat_panel:
