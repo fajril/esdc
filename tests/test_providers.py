@@ -9,3 +9,15 @@ def test_provider_config_validation():
     assert config.api_key == "sk-test"
     assert config.provider_type == "openai"
     assert config.model == "gpt-4o"
+
+
+def test_openai_provider_query():
+    from esdc.providers.openai import OpenAIProvider
+
+    provider = OpenAIProvider(api_key="sk-test", model="gpt-4o")
+
+    schema = "project_resources: project_name TEXT, province TEXT"
+    query = "Show projects in Java"
+
+    result = provider.generate_sql(schema, query)
+    assert "SELECT" in result.upper()
