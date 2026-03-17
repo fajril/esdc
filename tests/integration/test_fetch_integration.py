@@ -1,8 +1,6 @@
 """Integration tests for fetch command."""
 
 import sqlite3
-
-import pytest
 from typer.testing import CliRunner
 
 from esdc.esdc import app

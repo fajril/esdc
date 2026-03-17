@@ -1,6 +1,5 @@
 """Integration tests for show command."""
 
-import pytest
 from typer.testing import CliRunner
 
 from esdc.esdc import app

@@ -1,7 +1,5 @@
 from unittest.mock import patch, MagicMock
 
-import pytest
-
 from esdc.esdc import (
     _read_csv,
     esdc_url_builder,
@@ -9,7 +7,7 @@ from esdc.esdc import (
     _load_file_as_json,
     esdc_downloader,
 )
-from esdc.selection import TableName, ApiVer, FileType
+from esdc.selection import TableName, FileType
 
 
 class TestEsdcUrlBuilder:
