@@ -40,6 +40,9 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/fajril/esdc"
 
+[project.scripts]
+esdc = "esdc.esdc:app"
+
 [tool.setuptools.packages.find]
 where = ["."]
 

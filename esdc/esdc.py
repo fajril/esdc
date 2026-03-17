@@ -54,13 +54,16 @@ from tabulate import tabulate
 from esdc.selection import TableName, ApiVer, FileType
 from esdc.configs import Config
 from esdc.dbmanager import run_query, load_data_to_db
+from esdc.commands.provider import provider_app
+from esdc.chat.app import ESDCChatApp
 
 TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
     TableName.PROJECT_TIMESERIES,
 )
 
-app = typer.Typer(no_args_is_help=True)
+app = typer.Typer(no_args_is_help=False)
+app.add_typer(provider_app, name="provider")
 
 
 @app.callback()
@@ -486,6 +489,13 @@ def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
     for row in reader:
         data.append(row)
     return data, header
+
+
+@app.command(name="chat")
+def chat():
+    """Start the interactive chat TUI."""
+    app = ESDCChatApp()
+    app.run()
 
 
 @app.command(name="db-info")
