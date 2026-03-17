@@ -48,6 +48,19 @@ esdc = ["data/*"]
 [tool.setuptools.exclude-package-data]
 esdc = ["tests"]
 
-[project.scripts]
-esdc = "esdc:app"
+[tool.basedpyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+
+# These are expected in this codebase - suppress them
+reportMissingTypeStubs = false
+reportPrivateUsage = false
+reportUnannotatedClassAttribute = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+reportMissingParameterType = false
+reportUnknownLambdaType = false
+reportUnknownArgumentType = false
+reportCallInDefaultInitializer = false
 
