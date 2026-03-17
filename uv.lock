@@ -169,6 +169,8 @@ dev = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "pytest-mock" },
+    { name = "responses" },
 ]
 
 [package.metadata]
@@ -191,7 +193,11 @@ requires-dist = [
 provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.4.2" }]
+dev = [
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "pytest-mock", specifier = ">=3.15.1" },
+    { name = "responses", specifier = ">=0.26.0" },
+]
 
 [[package]]
 name = "et-xmlfile"
