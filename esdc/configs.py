@@ -150,6 +150,51 @@ class Config:
         return cls.get_db_dir()
 
     @classmethod
+    def _save_config(cls, config: dict[str, Any]) -> None:
+        """Save config to YAML file and update cache."""
+        cls._config_cache = config
+        config_file = cls.get_config_file()
+        config_dir = cls.get_config_dir()
+        if not config_dir.exists():
+            config_dir.mkdir(parents=True, exist_ok=True)
+        with open(config_file, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+    @classmethod
+    def get_providers(cls) -> dict:
+        """Get all provider configurations."""
+        config = cls._load_config()
+        return config.get("providers", {}) if config else {}
+
+    @classmethod
+    def save_provider(cls, name: str, provider_config: dict) -> None:
+        """Save a provider configuration."""
+        config = cls._load_config() or {}
+        providers = config.get("providers", {})
+        providers[name] = provider_config
+        config["providers"] = providers
+        cls._save_config(config)
+
+    @classmethod
+    def remove_provider(cls, name: str) -> bool:
+        """Remove a provider configuration. Returns True if removed."""
+        config = cls._load_config() or {}
+        providers = config.get("providers", {})
+        if name in providers:
+            del providers[name]
+            config["providers"] = providers
+            cls._save_config(config)
+            return True
+        return False
+
+    @classmethod
+    def set_default_provider(cls, name: str) -> None:
+        """Set the default provider."""
+        config = cls._load_config() or {}
+        config["default_provider"] = name
+        cls._save_config(config)
+
+    @classmethod
     def get_provider_config(cls) -> dict[str, Any] | None:
         """Get provider configuration from config file."""
         config = cls._load_config()
