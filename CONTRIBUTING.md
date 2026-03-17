@@ -185,10 +185,7 @@ esdc/
 ├── configs.py        # Configuration dataclass
 ├── selection.py      # Enum classes for constants
 ├── idgen.py          # ID generation utilities
-├── validate.py       # Validation rule engine
 ├── dbmanager.py      # Database operations
-├── summarizer.py     # Text summarization
-├── re0.py            # Validation rules
 └── sql/              # SQL query files
 
 tests/
@@ -202,7 +199,6 @@ tests/
 - **pandas**: Data manipulation
 - **rich**: Terminal output formatting
 - **requests**: HTTP client
-- **openai**: AI integration
 - **pytest**: Testing framework
 
 ## Pull Request Process
