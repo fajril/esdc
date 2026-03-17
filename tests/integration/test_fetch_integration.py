@@ -1,9 +1,13 @@
 """Integration tests for fetch command."""
 
+import sqlite3
+
 import pytest
 from typer.testing import CliRunner
 
 from esdc.esdc import app
+
+from tests.integration.constants import PROJECT_RESOURCES_URL, PROJECT_TIMESERIES_URL
 
 runner = CliRunner()
 
@@ -24,13 +28,9 @@ class TestFetchCreatesDatabase:
         project_timeseries_data = [
             {"project_id": "PRJ-001", "year": 2024, "cprd_grs_oil": 100.0}
         ]
+        mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=project_resources_data)
         mock_esdc_api.add_json(
-            "https://esdc.skkmigas.go.id/api/v2/project-resources.*",
-            json_data=project_resources_data,
-        )
-        mock_esdc_api.add_json(
-            "https://esdc.skkmigas.go.id/api/v2/project-timeseries.*",
-            json_data=project_timeseries_data,
+            PROJECT_TIMESERIES_URL, json_data=project_timeseries_data
         )
 
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -59,13 +59,9 @@ class TestFetchJsonToDatabase:
         project_timeseries_data = [
             {"project_id": "PRJ-001", "year": 2024, "cprd_grs_oil": 100.0}
         ]
+        mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=project_resources_data)
         mock_esdc_api.add_json(
-            "https://esdc.skkmigas.go.id/api/v2/project-resources.*",
-            json_data=project_resources_data,
-        )
-        mock_esdc_api.add_json(
-            "https://esdc.skkmigas.go.id/api/v2/project-timeseries.*",
-            json_data=project_timeseries_data,
+            PROJECT_TIMESERIES_URL, json_data=project_timeseries_data
         )
 
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -77,8 +73,6 @@ class TestFetchJsonToDatabase:
 
         db_file = isolated_config / ".esdc" / "esdc.db"
         assert db_file.exists()
-
-        import sqlite3
 
         conn = sqlite3.connect(db_file)
         cursor = conn.cursor()
@@ -99,14 +93,8 @@ class TestFetchCsvToDatabase:
             "PRJ-002;CSV Project;2024;DEVELOPMENT"
         )
         csv_timeseries = "project_id;year;cprd_grs_oil\nPRJ-002;2024;200.0"
-        mock_esdc_api.add_csv(
-            "https://esdc.skkmigas.go.id/api/v2/project-resources.*",
-            body=csv_content,
-        )
-        mock_esdc_api.add_csv(
-            "https://esdc.skkmigas.go.id/api/v2/project-timeseries.*",
-            body=csv_timeseries,
-        )
+        mock_esdc_api.add_csv(PROJECT_RESOURCES_URL, body=csv_content)
+        mock_esdc_api.add_csv(PROJECT_TIMESERIES_URL, body=csv_timeseries)
 
         monkeypatch.setenv("ESDC_USER", "testuser")
         monkeypatch.setenv("ESDC_PASS", "testpass")
@@ -117,8 +105,6 @@ class TestFetchCsvToDatabase:
 
         db_file = isolated_config / ".esdc" / "esdc.db"
         assert db_file.exists()
-
-        import sqlite3
 
         conn = sqlite3.connect(db_file)
         cursor = conn.cursor()
@@ -134,10 +120,7 @@ class TestFetchAuthFailure:
 
     def test_fetch_auth_failure(self, isolated_config, mock_esdc_api, monkeypatch):
         """API returns 401 should show clear error message"""
-        mock_esdc_api.add_status(
-            "https://esdc.skkmigas.go.id/api/v2/project-resources.*",
-            status=401,
-        )
+        mock_esdc_api.add_status(PROJECT_RESOURCES_URL, status=401)
 
         monkeypatch.setenv("ESDC_USER", "baduser")
         monkeypatch.setenv("ESDC_PASS", "badpass")
@@ -153,11 +136,11 @@ class TestFetchMalformedJson:
     def test_fetch_malformed_json(self, isolated_config, mock_esdc_api, monkeypatch):
         """Invalid JSON response should fail gracefully"""
         mock_esdc_api.add_json(
-            "https://esdc.skkmigas.go.id/api/v2/project-resources.*",
+            PROJECT_RESOURCES_URL,
             json_data=[{"project_id": "PRJ-001", "invalid_column": "data"}],
         )
         mock_esdc_api.add_json(
-            "https://esdc.skkmigas.go.id/api/v2/project-timeseries.*",
+            PROJECT_TIMESERIES_URL,
             json_data=[{"project_id": "PRJ-001", "year": 2024}],
         )
 
@@ -187,13 +170,9 @@ class TestFetchWithEnvCredentials:
         project_timeseries_data = [
             {"project_id": "PRJ-003", "year": 2024, "cprd_grs_oil": 300.0}
         ]
+        mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=project_resources_data)
         mock_esdc_api.add_json(
-            "https://esdc.skkmigas.go.id/api/v2/project-resources.*",
-            json_data=project_resources_data,
-        )
-        mock_esdc_api.add_json(
-            "https://esdc.skkmigas.go.id/api/v2/project-timeseries.*",
-            json_data=project_timeseries_data,
+            PROJECT_TIMESERIES_URL, json_data=project_timeseries_data
         )
 
         monkeypatch.setenv("ESDC_USER", "envuser")

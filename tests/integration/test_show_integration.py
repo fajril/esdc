@@ -16,7 +16,7 @@ class TestShowCommand:
         result = runner.invoke(app, ["show", "project_resources"])
 
         assert result.exit_code == 0
-        assert "WARNING" in result.stdout or "Unable to show data" in result.stdout
+        assert "Unable to show data" in result.stdout
 
     def test_show_with_data(self, seeded_database):
         """Show with seeded data should display formatted table."""
