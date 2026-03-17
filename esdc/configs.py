@@ -148,3 +148,48 @@ class Config:
     def get_db_path(cls) -> Path:
         """Return the database directory (backwards compatibility)."""
         return cls.get_db_dir()
+
+    @classmethod
+    def get_provider_config(cls) -> dict[str, Any] | None:
+        """Get provider configuration from config file."""
+        config = cls._load_config()
+        if config and "provider" in config:
+            return config["provider"]
+        return None
+
+    @classmethod
+    def get_default_provider(cls) -> str:
+        """Get default provider name."""
+        provider_config = cls.get_provider_config()
+        if provider_config and "name" in provider_config:
+            return provider_config["name"]
+        return "openai"
+
+    @classmethod
+    def get_provider_api_key(cls) -> str:
+        """Get provider API key from env var or config."""
+        env_key = os.environ.get("OPENAI_API_KEY")
+        if env_key:
+            return env_key
+
+        provider_config = cls.get_provider_config()
+        if provider_config and "api_key" in provider_config:
+            return provider_config["api_key"]
+
+        return ""
+
+    @classmethod
+    def get_provider_model(cls) -> str:
+        """Get provider model from config."""
+        provider_config = cls.get_provider_config()
+        if provider_config and "model" in provider_config:
+            return provider_config["model"]
+        return "gpt-4o"
+
+    @classmethod
+    def get_provider_base_url(cls) -> str:
+        """Get provider base URL from config."""
+        provider_config = cls.get_provider_config()
+        if provider_config and "base_url" in provider_config:
+            return provider_config["base_url"]
+        return ""
