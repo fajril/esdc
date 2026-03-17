@@ -17,13 +17,14 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  "requests==2.32.2",
-  "pandas>=2.2.2",
-  "tqdm==4.66.4",
-  "typer>=0.12.4",
-  "tabulate==0.9.0",
-  "openpyxl==3.1.5",
-  "pyyaml>=6.0",
+    "requests==2.32.2",
+    "pandas>=2.2.2",
+    "tqdm==4.66.4",
+    "typer>=0.12.4",
+    "tabulate==0.9.0",
+    "openpyxl==3.1.5",
+    "pyyaml>=6.0",
+    "textual>=0.52.0",
 ]
 
 [project.optional-dependencies]
@@ -63,4 +64,9 @@ reportMissingParameterType = false
 reportUnknownLambdaType = false
 reportUnknownArgumentType = false
 reportCallInDefaultInitializer = false
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
 
