@@ -20,7 +20,7 @@ Dependencies:
 from __future__ import annotations
 
 from itertools import cycle
-from typing import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 
 _HEX_DIGITS = "0123456789ABCDEF"
 _SUFFIX_RANGE = range(10_000)
@@ -174,9 +174,7 @@ def _parse_project_id(project_id: str) -> tuple[str, int]:
 
     sequence_number = int(sequence_text)
     if sequence_number < 1 or sequence_number > 99:
-        raise ValueError(
-            f"project sequence must be within 01-99: {project_id!r}"
-        )
+        raise ValueError(f"project sequence must be within 01-99: {project_id!r}")
 
     return field_payload, sequence_number
 
@@ -442,9 +440,7 @@ def gen_field_id(
     if total_id < 1:
         raise ValueError("total_id must be at least 1")
 
-    existing_grid_order, grid_suffixes = _collect_existing_grids(
-        current_field_id or []
-    )
+    existing_grid_order, grid_suffixes = _collect_existing_grids(current_field_id or [])
     ordered_grids = _resolve_ordered_grids(
         current_grid, existing_grid_order, grid_suffixes
     )
@@ -534,6 +530,7 @@ def gen_zone_id(
         results.append(f"Z-{field_payload}-{zone_suffix}-{checksum}")
 
     return results
+
 
 def verify_field_id(field_id: str) -> bool:
     """Return whether the supplied field ID passes checksum validation.

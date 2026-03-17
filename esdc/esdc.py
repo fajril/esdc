@@ -452,7 +452,7 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
         return None
 
 
-def _read_csv(file: str | Iterable) -> tuple[list[list[str]], list[str]]:
+def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
     """
     Reads a CSV file and returns its contents as a tuple of two values:
     a list of lists of strings representing the data,
