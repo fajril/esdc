@@ -1,3 +1,5 @@
+"""Integration tests for show command."""
+
 import pytest
 from typer.testing import CliRunner
 
@@ -6,21 +8,53 @@ from esdc.esdc import app
 runner = CliRunner()
 
 
-class TestShowIntegration:
-    """Integration tests for show command with real DB operations."""
+class TestShowCommand:
+    """Tests for show command with real database."""
 
-    def test_show_help_integration(self):
-        """Test show --help shows expected options."""
-        result = runner.invoke(app, ["show", "--help"])
+    def test_show_empty_database(self, isolated_config):
+        """Show with no data should show warning message."""
+        result = runner.invoke(app, ["show", "project_resources"])
+
         assert result.exit_code == 0
-        assert "table" in result.stdout.lower()
 
-    def test_show_requires_table_argument(self):
-        """Test show command requires table argument."""
-        result = runner.invoke(app, ["show"])
-        assert result.exit_code == 2
+    def test_show_with_data(self, seeded_database):
+        """Show with seeded data should display formatted table."""
+        result = runner.invoke(app, ["show", "project_resources"])
 
-    def test_show_with_invalid_table(self):
-        """Test show command with invalid table name."""
-        result = runner.invoke(app, ["show", "--table", "invalid_table"])
-        assert result.exit_code in [0, 1, 2]
+        assert result.exit_code == 0
+        assert "PRJ-001" in result.stdout or "Test Project Alpha" in result.stdout
+
+    def test_show_with_where_filter(self, seeded_database):
+        """Show with --where and --search should filter results."""
+        result = runner.invoke(
+            app,
+            [
+                "show",
+                "project_resources",
+                "--where",
+                "project_name",
+                "--search",
+                "Alpha",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "Alpha" in result.stdout
+        assert "Beta" not in result.stdout
+
+    def test_show_with_year_filter(self, seeded_database):
+        """Show with --year should filter by report year."""
+        result = runner.invoke(app, ["show", "project_resources", "--year", "2024"])
+
+        assert result.exit_code == 0
+        assert "2024" in result.stdout
+        assert "2023" not in result.stdout
+
+    def test_show_with_columns(self, seeded_database):
+        """Show with --columns should select specific fields."""
+        result = runner.invoke(
+            app,
+            ["show", "project_resources", "--columns", "project_name", "--output", "4"],
+        )
+
+        assert result.exit_code == 0

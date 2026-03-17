@@ -71,20 +71,99 @@ def seeded_database(isolated_config):
 
     Returns the tmp_path so tests can reference the database file.
     """
-    from esdc.dbmanager import load_data_to_db
-
-    sample_data = [
-        ["PRJ-001", "Test Project Alpha", "2024", "DISCOVERED", "100.00"],
-        ["PRJ-002", "Test Project Beta", "2024", "DEVELOPMENT", "200.00"],
-        ["PRJ-003", "Test Project Gamma", "2023", "PRODUCTION", "300.00"],
-    ]
-    header = ["project_code", "project_name", "report_year", "project_stage", "budget"]
-
-    # Ensure config is initialized
+    import sqlite3
     from esdc.configs import Config
 
     Config.init_config()
 
-    load_data_to_db(sample_data, header, "project_resources")
+    db_file = Config.get_db_file()
+    db_dir = Config.get_db_dir()
+    if not db_dir.exists():
+        db_dir.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(db_file) as conn:
+        cursor = conn.cursor()
+        cursor.executescript("""
+            CREATE TABLE IF NOT EXISTS project_resources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT,
+                report_year INTEGER,
+                report_status TEXT,
+                project_name TEXT,
+                project_stage TEXT,
+                project_class TEXT,
+                project_level TEXT,
+                uncert_level TEXT,
+                wk_name TEXT,
+                field_name TEXT,
+                rec_oc_risked REAL,
+                rec_an_risked REAL,
+                res_oc REAL,
+                res_an REAL,
+                prj_ioip REAL,
+                prj_igip REAL
+            );
+        """)
+
+        cursor.executemany(
+            "INSERT INTO project_resources (report_date, report_year, report_status, project_name, project_stage, project_class, project_level, uncert_level, wk_name, field_name, rec_oc_risked, rec_an_risked, res_oc, res_an, prj_ioip, prj_igip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "2024-01-01",
+                    2024,
+                    "ACTIVE",
+                    "Test Project Alpha",
+                    "DISCOVERED",
+                    "CLASS A",
+                    "LEVEL 1",
+                    "UNCERT-HIGH",
+                    "Work Area Alpha",
+                    "Field Alpha",
+                    100.0,
+                    50.0,
+                    1000.0,
+                    500.0,
+                    100.0,
+                    50.0,
+                ),
+                (
+                    "2024-01-01",
+                    2024,
+                    "ACTIVE",
+                    "Test Project Beta",
+                    "DEVELOPMENT",
+                    "CLASS B",
+                    "LEVEL 2",
+                    "UNCERT-MED",
+                    "Work Area Beta",
+                    "Field Beta",
+                    200.0,
+                    100.0,
+                    2000.0,
+                    1000.0,
+                    200.0,
+                    100.0,
+                ),
+                (
+                    "2023-01-01",
+                    2023,
+                    "ACTIVE",
+                    "Test Project Gamma",
+                    "PRODUCTION",
+                    "CLASS C",
+                    "LEVEL 3",
+                    "UNCERT-LOW",
+                    "Work Area Gamma",
+                    "Field Gamma",
+                    300.0,
+                    150.0,
+                    3000.0,
+                    1500.0,
+                    300.0,
+                    150.0,
+                ),
+            ],
+        )
+        conn.commit()
 
     return isolated_config

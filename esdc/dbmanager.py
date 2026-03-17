@@ -116,13 +116,12 @@ def run_query(
     # Modify the query based on the provided columns
     if columns:
         logging.debug("selected columns: %s", columns)
-        # Define the regex pattern to match any characters (including none)
-        # that come before the string "FROM" in a non-greedy way.
         pattern = r".*?(?=FROM)"
-        query = re.sub(pattern, "", query)
-        select_query = "SELECT" + ", ".join(col for col in columns)
+        query_match = re.search(pattern, query)
+        query = query[query_match.end() :]
+        select_query = "SELECT " + ", ".join(col for col in columns) + " "
         logging.debug("query: %s", select_query)
-        query = select_query[:-1] + query
+        query = select_query + query
 
     # Replace placeholders with actual values
     if table == TableName.NKRI_RESOURCES:
