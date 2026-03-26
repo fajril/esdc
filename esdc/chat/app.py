@@ -1003,7 +1003,11 @@ class ESDCChatApp(App):
         if self.chat_panel:
             self.chat_panel.mount_collapsible(thinking)
 
+        # Create a message widget for streaming AI response
+        streaming_message = None
+
         async def run_query():
+            nonlocal streaming_message
             async for chunk in self._stream_response(user_input):
                 if self._cancelled:
                     self.display_message("system", "Query cancelled.")
@@ -1011,9 +1015,16 @@ class ESDCChatApp(App):
                 if chunk["type"] == "message":
                     content = chunk.get("content", "")
                     if content:
-                        # Remove thinking indicator when answer arrives
-                        thinking.remove()
-                        self.display_message("ai", content)
+                        # Create or update streaming message
+                        if streaming_message is None:
+                            streaming_message = ChatMessage("ai", "")
+                            if self.chat_panel and self.chat_panel._message_container:
+                                self.chat_panel._message_container.mount(
+                                    streaming_message
+                                )
+                        # Append content to the message
+                        streaming_message.update(content)
+                        streaming_message.refresh()
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
                     thinking.add_step(f"Running: {tool_name}")
@@ -1024,13 +1035,13 @@ class ESDCChatApp(App):
                         sql = chunk.get("sql", "")
                         if sql:
                             sql_panel = SQLPanel()
-                            sql_panel.set_sql(sql)
                             self.chat_panel.mount_collapsible(sql_panel)
+                            sql_panel.set_sql(sql)
 
                         # Mount Results collapsible in chat flow
                         results_panel = ResultsPanel()
-                        results_panel.set_results(result)
                         self.chat_panel.mount_collapsible(results_panel)
+                        results_panel.set_results(result)
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
                     if tokens > 0:
