@@ -673,13 +673,13 @@ class ThinkingIndicator(Collapsible):
         text-style: bold;
     }
 
-    .thinking-step {
+    .thinking-steps {
         color: $text;
         padding: 0 1;
         margin: 1 0;
     }
 
-    .thinking-step .bullet {
+    .thinking-steps .bullet {
         color: $accent;
     }
     """
