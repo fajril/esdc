@@ -407,11 +407,8 @@ class ContextPanel(ScrollableContainer):
         self._provider_name = provider
         self._model_name = model
         self._session_thread_id = thread_id
-        # Update session content widget if it exists
-        self._provider_name = provider
-        self._model_name = model
-        self._session_thread_id = thread_id
 
+        # Update session content widget if it exists
         try:
             session_content = self.query_one("#session-content", Static)
             thread_display = thread_id[:8] if thread_id else "N/A"
