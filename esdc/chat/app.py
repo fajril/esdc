@@ -328,6 +328,7 @@ class ContextPanel(ScrollableContainer):
             yield Static(
                 f"Provider: {self._provider_name}\nModel: {self._model_name}\nThread: {self._session_thread_id[:8] if self._session_thread_id else 'N/A'}...",
                 classes="session-content",
+                id="session-content",
             )
 
         # Token Usage (always expanded)
@@ -407,8 +408,12 @@ class ContextPanel(ScrollableContainer):
         self._model_name = model
         self._session_thread_id = thread_id
         # Update session content widget if it exists
+        self._provider_name = provider
+        self._model_name = model
+        self._session_thread_id = thread_id
+
         try:
-            session_content = self.query_one(".session-content", Static)
+            session_content = self.query_one("#session-content", Static)
             thread_display = thread_id[:8] if thread_id else "N/A"
             session_content.update(
                 f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
