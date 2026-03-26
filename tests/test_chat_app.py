@@ -37,17 +37,14 @@ class TestSQLPanel:
 
         panel = SQLPanel()
         assert panel.sql_content == ""
-        assert panel.schema_tips == ""
 
-    def test_sql_panel_stores_data(self):
-        """Test SQLPanel stores data without calling display (no app needed)."""
+    def test_sql_panel_stores_sql(self):
+        """Test SQLPanel stores SQL content."""
         from esdc.chat.app import SQLPanel
 
         panel = SQLPanel()
         panel.sql_content = "SELECT * FROM table1"
-        panel.schema_tips = "table1: id, name"
         assert panel.sql_content == "SELECT * FROM table1"
-        assert panel.schema_tips == "table1: id, name"
 
 
 class TestResultsPanel:

@@ -564,46 +564,44 @@ class ThinkingIndicator(Collapsible):
         self.title = f"▶ Thinking... ({len(self.steps)} steps)"
 
 
-class SQLPanel(Vertical):
-    """Panel showing generated SQL and schema context."""
+class SQLPanel(Collapsible):
+    """Collapsible SQL query display in chat panel."""
 
     DEFAULT_CSS = """
     SQLPanel {
-        width: 100%;
-        height: 1fr;
-        border: none;
-        padding: 1;
+        margin: 1 0;
         background: transparent;
+        border: none;
+    }
+
+    SQLPanel .title {
+        color: $accent;
+        text-style: bold;
+    }
+
+    .sql-content {
+        color: $text;
+        padding: 1 2;
+        background: $surface;
     }
     """
 
     def __init__(self):
-        super().__init__()
+        super().__init__(title="📝 SQL Query", collapsed=True)
         self.sql_content = ""
-        self.schema_tips = ""
+        self._content_widget: Static | None = None
 
-    def set_sql(self, sql: str, schema_tips: str = ""):
+    def compose(self) -> ComposeResult:
+        yield Static("", classes="sql-content")
+
+    def on_mount(self) -> None:
+        self._content_widget = self.query_one(".sql-content", Static)
+
+    def set_sql(self, sql: str) -> None:
         self.sql_content = sql
-        self.schema_tips = schema_tips
-        self.update_display()
-
-    def update_display(self):
-        if not self.sql_content and not self.schema_tips:
-            self.remove_children()
-            self.mount(
-                Static("No SQL generated yet. Ask a question!", classes="placeholder")
-            )
-            return
-
-        content_parts = []
-        if self.sql_content:
-            content_parts.append(f"```sql\n{self.sql_content}\n```")
-        if self.schema_tips:
-            content_parts.append(f"**Schema:**\n{self.schema_tips}")
-
-        content = "\n\n".join(content_parts)
-        self.remove_children()
-        self.mount(Markdown(content))
+        if self._content_widget and sql:
+            self._content_widget.update(f"```sql\n{sql}\n```")
+            self.collapsed = False
 
 
 class ResultsPanel(Vertical):
