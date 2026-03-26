@@ -1,5 +1,6 @@
 # esdc/chat/app.py
 import asyncio
+import logging
 from typing import Any, AsyncGenerator
 
 from textual.app import App, ComposeResult
@@ -12,6 +13,17 @@ from textual.events import Key
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langgraph.checkpoint.base import BaseCheckpointSaver
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    handlers=[
+        logging.FileHandler("esdc_chat.log"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("esdc.chat")
 
 MAX_MESSAGE_HISTORY = 100
 MAX_QUERY_HISTORY = 5
@@ -312,6 +324,9 @@ class ContextPanel(Vertical):
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""
+        logger.debug(
+            f"ContextPanel mounted, provider={self._provider_name!r}, model={self._model_name!r}"
+        )
         # Initial refresh to ensure rendering
         self.refresh()
 
@@ -500,8 +515,16 @@ class ChatPanel(ScrollableContainer):
     def mount_collapsible(self, collapsible: "Collapsible") -> None:
         """Mount a collapsible widget to the message container."""
         if self._message_container:
+            logger.debug(
+                f"Mounting collapsible {type(collapsible).__name__} to message container"
+            )
             self._message_container.mount(collapsible)
-            self._message_container.refresh()
+        else:
+            # Fallback: mount to self if container not ready
+            logger.warning(
+                f"Message container not ready, mounting {type(collapsible).__name__} to ChatPanel"
+            )
+            self.mount(collapsible)
 
 
 class ThinkingIndicator(Collapsible):
@@ -1004,11 +1027,13 @@ class ESDCChatApp(App):
         if not user_input:
             return
 
+        logger.info(f"User input submitted: {user_input[:50]}...")
         self.display_message("user", user_input)
         event.input.value = ""
         self._cancelled = False
 
         if not self._agent:
+            logger.error("Agent not initialized")
             self.display_message("ai", "Error: Agent not initialized")
             return
 
@@ -1016,6 +1041,7 @@ class ESDCChatApp(App):
         thinking = ThinkingIndicator()
         if self.chat_panel:
             self.chat_panel.mount_collapsible(thinking)
+            logger.debug("Mounted ThinkingIndicator")
 
         # Create a message widget for streaming AI response
         streaming_message = None
@@ -1023,6 +1049,7 @@ class ESDCChatApp(App):
 
         async def run_query():
             nonlocal streaming_message, accumulated_content
+            logger.debug("Starting query execution")
             async for chunk in self._stream_response(user_input):
                 if self._cancelled:
                     self.display_message("system", "Query cancelled.")
@@ -1045,6 +1072,9 @@ class ESDCChatApp(App):
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
                     thinking.add_step(f"Running: {tool_name}")
+                    logger.debug(
+                        f"Added thinking step: {tool_name}, total steps: {len(thinking.steps)}"
+                    )
                 elif chunk["type"] == "tool_result":
                     result = chunk.get("result", "")
                     if result and self.chat_panel:
@@ -1053,10 +1083,16 @@ class ESDCChatApp(App):
                         if sql:
                             sql_panel = SQLPanel(sql)
                             self.chat_panel.mount_collapsible(sql_panel)
+                            logger.info(
+                                f"Mounted SQLPanel with {len(sql)} chars of SQL"
+                            )
 
                         # Mount Results collapsible in chat flow
                         results_panel = ResultsPanel(result)
                         self.chat_panel.mount_collapsible(results_panel)
+                        logger.info(
+                            f"Mounted ResultsPanel with {len(result)} chars of results"
+                        )
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
                     if tokens > 0:
@@ -1073,11 +1109,13 @@ class ESDCChatApp(App):
         try:
             await asyncio.wait_for(run_query(), timeout=120.0)
         except asyncio.TimeoutError:
+            logger.warning("Query timed out after 120 seconds")
             thinking.remove()
             self.display_message(
                 "ai", "Request timed out after 2 minutes. Please try again."
             )
         except Exception as e:
+            logger.exception(f"Query failed with error: {e}")
             thinking.remove()
             self.display_message("ai", f"Error: {str(e)}")
 
