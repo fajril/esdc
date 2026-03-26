@@ -467,15 +467,9 @@ class ChatPanel(ScrollableContainer):
         super().__init__()
         self.messages: list[tuple[str, str]] = []
         self._message_container: ScrollableContainer | None = None
-        self.sql_panel = SQLPanel()
-        self.results_panel = ResultsPanel()
-        self.thinking = ThinkingIndicator()
 
     def compose(self) -> ComposeResult:
         yield ScrollableContainer(id="message-container")
-        yield self.thinking
-        yield self.sql_panel
-        yield self.results_panel
 
     def on_mount(self) -> None:
         self._message_container = self.query_one(
@@ -490,11 +484,10 @@ class ChatPanel(ScrollableContainer):
         if len(self.messages) > MAX_MESSAGE_HISTORY:
             self.messages = self.messages[-MAX_MESSAGE_HISTORY:]
 
-    def set_sql(self, sql: str) -> None:
-        self.sql_panel.set_sql(sql)
-
-    def set_results(self, results: str) -> None:
-        self.results_panel.set_results(results)
+    def mount_collapsible(self, collapsible: "Collapsible") -> None:
+        """Mount a collapsible widget to the message container."""
+        if self._message_container:
+            self._message_container.mount(collapsible)
 
 
 class ThinkingIndicator(Collapsible):

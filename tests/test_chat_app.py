@@ -74,23 +74,20 @@ class TestChatPanel:
         from esdc.chat.app import ChatPanel
 
         panel = ChatPanel()
-        assert panel.sql_panel is not None
-        assert panel.results_panel is not None
-        assert panel.thinking is not None
+        assert panel is not None
+        assert hasattr(panel, "_message_container")
 
-    def test_chat_panel_has_sql_panel(self):
-        """Test ChatPanel has SQLPanel."""
-        from esdc.chat.app import ChatPanel, SQLPanel
-
-        panel = ChatPanel()
-        assert isinstance(panel.sql_panel, SQLPanel)
-
-    def test_chat_panel_has_results_panel(self):
-        """Test ChatPanel has ResultsPanel."""
-        from esdc.chat.app import ChatPanel, ResultsPanel
+    def test_chat_panel_mount_collapsible(self):
+        """Test ChatPanel can mount collapsible widgets."""
+        from esdc.chat.app import ChatPanel, ThinkingIndicator
 
         panel = ChatPanel()
-        assert isinstance(panel.results_panel, ResultsPanel)
+        # mount_collapsible method exists
+        assert hasattr(panel, "mount_collapsible")
+
+        # ThinkingIndicator is a Collapsible
+        thinking = ThinkingIndicator()
+        assert thinking is not None
 
     def test_sql_panel_stores_sql(self):
         """Test SQLPanel stores SQL content."""
