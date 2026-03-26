@@ -311,11 +311,9 @@ class ContextPanel(Vertical):
             )
 
     def on_mount(self) -> None:
-        """Called when panel is mounted - update content if values already set."""
-        if self._provider_name or self._model_name or self._session_thread_id:
-            self.update_session_info(
-                self._provider_name, self._model_name, self._session_thread_id
-            )
+        """Called when panel is mounted."""
+        # Initial refresh to ensure rendering
+        self.refresh()
 
     def update_session_info(
         self,
@@ -328,18 +326,23 @@ class ContextPanel(Vertical):
         self._model_name = model
         self._session_thread_id = thread_id
 
-        # Query the session content widget
-        try:
-            session_content = self.query_one("#session-content", Static)
-            if session_content:
-                thread_display = thread_id[:8] if thread_id else "N/A"
-                session_content.update(
-                    f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
-                )
-        except Exception:
-            # Widget might not be mounted yet
-            pass
-        self.refresh()
+        # Defer the widget update to next frame to ensure widget exists
+        from textual.message import Message
+
+        def _update():
+            try:
+                session_content = self.query_one("#session-content", Static)
+                if session_content:
+                    thread_display = thread_id[:8] if thread_id else "N/A"
+                    session_content.update(
+                        f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
+                    )
+            except Exception:
+                pass
+            self.refresh()
+
+        # Call update on next frame
+        self.call_later(_update)
 
 
 class ChatMessage(Markdown):
@@ -498,6 +501,7 @@ class ChatPanel(ScrollableContainer):
         """Mount a collapsible widget to the message container."""
         if self._message_container:
             self._message_container.mount(collapsible)
+            self._message_container.refresh()
 
 
 class ThinkingIndicator(Collapsible):
@@ -1035,9 +1039,9 @@ class ESDCChatApp(App):
                                 self.chat_panel._message_container.mount(
                                     streaming_message
                                 )
+                                self.chat_panel._message_container.refresh()
                         else:
                             streaming_message.update(accumulated_content)
-                        streaming_message.refresh()
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
                     thinking.add_step(f"Running: {tool_name}")
