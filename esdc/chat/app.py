@@ -272,57 +272,30 @@ class QueryHistory(Static):
         self.refresh()
 
 
-class ContextPanel(ScrollableContainer):
-    """Context panel with collapsible sections."""
+class ContextPanel(Vertical):
+    """Static context panel showing only session info."""
 
     DEFAULT_CSS = """
     ContextPanel {
-        width: 100%;
-        height: 100%;
+        width: 25%;
         padding: 1;
+        background: $surface;
     }
     """
 
     def __init__(self, id: str | None = None):
         super().__init__(id=id)
-
-        # Create section widgets
-        self.token_widget = TokenUsageWidget()
-        self.tool_list = ToolStatusList()
-        self.query_history = QueryHistory()
-
-        # Section state
-        self._section_expanded = {
-            "session_info": True,
-            "token_usage": True,
-            "tools": True,
-            "sql": False,
-            "results": False,
-            "schema": False,
-            "history": False,
-        }
-
-        # Content storage
-        self._last_sql: str = ""
-        self._last_results: str = ""
         self._provider_name: str = ""
         self._model_name: str = ""
         self._session_thread_id: str = ""
-        self._available_tables: list[str] = []
-
-        # Section references (set after compose)
-        self._sql_section: ContextSection | None = None
-        self._results_section: ContextSection | None = None
-        self._schema_section: ContextSection | None = None
 
     def compose(self) -> ComposeResult:
-        """Compose all sections."""
+        """Compose session info section."""
         from textual.widgets import Static
 
-        # Session Info (always expanded)
         with ContextSection(
             "Session Info",
-            expanded=self._section_expanded["session_info"],
+            expanded=True,
             id="session-section",
         ):
             yield Static(
@@ -330,66 +303,6 @@ class ContextPanel(ScrollableContainer):
                 classes="session-content",
                 id="session-content",
             )
-
-        # Token Usage (always expanded)
-        with ContextSection(
-            "Token Usage", expanded=self._section_expanded["token_usage"]
-        ):
-            yield self.token_widget
-
-        # Tools Available (always expanded)
-        with ContextSection(
-            "Tools Available", expanded=self._section_expanded["tools"]
-        ):
-            yield self.tool_list
-
-        # Last SQL Query (collapsed by default)
-        with ContextSection(
-            "Last SQL Query",
-            expanded=self._section_expanded["sql"],
-            badge=f"{len(self._last_sql)} chars" if self._last_sql else "",
-            id="sql-section",
-        ) as sql_section:
-            self._sql_section = sql_section
-            yield Static(
-                self._last_sql if self._last_sql else "No SQL yet",
-                id="sql-content",
-                classes="sql-content",
-            )
-
-        # Query Results (collapsed by default)
-        with ContextSection(
-            "Query Results",
-            expanded=self._section_expanded["results"],
-            id="results-section",
-        ) as results_section:
-            self._results_section = results_section
-            yield Static(
-                self._last_results if self._last_results else "No results yet",
-                id="results-content",
-                classes="results-content",
-            )
-
-        # Schema Browser (collapsed by default)
-        with ContextSection(
-            "Schema Browser",
-            expanded=self._section_expanded["schema"],
-            badge=f"{len(self._available_tables)} tables",
-            id="schema-section",
-        ) as schema_section:
-            self._schema_section = schema_section
-            schema_text = (
-                "\n".join(self._available_tables)
-                if self._available_tables
-                else "No tables loaded"
-            )
-            yield Static(schema_text, id="schema-content", classes="schema-content")
-
-        # Query History (collapsed by default)
-        with ContextSection(
-            "Query History", expanded=self._section_expanded["history"]
-        ):
-            yield self.query_history
 
     def update_session_info(
         self,
@@ -408,7 +321,6 @@ class ContextPanel(ScrollableContainer):
         self._model_name = model
         self._session_thread_id = thread_id
 
-        # Update session content widget if it exists
         try:
             session_content = self.query_one("#session-content", Static)
             thread_display = thread_id[:8] if thread_id else "N/A"
@@ -416,94 +328,8 @@ class ContextPanel(ScrollableContainer):
                 f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
             )
         except Exception:
-            pass  # Widget may not exist yet
+            pass
         self.refresh()
-
-    def update_tokens(self, count: int, total: int) -> None:
-        """Update token usage information.
-
-        Args:
-            count: Current token count used in the conversation.
-            total: Total context window size (e.g., 4096, 16384).
-        """
-        self.token_widget.context_length = total
-        self.token_widget.update_tokens(count)
-
-    def mark_tools_used(self, tools: list[str]) -> None:
-        """Mark which tools were used in the current query.
-
-        Args:
-            tools: List of tool names that were called.
-        """
-        self.tool_list.mark_used(tools)
-
-    def reset_tools(self) -> None:
-        """Reset tool usage indicators for a new query."""
-        self.tool_list.reset_used()
-
-    def set_sql(self, sql: str) -> None:
-        """Set the SQL query to display in the context panel.
-
-        Args:
-            sql: The SQL query string to display.
-        """
-        self._last_sql = sql
-        # Update badge on sql section
-        if self._sql_section:
-            self._sql_section.badge = f"{len(sql)} chars"
-        # Update content widget
-        sql_content = self.query_one("#sql-content", Static)
-        sql_content.update(sql if sql else "No SQL yet")
-        self.refresh()
-
-    def set_results(self, results: str, row_count: int = 0) -> None:
-        """Set the query results to display in the context panel.
-
-        Args:
-            results: The query results as a string.
-            row_count: Optional row count for display.
-        """
-        self._last_results = results
-        # Update content widget
-        results_content = self.query_one("#results-content", Static)
-        results_content.update(results if results else "No results yet")
-        self.refresh()
-
-    def set_tables(self, tables: list[str]) -> None:
-        """Set the available database tables for the Schema Browser.
-
-        Args:
-            tables: List of table names available in the database.
-        """
-        self._available_tables = tables
-        # Update badge on schema section
-        if self._schema_section:
-            self._schema_section.badge = f"{len(tables)} tables"
-        # Update content widget
-        schema_content = self.query_one("#schema-content", Static)
-        schema_text = "\n".join(tables) if tables else "No tables loaded"
-        schema_content.update(schema_text)
-        self.refresh()
-
-    def add_query(self, query: str) -> None:
-        """Add a query to the query history.
-
-        Args:
-            query: The user query string to add.
-        """
-        self.query_history.add_query(query)
-
-    def toggle_section(self, section_name: str) -> None:
-        """Toggle a section's expanded/collapsed state.
-
-        Args:
-            section_name: The name of the section to toggle ('sql', 'results', 'schema', 'history').
-        """
-        if section_name in self._section_expanded:
-            self._section_expanded[section_name] = not self._section_expanded[
-                section_name
-            ]
-            self.refresh()
 
 
 class ChatMessage(Markdown):
@@ -627,7 +453,7 @@ class Footer(Vertical):
         yield self.status_bar
 
 
-class ChatPanel(Vertical):
+class ChatPanel(ScrollableContainer):
     DEFAULT_CSS = """
     ChatPanel {
         height: 100%;
@@ -641,9 +467,15 @@ class ChatPanel(Vertical):
         super().__init__()
         self.messages: list[tuple[str, str]] = []
         self._message_container: ScrollableContainer | None = None
+        self.sql_panel = SQLPanel()
+        self.results_panel = ResultsPanel()
+        self.thinking = ThinkingIndicator()
 
     def compose(self) -> ComposeResult:
         yield ScrollableContainer(id="message-container")
+        yield self.thinking
+        yield self.sql_panel
+        yield self.results_panel
 
     def on_mount(self) -> None:
         self._message_container = self.query_one(
@@ -657,6 +489,12 @@ class ChatPanel(Vertical):
 
         if len(self.messages) > MAX_MESSAGE_HISTORY:
             self.messages = self.messages[-MAX_MESSAGE_HISTORY:]
+
+    def set_sql(self, sql: str) -> None:
+        self.sql_panel.set_sql(sql)
+
+    def set_results(self, results: str) -> None:
+        self.results_panel.set_results(results)
 
 
 class ThinkingIndicator(Collapsible):
@@ -1052,7 +890,6 @@ class ESDCChatApp(App):
         super().__init__()
         self.chat_panel: ChatPanel | None = None
         self._context_panel: ContextPanel | None = None
-        self._thinking: ThinkingIndicator | None = None
         self.status_bar: StatusBar | None = None
         self.user_input: Input | None = None
         self._agent: Runnable | None = None
@@ -1117,13 +954,6 @@ class ESDCChatApp(App):
                 self._model_name,
                 self._thread_id,
             )
-            self._context_panel.update_tokens(self._token_count, self._context_length)
-
-            # Initialize Schema Browser with available tables
-            from esdc.selection import TableName
-
-            tables = [t.value for t in TableName]
-            self._context_panel.set_tables(tables)
 
         self.status_bar.set_status(
             self._provider_name,
@@ -1167,21 +997,16 @@ class ESDCChatApp(App):
         event.input.value = ""
         self._cancelled = False
 
-        if self._context_panel:
-            self._context_panel.set_sql("")
-            self._context_panel.set_results("")
-
-        if self._thinking:
-            self._thinking.remove()
-            self._thinking = None
+        if self.chat_panel and self.chat_panel.thinking:
+            self.chat_panel.thinking.remove()
 
         if not self._agent:
             self.display_message("ai", "Error: Agent not initialized")
             return
 
-        self._thinking = ThinkingIndicator()
         if self.chat_panel:
-            self.chat_panel.mount(self._thinking)
+            self.chat_panel.thinking = ThinkingIndicator()
+            self.chat_panel.mount(self.chat_panel.thinking)
 
         async def run_query():
             async for chunk in self._stream_response(user_input):
@@ -1191,18 +1016,18 @@ class ESDCChatApp(App):
                 if chunk["type"] == "message":
                     content = chunk.get("content", "")
                     if content:
-                        if self._thinking:
-                            self._thinking.remove()
-                            self._thinking = None
+                        if self.chat_panel and self.chat_panel.thinking:
+                            self.chat_panel.thinking.remove()
                         self.display_message("ai", content)
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
-                    if self._thinking:
-                        self._thinking.add_step(f"Running: {tool_name}")
+                    if self.chat_panel and self.chat_panel.thinking:
+                        self.chat_panel.thinking.add_step(f"Running: {tool_name}")
                 elif chunk["type"] == "tool_result":
                     result = chunk.get("result", "")
-                    if result:
-                        self.set_results(chunk.get("sql", ""), result[:500])
+                    if result and self.chat_panel:
+                        self.chat_panel.set_sql(chunk.get("sql", ""))
+                        self.chat_panel.set_results(result)
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
                     if tokens > 0:
@@ -1219,16 +1044,14 @@ class ESDCChatApp(App):
         try:
             await asyncio.wait_for(run_query(), timeout=120.0)
         except asyncio.TimeoutError:
-            if self._thinking:
-                self._thinking.remove()
-                self._thinking = None
+            if self.chat_panel and self.chat_panel.thinking:
+                self.chat_panel.thinking.remove()
             self.display_message(
                 "ai", "Request timed out after 2 minutes. Please try again."
             )
         except Exception as e:
-            if self._thinking:
-                self._thinking.remove()
-                self._thinking = None
+            if self.chat_panel and self.chat_panel.thinking:
+                self.chat_panel.thinking.remove()
             self.display_message("ai", f"Error: {str(e)}")
 
     async def _stream_response(
@@ -1261,17 +1084,11 @@ class ESDCChatApp(App):
             self.chat_panel.add_message(role, content)
             self._message_count += 1
 
-    def set_results(self, sql: str, results: str) -> None:
-        if self._context_panel:
-            self._context_panel.set_sql(sql)
-            self._context_panel.set_results(results[:500])
-
     def action_cancel_query(self) -> None:
         """Cancel the current query."""
         self._cancelled = True
-        if self._thinking:
-            self._thinking.remove()
-            self._thinking = None
+        if self.chat_panel and self.chat_panel.thinking:
+            self.chat_panel.thinking.remove()
         self.notify("Query cancelled")
 
     def action_toggle_context_panel(self) -> None:
