@@ -310,30 +310,34 @@ class ContextPanel(Vertical):
                 id="session-content",
             )
 
+    def on_mount(self) -> None:
+        """Called when panel is mounted - update content if values already set."""
+        if self._provider_name or self._model_name or self._session_thread_id:
+            self.update_session_info(
+                self._provider_name, self._model_name, self._session_thread_id
+            )
+
     def update_session_info(
         self,
         provider: str,
         model: str,
         thread_id: str,
     ) -> None:
-        """Update session information displayed in the context panel.
-
-        Args:
-            provider: The LLM provider name (e.g., 'ollama', 'openai').
-            model: The model name (e.g., 'llama3.2', 'gpt-4o').
-            thread_id: The conversation thread ID for memory persistence.
-        """
+        """Update session information displayed in the context panel."""
         self._provider_name = provider
         self._model_name = model
         self._session_thread_id = thread_id
 
+        # Query the session content widget
         try:
             session_content = self.query_one("#session-content", Static)
-            thread_display = thread_id[:8] if thread_id else "N/A"
-            session_content.update(
-                f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
-            )
+            if session_content:
+                thread_display = thread_id[:8] if thread_id else "N/A"
+                session_content.update(
+                    f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
+                )
         except Exception:
+            # Widget might not be mounted yet
             pass
         self.refresh()
 
@@ -533,6 +537,9 @@ class ThinkingIndicator(Collapsible):
 
     def on_mount(self) -> None:
         self._content_widget = self.query_one(".thinking-steps", Static)
+        # Update display if steps were added before mount
+        if self.steps:
+            self._update_display()
 
     def add_step(self, step: str):
         """Add a thinking step to display."""
@@ -585,22 +592,21 @@ class SQLPanel(Collapsible):
     }
     """
 
-    def __init__(self):
-        super().__init__(title="📝 SQL Query", collapsed=True)
-        self.sql_content = ""
+    def __init__(self, sql: str = ""):
+        super().__init__(title="📝 SQL Query", collapsed=not sql)
+        self.sql_content = sql
         self._content_widget: Static | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("", classes="sql-content")
+        content = (
+            f"```sql\n{self.sql_content}\n```"
+            if self.sql_content
+            else "Executing query..."
+        )
+        yield Static(content, classes="sql-content")
 
     def on_mount(self) -> None:
         self._content_widget = self.query_one(".sql-content", Static)
-
-    def set_sql(self, sql: str) -> None:
-        self.sql_content = sql
-        if self._content_widget and sql:
-            self._content_widget.update(f"```sql\n{sql}\n```")
-            self.collapsed = False
 
 
 class ResultsPanel(Collapsible):
@@ -625,22 +631,19 @@ class ResultsPanel(Collapsible):
     }
     """
 
-    def __init__(self):
-        super().__init__(title="📊 Query Results", collapsed=True)
-        self.results_content = ""
+    def __init__(self, results: str = ""):
+        super().__init__(title="📊 Query Results", collapsed=not results)
+        self.results_content = results
         self._content_widget: Static | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("", classes="results-content")
+        content = (
+            self.results_content if self.results_content else "Waiting for results..."
+        )
+        yield Static(content, classes="results-content")
 
     def on_mount(self) -> None:
         self._content_widget = self.query_one(".results-content", Static)
-
-    def set_results(self, results: str) -> None:
-        self.results_content = results
-        if self._content_widget and results:
-            self._content_widget.update(results)
-            self.collapsed = False
 
 
 class RightPanel(Vertical):
@@ -1044,14 +1047,12 @@ class ESDCChatApp(App):
                         # Mount SQL collapsible in chat flow
                         sql = chunk.get("sql", "")
                         if sql:
-                            sql_panel = SQLPanel()
+                            sql_panel = SQLPanel(sql)
                             self.chat_panel.mount_collapsible(sql_panel)
-                            sql_panel.set_sql(sql)
 
                         # Mount Results collapsible in chat flow
-                        results_panel = ResultsPanel()
+                        results_panel = ResultsPanel(result)
                         self.chat_panel.mount_collapsible(results_panel)
-                        results_panel.set_results(result)
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
                     if tokens > 0:
