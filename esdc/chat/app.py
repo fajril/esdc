@@ -903,8 +903,6 @@ class ESDCChatApp(App):
         self._provider_name: str = ""
         self._model_name: str = ""
         self._context_panel_visible: bool = True
-        self._last_sql: str = ""
-        self._last_results: str = ""
 
     def compose(self) -> ComposeResult:
         # Main horizontal split container
