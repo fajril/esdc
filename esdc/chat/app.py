@@ -485,6 +485,11 @@ class Footer(Vertical):
         yield self.user_input
         yield self.status_bar
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Forward input submitted event to parent app."""
+        # Post the event to the app so it can handle it
+        self.post_message(event)
+
 
 class ChatPanel(ScrollableContainer):
     DEFAULT_CSS = """
