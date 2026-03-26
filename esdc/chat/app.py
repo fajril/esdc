@@ -994,16 +994,14 @@ class ESDCChatApp(App):
         event.input.value = ""
         self._cancelled = False
 
-        if self.chat_panel and self.chat_panel.thinking:
-            self.chat_panel.thinking.remove()
-
         if not self._agent:
             self.display_message("ai", "Error: Agent not initialized")
             return
 
+        # Create thinking indicator for this query and mount to chat flow
+        thinking = ThinkingIndicator()
         if self.chat_panel:
-            self.chat_panel.thinking = ThinkingIndicator()
-            self.chat_panel.mount(self.chat_panel.thinking)
+            self.chat_panel.mount_collapsible(thinking)
 
         async def run_query():
             async for chunk in self._stream_response(user_input):
@@ -1013,18 +1011,26 @@ class ESDCChatApp(App):
                 if chunk["type"] == "message":
                     content = chunk.get("content", "")
                     if content:
-                        if self.chat_panel and self.chat_panel.thinking:
-                            self.chat_panel.thinking.remove()
+                        # Remove thinking indicator when answer arrives
+                        thinking.remove()
                         self.display_message("ai", content)
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
-                    if self.chat_panel and self.chat_panel.thinking:
-                        self.chat_panel.thinking.add_step(f"Running: {tool_name}")
+                    thinking.add_step(f"Running: {tool_name}")
                 elif chunk["type"] == "tool_result":
                     result = chunk.get("result", "")
                     if result and self.chat_panel:
-                        self.chat_panel.set_sql(chunk.get("sql", ""))
-                        self.chat_panel.set_results(result)
+                        # Mount SQL collapsible in chat flow
+                        sql = chunk.get("sql", "")
+                        if sql:
+                            sql_panel = SQLPanel()
+                            sql_panel.set_sql(sql)
+                            self.chat_panel.mount_collapsible(sql_panel)
+
+                        # Mount Results collapsible in chat flow
+                        results_panel = ResultsPanel()
+                        results_panel.set_results(result)
+                        self.chat_panel.mount_collapsible(results_panel)
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
                     if tokens > 0:
@@ -1041,14 +1047,12 @@ class ESDCChatApp(App):
         try:
             await asyncio.wait_for(run_query(), timeout=120.0)
         except asyncio.TimeoutError:
-            if self.chat_panel and self.chat_panel.thinking:
-                self.chat_panel.thinking.remove()
+            thinking.remove()
             self.display_message(
                 "ai", "Request timed out after 2 minutes. Please try again."
             )
         except Exception as e:
-            if self.chat_panel and self.chat_panel.thinking:
-                self.chat_panel.thinking.remove()
+            thinking.remove()
             self.display_message("ai", f"Error: {str(e)}")
 
     async def _stream_response(
@@ -1084,8 +1088,6 @@ class ESDCChatApp(App):
     def action_cancel_query(self) -> None:
         """Cancel the current query."""
         self._cancelled = True
-        if self.chat_panel and self.chat_panel.thinking:
-            self.chat_panel.thinking.remove()
         self.notify("Query cancelled")
 
     def action_toggle_context_panel(self) -> None:
