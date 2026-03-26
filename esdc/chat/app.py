@@ -604,36 +604,44 @@ class SQLPanel(Collapsible):
             self.collapsed = False
 
 
-class ResultsPanel(Vertical):
-    """Panel showing query results in formatted table."""
+class ResultsPanel(Collapsible):
+    """Collapsible query results display in chat panel."""
 
     DEFAULT_CSS = """
     ResultsPanel {
-        width: 100%;
-        height: 1fr;
-        border: none;
-        padding: 1;
+        margin: 1 0;
         background: transparent;
+        border: none;
+    }
+
+    ResultsPanel .title {
+        color: $accent;
+        text-style: bold;
+    }
+
+    .results-content {
+        color: $text;
+        padding: 1 2;
+        background: $surface;
     }
     """
 
     def __init__(self):
-        super().__init__()
+        super().__init__(title="📊 Query Results", collapsed=True)
         self.results_content = ""
+        self._content_widget: Static | None = None
 
-    def set_results(self, results: str):
+    def compose(self) -> ComposeResult:
+        yield Static("", classes="results-content")
+
+    def on_mount(self) -> None:
+        self._content_widget = self.query_one(".results-content", Static)
+
+    def set_results(self, results: str) -> None:
         self.results_content = results
-        self.update_display()
-
-    def update_display(self):
-        if not self.results_content:
-            self.remove_children()
-            self.mount(Static("Waiting for results...", classes="placeholder"))
-            return
-
-        content = f"**Query Results:**\n\n{self.results_content}"
-        self.remove_children()
-        self.mount(Markdown(content))
+        if self._content_widget and results:
+            self._content_widget.update(results)
+            self.collapsed = False
 
 
 class RightPanel(Vertical):
