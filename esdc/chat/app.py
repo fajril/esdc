@@ -1,6 +1,8 @@
 # esdc/chat/app.py
 import asyncio
 import logging
+import os
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from textual.app import App, ComposeResult
@@ -14,16 +16,19 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-# Configure logging
+# Configure logging - create log file in current working directory
+log_dir = Path.cwd()
+log_file = log_dir / "esdc_chat.log"
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     handlers=[
-        logging.FileHandler("esdc_chat.log"),
+        logging.FileHandler(log_file, mode="w"),
         logging.StreamHandler(),
     ],
 )
 logger = logging.getLogger("esdc.chat")
+logger.info(f"ESDC Chat starting, log file: {log_file}")
 
 MAX_MESSAGE_HISTORY = 100
 MAX_QUERY_HISTORY = 5
