@@ -293,13 +293,19 @@ class ContextPanel(Vertical):
         """Compose session info section."""
         from textual.widgets import Static
 
+        # Use instance variables for initial render
+        thread_display = (
+            self._session_thread_id[:8] if self._session_thread_id else "N/A"
+        )
+        initial_content = f"Provider: {self._provider_name}\nModel: {self._model_name}\nThread: {thread_display}..."
+
         with ContextSection(
             "Session Info",
             expanded=True,
             id="session-section",
         ):
             yield Static(
-                f"Provider: {self._provider_name}\nModel: {self._model_name}\nThread: {self._session_thread_id[:8] if self._session_thread_id else 'N/A'}...",
+                initial_content,
                 classes="session-content",
                 id="session-content",
             )
@@ -951,6 +957,7 @@ class ESDCChatApp(App):
                 self._model_name,
                 self._thread_id,
             )
+            self._context_panel.refresh()
 
         self.status_bar.set_status(
             self._provider_name,
@@ -1005,9 +1012,10 @@ class ESDCChatApp(App):
 
         # Create a message widget for streaming AI response
         streaming_message = None
+        accumulated_content = ""
 
         async def run_query():
-            nonlocal streaming_message
+            nonlocal streaming_message, accumulated_content
             async for chunk in self._stream_response(user_input):
                 if self._cancelled:
                     self.display_message("system", "Query cancelled.")
@@ -1015,15 +1023,17 @@ class ESDCChatApp(App):
                 if chunk["type"] == "message":
                     content = chunk.get("content", "")
                     if content:
+                        # Accumulate content for streaming effect
+                        accumulated_content += content
                         # Create or update streaming message
                         if streaming_message is None:
-                            streaming_message = ChatMessage("ai", "")
+                            streaming_message = ChatMessage("ai", accumulated_content)
                             if self.chat_panel and self.chat_panel._message_container:
                                 self.chat_panel._message_container.mount(
                                     streaming_message
                                 )
-                        # Append content to the message
-                        streaming_message.update(content)
+                        else:
+                            streaming_message.update(accumulated_content)
                         streaming_message.refresh()
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
