@@ -150,130 +150,118 @@ async def run_agent_stream(
     stored_tool_call: dict[str, Any] = {}
     total_tokens_used = 0
 
-    async for chunk in agent.astream(
+    async for event in agent.astream_events(
         {"messages": messages},
         config=config,
-        stream_mode="values",
+        version="v2",
     ):
-        if "messages" in chunk:
-            last_msg = chunk["messages"][-1]
+        event_type = event.get("event")
+        data = event.get("data", {})
 
-            # DEBUG: Log every message received
-            msg_type = type(last_msg).__name__
-            has_name = hasattr(last_msg, "name")
-            name_val = getattr(last_msg, "name", None)
-            has_tool_calls = hasattr(last_msg, "tool_calls")
-            has_content = hasattr(last_msg, "content")
-            content_preview = (
-                str(getattr(last_msg, "content", "")[:50]) if has_content else "N/A"
-            )
-            logger.info(
-                f"AGENT_MSG: type={msg_type}, has_name={has_name}, name={name_val}, has_tool_calls={has_tool_calls}, content_preview={content_preview}"
-            )
+        # Handle token streaming (character-by-character)
+        if event_type == "on_chat_model_stream":
+            chunk = data.get("chunk")
+            if chunk and hasattr(chunk, "content") and chunk.content:
+                yield {
+                    "type": "token",
+                    "content": chunk.content,
+                }
 
-            # Extract token usage from AIMessage response
-            if isinstance(last_msg, AIMessage):
-                tokens_used = _extract_token_usage(last_msg, user_input)
+        # Handle completion (tool calls, final message)
+        elif event_type == "on_chat_model_end":
+            output = data.get("output")
+            if output:
+                # Token usage
+                tokens_used = _extract_token_usage(output, user_input)
                 if tokens_used > 0:
                     yield {"type": "token_usage", "tokens": tokens_used}
 
-            # Check for ToolMessage first (tool result - has name, no tool_calls)
-            is_tool_message = has_name and name_val and not has_tool_calls
-            logger.info(
-                f"AGENT_CHECK: is_tool_message={is_tool_message}, stored_tool_call={stored_tool_call}"
-            )
-
-            if is_tool_message:
-                tool_name = last_msg.name
-                tool_result = last_msg.content if hasattr(last_msg, "content") else ""
-                sql = ""
-                # Extract SQL query from tool call args stored earlier
-                if tool_name == "execute_sql" and stored_tool_call.get("args"):
-                    args = stored_tool_call.get("args", {})
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except Exception:
-                            args = {}
-                    sql = args.get("query", "")
-                    logger.info(
-                        f"YIELDING tool_result WITH SQL - tool={tool_name}, sql_length={len(sql)}, result_length={len(str(tool_result))}"
-                    )
-                else:
-                    logger.info(
-                        f"YIELDING tool_result NO SQL - tool={tool_name}, has_stored_args={bool(stored_tool_call.get('args'))}, result_length={len(str(tool_result))}"
-                    )
-
-                yield {
-                    "type": "tool_result",
-                    "tool": tool_name,
-                    "result": tool_result,
-                    "sql": sql,
-                }
-
-                # Clear stored_tool_call after use
-                stored_tool_call = {}
-
-            # Check for AIMessage - could have content OR tool_calls
-            elif isinstance(last_msg, AIMessage):
-                # ALWAYS check for tool_calls first (before content)
-                if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-                    for tc in last_msg.tool_calls:
-                        # Extract SQL from tool call args
+                # Tool calls
+                if hasattr(output, "tool_calls") and output.tool_calls:
+                    for tc in output.tool_calls:
+                        # Store for later SQL extraction
                         args = tc.get("args", {})
                         if isinstance(args, str):
                             try:
                                 args = json.loads(args)
-                            except:
+                            except Exception:
                                 args = {}
                         query = args.get("query", "")
 
                         stored_tool_call = {
                             "name": tc["name"],
                             "args": tc.get("args", {}),
-                            "query": query,  # Store extracted query
+                            "query": query,
                         }
+
                         logger.info(
                             f"AGENT_STORING: tool_call={tc['name']}, query={query[:50] if query else 'N/A'}..."
                         )
+
                         yield {
                             "type": "tool_call",
                             "tool": tc["name"],
                             "args": tc.get("args", {}),
                         }
 
-                # Then yield content if present (but skip if it contains SQL code blocks)
-                if last_msg.content:
-                    content = last_msg.content
-                    # Check if content contains SQL code block
+                # Content (apply existing SQL filtering)
+                if hasattr(output, "content") and output.content:
+                    content = output.content
+                    # Apply SQL filtering (lines 249-267)
                     if "```sql" in content.lower():
-                        # Remove SQL code blocks from content
                         import re
 
-                        # Pattern handles various whitespace arrangements
                         sql_pattern = r"```sql\s*?\n?(.*?)\n?```"
                         content = re.sub(
                             sql_pattern, "", content, flags=re.DOTALL | re.IGNORECASE
                         )
-                        # Remove markdown tables that contain SQL results
-                        # Match pattern: | column | column | ... | followed by separator line
                         table_pattern = r"\|.*\|.*\n\|[-:| ]+\|"
                         content = re.sub(table_pattern, "", content)
-                        # Clean up extra newlines
                         content = re.sub(r"\n{3,}", "\n\n", content)
                         content = content.strip()
                         logger.info(
                             f"AGENT_FILTERED: Removed SQL code block from message"
                         )
 
-                    if content:  # Only yield if there's content left
+                    if content:
                         yield {
                             "type": "message",
                             "content": content,
-                            "additional_kwargs": last_msg.additional_kwargs
-                            if hasattr(last_msg, "additional_kwargs")
+                            "additional_kwargs": output.additional_kwargs
+                            if hasattr(output, "additional_kwargs")
                             else {},
                         }
+
+        # Handle tool results
+        elif event_type == "on_tool_end":
+            tool_result = data.get("output")
+            tool_name = event.get("name", "unknown")
+
+            # Extract SQL from stored_tool_call
+            sql = ""
+            if stored_tool_call.get("name") == "execute_sql":
+                args = stored_tool_call.get("args", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {}
+                sql = args.get("query", "")
+                logger.info(
+                    f"YIELDING tool_result WITH SQL - tool={tool_name}, sql_length={len(sql)}, result_length={len(str(tool_result))}"
+                )
+            else:
+                logger.info(
+                    f"YIELDING tool_result NO SQL - tool={tool_name}, result_length={len(str(tool_result))}"
+                )
+
+            yield {
+                "type": "tool_result",
+                "tool": tool_name,
+                "result": str(tool_result),
+                "sql": sql,
+            }
+            stored_tool_call = {}
 
 
 def _extract_token_usage(message: AIMessage, user_input: str) -> int:
