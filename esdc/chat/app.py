@@ -1052,6 +1052,7 @@ class ESDCChatApp(App):
         accumulated_content = ""
 
         async def run_query():
+            nonlocal accumulated_content
             logger.debug("Starting query execution")
             async for chunk in self._stream_response(user_input):
                 if self._cancelled:
