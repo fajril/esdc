@@ -772,6 +772,7 @@ class ESDCChatApp(App):
         border-left: solid $surface;
         background: $surface;
         padding: 0;
+        overflow: hidden;
     }
 
     StatusBar {
