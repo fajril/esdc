@@ -359,7 +359,7 @@ class ChatMessage(Markdown):
         max-width: 85%;
     }
     ChatMessage.user {
-        background: $primary;
+        background: $primary-darken-2;
         color: $text;
         align-horizontal: right;
         border: none;
