@@ -1112,11 +1112,11 @@ class ESDCChatApp(App):
                         # Log token details (every 10 tokens to avoid spam)
                         if token_count % 10 == 0 or len(token) > 20:
                             logger.info(
-                                "📝 TOKEN #%d: len=%d, total_len=%d, preview='%s'",
+                                "📝 TOKEN #%d: len=%d, total_len=%d, has_indicator=%s",
                                 token_count,
                                 len(token),
                                 len(accumulated_content),
-                                token[:30],
+                                "🔍" in accumulated_content,
                             )
 
                 elif chunk["type"] == "message":
@@ -1152,9 +1152,21 @@ class ESDCChatApp(App):
                     if streaming_message:
                         current_content = accumulated_content or ""
                         if "🔍" not in current_content:
+                            logger.info(
+                                "📊 CONTENT_BEFORE_INDICATOR: len=%d, contains_emoji=%s, last_50_chars='%s'",
+                                len(current_content),
+                                "🔍" in current_content,
+                                current_content[-50:]
+                                if len(current_content) >= 50
+                                else current_content,
+                            )
+                            indicator_text = "\n\n🔍 Querying database..."
                             logger.info("✅ INDICATOR_ADDED: appending 🔍 to message")
-                            streaming_message.update(
-                                current_content + "\n\n🔍 Querying database..."
+                            streaming_message.update(current_content + indicator_text)
+                            logger.info(
+                                "📊 CONTENT_AFTER_INDICATOR: len=%d, preview='%s'",
+                                len(current_content + indicator_text),
+                                (current_content + indicator_text)[-50:],
                             )
                         else:
                             logger.info("❌ INDICATOR_SKIPPED: emoji already exists")
