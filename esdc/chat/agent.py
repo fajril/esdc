@@ -73,28 +73,38 @@ def create_agent(
         if not hasattr(ai_message, "tool_calls") or not ai_message.tool_calls:
             return {"messages": []}
 
+        logger.info(f"🔧 TOOL_NODE: Processing {len(ai_message.tool_calls)} tool calls")
+
         for tool_call in ai_message.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call.get("args", {})
+            tool_id = tool_call.get("id", "unknown")
 
             if tool_name in tools_by_name:
                 tool = tools_by_name[tool_name]
                 try:
                     if isinstance(tool_args, str):
                         tool_args = json.loads(tool_args)
+
+                    logger.info(f"🔧 TOOL_NODE: Invoking {tool_name} (id={tool_id})")
                     observation = await tool.ainvoke(tool_args)
+                    logger.info(
+                        f"🔧 TOOL_NODE: {tool_name} returned {len(str(observation))} chars"
+                    )
                 except Exception as e:
+                    logger.error(f"🔧 TOOL_NODE: {tool_name} failed: {e}")
                     observation = f"Error: {str(e)}"
 
                 result.append(
                     {
-                        "tool_call_id": tool_call["id"],
+                        "tool_call_id": tool_id,
                         "role": "tool",
                         "name": tool_name,
                         "content": observation,
                     }
                 )
 
+        logger.info(f"🔧 TOOL_NODE: Returning {len(result)} tool results")
         return {"messages": result}
 
     graph = (
