@@ -1027,8 +1027,8 @@ class ESDCChatApp(App):
         # Create thinking indicator for this query and mount to chat flow
         thinking = ThinkingIndicator()
         if self.chat_panel:
-            self.chat_panel.mount_collapsible(thinking)
-            logger.debug("Mounted ThinkingIndicator")
+            self.chat_panel.mount(thinking)
+            logger.debug("Mounted ThinkingIndicator as Collapsible widget")
 
         # Create a message widget for streaming AI response
         streaming_message = None
