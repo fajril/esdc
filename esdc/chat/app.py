@@ -1017,6 +1017,11 @@ class ESDCChatApp(App):
         self._model_name: str = ""
         self._context_panel_visible: bool = True
 
+        # Queue-based streaming infrastructure
+        self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._streaming_message: ChatMessage | None = None
+        self._accumulated_content: str = ""
+
     def compose(self) -> ComposeResult:
         # Main horizontal split container
         chat = ChatPanel()
@@ -1066,7 +1071,9 @@ class ESDCChatApp(App):
                 self._model_name,
                 self._thread_id,
             )
-            self._context_panel.refresh()
+
+        # Set up timer to consume events from queue (runs every 50ms)
+        self.set_interval(0.05, self._consume_events)
 
         self.status_bar.set_status(
             self._provider_name,
@@ -1099,7 +1106,7 @@ class ESDCChatApp(App):
         self._thread_id = create_thread_id()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle user input submission."""
+        """Handle user input submission (non-blocking with queue)."""
 
         user_input = event.value.strip()
         if not user_input:
@@ -1116,225 +1123,188 @@ class ESDCChatApp(App):
             return
 
         # Create streaming AI message
-        streaming_message = ChatMessage("ai", "")
+        self._streaming_message = ChatMessage("ai", "")
+        self._accumulated_content = ""
+
         if self.chat_panel:
-            self.chat_panel.mount(streaming_message)
-            streaming_message.scroll_visible()
-        accumulated_content = ""
+            self.chat_panel.mount(self._streaming_message)
+            self._streaming_message.scroll_visible()
 
-        async def run_query():
-            nonlocal accumulated_content
-            logger.info("=" * 60)
-            logger.info("🚀 QUERY START: user_input='%s'", user_input[:80])
-            logger.info("=" * 60)
+        # Start background streaming task (NON-blocking)
+        asyncio.create_task(self._stream_in_background(user_input))
+        logger.info("🚀 Started background streaming task")
 
-            chunk_count = 0
-            token_count = 0
-
-            async for chunk in self._stream_response(user_input):
-                chunk_count += 1
-                chunk_type = chunk.get("type", "unknown")
-
-                # Log every chunk with type
-                logger.info(
-                    "📥 CHUNK #%d: type=%s, keys=%s",
-                    chunk_count,
-                    chunk_type,
-                    list(chunk.keys()),
-                )
-
-                if self._cancelled:
-                    self.display_message("system", "Query cancelled.")
-                    return
-
-                if chunk["type"] == "token":
-                    token_count += 1
-                    # Real-time token streaming
-                    token = chunk.get("content", "")
-                    if token and streaming_message:
-                        # Check if user is near bottom before update
-                        should_scroll = False
-                        if self.chat_panel:
-                            scroll_y = self.chat_panel.scroll_offset.y
-                            max_scroll = self.chat_panel.max_scroll_y
-                            # Auto-scroll if within 3 lines of bottom
-                            should_scroll = (max_scroll - scroll_y) <= 3
-
-                        accumulated_content += token
-                        streaming_message.update(accumulated_content)
-
-                        # Scroll to bottom if user was already at bottom
-                        if should_scroll and self.chat_panel:
-                            self.chat_panel.scroll_end(animate=False)
-
-                        # Yield control every 5 tokens for better performance
-                        if token_count % 5 == 0:
-                            await asyncio.sleep(0)
-
-                        # Log token details (every 10 tokens to avoid spam)
-                        if token_count % 10 == 0 or len(token) > 20:
-                            logger.info(
-                                "📝 TOKEN #%d: len=%d, total_len=%d, has_indicator=%s",
-                                token_count,
-                                len(token),
-                                len(accumulated_content),
-                                "🔍" in accumulated_content,
-                            )
-
-                elif chunk["type"] == "message":
-                    # Legacy: complete message (fallback)
-                    # Only use if we don't already have content from tokens
-                    content = chunk.get("content", "")
-                    if content and not accumulated_content:
-                        logger.info(
-                            "📜 MESSAGE: len=%d, preview='%s'",
-                            len(content),
-                            content[:50],
-                        )
-                        # Check if user is near bottom before update
-                        should_scroll = False
-                        if self.chat_panel:
-                            scroll_y = self.chat_panel.scroll_offset.y
-                            max_scroll = self.chat_panel.max_scroll_y
-                            should_scroll = (max_scroll - scroll_y) <= 3
-
-                        accumulated_content += content
-                        streaming_message.update(accumulated_content)
-
-                        # Scroll to bottom if user was already at bottom
-                        if should_scroll and self.chat_panel:
-                            self.chat_panel.scroll_end(animate=False)
-
-                        await asyncio.sleep(0)  # Yield control for UI update
-                    else:
-                        logger.info(
-                            "📜 MESSAGE_SKIPPED: already have %d chars from tokens",
-                            len(accumulated_content),
-                        )
-
-                elif chunk["type"] == "tool_call":
-                    tool_name = chunk.get("tool", "")
-                    tool_args = chunk.get("args", {})
-                    logger.info(
-                        "🔍 DEBUG_ARGS: type=%s, value=%s, keys=%s",
-                        type(tool_args).__name__,
-                        str(tool_args)[:100] if tool_args else "empty",
-                        list(tool_args.keys())
-                        if isinstance(tool_args, dict)
-                        else "N/A",
-                    )
-                    sql_query = ""
-                    if isinstance(tool_args, dict):
-                        sql_query = tool_args.get("query", "")
-                    elif isinstance(tool_args, str):
-                        try:
-                            parsed = json.loads(tool_args)
-                            sql_query = parsed.get("query", "")
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                    logger.info(
-                        "🛠️ TOOL_CALL: name=%s, sql_len=%d, sql_preview='%s'",
-                        tool_name,
-                        len(sql_query) if sql_query else 0,
-                        sql_query[:50] if sql_query else "N/A",
-                    )
-
-                    # Update tool status in context panel
-                    if self._context_panel:
-                        self._context_panel.update_tool_status(
-                            "⏳ Querying database..."
-                        )
-
-                    logger.info(
-                        "💡 INDICATOR_CHECK: has_streaming_msg=%s, has_content=%s, content_len=%d",
-                        streaming_message is not None,
-                        bool(accumulated_content),
-                        len(accumulated_content) if accumulated_content else 0,
-                    )
-
-                    if streaming_message:
-                        current_content = accumulated_content or ""
-                        # Always show indicator for each tool call (multiple queries)
-                        indicator_text = "\n\n🔍 Querying database..."
-                        if sql_query:
-                            indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
-                        logger.info(
-                            "✅ INDICATOR_ADDED: appending 🔍 to message (with_sql=%s, sql_len=%d)",
-                            bool(sql_query),
-                            len(sql_query) if sql_query else 0,
-                        )
-                        # Check if user is near bottom before update
-                        should_scroll = False
-                        if self.chat_panel:
-                            scroll_y = self.chat_panel.scroll_offset.y
-                            max_scroll = self.chat_panel.max_scroll_y
-                            should_scroll = (max_scroll - scroll_y) <= 3
-
-                        accumulated_content = current_content + indicator_text
-                        streaming_message.update(accumulated_content)
-
-                        # Scroll to bottom if user was already at bottom
-                        if should_scroll and self.chat_panel:
-                            self.chat_panel.scroll_end(animate=False)
-
-                        await asyncio.sleep(0)  # Yield control for UI update
-                    else:
-                        logger.info(
-                            "❌ INDICATOR_SKIPPED: no streaming_msg=%s",
-                            streaming_message is not None,
-                        )
-
-                elif chunk["type"] == "tool_result":
-                    result = chunk.get("result", "")
-                    tool_name = chunk.get("tool", "")
-                    logger.info(
-                        "🔧 TOOL_RESULT: tool=%s, result_len=%d, has_indicator=%s",
-                        tool_name,
-                        len(result),
-                        "🔍" in accumulated_content if accumulated_content else False,
-                    )
-                    # Update tool status in context panel
-                    if self._context_panel:
-                        self._context_panel.update_tool_status("✅ Query completed")
-                    # Keep indicator visible - don't remove it
-                    # The indicator "🔍 Querying database..." will remain in the conversation
-                    # Yield control for UI responsiveness
-                    await asyncio.sleep(0)
-                elif chunk["type"] == "token_usage":
-                    tokens = chunk.get("tokens", 0)
-                    if tokens > 0:
-                        self._token_count += tokens
-                        if self.status_bar:
-                            self.status_bar.set_status(
-                                self._provider_name,
-                                self._model_name,
-                                self._token_count,
-                                self._context_length,
-                                self._thread_id,
-                            )
+    async def _stream_in_background(self, user_input: str) -> None:
+        """Run agent streaming in background, post events to queue."""
+        logger.info("=" * 60)
+        logger.info("🚀 QUERY START: user_input='%s'", user_input[:80])
+        logger.info("=" * 60)
 
         try:
-            await asyncio.wait_for(run_query(), timeout=120.0)
+            async for chunk in self._stream_response(user_input):
+                if self._cancelled:
+                    await self._event_queue.put(
+                        {"type": "complete", "success": False, "error": "Cancelled"}
+                    )
+                    return
+                await self._event_queue.put(chunk)
+
+            # Signal completion
+            await self._event_queue.put({"type": "complete", "success": True})
             logger.info("Query completed successfully")
+
+        except asyncio.TimeoutError:
+            logger.warning("Query timed out after 120 seconds")
+            await self._event_queue.put(
+                {
+                    "type": "complete",
+                    "success": False,
+                    "error": "Request timed out after 2 minutes. Please try again.",
+                }
+            )
+        except Exception as e:
+            logger.exception(f"Query failed with error: {e}")
+            await self._event_queue.put(
+                {"type": "complete", "success": False, "error": str(e)}
+            )
+        finally:
             # Reset tool status after streaming completes
             if self._context_panel:
                 self._context_panel.reset_tool_status()
-        except asyncio.TimeoutError:
-            logger.warning("Query timed out after 120 seconds")
-            if streaming_message:
-                streaming_message.update(
-                    "Request timed out after 2 minutes. Please try again."
-                )
-            # Reset tool status on error
-            if self._context_panel:
-                self._context_panel.reset_tool_status()
+
+    async def _consume_events(self) -> None:
+        """Consume events from queue in main thread (called by timer every 50ms)."""
+        try:
+            # Process up to 10 events per tick to avoid blocking
+            for _ in range(10):
+                try:
+                    chunk = self._event_queue.get_nowait()
+                    await self._process_chunk(chunk)
+                except asyncio.QueueEmpty:
+                    break
         except Exception as e:
-            logger.exception(f"Query failed with error: {e}")
-            if streaming_message:
-                streaming_message.update(f"Error: {str(e)}")
-            # Reset tool status on error
+            logger.error(f"Error consuming events: {e}")
+
+    async def _process_chunk(self, chunk: dict[str, Any]) -> None:
+        """Process a single chunk and update UI."""
+        chunk_type = chunk.get("type", "unknown")
+
+        if chunk_type == "token":
+            token = chunk.get("content", "")
+            if token and self._streaming_message:
+                # Check scroll BEFORE update
+                should_scroll = False
+                if self.chat_panel:
+                    scroll_y = self.chat_panel.scroll_offset.y
+                    max_scroll = self.chat_panel.max_scroll_y
+                    should_scroll = (max_scroll - scroll_y) <= 3
+
+                self._accumulated_content += token
+                self._streaming_message.update(self._accumulated_content)
+
+                # Scroll AFTER if was at bottom
+                if should_scroll and self.chat_panel:
+                    self.chat_panel.scroll_end(animate=False)
+
+        elif chunk_type == "message":
+            content = chunk.get("content", "")
+            if content and not self._accumulated_content:
+                # Check scroll BEFORE update
+                should_scroll = False
+                if self.chat_panel:
+                    scroll_y = self.chat_panel.scroll_offset.y
+                    max_scroll = self.chat_panel.max_scroll_y
+                    should_scroll = (max_scroll - scroll_y) <= 3
+
+                self._accumulated_content = content
+                if self._streaming_message:
+                    self._streaming_message.update(self._accumulated_content)
+
+                # Scroll AFTER if was at bottom
+                if should_scroll and self.chat_panel:
+                    self.chat_panel.scroll_end(animate=False)
+
+        elif chunk_type == "tool_call":
+            tool_name = chunk.get("tool", "")
+            tool_args = chunk.get("args", {})
+
+            sql_query = ""
+            if isinstance(tool_args, dict):
+                sql_query = tool_args.get("query", "")
+            elif isinstance(tool_args, str):
+                try:
+                    parsed = json.loads(tool_args)
+                    sql_query = parsed.get("query", "")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            logger.info(
+                "🛠️ TOOL_CALL: name=%s, sql_len=%d",
+                tool_name,
+                len(sql_query) if sql_query else 0,
+            )
+
+            # Update tool status
             if self._context_panel:
-                self._context_panel.reset_tool_status()
+                self._context_panel.update_tool_status("⏳ Querying database...")
+
+            # Add indicator to message
+            if self._streaming_message:
+                # Check scroll BEFORE update
+                should_scroll = False
+                if self.chat_panel:
+                    scroll_y = self.chat_panel.scroll_offset.y
+                    max_scroll = self.chat_panel.max_scroll_y
+                    should_scroll = (max_scroll - scroll_y) <= 3
+
+                indicator_text = "\n\n🔍 Querying database..."
+                if sql_query:
+                    indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
+
+                self._accumulated_content += indicator_text
+                self._streaming_message.update(self._accumulated_content)
+
+                # Scroll AFTER if was at bottom
+                if should_scroll and self.chat_panel:
+                    self.chat_panel.scroll_end(animate=False)
+
+        elif chunk_type == "tool_result":
+            result = chunk.get("result", "")
+            tool_name = chunk.get("tool", "")
+
+            logger.info(
+                "🔧 TOOL_RESULT: tool=%s, result_len=%d",
+                tool_name,
+                len(result),
+            )
+
+            # Update tool status
+            if self._context_panel:
+                self._context_panel.update_tool_status("✅ Query completed")
+
+        elif chunk_type == "token_usage":
+            tokens = chunk.get("tokens", 0)
+            if tokens > 0:
+                self._token_count += tokens
+                if self.status_bar:
+                    self.status_bar.set_status(
+                        self._provider_name,
+                        self._model_name,
+                        self._token_count,
+                        self._context_length,
+                        self._thread_id,
+                    )
+
+        elif chunk_type == "complete":
+            success = chunk.get("success", True)
+            error = chunk.get("error")
+
+            if not success and error and self._streaming_message:
+                self._streaming_message.update(f"Error: {error}")
+
+            # Reset state
+            self._streaming_message = None
+            self._accumulated_content = ""
 
     async def _stream_response(
         self, user_input: str
