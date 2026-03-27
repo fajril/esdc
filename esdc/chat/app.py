@@ -1146,10 +1146,13 @@ class ESDCChatApp(App):
             thinking.collapsed = True
             thinking.title = "✓ Thinking complete"
             if accumulated_content and self.chat_panel:
-                streaming_message = ChatMessage("ai", accumulated_content)
-                self.chat_panel.mount(streaming_message)
-                streaming_message.scroll_visible()
-                logger.info(f"Mounted AI message with {len(accumulated_content)} chars")
+                # Strip excess whitespace from filtered content
+                cleaned_content = accumulated_content.strip()
+                if cleaned_content:  # Only mount if there's actual content
+                    streaming_message = ChatMessage("ai", cleaned_content)
+                    self.chat_panel.mount(streaming_message)
+                    streaming_message.scroll_visible()
+                    logger.info(f"Mounted AI message with {len(cleaned_content)} chars")
         except asyncio.TimeoutError:
             logger.warning("Query timed out after 120 seconds")
             thinking.collapsed = True
