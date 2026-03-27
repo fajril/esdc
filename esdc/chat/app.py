@@ -16,13 +16,12 @@ file_handler.setFormatter(
     logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
 )
 
-# Configure root logger
-logging.basicConfig(
-    level=logging.DEBUG,
-    handlers=[file_handler],
-)
-
+# Configure esdc.chat logger - isolate from root logger to prevent console output
 logger = logging.getLogger("esdc.chat")
+logger.setLevel(logging.DEBUG)
+logger.addHandler(file_handler)
+logger.propagate = False  # Critical: prevent logs from propagating to root logger
+
 logger.info(f"ESDC Chat starting, log file: {log_file}")
 
 # Suppress verbose httpcore and markdown_it logs (only show WARNING+)
