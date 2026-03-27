@@ -363,7 +363,7 @@ class ChatMessage(Markdown):
     DEFAULT_CSS = """
     ChatMessage {
         padding: 1 2;
-        margin: 1 0;
+        margin: 0 0 1 0;
         border: none;
         max-width: 85%;
     }
