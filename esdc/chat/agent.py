@@ -150,17 +150,30 @@ async def run_agent_stream(
     stored_tool_call: dict[str, Any] = {}
     total_tokens_used = 0
 
+    logger.info("=" * 60)
+    logger.info("🔔 AGENT_STREAM_STARTED: thread_id=%s", thread_id)
+    logger.info("=" * 60)
+
+    event_count = 0
+    token_event_count = 0
+
     async for event in agent.astream_events(
         {"messages": messages},
         config=config,
         version="v2",
     ):
+        event_count += 1
         event_type = event.get("event")
         data = event.get("data", {})
+
+        # Log every event (but not too spammy)
+        if event_count <= 5 or event_count % 20 == 0:
+            logger.info("🔔 AGENT_EVENT #%d: type=%s", event_count, event_type)
 
         # Handle token streaming (character-by-character)
         # ChatOllama may emit either on_chat_model_stream or on_llm_stream
         if event_type in ("on_chat_model_stream", "on_llm_stream"):
+            token_event_count += 1
             chunk = data.get("chunk")
             if chunk:
                 # Handle different chunk formats
@@ -172,6 +185,15 @@ async def run_agent_stream(
                     content = str(chunk) if chunk else ""
 
                 if content:
+                    # Log token details (every 50 tokens)
+                    if token_event_count % 50 == 0:
+                        logger.info(
+                            "✅ TOKEN_EVENT #%d: len=%d, preview='%s'",
+                            token_event_count,
+                            len(content),
+                            content[:40],
+                        )
+
                     yield {
                         "type": "token",
                         "content": content,
@@ -179,15 +201,20 @@ async def run_agent_stream(
 
         # Handle completion (tool calls, final message)
         elif event_type == "on_chat_model_end":
+            logger.info("🔚 CHAT_MODEL_END: completing LLM call")
             output = data.get("output")
             if output:
                 # Token usage
                 tokens_used = _extract_token_usage(output, user_input)
                 if tokens_used > 0:
+                    logger.info("📊 TOKEN_USAGE: %d tokens", tokens_used)
                     yield {"type": "token_usage", "tokens": tokens_used}
 
                 # Tool calls
                 if hasattr(output, "tool_calls") and output.tool_calls:
+                    logger.info(
+                        "🛠️ TOOL_CALLS_DETECTED: count=%d", len(output.tool_calls)
+                    )
                     for tc in output.tool_calls:
                         # Store for later SQL extraction
                         args = tc.get("args", {})
@@ -247,6 +274,12 @@ async def run_agent_stream(
             tool_result = data.get("output")
             tool_name = event.get("name", "unknown")
 
+            logger.info(
+                "🔧 AGENT_TOOL_END: tool=%s, result_len=%d",
+                tool_name,
+                len(str(tool_result)),
+            )
+
             # Extract SQL from stored_tool_call
             sql = ""
             if stored_tool_call.get("name") == "execute_sql":
@@ -258,7 +291,10 @@ async def run_agent_stream(
                         args = {}
                 sql = args.get("query", "")
                 logger.info(
-                    f"YIELDING tool_result WITH SQL - tool={tool_name}, sql_length={len(sql)}, result_length={len(str(tool_result))}"
+                    "📤 YIELDING tool_result: tool=%s, sql_len=%d, result_len=%d",
+                    tool_name,
+                    len(sql),
+                    len(str(tool_result)),
                 )
             else:
                 logger.info(

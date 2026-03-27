@@ -1077,41 +1077,101 @@ class ESDCChatApp(App):
 
         async def run_query():
             nonlocal accumulated_content
-            logger.debug("Starting query execution")
+            logger.info("=" * 60)
+            logger.info("🚀 QUERY START: user_input='%s'", user_input[:80])
+            logger.info("=" * 60)
+
+            chunk_count = 0
+            token_count = 0
+
             async for chunk in self._stream_response(user_input):
+                chunk_count += 1
+                chunk_type = chunk.get("type", "unknown")
+
+                # Log every chunk with type
+                logger.info(
+                    "📥 CHUNK #%d: type=%s, keys=%s",
+                    chunk_count,
+                    chunk_type,
+                    list(chunk.keys()),
+                )
+
                 if self._cancelled:
                     self.display_message("system", "Query cancelled.")
                     return
+
                 if chunk["type"] == "token":
+                    token_count += 1
                     # Real-time token streaming
                     token = chunk.get("content", "")
                     if token and streaming_message:
                         accumulated_content += token
                         streaming_message.update(accumulated_content)
                         await asyncio.sleep(0)  # Yield control for UI update
+
+                        # Log token details (every 10 tokens to avoid spam)
+                        if token_count % 10 == 0 or len(token) > 20:
+                            logger.info(
+                                "📝 TOKEN #%d: len=%d, total_len=%d, preview='%s'",
+                                token_count,
+                                len(token),
+                                len(accumulated_content),
+                                token[:30],
+                            )
+
                 elif chunk["type"] == "message":
                     # Legacy: complete message (fallback)
                     content = chunk.get("content", "")
                     if content:
+                        logger.info(
+                            "📜 MESSAGE: len=%d, preview='%s'",
+                            len(content),
+                            content[:50],
+                        )
                         accumulated_content += content
                         streaming_message.update(accumulated_content)
                         await asyncio.sleep(0)  # Yield control for UI update
+
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
-                    logger.debug(f"Tool called: {tool_name}")
+                    logger.info("🛠️ TOOL_CALL: name=%s", tool_name)
+                    logger.info(
+                        "💡 INDICATOR_CHECK: has_streaming_msg=%s, has_content=%s, content_len=%d",
+                        streaming_message is not None,
+                        bool(accumulated_content),
+                        len(accumulated_content) if accumulated_content else 0,
+                    )
+
                     # Add inline indicator
                     if streaming_message and accumulated_content:
                         # Only add indicator if there's already content
                         if "🔍" not in accumulated_content:
+                            logger.info("✅ INDICATOR_ADDED: appending 🔍 to message")
                             streaming_message.update(
                                 accumulated_content + "\n\n🔍 Querying database..."
                             )
+                        else:
+                            logger.info("❌ INDICATOR_SKIPPED: emoji already exists")
+                    else:
+                        logger.info(
+                            "❌ INDICATOR_SKIPPED: no streaming_msg=%s or no content=%s",
+                            streaming_message is not None,
+                            bool(accumulated_content),
+                        )
+
                 elif chunk["type"] == "tool_result":
                     result = chunk.get("result", "")
                     tool_name = chunk.get("tool", "")
-                    logger.info(f"Tool result: {tool_name}, length={len(result)}")
+                    logger.info(
+                        "🔧 TOOL_RESULT: tool=%s, result_len=%d, has_indicator=%s",
+                        tool_name,
+                        len(result),
+                        "🔍" in accumulated_content if accumulated_content else False,
+                    )
+
                     # Remove indicator if added
                     if streaming_message and "🔍" in accumulated_content:
+                        logger.info("🧹 INDICATOR_REMOVED: cleaning up 🔍")
                         streaming_message.update(accumulated_content)
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
