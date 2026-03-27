@@ -613,6 +613,14 @@ class SQLPanel(Collapsible):
     def on_mount(self) -> None:
         self._content_widget = self.query_one(".sql-content", Markdown)
 
+    def set_sql(self, sql: str) -> None:
+        """Update the SQL content after mount."""
+        self.sql_content = sql
+        if self._content_widget:
+            content = f"```sql\n{sql}\n```" if sql else "Executing query..."
+            self._content_widget.update(content)
+        self.collapsed = not sql
+
 
 class ResultsPanel(Collapsible):
     """Collapsible query results display in chat panel."""
@@ -692,6 +700,15 @@ class ResultsPanel(Collapsible):
 
     def on_mount(self) -> None:
         self._content_widget = self.query_one(".results-content", Markdown)
+
+    def set_results(self, results: str) -> None:
+        """Update the results content after mount."""
+        self.results_content = results
+        if self._content_widget:
+            formatted = self._format_results_as_markdown(results)
+            self._content_widget.update(formatted)
+        # Update collapsed state
+        self.collapsed = not results
 
 
 class RightPanel(Vertical):
