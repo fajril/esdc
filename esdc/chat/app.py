@@ -5,18 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Static, Input, Markdown, Button, Collapsible
-from textual.widget import Widget
-from textual.events import Key
-
-from langchain_core.language_models import BaseChatModel
-from langchain_core.runnables import Runnable
-from langgraph.checkpoint.base import BaseCheckpointSaver
-
-# Configure logging - create log file in current working directory
+# Configure logging FIRST - before any other imports that might use logging
 log_dir = Path.cwd()
 log_file = log_dir / "esdc_chat.log"
 logging.basicConfig(
@@ -30,13 +19,24 @@ logging.basicConfig(
 logger = logging.getLogger("esdc.chat")
 logger.info(f"ESDC Chat starting, log file: {log_file}")
 
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
+from textual.widgets import Static, Input, Markdown, Button, Collapsible
+from textual.widget import Widget
+from textual.events import Key
+
+from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import Runnable
+from langgraph.checkpoint.base import BaseCheckpointSaver
+
 MAX_MESSAGE_HISTORY = 100
 MAX_QUERY_HISTORY = 5
 DEFAULT_CONTEXT_LENGTH = 4096
 TOOLS_LIST = ["execute_sql", "get_schema", "list_tables"]
 
 
-class ContextSection(Static):
+class ContextSection(Container):
     """Collapsible section widget for context panel."""
 
     DEFAULT_CSS = """
@@ -45,24 +45,24 @@ class ContextSection(Static):
         border: none;
     }
 
-    .header {
+    ContextSection .header {
         background: transparent;
         padding: 1 1;
         border-bottom: solid $primary-background;
     }
 
-    .title {
+    ContextSection .title {
         color: $text;
         text-style: bold;
     }
 
-    .content {
+    ContextSection .content {
         padding: 1 1;
         background: transparent;
     }
 
-    ContextSection.expanded .content {
-        display: block;
+    ContextSection.collapsed .content {
+        display: none;
     }
     """
 
@@ -77,15 +77,14 @@ class ContextSection(Static):
         self.title = title
         self.expanded = expanded
         self.badge = badge
-        self._content_widgets: list[Widget] = []
 
     def toggle(self) -> None:
         """Toggle expanded state."""
         self.expanded = not self.expanded
         if self.expanded:
-            self.add_class("expanded")
+            self.remove_class("collapsed")
         else:
-            self.remove_class("expanded")
+            self.add_class("collapsed")
 
     def compose(self) -> ComposeResult:
         """Compose the section."""
@@ -96,23 +95,14 @@ class ContextSection(Static):
 
         yield Static(title_text, classes="header")
 
-        with Vertical(classes="content"):
-            for widget in self._content_widgets:
-                yield widget
-
     def on_mount(self) -> None:
         """Set initial expanded state."""
-        if self.expanded:
-            self.add_class("expanded")
+        if not self.expanded:
+            self.add_class("collapsed")
 
     def on_click(self) -> None:
         """Handle click to toggle."""
         self.toggle()
-
-    def set_content(self, widgets: list) -> None:
-        """Set the content widgets."""
-        self._content_widgets = widgets
-        self.refresh()
 
 
 class TokenUsageWidget(Static):
@@ -312,7 +302,7 @@ class ContextPanel(Vertical):
 
         # Use instance variables for initial render
         thread_display = (
-            self._session_thread_id[:8] if self._session_thread_id else "N/A"
+            str(self._session_thread_id)[:8] if self._session_thread_id else "N/A"
         )
         initial_content = f"Provider: {self._provider_name}\nModel: {self._model_name}\nThread: {thread_display}..."
 
@@ -346,23 +336,16 @@ class ContextPanel(Vertical):
         self._model_name = model
         self._session_thread_id = thread_id
 
-        # Defer the widget update to next frame to ensure widget exists
-        from textual.message import Message
-
-        def _update():
-            try:
-                session_content = self.query_one("#session-content", Static)
-                if session_content:
-                    thread_display = thread_id[:8] if thread_id else "N/A"
-                    session_content.update(
-                        f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
-                    )
-            except Exception:
-                pass
-            self.refresh()
-
-        # Call update on next frame
-        self.call_later(_update)
+        # Update the static content directly
+        try:
+            session_content = self.query_one("#session-content", Static)
+            thread_display = str(thread_id)[:8] if thread_id else "N/A"
+            session_content.update(
+                f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
+            )
+        except Exception:
+            pass
+        self.refresh()
 
 
 class ChatMessage(Markdown):
@@ -485,56 +468,34 @@ class Footer(Vertical):
         yield self.user_input
         yield self.status_bar
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Forward input submitted event to parent app."""
-        # Post the event to the app so it can handle it
-        self.post_message(event)
-
 
 class ChatPanel(ScrollableContainer):
+    """Scrollable chat panel for displaying messages and collapsible widgets."""
+
     DEFAULT_CSS = """
     ChatPanel {
         height: 100%;
-    }
-    #message-container {
-        height: 1fr;
+        width: 100%;
+        padding: 1;
     }
     """
 
     def __init__(self):
         super().__init__()
         self.messages: list[tuple[str, str]] = []
-        self._message_container: ScrollableContainer | None = None
-
-    def compose(self) -> ComposeResult:
-        yield ScrollableContainer(id="message-container")
-
-    def on_mount(self) -> None:
-        self._message_container = self.query_one(
-            "#message-container", ScrollableContainer
-        )
 
     def add_message(self, role: str, content: str):
+        """Add a message to the chat panel."""
         self.messages.append((role, content))
-        if self._message_container:
-            self._message_container.mount(ChatMessage(role, content))
+        self.mount(ChatMessage(role, content))
 
         if len(self.messages) > MAX_MESSAGE_HISTORY:
             self.messages = self.messages[-MAX_MESSAGE_HISTORY:]
 
     def mount_collapsible(self, collapsible: "Collapsible") -> None:
-        """Mount a collapsible widget to the message container."""
-        if self._message_container:
-            logger.debug(
-                f"Mounting collapsible {type(collapsible).__name__} to message container"
-            )
-            self._message_container.mount(collapsible)
-        else:
-            # Fallback: mount to self if container not ready
-            logger.warning(
-                f"Message container not ready, mounting {type(collapsible).__name__} to ChatPanel"
-            )
-            self.mount(collapsible)
+        """Mount a collapsible widget to the chat panel."""
+        logger.debug(f"Mounting collapsible {type(collapsible).__name__} to ChatPanel")
+        self.mount(collapsible)
 
 
 class ThinkingIndicator(Collapsible):
@@ -614,7 +575,8 @@ class SQLPanel(Collapsible):
     SQLPanel {
         margin: 1 0;
         background: transparent;
-        border: none;
+        border: solid $surface;
+        height: auto;
     }
 
     SQLPanel .title {
@@ -622,10 +584,16 @@ class SQLPanel(Collapsible):
         text-style: bold;
     }
 
+    SQLPanel Static.sql-content {
+        height: auto;
+        max-height: 20;
+    }
+
     .sql-content {
         color: $text;
         padding: 1 2;
         background: $surface;
+        height: auto;
     }
     """
 
@@ -653,7 +621,8 @@ class ResultsPanel(Collapsible):
     ResultsPanel {
         margin: 1 0;
         background: transparent;
-        border: none;
+        border: solid $surface;
+        height: auto;
     }
 
     ResultsPanel .title {
@@ -661,26 +630,68 @@ class ResultsPanel(Collapsible):
         text-style: bold;
     }
 
+    ResultsPanel Markdown.results-content {
+        height: auto;
+        max-height: 30;
+    }
+
     .results-content {
         color: $text;
         padding: 1 2;
         background: $surface;
+        height: auto;
     }
     """
 
     def __init__(self, results: str = ""):
         super().__init__(title="📊 Query Results", collapsed=not results)
         self.results_content = results
-        self._content_widget: Static | None = None
+        self._content_widget: Markdown | None = None
 
     def compose(self) -> ComposeResult:
         content = (
-            self.results_content if self.results_content else "Waiting for results..."
+            self._format_results_as_markdown(self.results_content)
+            if self.results_content
+            else "Waiting for results..."
         )
-        yield Static(content, classes="results-content")
+        yield Markdown(content, classes="results-content")
+
+    def _format_results_as_markdown(self, results: str) -> str:
+        """Convert raw query results to markdown table format."""
+        if not results or results.strip() == "":
+            return "No results returned."
+
+        # Check if already formatted as markdown table
+        if results.startswith("|") and "|---" in results:
+            return results
+
+        # Convert pipe-separated text to markdown table
+        lines = results.strip().split("\n")
+        if len(lines) < 2:
+            return results
+
+        # Assume first line is headers, second line is separator if present
+        md_lines = []
+
+        # Header row
+        headers = lines[0].split("|")
+        headers = [h.strip() for h in headers if h.strip()]
+        md_lines.append("| " + " | ".join(headers) + " |")
+
+        # Separator
+        md_lines.append("|" + "---|" * len(headers))
+
+        # Data rows
+        for line in lines[1:]:
+            if line.strip():
+                cells = line.split("|")
+                cells = [c.strip() for c in cells if c.strip()]
+                md_lines.append("| " + " | ".join(cells) + " |")
+
+        return "\n".join(md_lines)
 
     def on_mount(self) -> None:
-        self._content_widget = self.query_one(".results-content", Static)
+        self._content_widget = self.query_one(".results-content", Markdown)
 
 
 class RightPanel(Vertical):
@@ -726,11 +737,12 @@ class ESDCChatApp(App):
     #main-content {
         layout: horizontal;
         height: 1fr;
+        width: 100%;
         padding: 0;
     }
 
     #chat-area {
-        width: 75%;
+        width: 3fr;
         height: 100%;
         border: none;
         background: $background;
@@ -738,7 +750,7 @@ class ESDCChatApp(App):
     }
 
     #context-panel {
-        width: 25%;
+        width: 1fr;
         height: 100%;
         border-left: solid $surface;
         background: $surface;
@@ -755,11 +767,7 @@ class ESDCChatApp(App):
 
     ChatPanel {
         height: 100%;
-        padding: 0;
-    }
-
-    #message-container {
-        height: 1fr;
+        width: 100%;
         padding: 1;
         scrollbar-gutter: stable;
     }
@@ -769,37 +777,6 @@ class ESDCChatApp(App):
         text-style: italic;
         text-align: center;
         padding: 2;
-    }
-
-    /* ===== Message Bubbles - Clean & Clear ===== */
-    ChatMessage {
-        padding: 1 2;
-        margin: 1 0;
-        border: none;
-        max-width: 85%;
-        background: transparent;
-    }
-
-    ChatMessage.user {
-        background: $primary-darken-2;
-        color: $text;
-        align-horizontal: right;
-        border: none;
-    }
-
-    ChatMessage.ai {
-        background: $surface;
-        color: $text;
-        align-horizontal: left;
-        border: none;
-    }
-
-    ChatMessage.system {
-        background: transparent;
-        color: $text-muted;
-        text-style: italic;
-        border: none;
-        text-align: center;
     }
 
     /* ===== Context Section - Minimal Borders ===== */
@@ -1072,11 +1049,8 @@ class ESDCChatApp(App):
                         # Create or update streaming message
                         if streaming_message is None:
                             streaming_message = ChatMessage("ai", accumulated_content)
-                            if self.chat_panel and self.chat_panel._message_container:
-                                self.chat_panel._message_container.mount(
-                                    streaming_message
-                                )
-                                self.chat_panel._message_container.refresh()
+                            if self.chat_panel:
+                                self.chat_panel.mount(streaming_message)
                         else:
                             streaming_message.update(accumulated_content)
                 elif chunk["type"] == "tool_call":
@@ -1087,21 +1061,44 @@ class ESDCChatApp(App):
                     )
                 elif chunk["type"] == "tool_result":
                     result = chunk.get("result", "")
+                    tool_name = chunk.get("tool", "")
+                    # DEBUG: Log detailed info
+                    logger.debug(f"[DEBUG_TOOL] Tool result received: {tool_name}")
+                    logger.debug(f"[DEBUG_TOOL] Result length: {len(result)}")
+                    logger.debug(
+                        f"[DEBUG_TOOL] SQL from chunk: {chunk.get('sql', 'NONE')[:50]}..."
+                    )
+                    logger.debug(
+                        f"[DEBUG_TOOL] Chat panel exists: {self.chat_panel is not None}"
+                    )
+                    logger.info(
+                        f"Received tool_result: tool={tool_name}, result_length={len(result)}, has_result={bool(result)}"
+                    )
                     if result and self.chat_panel:
+                        logger.debug("[DEBUG_TOOL] Chat panel exists, mounting...")
                         # Mount SQL collapsible in chat flow
                         sql = chunk.get("sql", "")
+                        logger.info(
+                            f"SQL from chunk: {sql[:100] if sql else 'None'}..."
+                        )
                         if sql:
+                            logger.debug("[DEBUG_TOOL] Mounting SQLPanel")
                             sql_panel = SQLPanel(sql)
                             self.chat_panel.mount_collapsible(sql_panel)
                             logger.info(
                                 f"Mounted SQLPanel with {len(sql)} chars of SQL"
                             )
+                            logger.debug("[DEBUG_TOOL] SQLPanel mounted")
 
                         # Mount Results collapsible in chat flow
                         results_panel = ResultsPanel(result)
                         self.chat_panel.mount_collapsible(results_panel)
                         logger.info(
                             f"Mounted ResultsPanel with {len(result)} chars of results"
+                        )
+                    else:
+                        logger.warning(
+                            f"Tool result not mounted: result_empty={not result}, chat_panel_exists={bool(self.chat_panel)}"
                         )
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
