@@ -1082,34 +1082,35 @@ class ESDCChatApp(App):
                 if self._cancelled:
                     self.display_message("system", "Query cancelled.")
                     return
-                if chunk["type"] == "message":
+                if chunk["type"] == "token":
+                    # Real-time token streaming
+                    token = chunk.get("content", "")
+                    if token and streaming_message:
+                        accumulated_content += token
+                        streaming_message.update(accumulated_content)
+                elif chunk["type"] == "message":
+                    # Legacy: complete message (fallback)
                     content = chunk.get("content", "")
                     if content:
-                        # Append content in real-time to streaming message
                         accumulated_content += content
                         streaming_message.update(accumulated_content)
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
                     logger.debug(f"Tool called: {tool_name}")
+                    # Add inline indicator
+                    if streaming_message and accumulated_content:
+                        # Only add indicator if there's already content
+                        if "🔍" not in accumulated_content:
+                            streaming_message.update(
+                                accumulated_content + "\n\n🔍 Querying database..."
+                            )
                 elif chunk["type"] == "tool_result":
                     result = chunk.get("result", "")
                     tool_name = chunk.get("tool", "")
-                    # DEBUG: Log detailed info
-                    logger.debug(f"[DEBUG_TOOL] Tool result received: {tool_name}")
-                    logger.debug(f"[DEBUG_TOOL] Result length: {len(result)}")
-                    logger.debug(
-                        f"[DEBUG_TOOL] SQL from chunk: {chunk.get('sql', 'NONE')[:50]}..."
-                    )
-                    logger.debug(
-                        f"[DEBUG_TOOL] Chat panel exists: {self.chat_panel is not None}"
-                    )
-                    logger.info(
-                        f"Received tool_result: tool={tool_name}, result_length={len(result)}, has_result={bool(result)}"
-                    )
-                    if result:
-                        logger.debug(
-                            f"Tool result received: {tool_name}, result_length={len(result)}"
-                        )
+                    logger.info(f"Tool result: {tool_name}, length={len(result)}")
+                    # Remove indicator if added
+                    if streaming_message and "🔍" in accumulated_content:
+                        streaming_message.update(accumulated_content)
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
                     if tokens > 0:
