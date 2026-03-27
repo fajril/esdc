@@ -1154,7 +1154,9 @@ class ESDCChatApp(App):
                     if token and streaming_message:
                         accumulated_content += token
                         streaming_message.update(accumulated_content)
-                        await asyncio.sleep(0)  # Yield control for UI update
+                        # Yield control every 5 tokens for better performance
+                        if token_count % 5 == 0:
+                            await asyncio.sleep(0)
 
                         # Log token details (every 10 tokens to avoid spam)
                         if token_count % 10 == 0 or len(token) > 20:
@@ -1238,6 +1240,7 @@ class ESDCChatApp(App):
                         )
                         accumulated_content = current_content + indicator_text
                         streaming_message.update(accumulated_content)
+                        await asyncio.sleep(0)  # Yield control for UI update
                     else:
                         logger.info(
                             "❌ INDICATOR_SKIPPED: no streaming_msg=%s",
@@ -1258,6 +1261,8 @@ class ESDCChatApp(App):
                         self._context_panel.update_tool_status("✅ Query completed")
                     # Keep indicator visible - don't remove it
                     # The indicator "🔍 Querying database..." will remain in the conversation
+                    # Yield control for UI responsiveness
+                    await asyncio.sleep(0)
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
                     if tokens > 0:
