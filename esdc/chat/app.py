@@ -1141,15 +1141,28 @@ class ESDCChatApp(App):
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
                     tool_args = chunk.get("args", {})
-                    sql_query = (
-                        tool_args.get("query", "")
-                        if isinstance(tool_args, dict)
-                        else ""
-                    )
                     logger.info(
-                        "🛠️ TOOL_CALL: name=%s, sql_len=%d",
+                        "🔍 DEBUG_ARGS: type=%s, value=%s, keys=%s",
+                        type(tool_args).__name__,
+                        str(tool_args)[:100] if tool_args else "empty",
+                        list(tool_args.keys())
+                        if isinstance(tool_args, dict)
+                        else "N/A",
+                    )
+                    sql_query = ""
+                    if isinstance(tool_args, dict):
+                        sql_query = tool_args.get("query", "")
+                    elif isinstance(tool_args, str):
+                        try:
+                            parsed = json.loads(tool_args)
+                            sql_query = parsed.get("query", "")
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    logger.info(
+                        "🛠️ TOOL_CALL: name=%s, sql_len=%d, sql_preview='%s'",
                         tool_name,
                         len(sql_query) if sql_query else 0,
+                        sql_query[:50] if sql_query else "N/A",
                     )
                     logger.info(
                         "💡 INDICATOR_CHECK: has_streaming_msg=%s, has_content=%s, content_len=%d",
