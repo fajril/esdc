@@ -8,18 +8,26 @@ from typing import Any, AsyncGenerator
 # Configure logging FIRST - before any other imports that might use logging
 log_dir = Path.cwd()
 log_file = log_dir / "esdc_chat.log"
+
+# Create file handler only (no console output to avoid terminal clutter)
+file_handler = logging.FileHandler(log_file, mode="a")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
+)
+
+# Configure root logger
 logging.basicConfig(
     level=logging.DEBUG,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    handlers=[
-        logging.FileHandler(
-            log_file, mode="a"
-        ),  # Use "a" for append, not "w" for overwrite
-        logging.StreamHandler(),
-    ],
+    handlers=[file_handler],
 )
+
 logger = logging.getLogger("esdc.chat")
 logger.info(f"ESDC Chat starting, log file: {log_file}")
+
+# Suppress verbose httpcore and markdown_it logs (only show WARNING+)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("markdown_it").setLevel(logging.WARNING)
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
