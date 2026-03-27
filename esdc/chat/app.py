@@ -1068,16 +1068,6 @@ class ESDCChatApp(App):
             self.display_message("ai", "Error: Agent not initialized")
             return
 
-        # Create thinking indicator for this query and mount to chat flow
-        thinking = ThinkingIndicator()
-        if self.chat_panel:
-            self.chat_panel.mount(thinking)
-            thinking.scroll_visible()
-            logger.debug("Mounted ThinkingIndicator as Collapsible widget")
-
-        # Track tools already added to prevent duplicates
-        seen_tools = set()
-
         # Accumulate AI response content for mounting after streaming
         accumulated_content = ""
 
@@ -1086,7 +1076,6 @@ class ESDCChatApp(App):
             logger.debug("Starting query execution")
             async for chunk in self._stream_response(user_input):
                 if self._cancelled:
-                    thinking.remove()
                     self.display_message("system", "Query cancelled.")
                     return
                 if chunk["type"] == "message":
@@ -1096,12 +1085,7 @@ class ESDCChatApp(App):
                         accumulated_content += content
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
-                    if tool_name not in seen_tools:
-                        seen_tools.add(tool_name)
-                        thinking.add_step(f"Running: {tool_name}")
-                        logger.debug(
-                            f"Added thinking step: {tool_name}, total steps: {len(thinking.steps)}"
-                        )
+                    logger.debug(f"Tool called: {tool_name}")
                 elif chunk["type"] == "tool_result":
                     result = chunk.get("result", "")
                     tool_name = chunk.get("tool", "")
@@ -1117,30 +1101,9 @@ class ESDCChatApp(App):
                     logger.info(
                         f"Received tool_result: tool={tool_name}, result_length={len(result)}, has_result={bool(result)}"
                     )
-                    if result and self.chat_panel:
-                        logger.debug("[DEBUG_TOOL] Chat panel exists, mounting...")
-                        sql = chunk.get("sql", "")
-                        logger.info(
-                            f"SQL from chunk: {sql[:100] if sql else 'None'}..."
-                        )
-                        if sql:
-                            logger.debug("[DEBUG_TOOL] Mounting SQLPanel")
-                            sql_panel = SQLPanel(sql)
-                            await self.chat_panel.mount_collapsible_async(sql_panel)
-                            logger.info(
-                                f"Mounted SQLPanel with {len(sql)} chars of SQL"
-                            )
-                            logger.debug("[DEBUG_TOOL] SQLPanel mounted")
-
-                        # Mount Results collapsible in chat flow
-                        results_panel = ResultsPanel(result)
-                        await self.chat_panel.mount_collapsible_async(results_panel)
-                        logger.info(
-                            f"Mounted ResultsPanel with {len(result)} chars of results"
-                        )
-                    else:
-                        logger.warning(
-                            f"Tool result not mounted: result_empty={not result}, chat_panel_exists={bool(self.chat_panel)}"
+                    if result:
+                        logger.debug(
+                            f"Tool result received: {tool_name}, result_length={len(result)}"
                         )
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
@@ -1157,9 +1120,7 @@ class ESDCChatApp(App):
 
         try:
             await asyncio.wait_for(run_query(), timeout=120.0)
-            # After streaming complete, collapse thinking and mount AI message
-            thinking.collapsed = True
-            thinking.title = "✓ Thinking complete"
+            # After streaming complete, mount AI message
             if accumulated_content and self.chat_panel:
                 # Strip excess whitespace from filtered content
                 cleaned_content = accumulated_content.strip()
@@ -1170,15 +1131,11 @@ class ESDCChatApp(App):
                     logger.info(f"Mounted AI message with {len(cleaned_content)} chars")
         except asyncio.TimeoutError:
             logger.warning("Query timed out after 120 seconds")
-            thinking.collapsed = True
-            thinking.title = "✗ Query timed out"
             self.display_message(
                 "ai", "Request timed out after 2 minutes. Please try again."
             )
         except Exception as e:
             logger.exception(f"Query failed with error: {e}")
-            thinking.collapsed = True
-            thinking.title = "✗ Query failed"
             self.display_message("ai", f"Error: {str(e)}")
 
     async def _stream_response(
