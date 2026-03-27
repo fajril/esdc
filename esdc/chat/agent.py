@@ -145,7 +145,7 @@ async def run_agent_stream(
     if checkpointer:
         agent = agent.compile(checkpointer=checkpointer)  # type: ignore[attr-defined]
 
-    stored_tool_call: dict[str, Any] = {}
+    stored_tool_calls: list[dict[str, Any]] = []
 
     logger.info("=" * 60)
     logger.info("🔔 AGENT_STREAM_STARTED: thread_id=%s", thread_id)
@@ -222,11 +222,14 @@ async def run_agent_stream(
                                 args = {}
                         query = args.get("query", "")
 
-                        stored_tool_call = {
-                            "name": tc["name"],
-                            "args": args,
-                            "query": query,
-                        }
+                        stored_tool_calls.append(
+                            {
+                                "name": tc["name"],
+                                "args": args,
+                                "query": query,
+                                "id": tc.get("id", ""),
+                            }
+                        )
 
                         logger.info(
                             f"AGENT_STORING: tool_call={tc['name']}, query={query[:50] if query else 'N/A'}..."
@@ -277,25 +280,29 @@ async def run_agent_stream(
                 len(str(tool_result)),
             )
 
-            # Extract SQL from stored_tool_call
+            # Extract SQL from stored_tool_calls (pop from front - FIFO order)
             sql = ""
-            if stored_tool_call.get("name") == "execute_sql":
-                args = stored_tool_call.get("args", {})
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except Exception:
-                        args = {}
-                sql = args.get("query", "")
-                logger.info(
-                    "📤 YIELDING tool_result: tool=%s, sql_len=%d, result_len=%d",
-                    tool_name,
-                    len(sql),
-                    len(str(tool_result)),
-                )
+            if stored_tool_calls:
+                stored_tc = stored_tool_calls.pop(0)
+                if stored_tc.get("name") == "execute_sql":
+                    args = stored_tc.get("args", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except Exception:
+                            args = {}
+                    sql = args.get("query", "")
+                    logger.info(
+                        "📤 YIELDING tool_result: tool=%s, sql_len=%d, result_len=%d",
+                        tool_name,
+                        len(sql),
+                        len(str(tool_result)),
+                    )
             else:
                 logger.info(
-                    f"YIELDING tool_result NO SQL - tool={tool_name}, result_length={len(str(tool_result))}"
+                    "YIELDING tool_result NO SQL - tool=%s, result_length=%d (no stored calls)",
+                    tool_name,
+                    len(str(tool_result)),
                 )
 
             yield {
@@ -304,7 +311,6 @@ async def run_agent_stream(
                 "result": str(tool_result),
                 "sql": sql,
             }
-            stored_tool_call = {}
 
 
 def _extract_token_usage(message: AIMessage, user_input: str) -> int:
