@@ -368,10 +368,11 @@ class ChatMessage(Markdown):
         max-width: 85%;
     }
     ChatMessage.user {
-        background: $primary-darken-2;
+        background: transparent;
         color: $text;
         align-horizontal: right;
-        border: none;
+        border-left: solid $primary-darken-2;
+        padding-left: 1;
     }
     ChatMessage.ai {
         background: transparent;
@@ -506,6 +507,12 @@ class ChatPanel(ScrollableContainer):
         logger.debug(f"Mounting collapsible {type(collapsible).__name__} to ChatPanel")
         self.mount(collapsible)
 
+    async def mount_collapsible_async(self, collapsible: "Collapsible") -> None:
+        """Mount a collapsible widget and scroll to make it visible."""
+        self.mount(collapsible)
+        collapsible.scroll_visible()
+        self.refresh()
+
 
 class ThinkingIndicator(Collapsible):
     """Collapsible thinking indicator that shows AI reasoning progress."""
@@ -513,7 +520,7 @@ class ThinkingIndicator(Collapsible):
     DEFAULT_CSS = """
     ThinkingIndicator {
         padding: 1 2;
-        margin: 1 0;
+        margin: 0 0 1 0;
         background: $surface;
         border: solid $primary;
         min-height: 2;
@@ -583,7 +590,7 @@ class SQLPanel(Collapsible):
 
     DEFAULT_CSS = """
     SQLPanel {
-        margin: 1 0;
+        margin: 0 0 1 0;
         background: $surface;
         border: solid $primary;
         min-height: 3;
@@ -634,7 +641,7 @@ class ResultsPanel(Collapsible):
 
     DEFAULT_CSS = """
     ResultsPanel {
-        margin: 1 0;
+        margin: 0 0 1 0;
         background: $surface;
         border: solid $primary;
         min-height: 3;
@@ -1050,6 +1057,7 @@ class ESDCChatApp(App):
         thinking = ThinkingIndicator()
         if self.chat_panel:
             self.chat_panel.mount(thinking)
+            thinking.scroll_visible()
             logger.debug("Mounted ThinkingIndicator as Collapsible widget")
 
         # Accumulate AI response content for mounting after streaming
@@ -1091,7 +1099,6 @@ class ESDCChatApp(App):
                     )
                     if result and self.chat_panel:
                         logger.debug("[DEBUG_TOOL] Chat panel exists, mounting...")
-                        # Mount SQL collapsible in chat flow
                         sql = chunk.get("sql", "")
                         logger.info(
                             f"SQL from chunk: {sql[:100] if sql else 'None'}..."
@@ -1099,7 +1106,7 @@ class ESDCChatApp(App):
                         if sql:
                             logger.debug("[DEBUG_TOOL] Mounting SQLPanel")
                             sql_panel = SQLPanel(sql)
-                            self.chat_panel.mount_collapsible(sql_panel)
+                            await self.chat_panel.mount_collapsible_async(sql_panel)
                             logger.info(
                                 f"Mounted SQLPanel with {len(sql)} chars of SQL"
                             )
@@ -1107,7 +1114,7 @@ class ESDCChatApp(App):
 
                         # Mount Results collapsible in chat flow
                         results_panel = ResultsPanel(result)
-                        self.chat_panel.mount_collapsible(results_panel)
+                        await self.chat_panel.mount_collapsible_async(results_panel)
                         logger.info(
                             f"Mounted ResultsPanel with {len(result)} chars of results"
                         )
@@ -1130,21 +1137,25 @@ class ESDCChatApp(App):
 
         try:
             await asyncio.wait_for(run_query(), timeout=120.0)
-            # After streaming complete, remove thinking and mount AI message
-            thinking.remove()
+            # After streaming complete, collapse thinking and mount AI message
+            thinking.collapsed = True
+            thinking.title = "✓ Thinking complete"
             if accumulated_content and self.chat_panel:
                 streaming_message = ChatMessage("ai", accumulated_content)
                 self.chat_panel.mount(streaming_message)
+                streaming_message.scroll_visible()
                 logger.info(f"Mounted AI message with {len(accumulated_content)} chars")
         except asyncio.TimeoutError:
             logger.warning("Query timed out after 120 seconds")
-            thinking.remove()
+            thinking.collapsed = True
+            thinking.title = "✗ Query timed out"
             self.display_message(
                 "ai", "Request timed out after 2 minutes. Please try again."
             )
         except Exception as e:
             logger.exception(f"Query failed with error: {e}")
-            thinking.remove()
+            thinking.collapsed = True
+            thinking.title = "✗ Query failed"
             self.display_message("ai", f"Error: {str(e)}")
 
     async def _stream_response(
