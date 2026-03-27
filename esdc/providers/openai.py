@@ -12,6 +12,20 @@ class OpenAIProvider(Provider):
     DEFAULT_MODEL = "gpt-4o-mini"
     BASE_URL = "https://models.inference.ai.azure.com"
 
+    CONTEXT_LENGTHS = {
+        "gpt-4o": 128000,
+        "gpt-4o-mini": 128000,
+        "gpt-4-turbo": 128000,
+        "gpt-4": 8192,
+        "gpt-3.5-turbo": 16385,
+        "gpt-3.5-turbo-16k": 16385,
+        "gpt-4-32k": 32768,
+        "o1": 128000,
+        "o1-mini": 128000,
+        "o3": 200000,
+        "o3-mini": 128000,
+    }
+
     @classmethod
     def list_models(cls, api_key: str | None = None, **kwargs: Any) -> list[str]:
         """List available OpenAI models."""

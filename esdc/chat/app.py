@@ -540,6 +540,11 @@ class ThinkingIndicator(Collapsible):
     .thinking-steps .bullet {
         color: $accent;
     }
+
+    ThinkingIndicator.collapsed {
+        height: auto;
+        min-height: 1;
+    }
     """
 
     def __init__(self):
@@ -609,6 +614,11 @@ class SQLPanel(Collapsible):
         color: $text;
         padding: 1 2;
     }
+
+    SQLPanel.collapsed {
+        height: auto;
+        min-height: 1;
+    }
     """
 
     def __init__(self, sql: str = ""):
@@ -659,6 +669,11 @@ class ResultsPanel(Collapsible):
     .results-content {
         color: $text;
         padding: 1 2;
+    }
+
+    ResultsPanel.collapsed {
+        height: auto;
+        min-height: 1;
     }
     """
 

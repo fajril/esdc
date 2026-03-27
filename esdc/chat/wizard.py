@@ -361,38 +361,87 @@ class WizardApp:
     }
 
     WIZARD_CSS = """
+    /* ===== Minimalist Wizard - Clean & Clear =====
+       Occam's Razor: Simplest effective design
+       Hick's Law: Minimize choices
+       Law of Prägnanz: Simple, clear forms
+    ================================================================ */
+    
     Screen {
-        background: $surface;
+        background: $background;
         align: center middle;
     }
 
     Container {
         width: 60;
         height: auto;
-        border: solid $primary;
-        padding: 1 2;
+        border: none;
+        padding: 2 4;
+        background: $background;
     }
 
     .title {
         text-align: center;
         text-style: bold;
-        color: $accent;
-        margin-bottom: 1;
+        color: $text;
+        margin-bottom: 2;
     }
 
     .content {
-        margin-bottom: 1;
+        text-align: center;
+        color: $text;
+        margin-bottom: 2;
     }
 
     .label {
         margin-top: 1;
+        color: $text-muted;
     }
 
     .summary {
         width: 100%;
+        background: transparent;
+        padding: 1;
+        border: none;
+        color: $text;
     }
 
     #provider-select {
+        margin: 2 0;
+        padding: 1;
+        border: none;
+        background: transparent;
+    }
+
+    Select {
+        margin: 1 0;
+        border: solid $primary;
+        background: $background;
+    }
+
+    Select:focus {
+        border: solid $accent;
+        background: $background;
+    }
+
+    Input {
+        margin: 1 0;
+        padding: 1 2;
+        border: solid $primary;
+        background: $background;
+    }
+
+    Input:focus {
+        border: solid $accent;
+        background: $background;
+    }
+
+    Button {
+        margin: 1 1;
+    }
+
+    Horizontal {
+        align: center middle;
         margin: 1 0;
     }
     """

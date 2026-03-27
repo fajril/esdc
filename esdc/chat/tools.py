@@ -7,6 +7,9 @@ from langchain.tools import tool
 
 from esdc.chat.schema_loader import SchemaLoader
 
+# Maximum rows to return to prevent context window overflow
+MAX_QUERY_ROWS = 50
+
 
 def _validate_table_name(name: str | None) -> str | None:
     """Validate table name to prevent SQL injection.
@@ -67,6 +70,15 @@ def execute_sql(
             if not rows:
                 return "Query executed successfully. No results returned."
 
+            # Limit results to prevent context window overflow
+            MAX_ROWS = 50
+            total_rows = len(rows)
+            if len(rows) > MAX_ROWS:
+                rows = rows[:MAX_ROWS]
+                truncated = True
+            else:
+                truncated = False
+
             row_strings = []
             for row in rows:
                 row_strings.append(" | ".join(str(value) for value in row))
@@ -75,7 +87,9 @@ def execute_sql(
             separator = "-" * len(header)
 
             result = f"{header}\n{separator}\n" + "\n".join(row_strings)
-            result += f"\n\n({len(rows)} rows returned)"
+            if truncated:
+                result += f"\n\n... ({total_rows - MAX_ROWS} more rows not shown)"
+            result += f"\n\n({total_rows} rows returned)"
 
             return result
         else:

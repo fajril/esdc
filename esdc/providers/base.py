@@ -6,6 +6,8 @@ from langchain_core.language_models import BaseChatModel
 
 ProviderType = Literal["ollama", "openai", "openai_compatible"]
 
+DEFAULT_CONTEXT_LENGTH = 4096
+
 
 @dataclass
 class ProviderConfig:
@@ -21,6 +23,7 @@ class ProviderConfig:
 class Provider(ABC):
     NAME: str = ""
     DEFAULT_MODEL: str = ""
+    CONTEXT_LENGTHS: dict[str, int] = {}
 
     @classmethod
     @abstractmethod
@@ -45,6 +48,24 @@ class Provider(ABC):
     def create_llm(cls, model: str | None = "", **kwargs: Any) -> BaseChatModel:
         """Create a LangChain chat model instance."""
         pass
+
+    @classmethod
+    def get_context_length(cls, model: str) -> int:
+        """Return context length for a model in tokens.
+
+        Args:
+            model: The model name
+
+        Returns:
+            Context length in tokens, or DEFAULT_CONTEXT_LENGTH as fallback
+        """
+        model_lower = model.lower() if model else ""
+
+        for key, length in cls.CONTEXT_LENGTHS.items():
+            if key in model_lower:
+                return length
+
+        return DEFAULT_CONTEXT_LENGTH
 
     @classmethod
     def get_name(cls) -> str:

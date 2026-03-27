@@ -10,6 +10,29 @@ class OllamaProvider(Provider):
     DEFAULT_BASE_URL = "http://localhost:11434"
     DEFAULT_MODEL = "llama3.2"
 
+    CONTEXT_LENGTHS = {
+        "llama3.2": 128000,
+        "llama3.1": 128000,
+        "llama3.0": 128000,
+        "llama2": 4096,
+        "llama2-70b": 4096,
+        "mistral": 32000,
+        "mixtral": 32000,
+        "qwen2.5": 128000,
+        "qwen2": 131072,
+        "qwen": 8192,
+        "deepseek-coder": 16384,
+        "deepseek-v2": 128000,
+        "codellama": 16384,
+        "phi3": 4096,
+        "phi4": 128000,
+        "gemma": 8192,
+        "gemma2": 8192,
+        "command-r": 128000,
+        "aya": 8192,
+        "OL-4": 128000,
+    }
+
     CODE_CAPABLE_MODELS = [
         "deepseek-coder",
         "codellama",

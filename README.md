@@ -11,18 +11,12 @@ This module provides functionality for managing data related to the ESDC (https:
 
 ## Installation
 
-To install the module, clone the repository and install the dependencies specified in the `pyproject.toml` file.
+To install the module, clone the repository and install using uv:
 
 ```sh
 git clone https://github.com/fajril/esdc.git
 cd esdc
-pip install .
-```
-
-Alternatively, you can install the dependencies directly:
-
-```sh
-pip install requests==2.32.2 pandas==2.2.2 tqdm==4.66.4 typer>=0.12.4 tabulate==0.9.0 ollama==0.3.0 basedpyright>=0.1.0 openpyxl==3.1.5 pyyaml>=6.0
+uv add -e .
 ```
 
 ## Configuration

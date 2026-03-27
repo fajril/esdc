@@ -10,31 +10,28 @@ ESDC is a Python CLI package for managing data from the ESDC API (https://esdc.s
 
 ### Installation
 ```bash
-pip install -e .
+uv add -e .
 ```
 
 ### Running Tests
 ```bash
 # Run all tests
-pytest tests/
+uv run pytest tests/
 
 # Run single test file
-pytest tests/test_idgen.py
+uv run pytest tests/test_idgen.py
 
 # Run single test function
-pytest tests/test_idgen.py::test_luhn_mod16_known_payloads
+uv run pytest tests/test_idgen.py::test_luhn_mod16_known_payloads
 
 # Run with verbose output
-pytest -v tests/
+uv run pytest -v tests/
 ```
 
 ### Linting and Type Checking
 ```bash
-# Run pylint on source
-pylint esdc/
-
 # Run basedpyright type checking
-basedpyright esdc/
+uv run basedpyright esdc/
 ```
 
 ### Running the CLI

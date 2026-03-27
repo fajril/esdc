@@ -246,15 +246,19 @@ async def run_agent_stream(
                 if last_msg.content:
                     content = last_msg.content
                     # Check if content contains SQL code block
-                    if "```sql" in content or "```SQL" in content:
+                    if "```sql" in content.lower():
                         # Remove SQL code blocks from content
                         import re
 
-                        # Pattern to match SQL code blocks
-                        pattern = r"```sql\n(.*?)\n```"
+                        # Pattern handles various whitespace arrangements
+                        sql_pattern = r"```sql\s*?\n?(.*?)\n?```"
                         content = re.sub(
-                            pattern, "", content, flags=re.DOTALL | re.IGNORECASE
+                            sql_pattern, "", content, flags=re.DOTALL | re.IGNORECASE
                         )
+                        # Remove markdown tables that contain SQL results
+                        # Match pattern: | column | column | ... | followed by separator line
+                        table_pattern = r"\|.*\|.*\n\|[-:| ]+\|"
+                        content = re.sub(table_pattern, "", content)
                         # Clean up extra newlines
                         content = re.sub(r"\n{3,}", "\n\n", content)
                         content = content.strip()

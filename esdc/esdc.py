@@ -85,18 +85,21 @@ def main(verbose: int = 0):
             - verbose == 0: WARNING
     """
     Config.init_config()
-    handler = RichHandler(show_time=False)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    logging.root.handlers.clear()
-    logging.root.addHandler(handler)
-    logger = logging.getLogger()
-    if verbose >= 2:
-        logger.setLevel(logging.DEBUG)
-    elif verbose == 1:
-        logger.setLevel(logging.INFO)
-    else:
-        logger.setLevel(logging.WARNING)
-    logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
+    # Only configure logging if not already configured (e.g., by app.py)
+    if not logging.root.handlers:
+        handler = RichHandler(show_time=False)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        logging.root.addHandler(handler)
+        logger = logging.getLogger()
+        if verbose >= 2:
+            logger.setLevel(logging.DEBUG)
+        elif verbose == 1:
+            logger.setLevel(logging.INFO)
+        else:
+            logger.setLevel(logging.WARNING)
+        logger.info(
+            "Log level set to %s", logging.getLevelName(logger.getEffectiveLevel())
+        )
 
 
 # ... (previous imports remain unchanged)
@@ -492,10 +495,20 @@ def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
 
 
 @app.command(name="chat")
-def chat():
+def chat(setup: bool = False):
     """Start the interactive chat TUI."""
-    app = ESDCChatApp()
-    app.run()
+    from esdc.chat.wizard import WizardApp
+    from esdc.configs import Config
+
+    if setup or not Config.has_chat_config():
+        rich.print("[bold]Running setup wizard...[/bold]")
+        WizardApp.run()
+
+    if Config.has_chat_config():
+        app = ESDCChatApp()
+        app.run()
+    else:
+        rich.print("[yellow]Setup incomplete. Chat cannot start.[/yellow]")
 
 
 @app.command(name="db-info")
