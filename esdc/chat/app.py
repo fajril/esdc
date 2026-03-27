@@ -1174,32 +1174,17 @@ class ESDCChatApp(App):
 
                     if streaming_message:
                         current_content = accumulated_content or ""
-                        if "🔍" not in current_content:
-                            logger.info(
-                                "📊 CONTENT_BEFORE_INDICATOR: len=%d, contains_emoji=%s, last_50_chars='%s'",
-                                len(current_content),
-                                "🔍" in current_content,
-                                current_content[-50:]
-                                if len(current_content) >= 50
-                                else current_content,
-                            )
-                            indicator_text = "\n\n🔍 Querying database..."
-                            if sql_query:
-                                indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
-                            logger.info(
-                                "✅ INDICATOR_ADDED: appending 🔍 to message (with_sql=%s)",
-                                bool(sql_query),
-                            )
-                            accumulated_content = current_content + indicator_text
-                            streaming_message.update(accumulated_content)
-                            logger.info(
-                                "📊 CONTENT_AFTER_INDICATOR: len=%d, accumulated_len=%d, preview='%s'",
-                                len(current_content + indicator_text),
-                                len(accumulated_content),
-                                accumulated_content[-50:],
-                            )
-                        else:
-                            logger.info("❌ INDICATOR_SKIPPED: emoji already exists")
+                        # Always show indicator for each tool call (multiple queries)
+                        indicator_text = "\n\n🔍 Querying database..."
+                        if sql_query:
+                            indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
+                        logger.info(
+                            "✅ INDICATOR_ADDED: appending 🔍 to message (with_sql=%s, sql_len=%d)",
+                            bool(sql_query),
+                            len(sql_query) if sql_query else 0,
+                        )
+                        accumulated_content = current_content + indicator_text
+                        streaming_message.update(accumulated_content)
                     else:
                         logger.info(
                             "❌ INDICATOR_SKIPPED: no streaming_msg=%s",
