@@ -159,13 +159,23 @@ async def run_agent_stream(
         data = event.get("data", {})
 
         # Handle token streaming (character-by-character)
-        if event_type == "on_chat_model_stream":
+        # ChatOllama may emit either on_chat_model_stream or on_llm_stream
+        if event_type in ("on_chat_model_stream", "on_llm_stream"):
             chunk = data.get("chunk")
-            if chunk and hasattr(chunk, "content") and chunk.content:
-                yield {
-                    "type": "token",
-                    "content": chunk.content,
-                }
+            if chunk:
+                # Handle different chunk formats
+                if hasattr(chunk, "content"):
+                    content = chunk.content
+                elif isinstance(chunk, str):
+                    content = chunk
+                else:
+                    content = str(chunk) if chunk else ""
+
+                if content:
+                    yield {
+                        "type": "token",
+                        "content": content,
+                    }
 
         # Handle completion (tool calls, final message)
         elif event_type == "on_chat_model_end":

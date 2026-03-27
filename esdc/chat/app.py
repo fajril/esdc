@@ -1088,12 +1088,14 @@ class ESDCChatApp(App):
                     if token and streaming_message:
                         accumulated_content += token
                         streaming_message.update(accumulated_content)
+                        await asyncio.sleep(0)  # Yield control for UI update
                 elif chunk["type"] == "message":
                     # Legacy: complete message (fallback)
                     content = chunk.get("content", "")
                     if content:
                         accumulated_content += content
                         streaming_message.update(accumulated_content)
+                        await asyncio.sleep(0)  # Yield control for UI update
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
                     logger.debug(f"Tool called: {tool_name}")
