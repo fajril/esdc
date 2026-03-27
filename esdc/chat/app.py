@@ -1068,7 +1068,11 @@ class ESDCChatApp(App):
             self.display_message("ai", "Error: Agent not initialized")
             return
 
-        # Accumulate AI response content for mounting after streaming
+        # Create streaming AI message
+        streaming_message = ChatMessage("ai", "")
+        if self.chat_panel:
+            self.chat_panel.mount(streaming_message)
+            streaming_message.scroll_visible()
         accumulated_content = ""
 
         async def run_query():
@@ -1081,8 +1085,9 @@ class ESDCChatApp(App):
                 if chunk["type"] == "message":
                     content = chunk.get("content", "")
                     if content:
-                        # Accumulate content without mounting yet
+                        # Append content in real-time to streaming message
                         accumulated_content += content
+                        streaming_message.update(accumulated_content)
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
                     logger.debug(f"Tool called: {tool_name}")
@@ -1120,23 +1125,17 @@ class ESDCChatApp(App):
 
         try:
             await asyncio.wait_for(run_query(), timeout=120.0)
-            # After streaming complete, mount AI message
-            if accumulated_content and self.chat_panel:
-                # Strip excess whitespace from filtered content
-                cleaned_content = accumulated_content.strip()
-                if cleaned_content:  # Only mount if there's actual content
-                    streaming_message = ChatMessage("ai", cleaned_content)
-                    self.chat_panel.mount(streaming_message)
-                    streaming_message.scroll_visible()
-                    logger.info(f"Mounted AI message with {len(cleaned_content)} chars")
+            logger.info("Query completed successfully")
         except asyncio.TimeoutError:
             logger.warning("Query timed out after 120 seconds")
-            self.display_message(
-                "ai", "Request timed out after 2 minutes. Please try again."
-            )
+            if streaming_message:
+                streaming_message.update(
+                    "Request timed out after 2 minutes. Please try again."
+                )
         except Exception as e:
             logger.exception(f"Query failed with error: {e}")
-            self.display_message("ai", f"Error: {str(e)}")
+            if streaming_message:
+                streaming_message.update(f"Error: {str(e)}")
 
     async def _stream_response(
         self, user_input: str
