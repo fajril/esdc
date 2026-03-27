@@ -584,7 +584,7 @@ class SQLPanel(Collapsible):
         text-style: bold;
     }
 
-    SQLPanel Static.sql-content {
+    SQLPanel Markdown.sql-content {
         height: auto;
         max-height: 20;
     }
@@ -600,7 +600,7 @@ class SQLPanel(Collapsible):
     def __init__(self, sql: str = ""):
         super().__init__(title="📝 SQL Query", collapsed=not sql)
         self.sql_content = sql
-        self._content_widget: Static | None = None
+        self._content_widget: Markdown | None = None
 
     def compose(self) -> ComposeResult:
         content = (
@@ -608,10 +608,10 @@ class SQLPanel(Collapsible):
             if self.sql_content
             else "Executing query..."
         )
-        yield Static(content, classes="sql-content")
+        yield Markdown(content, classes="sql-content")
 
     def on_mount(self) -> None:
-        self._content_widget = self.query_one(".sql-content", Static)
+        self._content_widget = self.query_one(".sql-content", Markdown)
 
 
 class ResultsPanel(Collapsible):
