@@ -1185,7 +1185,7 @@ class ESDCChatApp(App):
                             )
                             indicator_text = "\n\n🔍 Querying database..."
                             if sql_query:
-                                indicator_text += f"\n\n```sql\n{sql_query}\n```"
+                                indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
                             logger.info(
                                 "✅ INDICATOR_ADDED: appending 🔍 to message (with_sql=%s)",
                                 bool(sql_query),
