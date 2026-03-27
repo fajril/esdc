@@ -1,12 +1,10 @@
 import asyncio
 import re
 import sqlite3
-from pathlib import Path
 from typing import Annotated
 
 from langchain.tools import tool
 
-from esdc.chat.schema_loader import SchemaLoader
 
 # Maximum rows to return to prevent context window overflow
 MAX_QUERY_ROWS = 50

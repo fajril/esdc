@@ -1,7 +1,7 @@
 # esdc/chat/app.py
 import asyncio
+import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -28,16 +28,14 @@ logger.info(f"ESDC Chat starting, log file: {log_file}")
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("markdown_it").setLevel(logging.WARNING)
 
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
-from textual.widgets import Static, Input, Markdown, Button, Collapsible
-from textual.widget import Widget
-from textual.events import Key
+from textual.app import App, ComposeResult  # noqa: E402
+from textual.binding import Binding  # noqa: E402
+from textual.containers import Container, Horizontal, Vertical, ScrollableContainer  # noqa: E402
+from textual.widgets import Static, Input, Markdown, Collapsible  # noqa: E402
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.runnables import Runnable
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langchain_core.language_models import BaseChatModel  # noqa: E402
+from langchain_core.runnables import Runnable  # noqa: E402
+from langgraph.checkpoint.base import BaseCheckpointSaver  # noqa: E402
 
 MAX_MESSAGE_HISTORY = 100
 MAX_QUERY_HISTORY = 5
@@ -303,22 +301,18 @@ class ContextPanel(Vertical):
         padding: 1;
         color: $text;
         background: $background;
-        border: solid $primary;
     }
     
     .tool-status.querying {
         color: $warning;
-        border-color: $warning;
     }
     
     .tool-status.completed {
         color: $success;
-        border-color: $success;
     }
     
     .tool-status.idle {
         color: $text-muted;
-        border-color: $surface;
     }
     """
 
@@ -809,8 +803,8 @@ class RightPanel(Vertical):
         yield self.sql_panel
         yield self.results_panel
 
-    def set_sql(self, sql: str, schema_tips: str = ""):
-        self.sql_panel.set_sql(sql, schema_tips)
+    def set_sql(self, sql: str):
+        self.sql_panel.set_sql(sql)
 
     def set_results(self, results: str):
         self.results_panel.set_results(results)
@@ -1106,7 +1100,6 @@ class ESDCChatApp(App):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle user input submission."""
-        import asyncio
 
         user_input = event.value.strip()
         if not user_input:
@@ -1362,32 +1355,6 @@ class ESDCChatApp(App):
         self.notify(
             f"Context panel {'shown' if self._context_panel_visible else 'hidden'}"
         )
-
-    def action_toggle_sql_section(self) -> None:
-        """Toggle SQL section."""
-        if self._context_panel:
-            self._context_panel.toggle_section("sql")
-
-    def action_toggle_results_section(self) -> None:
-        """Toggle results section."""
-        if self._context_panel:
-            self._context_panel.toggle_section("results")
-
-    def action_toggle_all_sections(self) -> None:
-        """Toggle all collapsible sections."""
-        if self._context_panel:
-            all_expanded = all(
-                v
-                for k, v in self._context_panel._section_expanded.items()
-                if k not in ("session_info", "token_usage", "tools")
-            )
-
-            for section in self._context_panel._section_expanded:
-                if section not in ("session_info", "token_usage", "tools"):
-                    self._context_panel._section_expanded[section] = not all_expanded
-
-            self._context_panel.refresh()
-            self.notify(f"All sections {'collapsed' if all_expanded else 'expanded'}")
 
     def action_save_screenshot(self, filename: str | None = None) -> None:
         """Save screenshot of the current screen.

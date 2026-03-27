@@ -8,12 +8,10 @@ from langchain_core.messages import (
     HumanMessage,
     AIMessage,
     SystemMessage,
-    BaseMessage,
 )
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph, MessagesState, START, END
-from langgraph.prebuilt import ToolNode
 
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.tools import execute_sql, get_schema, list_tables
@@ -148,7 +146,6 @@ async def run_agent_stream(
         agent = agent.compile(checkpointer=checkpointer)  # type: ignore[attr-defined]
 
     stored_tool_call: dict[str, Any] = {}
-    total_tokens_used = 0
 
     logger.info("=" * 60)
     logger.info("🔔 AGENT_STREAM_STARTED: thread_id=%s", thread_id)
@@ -257,7 +254,7 @@ async def run_agent_stream(
                         content = re.sub(r"\n{3,}", "\n\n", content)
                         content = content.strip()
                         logger.info(
-                            f"AGENT_FILTERED: Removed SQL code block from message"
+                            "AGENT_FILTERED: Removed SQL code block from message"
                         )
 
                     if content:
