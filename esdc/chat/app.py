@@ -12,7 +12,9 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     handlers=[
-        logging.FileHandler(log_file, mode="w"),
+        logging.FileHandler(
+            log_file, mode="a"
+        ),  # Use "a" for append, not "w" for overwrite
         logging.StreamHandler(),
     ],
 )
@@ -505,8 +507,9 @@ class ThinkingIndicator(Collapsible):
     ThinkingIndicator {
         padding: 1 2;
         margin: 1 0;
-        background: transparent;
-        border: none;
+        background: $surface;
+        border: solid $primary;
+        min-height: 2;
     }
 
     ThinkingIndicator .title {
@@ -574,9 +577,9 @@ class SQLPanel(Collapsible):
     DEFAULT_CSS = """
     SQLPanel {
         margin: 1 0;
-        background: transparent;
-        border: solid $surface;
-        height: auto;
+        background: $surface;
+        border: solid $primary;
+        min-height: 3;
     }
 
     SQLPanel .title {
@@ -585,15 +588,12 @@ class SQLPanel(Collapsible):
     }
 
     SQLPanel Markdown.sql-content {
-        height: auto;
         max-height: 20;
     }
 
     .sql-content {
         color: $text;
         padding: 1 2;
-        background: $surface;
-        height: auto;
     }
     """
 
@@ -628,9 +628,9 @@ class ResultsPanel(Collapsible):
     DEFAULT_CSS = """
     ResultsPanel {
         margin: 1 0;
-        background: transparent;
-        border: solid $surface;
-        height: auto;
+        background: $surface;
+        border: solid $primary;
+        min-height: 3;
     }
 
     ResultsPanel .title {
@@ -639,15 +639,12 @@ class ResultsPanel(Collapsible):
     }
 
     ResultsPanel Markdown.results-content {
-        height: auto;
         max-height: 30;
     }
 
     .results-content {
         color: $text;
         padding: 1 2;
-        background: $surface;
-        height: auto;
     }
     """
 
