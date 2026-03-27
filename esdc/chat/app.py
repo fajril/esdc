@@ -1152,8 +1152,21 @@ class ESDCChatApp(App):
                     # Real-time token streaming
                     token = chunk.get("content", "")
                     if token and streaming_message:
+                        # Check if user is near bottom before update
+                        should_scroll = False
+                        if self.chat_panel:
+                            scroll_y = self.chat_panel.scroll_offset.y
+                            max_scroll = self.chat_panel.max_scroll_y
+                            # Auto-scroll if within 3 lines of bottom
+                            should_scroll = (max_scroll - scroll_y) <= 3
+
                         accumulated_content += token
                         streaming_message.update(accumulated_content)
+
+                        # Scroll to bottom if user was already at bottom
+                        if should_scroll and self.chat_panel:
+                            self.chat_panel.scroll_end(animate=False)
+
                         # Yield control every 5 tokens for better performance
                         if token_count % 5 == 0:
                             await asyncio.sleep(0)
@@ -1178,8 +1191,20 @@ class ESDCChatApp(App):
                             len(content),
                             content[:50],
                         )
+                        # Check if user is near bottom before update
+                        should_scroll = False
+                        if self.chat_panel:
+                            scroll_y = self.chat_panel.scroll_offset.y
+                            max_scroll = self.chat_panel.max_scroll_y
+                            should_scroll = (max_scroll - scroll_y) <= 3
+
                         accumulated_content += content
                         streaming_message.update(accumulated_content)
+
+                        # Scroll to bottom if user was already at bottom
+                        if should_scroll and self.chat_panel:
+                            self.chat_panel.scroll_end(animate=False)
+
                         await asyncio.sleep(0)  # Yield control for UI update
                     else:
                         logger.info(
@@ -1238,8 +1263,20 @@ class ESDCChatApp(App):
                             bool(sql_query),
                             len(sql_query) if sql_query else 0,
                         )
+                        # Check if user is near bottom before update
+                        should_scroll = False
+                        if self.chat_panel:
+                            scroll_y = self.chat_panel.scroll_offset.y
+                            max_scroll = self.chat_panel.max_scroll_y
+                            should_scroll = (max_scroll - scroll_y) <= 3
+
                         accumulated_content = current_content + indicator_text
                         streaming_message.update(accumulated_content)
+
+                        # Scroll to bottom if user was already at bottom
+                        if should_scroll and self.chat_panel:
+                            self.chat_panel.scroll_end(animate=False)
+
                         await asyncio.sleep(0)  # Yield control for UI update
                     else:
                         logger.info(
