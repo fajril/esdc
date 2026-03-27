@@ -1,3 +1,4 @@
+import asyncio
 import re
 import sqlite3
 from pathlib import Path
@@ -40,7 +41,7 @@ def get_db_connection(db_path: str | None = None) -> sqlite3.Connection:
 
 
 @tool
-def execute_sql(
+async def execute_sql(
     query: Annotated[
         str, "A valid SQL SELECT query to execute against the ESDC database."
     ],
@@ -50,7 +51,18 @@ def execute_sql(
 
     Use this tool when the user wants to query data from the database.
     Only SELECT queries are allowed for safety.
+
+    This is an async tool that runs the query in a thread pool to avoid blocking
+    the event loop, keeping the UI responsive during database operations.
     """
+    # Run the synchronous database query in a thread pool
+    return await asyncio.get_event_loop().run_in_executor(
+        None, _execute_sql_sync, query, db_path
+    )
+
+
+def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
+    """Synchronous SQL execution (runs in thread pool to avoid blocking)."""
     query = query.strip()
 
     if not query.lower().startswith("select"):

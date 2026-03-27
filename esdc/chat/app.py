@@ -289,13 +289,36 @@ class QueryHistory(Static):
 
 
 class ContextPanel(Vertical):
-    """Static context panel showing only session info."""
+    """Static context panel showing session info and tool status."""
 
     DEFAULT_CSS = """
     ContextPanel {
         width: 25%;
         padding: 1;
         background: $surface;
+    }
+    
+    .tool-status {
+        margin: 1 0;
+        padding: 1;
+        color: $text;
+        background: $background;
+        border: solid $primary;
+    }
+    
+    .tool-status.querying {
+        color: $warning;
+        border-color: $warning;
+    }
+    
+    .tool-status.completed {
+        color: $success;
+        border-color: $success;
+    }
+    
+    .tool-status.idle {
+        color: $text-muted;
+        border-color: $surface;
     }
     """
 
@@ -304,6 +327,7 @@ class ContextPanel(Vertical):
         self._provider_name: str = ""
         self._model_name: str = ""
         self._session_thread_id: str = ""
+        self._tool_status: str = "🔍 Idle"
 
     def compose(self) -> ComposeResult:
         """Compose session info section."""
@@ -325,6 +349,9 @@ class ContextPanel(Vertical):
                 classes="session-content",
                 id="session-content",
             )
+
+        # Tool status indicator
+        yield Static(self._tool_status, classes="tool-status idle", id="tool-status")
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""
@@ -355,6 +382,32 @@ class ContextPanel(Vertical):
         except Exception:
             pass
         self.refresh()
+
+    def update_tool_status(self, status: str) -> None:
+        """Update tool execution status with emoji+text."""
+        self._tool_status = status
+        try:
+            status_widget = self.query_one("#tool-status", Static)
+            status_widget.update(status)
+            # Set appropriate class based on status
+            if "⏳" in status:
+                status_widget.set_class(True, "querying")
+                status_widget.set_class(False, "completed")
+                status_widget.set_class(False, "idle")
+            elif "✅" in status:
+                status_widget.set_class(False, "querying")
+                status_widget.set_class(True, "completed")
+                status_widget.set_class(False, "idle")
+            else:
+                status_widget.set_class(False, "querying")
+                status_widget.set_class(False, "completed")
+                status_widget.set_class(True, "idle")
+        except Exception:
+            pass
+
+    def reset_tool_status(self) -> None:
+        """Reset tool status to idle state."""
+        self.update_tool_status("🔍 Idle")
 
 
 class ChatMessage(Markdown):
@@ -1165,6 +1218,13 @@ class ESDCChatApp(App):
                         len(sql_query) if sql_query else 0,
                         sql_query[:50] if sql_query else "N/A",
                     )
+
+                    # Update tool status in context panel
+                    if self._context_panel:
+                        self._context_panel.update_tool_status(
+                            "⏳ Querying database..."
+                        )
+
                     logger.info(
                         "💡 INDICATOR_CHECK: has_streaming_msg=%s, has_content=%s, content_len=%d",
                         streaming_message is not None,
@@ -1200,6 +1260,9 @@ class ESDCChatApp(App):
                         len(result),
                         "🔍" in accumulated_content if accumulated_content else False,
                     )
+                    # Update tool status in context panel
+                    if self._context_panel:
+                        self._context_panel.update_tool_status("✅ Query completed")
                     # Keep indicator visible - don't remove it
                     # The indicator "🔍 Querying database..." will remain in the conversation
                 elif chunk["type"] == "token_usage":
@@ -1218,16 +1281,25 @@ class ESDCChatApp(App):
         try:
             await asyncio.wait_for(run_query(), timeout=120.0)
             logger.info("Query completed successfully")
+            # Reset tool status after streaming completes
+            if self._context_panel:
+                self._context_panel.reset_tool_status()
         except asyncio.TimeoutError:
             logger.warning("Query timed out after 120 seconds")
             if streaming_message:
                 streaming_message.update(
                     "Request timed out after 2 minutes. Please try again."
                 )
+            # Reset tool status on error
+            if self._context_panel:
+                self._context_panel.reset_tool_status()
         except Exception as e:
             logger.exception(f"Query failed with error: {e}")
             if streaming_message:
                 streaming_message.update(f"Error: {str(e)}")
+            # Reset tool status on error
+            if self._context_panel:
+                self._context_panel.reset_tool_status()
 
     async def _stream_response(
         self, user_input: str
