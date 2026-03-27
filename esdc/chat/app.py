@@ -1265,7 +1265,11 @@ class ESDCChatApp(App):
                 if content:
                     yield {"type": "message", "content": content}
             elif chunk["type"] == "tool_call":
-                yield {"type": "tool_call", "tool": chunk.get("tool", "")}
+                yield {
+                    "type": "tool_call",
+                    "tool": chunk.get("tool", ""),
+                    "args": chunk.get("args", {}),
+                }
             elif chunk["type"] == "tool_result":
                 result = chunk.get("result", "")
                 sql = chunk.get("sql", "")
