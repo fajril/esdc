@@ -993,6 +993,7 @@ class ESDCChatApp(App):
         footer = self.query_one(Footer)
         self.user_input = footer.user_input
         self.status_bar = footer.status_bar
+        self.user_input.focus()
 
         from esdc.configs import Config
 
@@ -1184,7 +1185,7 @@ class ESDCChatApp(App):
                             )
                             indicator_text = "\n\n🔍 Querying database..."
                             if sql_query:
-                                indicator_text += f"\n\n```sql\n{sql_query}\n````"
+                                indicator_text += f"\n\n```sql\n{sql_query}\n```"
                             logger.info(
                                 "✅ INDICATOR_ADDED: appending 🔍 to message (with_sql=%s)",
                                 bool(sql_query),
