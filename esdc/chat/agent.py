@@ -144,10 +144,11 @@ async def run_agent_stream(
         Dict with 'type' (message/tool/error) and 'content' or 'token_usage'
     """
     config: RunnableConfig = {  # type: ignore[assignment]
+        "recursion_limit": 50,
         "configurable": {
             "thread_id": thread_id,
             "checkpoint_ns": "esdc_chat",
-        }
+        },
     }
 
     messages = [HumanMessage(content=user_input)]
