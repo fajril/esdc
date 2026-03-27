@@ -227,7 +227,7 @@ async def run_agent_stream(
 
                         stored_tool_call = {
                             "name": tc["name"],
-                            "args": tc.get("args", {}),
+                            "args": args,
                             "query": query,
                         }
 
@@ -238,7 +238,7 @@ async def run_agent_stream(
                         yield {
                             "type": "tool_call",
                             "tool": tc["name"],
-                            "args": tc.get("args", {}),
+                            "args": args,
                         }
 
                 # Content (apply existing SQL filtering)
