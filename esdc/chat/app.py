@@ -1142,21 +1142,20 @@ class ESDCChatApp(App):
                         len(accumulated_content) if accumulated_content else 0,
                     )
 
-                    # Add inline indicator
-                    if streaming_message and accumulated_content:
-                        # Only add indicator if there's already content
-                        if "🔍" not in accumulated_content:
+                    # Add inline indicator - ALWAYS show when tool is called
+                    if streaming_message:
+                        current_content = accumulated_content or ""
+                        if "🔍" not in current_content:
                             logger.info("✅ INDICATOR_ADDED: appending 🔍 to message")
                             streaming_message.update(
-                                accumulated_content + "\n\n🔍 Querying database..."
+                                current_content + "\n\n🔍 Querying database..."
                             )
                         else:
                             logger.info("❌ INDICATOR_SKIPPED: emoji already exists")
                     else:
                         logger.info(
-                            "❌ INDICATOR_SKIPPED: no streaming_msg=%s or no content=%s",
+                            "❌ INDICATOR_SKIPPED: no streaming_msg=%s",
                             streaming_message is not None,
-                            bool(accumulated_content),
                         )
 
                 elif chunk["type"] == "tool_result":
@@ -1214,7 +1213,10 @@ class ESDCChatApp(App):
             user_input,
             self._thread_id,
         ):
-            if chunk["type"] == "message":
+            # CRITICAL: Forward token events for real-time streaming
+            if chunk["type"] == "token":
+                yield chunk
+            elif chunk["type"] == "message":
                 content = chunk.get("content", "")
                 if content:
                     yield {"type": "message", "content": content}
@@ -1224,6 +1226,8 @@ class ESDCChatApp(App):
                 result = chunk.get("result", "")
                 sql = chunk.get("sql", "")
                 yield {"type": "tool_result", "result": result, "sql": sql}
+            elif chunk["type"] == "token_usage":
+                yield chunk
 
     def display_message(self, role: str, content: str) -> None:
         if self.chat_panel:
