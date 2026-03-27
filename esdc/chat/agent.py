@@ -64,7 +64,7 @@ def create_agent(
 
         return END
 
-    def tool_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
+    async def tool_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
         """Tool execution node."""
         result = []
         last_message = state["messages"][-1]
@@ -82,7 +82,7 @@ def create_agent(
                 try:
                     if isinstance(tool_args, str):
                         tool_args = json.loads(tool_args)
-                    observation = tool.invoke(tool_args)
+                    observation = await tool.ainvoke(tool_args)
                 except Exception as e:
                     observation = f"Error: {str(e)}"
 
