@@ -1,20 +1,14 @@
-import os
 from pathlib import Path
-from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
-from textual.screen import ModalScreen, Screen
+from textual.containers import Container, Horizontal
+from textual.screen import Screen
 from textual.widgets import Button, Header, Footer, Static, Input, SelectionList, Select
 
 from esdc.auth import start_oauth_flow
 from esdc.configs import Config
-from esdc.providers import (
-    PROVIDER_NAMES,
-    get_provider,
-    list_provider_types,
-)
+from esdc.providers import PROVIDER_NAMES
 
 
 class WelcomeScreen(Screen):
