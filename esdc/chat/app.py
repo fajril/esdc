@@ -1060,6 +1060,9 @@ class ESDCChatApp(App):
             thinking.scroll_visible()
             logger.debug("Mounted ThinkingIndicator as Collapsible widget")
 
+        # Track tools already added to prevent duplicates
+        seen_tools = set()
+
         # Accumulate AI response content for mounting after streaming
         accumulated_content = ""
 
@@ -1078,10 +1081,12 @@ class ESDCChatApp(App):
                         accumulated_content += content
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
-                    thinking.add_step(f"Running: {tool_name}")
-                    logger.debug(
-                        f"Added thinking step: {tool_name}, total steps: {len(thinking.steps)}"
-                    )
+                    if tool_name not in seen_tools:
+                        seen_tools.add(tool_name)
+                        thinking.add_step(f"Running: {tool_name}")
+                        logger.debug(
+                            f"Added thinking step: {tool_name}, total steps: {len(thinking.steps)}"
+                        )
                 elif chunk["type"] == "tool_result":
                     result = chunk.get("result", "")
                     tool_name = chunk.get("tool", "")
