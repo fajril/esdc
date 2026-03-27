@@ -1121,8 +1121,9 @@ class ESDCChatApp(App):
 
                 elif chunk["type"] == "message":
                     # Legacy: complete message (fallback)
+                    # Only use if we don't already have content from tokens
                     content = chunk.get("content", "")
-                    if content:
+                    if content and not accumulated_content:
                         logger.info(
                             "📜 MESSAGE: len=%d, preview='%s'",
                             len(content),
@@ -1131,6 +1132,11 @@ class ESDCChatApp(App):
                         accumulated_content += content
                         streaming_message.update(accumulated_content)
                         await asyncio.sleep(0)  # Yield control for UI update
+                    else:
+                        logger.info(
+                            "📜 MESSAGE_SKIPPED: already have %d chars from tokens",
+                            len(accumulated_content),
+                        )
 
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
@@ -1167,11 +1173,8 @@ class ESDCChatApp(App):
                         len(result),
                         "🔍" in accumulated_content if accumulated_content else False,
                     )
-
-                    # Remove indicator if added
-                    if streaming_message and "🔍" in accumulated_content:
-                        logger.info("🧹 INDICATOR_REMOVED: cleaning up 🔍")
-                        streaming_message.update(accumulated_content)
+                    # Keep indicator visible - don't remove it
+                    # The indicator "🔍 Querying database..." will remain in the conversation
                 elif chunk["type"] == "token_usage":
                     tokens = chunk.get("tokens", 0)
                     if tokens > 0:
