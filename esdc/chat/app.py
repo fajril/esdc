@@ -1192,29 +1192,25 @@ class ESDCChatApp(App):
         if chunk_type == "token":
             token = chunk.get("content", "")
             if token and self._streaming_message:
-                # Check scroll BEFORE update
+                # Check if user was at bottom BEFORE update (using Textual's built-in)
                 should_scroll = False
                 if self.chat_panel:
-                    scroll_y = self.chat_panel.scroll_offset.y
-                    max_scroll = self.chat_panel.max_scroll_y
-                    should_scroll = (max_scroll - scroll_y) <= 3
+                    should_scroll = self.chat_panel.is_vertical_scroll_end
 
                 self._accumulated_content += token
                 self._streaming_message.update(self._accumulated_content)
 
-                # Scroll AFTER if was at bottom
+                # Scroll AFTER if was at bottom (immediate=True to bypass animation timing)
                 if should_scroll and self.chat_panel:
-                    self.chat_panel.scroll_end(animate=False)
+                    self.chat_panel.scroll_end(animate=False, immediate=True)
 
         elif chunk_type == "message":
             content = chunk.get("content", "")
             if content and not self._accumulated_content:
-                # Check scroll BEFORE update
+                # Check if user was at bottom BEFORE update
                 should_scroll = False
                 if self.chat_panel:
-                    scroll_y = self.chat_panel.scroll_offset.y
-                    max_scroll = self.chat_panel.max_scroll_y
-                    should_scroll = (max_scroll - scroll_y) <= 3
+                    should_scroll = self.chat_panel.is_vertical_scroll_end
 
                 self._accumulated_content = content
                 if self._streaming_message:
@@ -1222,7 +1218,7 @@ class ESDCChatApp(App):
 
                 # Scroll AFTER if was at bottom
                 if should_scroll and self.chat_panel:
-                    self.chat_panel.scroll_end(animate=False)
+                    self.chat_panel.scroll_end(animate=False, immediate=True)
 
         elif chunk_type == "tool_call":
             tool_name = chunk.get("tool", "")
@@ -1250,12 +1246,10 @@ class ESDCChatApp(App):
 
             # Add indicator to message
             if self._streaming_message:
-                # Check scroll BEFORE update
+                # Check if user was at bottom BEFORE update
                 should_scroll = False
                 if self.chat_panel:
-                    scroll_y = self.chat_panel.scroll_offset.y
-                    max_scroll = self.chat_panel.max_scroll_y
-                    should_scroll = (max_scroll - scroll_y) <= 3
+                    should_scroll = self.chat_panel.is_vertical_scroll_end
 
                 indicator_text = "\n\n🔍 Querying database..."
                 if sql_query:
@@ -1266,7 +1260,7 @@ class ESDCChatApp(App):
 
                 # Scroll AFTER if was at bottom
                 if should_scroll and self.chat_panel:
-                    self.chat_panel.scroll_end(animate=False)
+                    self.chat_panel.scroll_end(animate=False, immediate=True)
 
         elif chunk_type == "tool_result":
             result = chunk.get("result", "")
