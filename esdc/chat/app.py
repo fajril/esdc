@@ -1047,29 +1047,21 @@ class ESDCChatApp(App):
             self.chat_panel.mount(thinking)
             logger.debug("Mounted ThinkingIndicator as Collapsible widget")
 
-        # Create a message widget for streaming AI response
-        streaming_message = None
+        # Accumulate AI response content for mounting after streaming
         accumulated_content = ""
 
         async def run_query():
-            nonlocal streaming_message, accumulated_content
             logger.debug("Starting query execution")
             async for chunk in self._stream_response(user_input):
                 if self._cancelled:
+                    thinking.remove()
                     self.display_message("system", "Query cancelled.")
                     return
                 if chunk["type"] == "message":
                     content = chunk.get("content", "")
                     if content:
-                        # Accumulate content for streaming effect
+                        # Accumulate content without mounting yet
                         accumulated_content += content
-                        # Create or update streaming message
-                        if streaming_message is None:
-                            streaming_message = ChatMessage("ai", accumulated_content)
-                            if self.chat_panel:
-                                self.chat_panel.mount(streaming_message)
-                        else:
-                            streaming_message.update(accumulated_content)
                 elif chunk["type"] == "tool_call":
                     tool_name = chunk.get("tool", "")
                     thinking.add_step(f"Running: {tool_name}")
@@ -1132,6 +1124,12 @@ class ESDCChatApp(App):
 
         try:
             await asyncio.wait_for(run_query(), timeout=120.0)
+            # After streaming complete, remove thinking and mount AI message
+            thinking.remove()
+            if accumulated_content and self.chat_panel:
+                streaming_message = ChatMessage("ai", accumulated_content)
+                self.chat_panel.mount(streaming_message)
+                logger.info(f"Mounted AI message with {len(accumulated_content)} chars")
         except asyncio.TimeoutError:
             logger.warning("Query timed out after 120 seconds")
             thinking.remove()
