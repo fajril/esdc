@@ -56,6 +56,11 @@ class ContextSection(Container):
         background: transparent;
         padding: 1 1;
         border-bottom: solid $primary-background;
+        cursor: pointer;
+    }
+
+    ContextSection .header:hover {
+        color: $accent;
     }
 
     ContextSection .title {
@@ -76,31 +81,25 @@ class ContextSection(Container):
     def __init__(
         self,
         title: str,
-        expanded: bool = False,
+        expanded: bool = True,
         badge: str = "",
         id: str | None = None,
     ):
         super().__init__(id=id)
-        self.title = title
+        self.section_title = title
         self.expanded = expanded
         self.badge = badge
-
-    def toggle(self) -> None:
-        """Toggle expanded state."""
-        self.expanded = not self.expanded
-        if self.expanded:
-            self.remove_class("collapsed")
-        else:
-            self.add_class("collapsed")
+        self._header: Static | None = None
 
     def compose(self) -> ComposeResult:
         """Compose the section."""
-        icon = "▾" if self.expanded else "▸"
-        title_text = f"{icon} {self.title}"
+        icon = "▼" if self.expanded else "▶"
+        title_text = f"{icon} {self.section_title}"
         if self.badge:
             title_text += f" [{self.badge}]"
 
-        yield Static(title_text, classes="header")
+        self._header = Static(title_text, classes="header")
+        yield self._header
 
     def on_mount(self) -> None:
         """Set initial expanded state."""
@@ -110,6 +109,22 @@ class ContextSection(Container):
     def on_click(self) -> None:
         """Handle click to toggle."""
         self.toggle()
+
+    def toggle(self) -> None:
+        """Toggle expanded state and update header."""
+        self.expanded = not self.expanded
+
+        if self.expanded:
+            self.remove_class("collapsed")
+        else:
+            self.add_class("collapsed")
+
+        if self._header:
+            icon = "▼" if self.expanded else "▶"
+            title_text = f"{icon} {self.section_title}"
+            if self.badge:
+                title_text += f" [{self.badge}]"
+            self._header.update(title_text)
 
 
 class ContextUsageWidget(Static):
