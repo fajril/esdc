@@ -1,8 +1,10 @@
-from typing import Any
+import logging
 
 from langchain_ollama import ChatOllama
 
 from esdc.providers.base import Provider, ProviderConfig
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaProvider(Provider):
@@ -51,6 +53,45 @@ class OllamaProvider(Provider):
             return [m.model for m in result.models]  # type: ignore[union-attr]
         except Exception:
             return []
+
+    @classmethod
+    def get_context_length(cls, model: str) -> int:
+        """Get context length from hardcoded mapping."""
+        model_base = model.split(":")[0].lower()
+        for key, value in cls.CONTEXT_LENGTHS.items():
+            if model_base == key.lower():
+                return value
+        return 4096
+
+    @classmethod
+    def get_context_length_from_api(
+        cls, model: str, base_url: str | None = None
+    ) -> int:
+        """Fetch context length dynamically from Ollama API.
+
+        Args:
+            model: Model name (e.g., "kimi-k2.5:cloud")
+            base_url: Optional base URL for API
+
+        Returns:
+            Context length from model_info, or fallback to hardcoded mapping
+        """
+        try:
+            import ollama
+
+            client = ollama.Client(host=base_url or cls.DEFAULT_BASE_URL)
+            info = client.show(model)
+
+            model_info = info.get("model_info", {})
+
+            for key, value in model_info.items():
+                if "context_length" in key and isinstance(value, (int, float)):
+                    return int(value)
+
+        except Exception as e:
+            logger.debug(f"Failed to fetch context length from API: {e}")
+
+        return cls.get_context_length(model)
 
     @classmethod
     def get_default_model(cls, base_url: str | None = None) -> str:
