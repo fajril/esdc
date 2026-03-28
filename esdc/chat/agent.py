@@ -1,4 +1,3 @@
-import functools
 import json
 import logging
 from typing import Any, AsyncGenerator, cast
@@ -186,9 +185,9 @@ def create_agent(
         logger.info(f"🔧 TOOL_NODE: Returning {len(result)} tool results")
         return {"messages": result}
 
-    manage_context_with_length = functools.partial(
-        manage_context_node, context_length=context_length
-    )
+    def manage_context_with_length(state: MessagesState) -> dict[str, list[AnyMessage]]:
+        """Wrapper for manage_context_node with bound context_length."""
+        return manage_context_node(state, context_length=context_length)
 
     graph = (
         StateGraph(MessagesState)

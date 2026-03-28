@@ -1,13 +1,15 @@
 # esdc/chat/context_manager.py
 
-from typing import Literal
+from typing import Any, Literal
 from langchain_core.messages import (
     HumanMessage,
     AIMessage,
     ToolMessage,
     SystemMessage,
     BaseMessage,
+    AnyMessage,
 )
+from langgraph.graph import MessagesState
 
 
 class ContextManager:
@@ -177,7 +179,9 @@ def estimate_tokens(messages: list[BaseMessage]) -> int:
     return total_chars // 4
 
 
-def manage_context_node(state: dict, context_length: int = 6000) -> dict:
+def manage_context_node(
+    state: MessagesState, context_length: int = 6000
+) -> dict[str, Any]:
     """LangGraph node wrapper for context management.
 
     This node is called before the agent to proactively manage context.
