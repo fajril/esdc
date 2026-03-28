@@ -150,17 +150,24 @@ class ContextManager:
         return total_chars // 4
 
 
-def manage_context_node(state: dict) -> dict:
+def manage_context_node(state: dict, context_length: int = 6000) -> dict:
     """LangGraph node wrapper for context management.
 
     This node is called before the agent to proactively manage context.
+
+    Args:
+        state: LangGraph state with 'messages' key
+        context_length: Maximum context length in tokens (default: 6000)
+
+    Returns:
+        State dict with managed messages and context metadata
     """
     messages = state.get("messages", [])
     if not messages:
         return {"messages": [], "context_metadata": {"was_compacted": False}}
 
     manager = ContextManager(
-        max_tokens=6000,
+        max_tokens=context_length,
         compaction_threshold=0.75,
         recent_messages=6,
     )

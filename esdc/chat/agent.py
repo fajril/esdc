@@ -1,3 +1,4 @@
+import functools
 import json
 import logging
 from typing import Any, AsyncGenerator, cast
@@ -85,6 +86,7 @@ def create_agent(
     llm: BaseChatModel,
     tools: list | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    context_length: int = 6000,
 ) -> Runnable:
     """Create a LangGraph agent with tools.
 
@@ -92,6 +94,7 @@ def create_agent(
         llm: A LangChain chat model
         tools: Optional list of tools. Defaults to [execute_sql, get_schema, list_tables]
         checkpointer: Optional checkpointer for memory persistence
+        context_length: Maximum context length in tokens for context management. Default: 6000
 
     Returns:
         A compiled StateGraph agent
@@ -172,9 +175,13 @@ def create_agent(
         logger.info(f"🔧 TOOL_NODE: Returning {len(result)} tool results")
         return {"messages": result}
 
+    manage_context_with_length = functools.partial(
+        manage_context_node, context_length=context_length
+    )
+
     graph = (
         StateGraph(MessagesState)
-        .add_node("manage_context", manage_context_node)
+        .add_node("manage_context", manage_context_with_length)
         .add_node("agent", agent_node)
         .add_node("tools", tool_node)
         .add_edge(START, "manage_context")

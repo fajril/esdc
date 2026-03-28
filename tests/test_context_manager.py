@@ -193,3 +193,27 @@ class TestManageContextNode:
 
         assert "context_metadata" in result
         assert "was_compacted" in result["context_metadata"]
+
+    def test_context_length_parameter_default(self):
+        """Test node uses default context_length (6000)."""
+        state = {"messages": [HumanMessage(content="Test")]}
+        result = manage_context_node(state)
+
+        assert "context_metadata" in result
+        assert result["context_metadata"]["was_compacted"] == False
+
+    def test_context_length_parameter_custom(self):
+        """Test node uses custom context_length."""
+        # Create enough messages to trigger compaction (need more than recent_messages=6)
+        # 10 messages * 80 chars = 800 chars / 4 = 200 tokens
+        state = {"messages": [HumanMessage(content="x" * 80) for _ in range(10)]}
+
+        # With default context_length=6000, should NOT compact (under threshold: 200 < 4500)
+        result_default = manage_context_node(state, context_length=6000)
+        assert result_default["context_metadata"]["was_compacted"] == False
+
+        # With context_length=100, should compact (over 75% threshold: 200 > 75)
+        # 10 messages, recent_messages=6 means 4 older messages to summarize
+        result_custom = manage_context_node(state, context_length=100)
+        assert result_custom["context_metadata"]["was_compacted"] == True
+        assert result_custom["context_metadata"]["summarized_count"] == 4
