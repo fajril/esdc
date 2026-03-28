@@ -371,7 +371,7 @@ class ContextPanel(Vertical):
         self._context_length: int = 4096
 
     def compose(self) -> ComposeResult:
-        """Compose session info section."""
+        """Compose all sections of context panel."""
         from textual.widgets import Static
 
         # 1. Conversation Title (static top)
@@ -380,11 +380,14 @@ class ContextPanel(Vertical):
             id="conversation-title",
         )
 
-        # 2. Session Info (collapsible section)
+        # 2. Session Info (collapsible, expanded by default)
+        import os
+
+        self._current_directory = os.getcwd()
         thread_display = (
             str(self._session_thread_id)[:8] if self._session_thread_id else "N/A"
         )
-        initial_content = f"Provider: {self._provider_name}\nModel: {self._model_name}\nThread: {thread_display}..."
+        session_content = f"Provider: {self._provider_name}\nModel: {self._model_name}\nThread: {thread_display}...\nDir: {self._current_directory}"
 
         with ContextSection(
             "Session Info",
@@ -392,12 +395,24 @@ class ContextPanel(Vertical):
             id="session-section",
         ):
             yield Static(
-                initial_content,
+                session_content,
                 classes="session-content",
                 id="session-content",
             )
 
-        # 3. Tool status indicator
+        # 3. Context (collapsible, collapsed by default)
+        with ContextSection(
+            "Context",
+            expanded=False,
+            id="context-section",
+        ):
+            yield ContextUsageWidget(
+                token_count=self._token_count,
+                context_length=self._context_length,
+                id="context-usage",
+            )
+
+        # 4. Tool status indicator (static)
         yield Static(self._tool_status, classes="tool-status idle", id="tool-status")
 
     def on_mount(self) -> None:
@@ -426,6 +441,13 @@ class ContextPanel(Vertical):
         """Update context usage display."""
         self._token_count = token_count
         self._context_length = context_length
+        try:
+            context_widget = self.query_one("#context-usage", ContextUsageWidget)
+            context_widget.token_count = token_count
+            context_widget.context_length = context_length
+            context_widget._update_display()
+        except Exception:
+            pass
         self.refresh()
 
     def update_session_info(
@@ -439,12 +461,17 @@ class ContextPanel(Vertical):
         self._model_name = model
         self._session_thread_id = thread_id
 
-        # Update the static content directly
+        # Get current directory
+        import os
+
+        self._current_directory = os.getcwd()
+
+        # Update the static content
         try:
             session_content = self.query_one("#session-content", Static)
             thread_display = str(thread_id)[:8] if thread_id else "N/A"
             session_content.update(
-                f"Provider: {provider}\nModel: {model}\nThread: {thread_display}..."
+                f"Provider: {provider}\nModel: {model}\nThread: {thread_display}...\nDir: {self._current_directory}"
             )
         except Exception:
             pass
