@@ -5,8 +5,9 @@ class SchemaLoader:
     SCHEMA_FILE = (
         Path(__file__).parent.parent.parent
         / "docs"
-        / "plans"
-        / "2025-03-17-esdc-tui-chat-schema.md"
+        / "reference"
+        / "schema"
+        / "esdc-database-schema.md"
     )
 
     CORE_COLUMNS = [
