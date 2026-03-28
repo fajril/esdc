@@ -1474,7 +1474,10 @@ class ESDCChatApp(App):
                 self._context_panel.update_tool_status(completed_msg)
 
         elif chunk_type == "context_metadata":
-            self._context_metadata = chunk.get("metadata")
+            metadata = chunk.get("metadata")
+            # Only update if compaction occurred (don't overwrite with non-compaction)
+            if metadata and metadata.get("was_compacted"):
+                self._context_metadata = metadata
 
         elif chunk_type == "messages_state":
             messages = chunk.get("messages", [])
