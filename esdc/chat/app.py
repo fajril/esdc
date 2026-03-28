@@ -1162,9 +1162,18 @@ class ESDCChatApp(App):
             provider_type = provider_config.get("provider_type", "ollama")
             provider = get_provider(provider_type)
             if provider:
-                self._context_length = provider.get_context_length(
-                    provider_config.get("model", "")
-                )
+                # Use dynamic API fetching for Ollama
+                if provider_type == "ollama":
+                    from esdc.providers.ollama import OllamaProvider
+
+                    self._context_length = OllamaProvider.get_context_length_from_api(
+                        provider_config.get("model", ""),
+                        provider_config.get("base_url"),
+                    )
+                else:
+                    self._context_length = provider.get_context_length(
+                        provider_config.get("model", "")
+                    )
 
         # Update context panel with session info
         if self._context_panel:
