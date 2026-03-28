@@ -1234,7 +1234,11 @@ class ESDCChatApp(App):
 
         self._llm = create_llm_from_config(provider_config)
         self._checkpointer = create_checkpointer()
-        self._agent = create_agent(self._llm, checkpointer=self._checkpointer)
+        self._agent = create_agent(
+            self._llm,
+            checkpointer=self._checkpointer,
+            context_length=self._context_length,
+        )
         self._thread_id = create_thread_id()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
