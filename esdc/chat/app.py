@@ -43,7 +43,7 @@ DEFAULT_CONTEXT_LENGTH = 4096
 TOOLS_LIST = ["execute_sql", "get_schema", "list_tables"]
 
 
-class ContextSection(Container):
+class ContextSection(Vertical):
     """Collapsible section widget for context panel."""
 
     DEFAULT_CSS = """
@@ -62,14 +62,14 @@ class ContextSection(Container):
         color: $accent;
     }
 
-    ContextSection .title {
-        color: $text;
-        text-style: bold;
-    }
-
-    ContextSection .content {
+    ContextSection .section-content {
+        display: block;
         padding: 1 1;
         background: transparent;
+    }
+
+    ContextSection.collapsed .section-content {
+        display: none;
     }
     """
 
@@ -85,12 +85,9 @@ class ContextSection(Container):
         self.expanded = expanded
         self.badge = badge
         self._header: Static | None = None
-        self._content_container: Vertical | None = None
 
     def compose(self) -> ComposeResult:
-        """Compose the section."""
-        from textual.containers import Vertical
-
+        """Compose the section header first."""
         icon = "▼" if self.expanded else "▶"
         title_text = f"{icon} {self.section_title}"
         if self.badge:
@@ -99,18 +96,14 @@ class ContextSection(Container):
         self._header = Static(title_text, classes="header")
         yield self._header
 
-        self._content_container = Vertical(classes="content")
-        if not self.expanded:
-            self._content_container.display = False
-        yield self._content_container
-
     def on_mount(self) -> None:
-        """Move children from parent to content container."""
-        if self._content_container:
-            children = list(self.children)
-            for child in children:
-                if child is not self._header and child is not self._content_container:
-                    self._content_container.mount(child)
+        """Set initial collapsed state."""
+        if not self.expanded:
+            self.add_class("collapsed")
+        # Add section-content class to all children except header
+        for child in self.children:
+            if child is not self._header:
+                child.add_class("section-content")
 
     def on_click(self) -> None:
         """Handle click to toggle."""
@@ -120,8 +113,10 @@ class ContextSection(Container):
         """Toggle expanded state and update header."""
         self.expanded = not self.expanded
 
-        if self._content_container:
-            self._content_container.display = self.expanded
+        if self.expanded:
+            self.remove_class("collapsed")
+        else:
+            self.add_class("collapsed")
 
         if self._header:
             icon = "▼" if self.expanded else "▶"
@@ -1247,30 +1242,10 @@ class ESDCChatApp(App):
         if not user_input:
             return
 
-        # Generate conversation title on first query
+        # Generate conversation title on first query (in background)
         if not self._title_generated and self._llm:
-            try:
-                from esdc.chat.agent import generate_conversation_title
-
-                title = await generate_conversation_title(self._llm, user_input)
-                self._conversation_title = title
-                self._title_generated = True
-
-                # Update context panel
-                if self._context_panel:
-                    self._context_panel.update_conversation_title(title)
-            except Exception as e:
-                logger.debug(f"Failed to generate conversation title: {e}")
-                # Fallback: use first 50 chars of query
-                if len(user_input) > 50:
-                    self._conversation_title = user_input[:47] + "..."
-                else:
-                    self._conversation_title = user_input
-                self._title_generated = True
-                if self._context_panel:
-                    self._context_panel.update_conversation_title(
-                        self._conversation_title
-                    )
+            self._title_generated = True
+            asyncio.create_task(self._generate_and_set_title(user_input, self._llm))
 
         logger.info(f"User input submitted: {user_input[:50]}...")
         self.display_message("user", user_input)
@@ -1331,6 +1306,27 @@ class ESDCChatApp(App):
             # Reset tool status after streaming completes
             if self._context_panel:
                 self._context_panel.reset_tool_status()
+
+    async def _generate_and_set_title(self, user_input: str, llm: Any) -> None:
+        """Generate conversation title in background and update UI."""
+        try:
+            from esdc.chat.agent import generate_conversation_title
+
+            title = await generate_conversation_title(llm, user_input)
+            self._conversation_title = title
+
+            # Update context panel from main thread
+            if self._context_panel:
+                self._context_panel.update_conversation_title(title)
+        except Exception as e:
+            logger.debug(f"Failed to generate conversation title: {e}")
+            # Fallback: use first 50 chars of query
+            if len(user_input) > 50:
+                self._conversation_title = user_input[:47] + "..."
+            else:
+                self._conversation_title = user_input
+            if self._context_panel:
+                self._context_panel.update_conversation_title(self._conversation_title)
 
     async def _consume_events(self) -> None:
         """Consume events from queue in main thread (called by timer every 50ms)."""
