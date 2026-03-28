@@ -5,7 +5,9 @@ import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from typing import Any
+
 import httpx
+import rich
 
 CALLBACK_PORT = 8765
 CALLBACK_HOST = "localhost"
@@ -131,8 +133,8 @@ def start_oauth_flow() -> dict[str, Any]:
     server = start_callback_server()
 
     auth_url = get_authorization_url(code_verifier, code_challenge, state)
-    print("Opening browser for authentication...")
-    print(f"URL: {auth_url}")
+    rich.print("[bold]Opening browser for authentication...[/bold]")
+    rich.print(f"[cyan]URL:[/cyan] {auth_url}")
     webbrowser.open(auth_url)
 
     server.handle_request()
