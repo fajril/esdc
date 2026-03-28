@@ -319,14 +319,13 @@ class ConversationTitle(Static):
     """
 
     def __init__(self, title: str = "", id: str | None = None):
-        super().__init__(id=id)
+        super().__init__(title if title else "New Conversation", id=id)
         self._title = title
 
-    def compose(self) -> ComposeResult:
-        """Compose the title widget."""
-        from textual.widgets import Static
-
-        yield Static(self._title if self._title else "New Conversation")
+    def set_title(self, title: str) -> None:
+        """Update the conversation title."""
+        self._title = title
+        self.update(title)
 
 
 class ContextPanel(Vertical):
@@ -431,11 +430,9 @@ class ContextPanel(Vertical):
         self._conversation_title = title
         try:
             title_widget = self.query_one("#conversation-title", ConversationTitle)
-            title_widget._title = title
-            title_widget.update(title)
-        except Exception:
-            pass
-        self.refresh()
+            title_widget.set_title(title)
+        except Exception as e:
+            logger.debug(f"Failed to update conversation title: {e}")
 
     def update_context_usage(self, token_count: int, context_length: int) -> None:
         """Update context usage display."""
