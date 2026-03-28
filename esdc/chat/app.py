@@ -1121,6 +1121,8 @@ class ESDCChatApp(App):
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._streaming_message: ChatMessage | None = None
         self._accumulated_content: str = ""
+        self._conversation_title: str = ""
+        self._title_generated: bool = False
 
     def compose(self) -> ComposeResult:
         # Main horizontal split container
@@ -1171,6 +1173,11 @@ class ESDCChatApp(App):
                 self._model_name,
                 self._thread_id,
             )
+            # Initialize context usage display
+            self._context_panel.update_context_usage(
+                self._token_count,
+                self._context_length,
+            )
 
         # Set up timer to consume events from queue (runs every 50ms)
         self.set_interval(0.05, self._consume_events)
@@ -1211,6 +1218,31 @@ class ESDCChatApp(App):
         user_input = event.value.strip()
         if not user_input:
             return
+
+        # Generate conversation title on first query
+        if not self._title_generated and self._llm:
+            try:
+                from esdc.chat.agent import generate_conversation_title
+
+                title = await generate_conversation_title(self._llm, user_input)
+                self._conversation_title = title
+                self._title_generated = True
+
+                # Update context panel
+                if self._context_panel:
+                    self._context_panel.update_conversation_title(title)
+            except Exception as e:
+                logger.debug(f"Failed to generate conversation title: {e}")
+                # Fallback: use first 50 chars of query
+                if len(user_input) > 50:
+                    self._conversation_title = user_input[:47] + "..."
+                else:
+                    self._conversation_title = user_input
+                self._title_generated = True
+                if self._context_panel:
+                    self._context_panel.update_conversation_title(
+                        self._conversation_title
+                    )
 
         logger.info(f"User input submitted: {user_input[:50]}...")
         self.display_message("user", user_input)
@@ -1380,6 +1412,7 @@ class ESDCChatApp(App):
             tokens = chunk.get("tokens", 0)
             if tokens > 0:
                 self._token_count += tokens
+                # Update both status bar and context panel
                 if self.status_bar:
                     self.status_bar.set_status(
                         self._provider_name,
@@ -1387,6 +1420,12 @@ class ESDCChatApp(App):
                         self._token_count,
                         self._context_length,
                         self._thread_id,
+                    )
+                # Update context panel token display
+                if self._context_panel:
+                    self._context_panel.update_context_usage(
+                        self._token_count,
+                        self._context_length,
                     )
 
         elif chunk_type == "complete":
