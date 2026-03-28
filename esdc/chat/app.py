@@ -31,6 +31,7 @@ logging.getLogger("markdown_it").setLevel(logging.WARNING)
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer  # noqa: E402
+from textual.widget import Widget  # noqa: E402
 from textual.widgets import Static, Input, Markdown, Collapsible  # noqa: E402
 
 from langchain_core.language_models import BaseChatModel  # noqa: E402
