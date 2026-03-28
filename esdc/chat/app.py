@@ -48,13 +48,15 @@ class ContextSection(Container):
 
     DEFAULT_CSS = """
     ContextSection {
-        margin: 0;
+        margin: 0 0 1 0;
         border: none;
     }
 
     ContextSection .header {
         background: transparent;
         padding: 1 1;
+        text-style: bold;
+        color: $text;
     }
 
     ContextSection .header:hover {
@@ -62,8 +64,9 @@ class ContextSection(Container):
     }
 
     ContextSection .content {
-        padding: 1 1;
+        padding: 0 1 1 1;
         background: transparent;
+        border: none;
     }
     """
 
@@ -321,9 +324,8 @@ class ConversationTitle(Static):
     ConversationTitle {
         height: auto;
         padding: 1;
-        background: $surface;
+        background: transparent;
         border: none;
-        margin: 1 0;
         text-style: bold;
         color: $text;
         content-align: center middle;
@@ -348,13 +350,18 @@ class ContextPanel(Vertical):
         width: 25%;
         padding: 1;
         background: $surface;
+        border: none;
+    }
+    
+    ContextPanel > * {
+        border: none;
     }
     
     .tool-status {
-        margin: 1 0;
-        padding: 1;
-        color: $text;
-        background: $background;
+        margin-top: 1;
+        padding: 0;
+        color: $text-muted;
+        background: transparent;
     }
     
     .tool-status.querying {
@@ -982,16 +989,17 @@ class ESDCChatApp(App):
         padding: 2;
     }
 
-    /* ===== Context Section - Minimal Borders ===== */
+    /* ===== Context Section - Minimal Design ===== */
     ContextSection {
-        margin: 0;
+        margin: 0 0 1 0;
         border: none;
     }
 
     ContextSection .header {
         background: transparent;
         padding: 1 1;
-        border-bottom: solid $primary-background;
+        text-style: bold;
+        color: $text;
     }
 
     ContextSection .title {
@@ -1000,7 +1008,7 @@ class ESDCChatApp(App):
     }
 
     ContextSection .content {
-        padding: 1 1;
+        padding: 0 1 1 1;
         background: transparent;
     }
 
@@ -1031,10 +1039,9 @@ class ESDCChatApp(App):
     /* ===== Widget - Clean Design ===== */
     ContextUsageWidget {
         height: auto;
-        padding: 1;
+        padding: 0;
         background: transparent;
         border: none;
-        margin: 1 0;
     }
 
     ToolStatusList {
