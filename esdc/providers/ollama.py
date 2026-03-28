@@ -61,6 +61,9 @@ class OllamaProvider(Provider):
         for key, value in cls.CONTEXT_LENGTHS.items():
             if model_base == key.lower():
                 return value
+        logger.debug(
+            f"📊 No hardcoded context length for {model_base}, using default 4096"
+        )
         return 4096
 
     @classmethod
@@ -82,16 +85,26 @@ class OllamaProvider(Provider):
             client = ollama.Client(host=base_url or cls.DEFAULT_BASE_URL)
             info = client.show(model)
 
-            model_info = info.get("model_info", {})
+            model_info = (
+                info.modelinfo
+                if hasattr(info, "modelinfo")
+                else info.get("model_info", {})
+            )
+            logger.debug(f"📊 Model info for {model}: {model_info}")
 
             for key, value in model_info.items():
-                if "context_length" in key and isinstance(value, (int, float)):
+                if key.endswith(".context_length") and isinstance(value, (int, float)):
+                    logger.debug(f"🔍 Found context_length: {key}={value}")
                     return int(value)
+
+            logger.warning(f"❌ No context_length found in model_info for {model}")
 
         except Exception as e:
             logger.debug(f"Failed to fetch context length from API: {e}")
 
-        return cls.get_context_length(model)
+        fallback = cls.get_context_length(model)
+        logger.debug(f"📊 Using fallback context length: {fallback} for {model}")
+        return fallback
 
     @classmethod
     def get_default_model(cls, base_url: str | None = None) -> str:
