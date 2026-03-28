@@ -28,6 +28,7 @@ from esdc.chat.tools import (
 logger = logging.getLogger("esdc.chat.agent")
 
 TOKEN_CHARS_PER_TOKEN = 4
+MAX_TOOL_RESULT_CHARS = 10000
 
 
 async def generate_conversation_title(
@@ -156,9 +157,19 @@ def create_agent(
 
                     logger.info(f"🔧 TOOL_NODE: Invoking {tool_name} (id={tool_id})")
                     observation = await tool.ainvoke(tool_args)
+                    observation_str = str(observation)
                     logger.info(
-                        f"🔧 TOOL_NODE: {tool_name} returned {len(str(observation))} chars"
+                        f"🔧 TOOL_NODE: {tool_name} returned {len(observation_str)} chars"
                     )
+
+                    if len(observation_str) > MAX_TOOL_RESULT_CHARS:
+                        observation = (
+                            observation_str[:MAX_TOOL_RESULT_CHARS]
+                            + "\n\n[Result truncated to first 10000 characters for context efficiency]"
+                        )
+                        logger.info(
+                            f"🔧 TOOL_NODE: {tool_name} result truncated from {len(observation_str)} to {MAX_TOOL_RESULT_CHARS} chars"
+                        )
                 except Exception as e:
                     logger.error(f"🔧 TOOL_NODE: {tool_name} failed: {e}")
                     observation = f"Error: {str(e)}"
