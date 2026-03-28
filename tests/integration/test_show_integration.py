@@ -10,12 +10,18 @@ runner = CliRunner()
 class TestShowCommand:
     """Tests for show command with real database."""
 
-    def test_show_empty_database(self, isolated_config):
+    def test_show_empty_database(self, isolated_config, caplog):
         """Show with no data should show warning message."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
         result = runner.invoke(app, ["show", "project_resources"])
 
         assert result.exit_code == 0
-        assert "Unable to show data" in result.stdout
+        # Check logs for warning message
+        log_messages = caplog.text
+        assert "Unable to show data" in log_messages
 
     def test_show_with_data(self, seeded_database):
         """Show with seeded data should display formatted table."""

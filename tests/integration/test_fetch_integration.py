@@ -116,8 +116,13 @@ class TestFetchCsvToDatabase:
 class TestFetchAuthFailure:
     """Tests that fetch handles auth failures correctly."""
 
-    def test_fetch_auth_failure(self, isolated_config, mock_esdc_api, monkeypatch):
+    def test_fetch_auth_failure(
+        self, isolated_config, mock_esdc_api, monkeypatch, caplog
+    ):
         """API returns 401 should show clear error message"""
+        import logging
+
+        caplog.set_level(logging.WARNING)
         mock_esdc_api.add_status(PROJECT_RESOURCES_URL, status=401)
 
         monkeypatch.setenv("ESDC_USER", "baduser")
@@ -125,7 +130,9 @@ class TestFetchAuthFailure:
 
         result = runner.invoke(app, ["fetch", "--filetype", "json"])
 
-        assert "401" in result.output or "Failed to download" in result.output.lower()
+        # Check logs for warning messages
+        log_messages = caplog.text
+        assert "401" in log_messages or "Failed to download" in log_messages
 
 
 class TestFetchMalformedJson:
