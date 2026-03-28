@@ -173,13 +173,18 @@ class ContextUsageWidget(Static):
         super().__init__(id=id)
         self.token_count = token_count
         self.context_length = context_length
+        self.message_count: int = 0
         self.compaction_info: dict | None = None
 
     def update_usage(
-        self, token_count: int, compaction_info: dict | None = None
+        self,
+        token_count: int,
+        message_count: int = 0,
+        compaction_info: dict | None = None,
     ) -> None:
-        """Update token count and compaction info."""
+        """Update token count, message count, and compaction info."""
         self.token_count = token_count
+        self.message_count = message_count
         self.compaction_info = compaction_info
         self._update_display()
 
@@ -207,6 +212,11 @@ class ContextUsageWidget(Static):
             lines.append(f"[context-warning]{text}[/]")
         else:
             lines.append(text)
+
+        if self.message_count > 0:
+            lines.append(
+                f"[context-muted]{self.message_count} messages in conversation[/]"
+            )
 
         if self.compaction_info and self.compaction_info.get("was_compacted"):
             original_count = self.compaction_info.get("original_count", 0)
@@ -1446,6 +1456,7 @@ class ESDCChatApp(App):
 
         elif chunk_type == "messages_state":
             messages = chunk.get("messages", [])
+            message_count = chunk.get("message_count", len(messages))
             if messages:
                 from esdc.chat.context_manager import estimate_tokens
 
@@ -1468,7 +1479,7 @@ class ESDCChatApp(App):
                             "#context-usage", ContextUsageWidget
                         )
                         context_widget.update_usage(
-                            self._token_count, self._context_metadata
+                            self._token_count, message_count, self._context_metadata
                         )
                     except Exception:
                         pass

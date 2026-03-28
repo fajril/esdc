@@ -311,6 +311,7 @@ async def run_agent_stream(
                     yield {
                         "type": "messages_state",
                         "messages": conversation_messages.copy(),
+                        "message_count": len(conversation_messages),
                     }
 
         # Handle completion (tool calls, final message)
@@ -323,6 +324,7 @@ async def run_agent_stream(
                 yield {
                     "type": "messages_state",
                     "messages": conversation_messages.copy(),
+                    "message_count": len(conversation_messages),
                 }
 
                 # Token usage
@@ -439,6 +441,7 @@ async def run_agent_stream(
             yield {
                 "type": "messages_state",
                 "messages": conversation_messages.copy(),
+                "message_count": len(conversation_messages),
             }
 
             yield {
