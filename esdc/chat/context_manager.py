@@ -150,6 +150,33 @@ class ContextManager:
         return total_chars // 4
 
 
+def estimate_tokens(messages: list[BaseMessage]) -> int:
+    """Estimate token count from messages list.
+
+    Public API for calculating tokens from messages in state.
+    Uses the same algorithm as ContextManager._estimate_tokens.
+
+    Args:
+        messages: List of messages to estimate tokens for
+
+    Returns:
+        Estimated token count
+    """
+    total_chars = 0
+
+    for m in messages:
+        if m.content:
+            total_chars += len(str(m.content))
+
+        if isinstance(m, AIMessage) and m.tool_calls:
+            for tc in m.tool_calls:
+                total_chars += len(str(tc.get("name", "")))
+                args = tc.get("args", {})
+                total_chars += len(str(args))
+
+    return total_chars // 4
+
+
 def manage_context_node(state: dict, context_length: int = 6000) -> dict:
     """LangGraph node wrapper for context management.
 

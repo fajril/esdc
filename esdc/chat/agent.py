@@ -297,10 +297,14 @@ async def run_agent_stream(
             node_name = event.get("name", "")
             if node_name == "manage_context":
                 output_data = data.get("output", {})
+                messages = output_data.get("messages", [])
                 context_metadata = output_data.get("context_metadata")
                 if context_metadata:
                     logger.info("📦 CONTEXT_METADATA: %s", context_metadata)
                     yield {"type": "context_metadata", "metadata": context_metadata}
+                # Yield messages state for real-time token calculation
+                if messages:
+                    yield {"type": "messages_state", "messages": messages}
 
         # Handle completion (tool calls, final message)
         elif event_type == "on_chat_model_end":

@@ -1441,11 +1441,12 @@ class ESDCChatApp(App):
         elif chunk_type == "context_metadata":
             self._context_metadata = chunk.get("metadata")
 
-        elif chunk_type == "token_usage":
-            tokens = chunk.get("tokens", 0)
-            if tokens > 0:
-                self._token_count += tokens
-                # Update both status bar and context panel
+        elif chunk_type == "messages_state":
+            messages = chunk.get("messages", [])
+            if messages:
+                from esdc.chat.context_manager import estimate_tokens
+
+                self._token_count = estimate_tokens(messages)
                 if self.status_bar:
                     self.status_bar.set_status(
                         self._provider_name,
@@ -1454,13 +1455,11 @@ class ESDCChatApp(App):
                         self._context_length,
                         self._thread_id,
                     )
-                # Update context panel token display
                 if self._context_panel:
                     self._context_panel.update_context_usage(
                         self._token_count,
                         self._context_length,
                     )
-                    # Update ContextUsageWidget with compaction info
                     try:
                         context_widget = self._context_panel.query_one(
                             "#context-usage", ContextUsageWidget
@@ -1470,6 +1469,11 @@ class ESDCChatApp(App):
                         )
                     except Exception:
                         pass
+
+        elif chunk_type == "token_usage":
+            # DEPRECATED: messages_state provides more accurate token count
+            # Keep for backward compatibility with older agent versions
+            pass
 
         elif chunk_type == "complete":
             success = chunk.get("success", True)
