@@ -9,6 +9,7 @@ Fix the ESDC TUI chat application's streaming and indicator issues:
 5. **Fix UI freeze** - Make UI responsive during tool execution
 6. **Auto-focus input** - Cursor should be in chat box when app starts
 7. **Tool status indicator** - Show query status in right panel
+8. **Right panel restructure** - Clean layout with conversation title, collapsible sections, and token usage
 
 ## Instructions
 
@@ -92,6 +93,13 @@ Fix the ESDC TUI chat application's streaming and indicator issues:
 14. ✅ **Show all SQL queries** - display indicator + SQL for each tool call (not just first)
 15. ✅ **Added tool status indicator** - real-time status display in right panel
 16. ✅ **Made tool execution non-blocking** - async wrapper with thread pool executor
+17. ✅ **Increased recursion limit** - from 25 to 50 in LangGraph config
+18. ✅ **Renamed TokenUsageWidget to ContextUsageWidget** - with color coding (green/yellow/red)
+19. ✅ **Added ConversationTitle widget** - shows AI-generated summary from first query
+20. ✅ **Restructured ContextPanel** - clean layout with collapsible sections
+21. ✅ **Added generate_conversation_title** - AI generates title from first user query
+22. ✅ **Integrated token display** - updates in real-time in Context section
+23. ✅ **Added current directory** - displayed in Session Info section
 
 ### Commits Made:
 ```

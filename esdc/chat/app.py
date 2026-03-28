@@ -71,10 +71,6 @@ class ContextSection(Container):
         padding: 1 1;
         background: transparent;
     }
-
-    ContextSection .content.hidden {
-        display: none;
-    }
     """
 
     def __init__(
@@ -92,7 +88,7 @@ class ContextSection(Container):
         self._content_container: Vertical | None = None
 
     def compose(self) -> ComposeResult:
-        """Compose the section with header and content wrapper."""
+        """Compose the section."""
         from textual.containers import Vertical
 
         icon = "▼" if self.expanded else "▶"
@@ -105,12 +101,16 @@ class ContextSection(Container):
 
         self._content_container = Vertical(classes="content")
         if not self.expanded:
-            self._content_container.add_class("hidden")
+            self._content_container.display = False
         yield self._content_container
 
     def on_mount(self) -> None:
-        """Set initial expanded state."""
-        pass
+        """Move children from parent to content container."""
+        if self._content_container:
+            children = list(self.children)
+            for child in children:
+                if child is not self._header and child is not self._content_container:
+                    self._content_container.mount(child)
 
     def on_click(self) -> None:
         """Handle click to toggle."""
@@ -120,12 +120,8 @@ class ContextSection(Container):
         """Toggle expanded state and update header."""
         self.expanded = not self.expanded
 
-        if self.expanded:
-            if self._content_container:
-                self._content_container.remove_class("hidden")
-        else:
-            if self._content_container:
-                self._content_container.add_class("hidden")
+        if self._content_container:
+            self._content_container.display = self.expanded
 
         if self._header:
             icon = "▼" if self.expanded else "▶"
