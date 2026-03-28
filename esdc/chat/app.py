@@ -531,7 +531,6 @@ class ChatMessage(Markdown):
         padding: 1 2;
         margin: 0 0 1 0;
         border: none;
-        max-width: 85%;
     }
     ChatMessage.user {
         background: transparent;
