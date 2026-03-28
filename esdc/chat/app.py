@@ -209,8 +209,11 @@ class ContextUsageWidget(Static):
             lines.append(text)
 
         if self.compaction_info and self.compaction_info.get("was_compacted"):
+            original_count = self.compaction_info.get("original_count", 0)
+            new_count = self.compaction_info.get("new_count", 0)
+            summarized_count = self.compaction_info.get("summarized_count", 0)
             lines.append(
-                f"[context-compacted]📦 Compacted: {self.compaction_info['summarized_count']} messages summarized[/]"
+                f"[context-compacted]📦 Compacted: {original_count} → {new_count} messages ({summarized_count} summarized)[/]"
             )
 
         self.update("\n".join(lines))
