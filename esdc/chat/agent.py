@@ -22,6 +22,58 @@ logger = logging.getLogger("esdc.chat.agent")
 TOKEN_CHARS_PER_TOKEN = 4
 
 
+async def generate_conversation_title(
+    llm: BaseChatModel,
+    user_query: str,
+) -> str:
+    """Generate a short title/summary for the conversation based on first query.
+
+    Args:
+        llm: Language model to use for generation
+        user_query: First user query
+
+    Returns:
+        Short title (max 50 chars) summarizing the conversation
+    """
+    prompt = """Generate a very short title (max 50 characters) summarizing this user query.
+The title should be concise and descriptive. Respond with ONLY the title, no quotes or explanation.
+
+Examples:
+- "how much oil reserves in Rokan field" -> "Rokan Field Oil Reserves"
+- "list all working areas with gas production" -> "Working Areas Gas Production"
+- "compare reserves between 2020 and 2023" -> "Reserve Comparison 2020-2023"
+
+User query: {query}
+
+Title:"""
+
+    try:
+        messages = [
+            SystemMessage(
+                content="You are a helpful assistant that generates concise conversation titles."
+            ),
+            HumanMessage(content=prompt.format(query=user_query)),
+        ]
+
+        response = await llm.ainvoke(messages)
+        content = response.content
+        if isinstance(content, list):
+            title = str(content[0]) if content else ""
+        else:
+            title = str(content)
+        title = title.strip().strip("\"'")
+
+        if len(title) > 50:
+            title = title[:47] + "..."
+
+        return title
+    except Exception:
+        query_clean = user_query.strip()
+        if len(query_clean) > 50:
+            return query_clean[:47] + "..."
+        return query_clean
+
+
 def create_agent(
     llm: BaseChatModel,
     tools: list | None = None,
