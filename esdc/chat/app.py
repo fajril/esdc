@@ -106,6 +106,9 @@ class ContextSection(Container):
                 content.display = False
             yield from self._content_children
 
+        # Clear after yielding to prevent accumulation on recompose
+        self._content_children = []
+
     def on_click(self) -> None:
         """Handle click to toggle."""
         self.toggle()
