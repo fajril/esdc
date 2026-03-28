@@ -55,7 +55,6 @@ class ContextSection(Container):
     ContextSection .header {
         background: transparent;
         padding: 1 1;
-        border-bottom: solid $primary-background;
     }
 
     ContextSection .header:hover {

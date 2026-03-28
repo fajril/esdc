@@ -1,23 +1,17 @@
 ---
 ## Goal
 
-Fix the ESDC TUI chat application's streaming and indicator issues:
-1. **Real-time token-by-token streaming** - Character-by-character display like ChatGPT
-2. **Inline indicator visibility** - Show "🔍 Querying database..." during tool calls, keep it visible after completion
-3. **Fix text duplication** - Prevent content from being appended twice
-4. **Show SQL query** - Display executed SQL query in code block below indicator for ALL tool calls
-5. **Fix UI freeze** - Make UI responsive during tool execution
-6. **Auto-focus input** - Cursor should be in chat box when app starts
-7. **Tool status indicator** - Show query status in right panel
-8. **Right panel restructure** - Clean layout with conversation title, collapsible sections, and token usage
+Fix the ESDC TUI chat application's right panel issues:
+1. **Collapsible sections not working** - Content rendered before header ❌ (FIXED)
+2. **Title freeze on first chat** - UI freezes 1-2 seconds when sending first message due to blocking LLM call for title generation ❌ (FIXED)
+3. **Context length incorrect** - Shows 4096 instead of actual model context length ✓ (already fixed)
 
 ## Instructions
 
-- User uses iTerm2 terminal (has emoji support)
-- User prefers emoji 🔍 for indicator (not ASCII text)
-- Don't remove indicator after tool_result - keep it visible
-- When there are multiple approaches, choose the simpler one
-- Always commit with clear, descriptive messages
+- User uses iTerm2 terminal (emoji support)
+- When researching solutions, check internet/Textual documentation first
+- Make proper fixes (not quick hacks)
+- Always commit with clear descriptive messages
 - Test with `esdc chat` command
 
 ## Discoveries
@@ -100,6 +94,8 @@ Fix the ESDC TUI chat application's streaming and indicator issues:
 21. ✅ **Added generate_conversation_title** - AI generates title from first user query
 22. ✅ **Integrated token display** - updates in real-time in Context section
 23. ✅ **Added current directory** - displayed in Session Info section
+24. ✅ **Fixed collapsible sections** - use `compose_add_child()` pattern for correct header/content order
+25. ✅ **Fixed title freeze** - run title generation in background task with `asyncio.create_task()`
 
 ### Commits Made:
 ```
@@ -115,6 +111,8 @@ fddfe20 - fix: forward args in tool_call from _stream_response to app
 fe708b6 - fix: add newline after SQL code block to prevent token concatenation
 85553e2 - feat: show SQL query for each tool call (multiple queries)
 2b281e8 - feat: add tool status indicator and non-blocking SQL execution
+3fae385 - fix(ContextSection): use CSS-based collapsible and background title generation
+82ccec5 - fix(ContextSection): use compose_add_child for correct header order
 ```
 
 ## Relevant Files / Directories
