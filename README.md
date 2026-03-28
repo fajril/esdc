@@ -1,92 +1,185 @@
-# ESDC Data Management Module
+# ESDC (Elektronik Sumber Daya dan Cadangan)
 
-This module provides functionality for managing data related to the ESDC (https://esdc.skkmigas.go.id). It includes commands for fetching, validating, and displaying data from various resources, as well as loading data into a SQLite database. The module utilizes the Typer library for command-line interface (CLI) interactions and Rich for enhanced logging and output formatting.
+A data management system for Indonesian oil & gas reserves data from ESDC (https://esdc.skkmigas.go.id).
 
-## Key Features
+## Features
 
-- **Fetch Data**: Fetch data from the ESDC API in various formats (CSV, JSON, ZIP).
-- **Load Data**: Load data into a SQLite database.
-- **Validate Data**: Validate data against predefined rules.
-- **Display Data**: Display data from specific tables with filtering options.
-- **Save Data**: Save output data to files.
+### Chat TUI
+Interactive terminal-based chat interface to query oil & gas reserves data using natural language.
+
+- **Natural Language Queries**: Ask questions about reserves, production, and fields
+- **Real-time Streaming**: AI responses stream in real-time
+- **Context Panel**: Shows current model, provider, token usage, and conversation thread
+- **Collapsible Sections**: Toggle session info, context usage, and tool status
+- **Provider Support**: Works with Ollama models (kimi-k2.5:cloud, etc.)
+
+### Data Management CLI
+Command-line interface for fetching and managing ESDC data.
+
+- **Fetch Data**: Download data from ESDC API (CSV, JSON, ZIP formats)
+- **Load Data**: Import data into SQLite database
+- **Query Data**: Display and filter data with various options
 
 ## Installation
 
-To install the module, clone the repository and install the dependencies specified in the `pyproject.toml` file.
-
-```sh
+```bash
+# Clone repository
 git clone https://github.com/fajril/esdc.git
 cd esdc
-pip install .
+
+# Install with uv
+uv add -e .
 ```
 
-Alternatively, you can install the dependencies directly:
+## Quick Start
 
-```sh
-pip install requests==2.32.2 python-dotenv==1.0.1 pandas==2.2.2 tqdm==4.66.4 typer==0.12.3 platformdirs==4.2.2 tabulate==0.9.0 ollama==0.3.0 mypy==1.11.0 openpyxl==3.1.5
+### Chat TUI
+
+```bash
+# Start interactive chat
+esdc chat
+
+# Example queries:
+# "What are the top 10 oil reserves in 2023?"
+# "Show all fields in North Sumatra basin"
+# "Compare gas reserves between 2020 and 2023"
 ```
-## Usage
 
-Run the module from the command line to access the available commands and options. Below are the main commands provided by the module:
+### Data CLI
 
-### `init`
-Initializes the application and fetches data.
+```bash
+# Fetch latest data
+esdc fetch --filetype csv --save
+
+# Reload into database
+esdc reload --filetype csv
+
+# Show data with filters
+esdc show project_resources --year 2023 --save
+```
+
+## Configuration
+
+Configuration is stored in `~/.esdc/`:
+
+```
+~/.esdc/
+├── config.yaml    # Provider and model settings
+└── esdc.db        # SQLite database
+```
+
+### Chat TUI Configuration
+
+The chat TUI uses the default provider from `config.yaml`:
+
+```yaml
+default_provider: ollama
+providers:
+  ollama:
+    model: kimi-k2.5:cloud
+    base_url: http://localhost:11434
+```
+
+### Environment Variables
+
+Set credentials for data fetching:
+
+```bash
+export ESDC_USER="your_username"
+export ESDC_PASS="your_password"
+```
+
+| Variable | Purpose |
+|----------|---------|
+| `ESDC_USER` | ESDC API username |
+| `ESDC_PASS` | ESDC API password |
+| `ESDC_URL` | API URL (default: https://esdc.skkmigas.go.id/) |
+| `ESDC_DB_FILE` | Database file path |
+
+## Architecture
+
+```
+esdc/
+├── chat/                    # Chat TUI application
+│   ├── app.py              # Textual TUI app
+│   ├── agent.py            # LangGraph agent with tools
+│   ├── tools.py            # SQL execution & schema tools
+│   ├── prompts.py          # System prompt template
+│   └── schema_loader.py    # Database schema loader
+├── commands/                # CLI commands
+├── configs.py               # Configuration management
+└── db/                      # Database operations
+```
+
+## Documentation
+
+- **Knowledge Base**: `docs/reference/` - Architecture and conventions
+- **Database Schema**: `docs/reference/schema/esdc-database-schema.md`
+- **Active Work**: `docs/active/` - Current development
+- **Completed Work**: `docs/completed/` - Archived plans
+- **For AI Agents**: See `AGENTS.md`
+
+## CLI Commands
 
 ### `fetch`
+Download data from ESDC API.
 
-Downloads data from the ESDC API and saves it to a specified file type.
-
-```sh
+```bash
 esdc fetch --filetype csv --save
 ```
 
 Options:
-
-- `filetype`: The type of file to save the data to. Options are "csv" or "json". Defaults to "json".
-- `save`: Indicates whether to save the data to a file. Defaults to `False`.
+- `--filetype`: Output format (csv, json, zip). Default: json
+- `--save`: Save fetched data to file
 
 ### `reload`
+Import existing data files into database.
 
-Reloads data from existing files into the database.
-
-```sh
+```bash
 esdc reload --filetype csv
 ```
 
-Options:
-
-- `filetype`: The type of file to save the data to. Options are "csv", "json", or "zip". Defaults to "json".
-
 ### `show`
+Display data with filters.
 
-Displays data from a specified table with optional filters.
-
-```sh
-esdc show table_name --where column_name --search filter_value --year 2023 --output 0 --save --columns column1 column2
+```bash
+esdc show project_resources --year 2023 --columns project_name res_oil
 ```
+
 Arguments:
+- `table`: Table name to query
+- `--where`: Column to filter
+- `--search`: Search keyword
+- `--year`: Filter by year
+- `--output`: Detail level (0=summary, 1=detail)
+- `--save`: Save output to file
+- `--columns`: Columns to display
 
-- table: The name of the table to show data from.
-- where: (Optional) The column to search. Defaults to None.
-- search: (Optional) A search keyword to apply to the selected column in where clause. Defaults to "".
-- year: (Optional) A filter year value to apply to the data. Defaults to None.
-- output: (Optional) The level of detail to show in the output. Defaults to 0.
-- save: (Optional) Whether to save the output data to a file. Defaults to False.
-columns: (Optional) A space-separated list of columns to select. Defaults to "".
+## Tech Stack
 
-### Contributing
+- **Python 3.11+**
+- **Textual** - Terminal UI framework
+- **LangChain & LangGraph** - AI agent framework
+- **SQLite** - Local database
+- **Typer** - CLI framework
 
-Contributions are welcome! Please follow these steps to contribute:
+## Development
 
-1. Fork the repository.
-2. Create a new branch for your feature or bugfix.
-3. Commit your changes.
-4. Push your branch to your fork.
-5. Create a pull request on the main repository.
+```bash
+# Run tests
+pytest tests/
 
-### License
-This project is licensed under the terms of the Apache Software license. See the `LICENSE` file for details.
+# Run chat TUI
+esdc chat
 
-### Contact
+# Format code
+ruff check --fix esdc/
+```
 
-For any questions or issues, please contact me at fambia at skkmigas.go.id or fajril at ambia.id.
+## License
+
+Apache Software License. See `LICENSE` file.
+
+## Contact
+
+fambia@skkmigas.go.id or fajril@ambia.id

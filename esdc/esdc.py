@@ -1,17 +1,16 @@
 """
 ESDC Data Management Module
 
-This module provides functionality for managing data 
-related to the ESDC (https://esdc.skkmigas.go.id). 
-It includes commands for fetching, validating, and displaying data from various resources,
-as well as loading data into a SQLite database. 
-The module utilizes the Typer library for command-line interface (CLI) interactions 
+This module provides functionality for managing data
+related to the ESDC (https://esdc.skkmigas.go.id).
+It includes commands for fetching and displaying data from various resources,
+as well as loading data into a SQLite database.
+The module utilizes the Typer library for command-line interface (CLI) interactions
 and Rich for enhanced logging and output formatting.
 
 Key Features:
 - Fetch data from the ESDC API in various formats (CSV, JSON, ZIP).
 - Load data into a SQLite database.
-- Validate data against predefined rules.
 - Display data from specific tables with filtering options.
 - Save output data to files.
 
@@ -19,7 +18,7 @@ Dependencies:
 - pandas: For data manipulation and storage.
 - requests: For making HTTP requests to the ESDC API.
 - rich: For enhanced terminal output and logging.
-- dotenv: For loading environment variables from a .env file.
+- pyyaml: For loading configuration from config.yaml.
 - sqlite3: For database operations.
 
 Commands:
@@ -27,7 +26,6 @@ Commands:
 - fetch: Downloads data from the ESDC API and saves it to a specified file type.
 - reload: Reloads data from existing binary files into the database.
 - show: Displays data from a specified table with optional filters.
-- validate: Validates data from a file or performs a full validation.
 
 Usage:
 Run the module from the command line to access the available commands and options.
@@ -42,31 +40,30 @@ import json
 import gzip
 from contextlib import closing
 import logging
-from typing import Union, List, Tuple, Iterable, Optional
+from collections.abc import Iterable
 
 import requests
-from dotenv import load_dotenv, find_dotenv
 import typer
-from typing_extensions import Annotated
+from typing import Annotated
 import rich
 from rich.progress import Progress, TransferSpeedColumn, DownloadColumn
 from rich.logging import RichHandler
-from rich.prompt import Prompt
 import pandas as pd
 from tabulate import tabulate
 
 from esdc.selection import TableName, ApiVer, FileType
-from esdc.validate import RuleEngine
 from esdc.configs import Config
-from esdc.summarizer import describer, analyzer
 from esdc.dbmanager import run_query, load_data_to_db
+from esdc.commands.provider import provider_app
+from esdc.chat.app import ESDCChatApp
 
-TABLES: Tuple[TableName, TableName] = (
+TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
     TableName.PROJECT_TIMESERIES,
 )
 
-app = typer.Typer(no_args_is_help=True)
+app = typer.Typer(no_args_is_help=False)
+app.add_typer(provider_app, name="provider")
 
 
 @app.callback()
@@ -87,51 +84,25 @@ def main(verbose: int = 0):
             - verbose == 1: INFO
             - verbose == 0: WARNING
     """
-    load_dotenv(find_dotenv())
-    handler = RichHandler(show_time=False)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    logging.root.handlers.clear()
-    logging.root.addHandler(handler)
-    logger = logging.getLogger()
-    if verbose >= 2:
-        logger.setLevel(logging.DEBUG)
-    elif verbose == 1:
-        logger.setLevel(logging.INFO)
-    else:
-        logger.setLevel(logging.WARNING)
-    logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
+    Config.init_config()
+    # Only configure logging if not already configured (e.g., by app.py)
+    if not logging.root.handlers:
+        handler = RichHandler(show_time=False)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        logging.root.addHandler(handler)
+        logger = logging.getLogger()
+        if verbose >= 2:
+            logger.setLevel(logging.DEBUG)
+        elif verbose == 1:
+            logger.setLevel(logging.INFO)
+        else:
+            logger.setLevel(logging.WARNING)
+        logger.info(
+            "Log level set to %s", logging.getLevelName(logger.getEffectiveLevel())
+        )
+
 
 # ... (previous imports remain unchanged)
-
-@app.command()
-def chat():
-    try:
-        # Initialize the chat session
-        chat_function = create_chat_session()
-        if not chat_function:
-            print("Failed to create chat session. Exiting.")
-            return
-
-        print("Chat session started.")
-        print("Type 'exit' or 'quit' to end the conversation.")
-
-        while True:
-            # Get user input
-            user_input = input("You: ").strip()
-
-            # Check if user wants to exit
-            if user_input.lower() in ['exit', 'quit']:
-                print("Ending chat session.")
-                break
-
-            # Send user input to the model and get response
-            response = chat_function(user_input)
-
-            # Print the model's response
-            print("AI:", response)
-
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
 
 
 @app.command()
@@ -161,19 +132,7 @@ def fetch(
         None
     """
 
-    env_available = load_dotenv(find_dotenv())
-    if env_available:
-        username = os.getenv("ESDC_USER") or ""
-        password = os.getenv("ESDC_PASS") or ""
-    else:
-        logging.debug("Environment variables is not found.")
-        username = ""
-        password = ""
-
-    if not username:
-        logging.debug("Requesting credential from user.")
-        username = Prompt.ask("user")
-        password = Prompt.ask("pass", password=True)
+    username, password = Config.get_credentials()
 
     if filetype == "csv":
         load_esdc_data(
@@ -190,8 +149,8 @@ def fetch(
 @app.command()
 def reload(
     filetype: Annotated[
-        Optional[str], typer.Option(help="Options: csv, json, zip")
-    ] = "csv"
+        str | None, typer.Option(help="Options: csv, json, zip")
+    ] = "csv",
 ) -> None:
     """
     Reload data from binary files and save it to a file.
@@ -209,8 +168,8 @@ def reload(
         If a file is not found, a warning message will be printed.
     """
     for table in TABLES:
-        if Path(f"{table.value}.{filetype}").exists():
-            filename = f"{table.value}.{filetype}"
+        filename = f"{table.value}.{filetype}"
+        if Path(filename).exists():
             if filetype == "csv":
                 _load_file_as_csv(filename, table.value)
             elif filetype == "json":
@@ -226,10 +185,10 @@ def reload(
 @app.command()
 def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
-    where: Annotated[Optional[str], typer.Option(help="Column to search.")] = None,
-    search: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
+    where: Annotated[str | None, typer.Option(help="Column to search.")] = None,
+    search: Annotated[str | None, typer.Option(help="Filter value")] = "",
     year: Annotated[
-        Optional[int], typer.Option(min=2019, help="Filter year value")
+        int | None, typer.Option(min=2019, help="Filter year value")
     ] = None,
     output: Annotated[int, typer.Option(help="Detail of output.")] = 0,
     save: bool = typer.Option(
@@ -245,7 +204,7 @@ def show(
     Args:
         table (str): The name of the table to show data from.
         where (str, optional): The column to search. Defaults to None.
-        search (str, optional): A search keyword to apply to the selected column in where clause. 
+        search (str, optional): A search keyword to apply to the selected column in where clause.
             Defaults to "".
         year (int, optional): A filter year value to apply to the data. Defaults to None.
         output (int, optional): The level of detail to show in the output. Defaults to 0.
@@ -262,7 +221,7 @@ def show(
         If the save option is True, the output data will be saved to a CSV file.
     """
     if columns.strip():
-        columns_splitted: Union[List[str], str] = columns.split(" ")
+        columns_splitted: list[str] | str = columns.split(" ")
     else:
         columns_splitted = ""
     df = run_query(
@@ -291,70 +250,6 @@ def show(
             )
     else:
         logging.warning("Unable to show data. The query is none.")
-
-
-@app.command()
-def describe(
-    table: Annotated[str, typer.Argument(help="Table name.")] = "project_resources",
-    search: Annotated[Optional[str], typer.Option(help="Filter value")] = "",
-    year: Annotated[
-        Optional[int], typer.Option(min=2019, help="Filter year value")
-    ] = None,
-    save: bool = typer.Option(
-        False,
-        "--save/--no-save",
-        help="Specify whether to save the shown data to a file.",
-    )
-):
-    selected_table = TableName(table)
-    articles = describer(table=selected_table, year=year, search=search)
-    if articles is not None:
-        with open(f"{table}.txt", "w", encoding="utf-8") as f:
-            f.writelines(f"{paragraph}\n" for paragraph in articles)
-        rich.print(articles[0])
-        rich.print("dan seterusnya...")
-
-@app.command()
-def analyze(
-    field: Annotated[str, typer.Argument(help="field name")],
-    wkname: Annotated[str, typer.Argument(help="Working Area name")]
-):
-    rich.print(analyzer(field, wkname))
-
-
-@app.command()
-def validate(
-    filename: Annotated[Optional[str], typer.Argument(help="File name.")] = None
-) -> None:
-    """
-    Validate data from a file or run a full validation.
-
-    Args:
-        filename (str, optional): The name of the file to validate. Defaults to None.
-
-    Returns:
-        None
-
-    Notes:
-        This function validates data from a file if a filename is provided,
-        or runs a full validation if no filename is provided.
-    """
-    if filename is None:
-        run_validation()
-
-
-def run_validation():
-    project_resources = run_query(TableName.PROJECT_RESOURCES, output=4)
-    engine = RuleEngine(project_resources=project_resources)
-    results = engine.run()
-    if results.empty:
-        logging.info("No validation results.")
-    else:
-        logging.info("Saving validation results.")
-        results = results.sort_values(
-            by=["report_year", "wk_name", "field_name", "project_name", "uncert_lvl"]
-        )
-        results.to_csv(f"validation_{date.today().strftime('%Y%m%d')}.csv", index=False)
 
 
 def load_esdc_data(
@@ -401,7 +296,7 @@ def load_esdc_data(
         if to_file:
             logging.debug("Save data as %s.%s", table.value, filetype.value)
             with open(table.value + "." + filetype.value, "wb") as f:
-                f.write(data)
+                _ = f.write(data)
 
         if filetype == FileType.CSV:
             decoded_data = data.decode("utf-8").splitlines()
@@ -420,7 +315,7 @@ def esdc_url_builder(
     table_name: TableName,
     api_ver: ApiVer = ApiVer.V2,
     verbose: int = 3,
-    report_year: Optional[int] = None,
+    report_year: int | None = None,
     file_type: FileType = FileType.CSV,
 ) -> str:
     """
@@ -452,15 +347,7 @@ def esdc_url_builder(
     For example, the url for project_resources table is:
     https://esdc.skkmigas.go.id/api/v2/project-resources?verbose=3&output=csv
     """
-    load_dotenv(find_dotenv())
-    url = os.getenv("ESDC_URL")
-    if url is None:
-        logging.info(
-            "Environment Variables is not found. Url set to: https://esdc.skkmigas.go.id/"
-        )
-        url = Config.BASE_API_URL_V2
-
-    url += api_ver.value
+    url = Config.get_api_url().rstrip("/") + api_ver.value
     tables = {
         TableName.PROJECT_RESOURCES: "project-resources",
         TableName.PROJECT_TIMESERIES: "project-timeseries",
@@ -491,14 +378,14 @@ def _load_file_as_json(file: str, table_name):
     with open(file, "rb") as f:
         data = f.read()
     parsed_json = json.loads(data)
+    if not parsed_json:
+        return
     header = parsed_json[0].keys()
     content = [list(item.values()) for item in parsed_json]
     load_data_to_db(content, header, table_name)
 
 
-def esdc_downloader(
-    url: str, username: str = "", password: str = ""
-) -> Union[bytes, None]:
+def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes | None:
     """
     Download a file from a URL using the requests library and return its content.
 
@@ -509,7 +396,7 @@ def esdc_downloader(
 
     Returns
     -------
-    Union[bytes, None]
+    bytes | None
         The content of the downloaded file as bytes, or None if the download failed.
 
     Raises
@@ -528,7 +415,9 @@ def esdc_downloader(
         if response.status_code == 200:
             file_size = int(response.headers.get("Content-Length", 0))
             logging.debug("File size is %s bytes", file_size)
-            logging.debug("Encoding format: %s", response.headers.get("Content-Encoding"))
+            logging.debug(
+                "Encoding format: %s", response.headers.get("Content-Encoding")
+            )
 
             with closing(io.BytesIO()) as f:
                 with Progress(
@@ -537,7 +426,7 @@ def esdc_downloader(
                     DownloadColumn(binary_units=True),
                 ) as progress:
                     task_id = progress.add_task(
-                        f"[cyan]Downloading {round(file_size/1E6)} MB...",
+                        f"[cyan]Downloading {round(file_size / 1e6)} MB...",
                         total=file_size,
                         unit="B",
                         transfer=True,
@@ -549,12 +438,12 @@ def esdc_downloader(
                                 chunk = gz.read(size=8192)
                                 if not chunk:
                                     break
-                                f.write(chunk)
-                                progress.update(task_id, advance=len(chunk))
+                                _ = f.write(chunk)
+                                _ = progress.update(task_id, advance=len(chunk))
                     else:
                         for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                            progress.update(task_id, advance=len(chunk))
+                            _ = f.write(chunk)
+                            _ = progress.update(task_id, advance=len(chunk))
 
                     logging.info(
                         "File downloaded successfully to memory (Size: %s bytes)",
@@ -569,7 +458,7 @@ def esdc_downloader(
         return None
 
 
-def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
+def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
     """
     Reads a CSV file and returns its contents as a tuple of two values:
     a list of lists of strings representing the data,
@@ -580,7 +469,7 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
         or an iterable of strings representing the CSV data.
 
     Returns:
-        Tuple[List[List[str]], List[str]]: A tuple containing the data
+        tuple[list[list[str]], list[str]]: A tuple containing the data
         and header of the CSV file.
     """
 
@@ -589,7 +478,7 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
         quotechar = '"'
         doublequote = True
         lineterminator = "\n"
-        quoting = csv.QUOTE_STRINGS
+        quoting = csv.QUOTE_MINIMAL
 
     csv.register_dialect("esdc", _EsdcDialect)
 
@@ -603,6 +492,45 @@ def _read_csv(file: Union[str, Iterable]) -> Tuple[List[List[str]], List[str]]:
     for row in reader:
         data.append(row)
     return data, header
+
+
+@app.command(name="chat")
+def chat(setup: bool = False):
+    """Start the interactive chat TUI."""
+    from esdc.chat.wizard import WizardApp
+    from esdc.configs import Config
+
+    if setup or not Config.has_chat_config():
+        rich.print("[bold]Running setup wizard...[/bold]")
+        WizardApp.run()
+
+    if Config.has_chat_config():
+        app = ESDCChatApp()
+        app.run()
+    else:
+        rich.print("[yellow]Setup incomplete. Chat cannot start.[/yellow]")
+
+
+@app.command(name="db-info")
+def db_info() -> None:
+    """Show database location and configuration."""
+    db_dir = Config.get_db_dir()
+    db_file = Config.get_db_file()
+
+    rich.print(f"[bold]Database directory:[/bold] {db_dir}")
+    rich.print(f"[bold]Database file:[/bold] {db_file}")
+
+    if os.environ.get("ESDC_DB_DIR"):
+        rich.print("  (from [cyan]ESDC_DB_DIR[/cyan] environment variable)")
+    if os.environ.get("ESDC_DB_FILE"):
+        rich.print("  (from [cyan]ESDC_DB_FILE[/cyan] environment variable)")
+
+    if db_file.exists():
+        rich.print("[green]Database exists: Yes[/green]")
+    else:
+        rich.print(
+            "[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"
+        )
 
 
 if __name__ == "__main__":

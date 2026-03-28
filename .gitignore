@@ -1,5 +1,8 @@
 # Custom Filter
 
+worktrees/
+.worktrees/
+
 notebook
 func_test
 
@@ -303,10 +306,10 @@ venv.bak/
 # mkdocs documentation
 /site
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# basedpyright
+.basedpyright/
+.pyright/
+Pylance/
 
 # Pyre type checker
 .pyre/

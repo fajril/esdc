@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esdc"
-version = "0.2.1"
-description = "A package for retrieving and managing eSDC data."
+version = "0.3.0"
+description = "Agentic chat interface for Indonesian oil & gas reserves database (ESDC)"
+requires-python = ">=3.10"
 authors = [
   { name = "Fajril Ambia", email = "fajril@ambia.id" },
 ]
@@ -16,22 +17,42 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  "requests==2.32.2",
-  "python-dotenv==1.0.1",
-  "pandas>=2.2.2",
-  "tqdm==4.66.4",
-  "typer==0.12.3",
-  "platformdirs==4.2.2",
-  "tabulate==0.9.0",
-  "ollama==0.3.0",
-  "mypy==1.11.0",
-  "openpyxl==3.1.5",
-  "openai>=1.78.0",
-  "pandas-stubs>=2.2.3.250308",
+    "requests==2.32.2",
+    "pandas>=2.2.2",
+    "tqdm==4.66.4",
+    "typer>=0.12.4",
+    "tabulate==0.9.0",
+    "openpyxl==3.1.5",
+    "pyyaml>=6.0",
+    "textual>=0.52.0",
+    # LangChain ecosystem
+    "langchain-core>=0.3.0",
+    "langchain-community>=0.3.0",
+    "langgraph>=0.2.0",
+    "langchain-ollama>=0.2.0",
+    "langchain-openai>=0.3.0",
+    # Direct APIs
+    "ollama>=0.4.0",
+    "httpx>=0.27.0",
+    "click>=8.0.0",
+    "basedpyright>=1.38.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4.2",
+  "pytest-mock>=3.14.0",
+  "responses>=0.25.0",
+  "pylint>=4.0.1",
+  "basedpyright>=0.1.0",
+  "pandas-stubs>=2.2.2",
 ]
 
 [project.urls]
 Homepage = "https://github.com/fajril/esdc"
+
+[project.scripts]
+esdc = "esdc.esdc:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -42,6 +63,26 @@ esdc = ["data/*"]
 [tool.setuptools.exclude-package-data]
 esdc = ["tests"]
 
-[project.scripts]
-esdc = "esdc:app"
+[tool.basedpyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+
+# These are expected in this codebase - suppress them
+reportMissingTypeStubs = false
+reportPrivateUsage = false
+reportUnannotatedClassAttribute = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+reportMissingParameterType = false
+reportUnknownLambdaType = false
+reportUnknownArgumentType = false
+reportCallInDefaultInitializer = false
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-mock>=3.15.1",
+    "responses>=0.26.0",
+]
 
