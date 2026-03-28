@@ -989,29 +989,6 @@ class ESDCChatApp(App):
         padding: 2;
     }
 
-    /* ===== Context Section - Minimal Design ===== */
-    ContextSection {
-        margin: 0 0 1 0;
-        border: none;
-    }
-
-    ContextSection .header {
-        background: transparent;
-        padding: 1 1;
-        text-style: bold;
-        color: $text;
-    }
-
-    ContextSection .title {
-        color: $text;
-        text-style: bold;
-    }
-
-    ContextSection .content {
-        padding: 0 1 1 1;
-        background: transparent;
-    }
-
     /* Content widgets for sections */
     .sql-content, .results-content, .schema-content, .session-content {
         padding: 1 1;
