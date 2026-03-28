@@ -126,8 +126,27 @@ class ContextManager:
         return "\n".join(summary_parts[-10:])  # Keep last 10 significant actions
 
     def _estimate_tokens(self, messages: list[BaseMessage]) -> int:
-        """Estimate token count using ~4 chars per token."""
-        total_chars = sum(len(str(m.content)) for m in messages)
+        """Estimate token count using ~4 chars per token.
+
+        Counts tokens from all message types including:
+        - HumanMessage/AIMessage/SystemMessage content
+        - ToolMessage content (can be very large, 100K+ chars)
+        - AIMessage tool_calls arguments
+        """
+        total_chars = 0
+
+        for m in messages:
+            # Count message content (applies to HumanMessage, AIMessage, ToolMessage, SystemMessage)
+            if m.content:
+                total_chars += len(str(m.content))
+
+            # Count AIMessage tool_calls arguments (these contribute to token usage)
+            if isinstance(m, AIMessage) and m.tool_calls:
+                for tc in m.tool_calls:
+                    total_chars += len(str(tc.get("name", "")))
+                    args = tc.get("args", {})
+                    total_chars += len(str(args))
+
         return total_chars // 4
 
 

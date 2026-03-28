@@ -90,6 +90,91 @@ class TestContextManager:
         assert "What is the oil reserves" in summary
 
 
+class TestEstimateTokens:
+    """Tests for token estimation across message types."""
+
+    def test_human_message_tokens(self):
+        """Test token estimation for HumanMessage content."""
+        manager = ContextManager()
+        messages = [HumanMessage(content="Hello world")]  # 11 chars
+        tokens = manager._estimate_tokens(messages)
+        assert tokens == 2  # 11 // 4 = 2
+
+    def test_ai_message_content_tokens(self):
+        """Test token estimation for AIMessage content."""
+        manager = ContextManager()
+        messages = [AIMessage(content="Response text here")]  # 18 chars
+        tokens = manager._estimate_tokens(messages)
+        assert tokens == 4  # 18 // 4 = 4
+
+    def test_system_message_tokens(self):
+        """Test token estimation for SystemMessage content."""
+        manager = ContextManager()
+        messages = [SystemMessage(content="System prompt")]  # 13 chars
+        tokens = manager._estimate_tokens(messages)
+        assert tokens == 3  # 13 // 4 = 3
+
+    def test_tool_message_large_content(self):
+        """Test token estimation for large ToolMessage content."""
+        manager = ContextManager()
+        large_content = "x" * 100000  # 100K chars (simulating SQL query result)
+        messages = [ToolMessage(content=large_content, tool_call_id="1")]
+        tokens = manager._estimate_tokens(messages)
+        assert tokens == 25000  # 100000 // 4 = 25000
+
+    def test_ai_message_tool_calls(self):
+        """Test token estimation includes tool_calls arguments."""
+        manager = ContextManager()
+        messages = [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute_sql",
+                        "args": {"query": "SELECT * FROM reserves"},
+                        "id": "1",
+                    }
+                ],
+            )
+        ]
+        # name: 11 chars, args: {"query": "SELECT * FROM reserves"} = ~30 chars
+        # total ~41 chars, 41 // 4 = 10
+        tokens = manager._estimate_tokens(messages)
+        assert tokens >= 10
+
+    def test_multiple_message_types(self):
+        """Test token estimation for mixed message types."""
+        manager = ContextManager()
+        messages = [
+            SystemMessage(content="System prompt"),  # 13 chars
+            HumanMessage(content="Query"),  # 5 chars
+            AIMessage(
+                content="Response",  # 8 chars
+                tool_calls=[
+                    {"name": "exec", "args": {"q": "test"}, "id": "1"}
+                ],  # ~15 chars
+            ),
+            ToolMessage(content="Result data", tool_call_id="1"),  # 11 chars
+        ]
+        # Total: 13 + 5 + 8 + 15 + 11 = 52 chars, 52 // 4 = 13
+        tokens = manager._estimate_tokens(messages)
+        assert tokens == 13
+
+    def test_empty_content(self):
+        """Test token estimation handles empty content."""
+        manager = ContextManager()
+        messages = [HumanMessage(content="")]
+        tokens = manager._estimate_tokens(messages)
+        assert tokens == 0
+
+    def test_ai_message_empty_tool_calls(self):
+        """Test AIMessage with empty tool_calls list."""
+        manager = ContextManager()
+        messages = [AIMessage(content="Hello", tool_calls=[])]
+        tokens = manager._estimate_tokens(messages)
+        assert tokens == 1  # 5 chars // 4 = 1
+
+
 class TestManageContextNode:
     """Tests for LangGraph node wrapper."""
 
