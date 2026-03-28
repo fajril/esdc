@@ -125,6 +125,10 @@ Step 3: Build SQL using tool results:
 - Correct uncertainty calculations (especially for probable/possible)
 - Less token usage in system prompt
 
+## Context Management
+
+When conversations get long, old messages are automatically summarized at 75% token usage to stay within limits. Recent exchanges are always preserved verbatim. You will see a notification when this happens.
+
 ## Database Schema
 
 The database contains project-level reserve/resource data for Indonesian oil and gas projects. Key tables:
