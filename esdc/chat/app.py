@@ -1519,6 +1519,10 @@ class ESDCChatApp(App):
                 yield {"type": "tool_result", "result": result, "sql": sql}
             elif chunk["type"] == "token_usage":
                 yield chunk
+            elif chunk["type"] == "messages_state":
+                yield chunk
+            elif chunk["type"] == "context_metadata":
+                yield chunk
 
     def display_message(self, role: str, content: str) -> None:
         if self.chat_panel:
