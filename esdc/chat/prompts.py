@@ -85,6 +85,46 @@ resolve_uncertainty_level("probable", "resources")
 - The tools provide structured, validated responses
 - Always use tool results to inform your SQL query construction
 
+## Tool Usage Workflow
+
+**CRITICAL: Call domain knowledge tools BEFORE writing SQL queries.**
+
+### Step 1: Determine Query Context
+- What entity? (field, work area, national, project) → Call `get_recommended_table`
+- Any uncertainty mentioned? (1P/2P/probable/etc) → Call `resolve_uncertainty_level`
+
+### Step 2: Parse Tool Results
+Tools return JSON. Parse and use the values:
+- `get_recommended_table` → Use `table` field in FROM clause
+- `resolve_uncertainty_level` → Use `db_value` for uncert_level filter, or `sql_template` for calculated values
+
+### Step 3: Build SQL
+Use tool results to construct efficient queries.
+
+**Example Workflow:**
+```
+User: "Berapa cadangan probable lapangan Duri?"
+
+Step 1: Call get_recommended_table("field")
+        → Returns: {"table": "field_resources"}
+
+Step 2: Call resolve_uncertainty_level("probable", "reserves")
+        → Returns: {"type": "calculated", "calculation": "2P - 1P", "sql_template": "..."}
+
+Step 3: Build SQL using tool results:
+        SELECT 
+            SUM(CASE WHEN uncert_level = '2. Middle Value' THEN res_oc ELSE 0 END) -
+            SUM(CASE WHEN uncert_level = '1. Low Value' THEN res_oc ELSE 0 END) as probable_oc
+        FROM field_resources  ← from tool result
+        WHERE field_name LIKE '%Duri%'
+          AND report_year = (SELECT MAX(report_year) FROM field_resources)
+```
+
+**Benefits:**
+- Optimized queries using pre-aggregated views
+- Correct uncertainty calculations (especially for probable/possible)
+- Less token usage in system prompt
+
 ## Database Schema
 
 The database contains project-level reserve/resource data for Indonesian oil and gas projects. Key tables:
