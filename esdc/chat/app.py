@@ -462,8 +462,11 @@ class ContextPanel(Vertical):
             context_widget.token_count = token_count
             context_widget.context_length = context_length
             context_widget._update_display()
-        except Exception:
-            pass
+            logger.debug(
+                f"🔍 Updated context usage: {token_count:,} / {context_length:,}"
+            )
+        except Exception as e:
+            logger.warning(f"❌ Failed to update context usage: {e}")
         self.refresh()
 
     def update_session_info(
