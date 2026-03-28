@@ -43,7 +43,7 @@ DEFAULT_CONTEXT_LENGTH = 4096
 TOOLS_LIST = ["execute_sql", "get_schema", "list_tables"]
 
 
-class ContextSection(Vertical):
+class ContextSection(Container):
     """Collapsible section widget for context panel."""
 
     DEFAULT_CSS = """
@@ -62,14 +62,9 @@ class ContextSection(Vertical):
         color: $accent;
     }
 
-    ContextSection .section-content {
-        display: block;
+    ContextSection .content {
         padding: 1 1;
         background: transparent;
-    }
-
-    ContextSection.collapsed .section-content {
-        display: none;
     }
     """
 
@@ -85,9 +80,16 @@ class ContextSection(Vertical):
         self.expanded = expanded
         self.badge = badge
         self._header: Static | None = None
+        self._content_children: list = []
+
+    def compose_add_child(self, widget: "Widget") -> None:
+        """Capture children from 'with' block to render after header."""
+        self._content_children.append(widget)
 
     def compose(self) -> ComposeResult:
-        """Compose the section header first."""
+        """Header first, then content container with children."""
+        from textual.containers import Vertical
+
         icon = "▼" if self.expanded else "▶"
         title_text = f"{icon} {self.section_title}"
         if self.badge:
@@ -96,14 +98,10 @@ class ContextSection(Vertical):
         self._header = Static(title_text, classes="header")
         yield self._header
 
-    def on_mount(self) -> None:
-        """Set initial collapsed state."""
-        if not self.expanded:
-            self.add_class("collapsed")
-        # Add section-content class to all children except header
-        for child in self.children:
-            if child is not self._header:
-                child.add_class("section-content")
+        with Vertical(classes="content") as content:
+            if not self.expanded:
+                content.display = False
+            yield from self._content_children
 
     def on_click(self) -> None:
         """Handle click to toggle."""
@@ -113,10 +111,11 @@ class ContextSection(Vertical):
         """Toggle expanded state and update header."""
         self.expanded = not self.expanded
 
-        if self.expanded:
-            self.remove_class("collapsed")
-        else:
-            self.add_class("collapsed")
+        # Find content container and toggle display
+        for child in self.children:
+            if "content" in child.classes:
+                child.display = self.expanded
+                break
 
         if self._header:
             icon = "▼" if self.expanded else "▶"
