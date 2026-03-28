@@ -131,7 +131,7 @@ def start_oauth_flow() -> dict[str, Any]:
     server = start_callback_server()
 
     auth_url = get_authorization_url(code_verifier, code_challenge, state)
-    print(f"Opening browser for authentication...")
+    print("Opening browser for authentication...")
     print(f"URL: {auth_url}")
     webbrowser.open(auth_url)
 

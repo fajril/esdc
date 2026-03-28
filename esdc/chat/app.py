@@ -1627,7 +1627,6 @@ class ESDCChatApp(App):
         Args:
             filename: Optional filename for the screenshot. Defaults to timestamped filename.
         """
-        from datetime import datetime
         from pathlib import Path
 
         if filename is None:

@@ -62,14 +62,11 @@ def create_llm_from_config(config: dict[str, Any]):
         oauth=config.get("oauth", {}),
     )
 
-    model = config.get("model")
-    base_url = config.get("base_url")
-    api_key = config.get("api_key")
-
     return provider_class.create_llm(
-        model=model if model else "",
-        base_url=base_url if base_url else "",
-        api_key=api_key if api_key else "",
+        model=provider_config.model or None,
+        base_url=provider_config.base_url or None,
+        api_key=provider_config.api_key or None,
+        config=provider_config,
     )
 
 

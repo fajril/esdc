@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 from openai import OpenAI
 
 # Local
-from esdc.auth import get_valid_token, is_token_expired, start_oauth_flow
+from esdc.auth import is_token_expired, start_oauth_flow
 from esdc.providers.base import Provider, ProviderConfig
 
 

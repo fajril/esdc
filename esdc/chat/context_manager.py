@@ -2,12 +2,11 @@
 
 # Standard library
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any
 
 # Third-party
 from langchain_core.messages import (
     AIMessage,
-    BaseMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,

@@ -526,10 +526,10 @@ def db_info() -> None:
         rich.print("  (from [cyan]ESDC_DB_FILE[/cyan] environment variable)")
 
     if db_file.exists():
-        rich.print(f"[green]Database exists: Yes[/green]")
+        rich.print("[green]Database exists: Yes[/green]")
     else:
         rich.print(
-            f"[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"
+            "[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"
         )
 
 
