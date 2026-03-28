@@ -1399,6 +1399,15 @@ class ESDCChatApp(App):
             tool_name = chunk.get("tool", "")
             tool_args = chunk.get("args", {})
 
+            # Tool-specific status messages
+            TOOL_STATUS_MAP = {
+                "execute_sql": "⏳ Executing SQL query...",
+                "get_schema": "⏳ Getting table schema...",
+                "list_tables": "⏳ Listing available tables...",
+                "get_recommended_table": "⏳ Finding recommended table...",
+                "resolve_uncertainty_level": "⏳ Resolving uncertainty level...",
+            }
+
             sql_query = ""
             if isinstance(tool_args, dict):
                 sql_query = tool_args.get("query", "")
@@ -1415,9 +1424,12 @@ class ESDCChatApp(App):
                 len(sql_query) if sql_query else 0,
             )
 
+            # Get appropriate status message
+            status_msg = TOOL_STATUS_MAP.get(tool_name, f"⏳ Using {tool_name}...")
+
             # Update tool status
             if self._context_panel:
-                self._context_panel.update_tool_status("⏳ Querying database...")
+                self._context_panel.update_tool_status(status_msg)
 
             # Add indicator to message
             if self._streaming_message:
@@ -1426,8 +1438,8 @@ class ESDCChatApp(App):
                 if self.chat_panel:
                     should_scroll = self.chat_panel.is_vertical_scroll_end
 
-                indicator_text = "\n\n🔍 Querying database..."
-                if sql_query:
+                indicator_text = f"\n\n{status_msg}"
+                if sql_query and tool_name == "execute_sql":
                     indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
 
                 self._accumulated_content += indicator_text
@@ -1447,9 +1459,19 @@ class ESDCChatApp(App):
                 len(result),
             )
 
+            # Tool-specific completion messages
+            TOOL_COMPLETED_MAP = {
+                "execute_sql": "✅ SQL query completed",
+                "get_schema": "✅ Schema retrieved",
+                "list_tables": "✅ Tables listed",
+                "get_recommended_table": "✅ Recommended table found",
+                "resolve_uncertainty_level": "✅ Uncertainty level resolved",
+            }
+
             # Update tool status
             if self._context_panel:
-                self._context_panel.update_tool_status("✅ Query completed")
+                completed_msg = TOOL_COMPLETED_MAP.get(tool_name, "✅ Tool completed")
+                self._context_panel.update_tool_status(completed_msg)
 
         elif chunk_type == "context_metadata":
             self._context_metadata = chunk.get("metadata")
