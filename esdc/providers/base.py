@@ -1,7 +1,9 @@
+# Standard library
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# Third-party
 from langchain_core.language_models import BaseChatModel
 
 ProviderType = Literal["ollama", "openai", "openai_compatible"]

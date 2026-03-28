@@ -1,15 +1,36 @@
 # esdc/chat/context_manager.py
 
+# Standard library
+from collections.abc import Sequence
 from typing import Any, Literal
+
+# Third-party
 from langchain_core.messages import (
-    HumanMessage,
     AIMessage,
-    ToolMessage,
-    SystemMessage,
     BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
     AnyMessage,
 )
 from langgraph.graph import MessagesState
+
+
+def _get_content_str(content: str | list[str | dict[str, Any]] | None) -> str:
+    """Extract string from content that can be str or list."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and "text" in item:
+                parts.append(item["text"])
+        return " ".join(parts)
+    return str(content)
 
 
 class ContextManager:
@@ -33,7 +54,7 @@ class ContextManager:
         self.recent_messages = recent_messages
         self.compaction_count = 0
 
-    def should_compact(self, messages: list[BaseMessage]) -> bool:
+    def should_compact(self, messages: Sequence[AnyMessage]) -> bool:
         """Check if compaction is needed (proactive at 75%)."""
         if not messages:
             return False
@@ -41,8 +62,8 @@ class ContextManager:
         return token_count >= self.compaction_threshold
 
     def manage_context(
-        self, messages: list[BaseMessage], force: bool = False
-    ) -> tuple[list[BaseMessage], dict]:
+        self, messages: Sequence[AnyMessage], force: bool = False
+    ) -> tuple[list[AnyMessage], dict]:
         """Apply hybrid compaction if needed.
 
         Returns:
@@ -50,16 +71,16 @@ class ContextManager:
             metadata includes: was_compacted, original_count, summary_info
         """
         if not messages:
-            return messages, {"was_compacted": False}
+            return list(messages), {"was_compacted": False}
 
         # Proactive check: only compact if over threshold
         if not force and not self.should_compact(messages):
-            return messages, {"was_compacted": False}
+            return list(messages), {"was_compacted": False}
 
         self.compaction_count += 1
         return self._hybrid(messages)
 
-    def _hybrid(self, messages: list[BaseMessage]) -> tuple[list[BaseMessage], dict]:
+    def _hybrid(self, messages: Sequence[AnyMessage]) -> tuple[list[AnyMessage], dict]:
         """Hybrid: Keep recent exact + summarized older."""
         # Separate system messages (always keep)
         system_messages = [m for m in messages if isinstance(m, SystemMessage)]
@@ -70,7 +91,7 @@ class ContextManager:
         older = other_messages[: -self.recent_messages]
 
         if not older:
-            return messages, {"was_compacted": False}
+            return list(messages), {"was_compacted": False}
 
         # Create summary of older messages
         summary = self._create_summary(older)
@@ -94,14 +115,15 @@ class ContextManager:
 
         return managed, metadata
 
-    def _create_summary(self, messages: list[BaseMessage]) -> str:
+    def _create_summary(self, messages: Sequence[AnyMessage]) -> str:
         """Create intelligent summary of older messages."""
         summary_parts = []
 
         for msg in messages:
             if isinstance(msg, HumanMessage):
+                content_str = _get_content_str(msg.content)
                 content = (
-                    msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
+                    content_str[:80] + "..." if len(content_str) > 80 else content_str
                 )
                 summary_parts.append(f"User asked: {content}")
 
@@ -118,16 +140,17 @@ class ContextManager:
                     tool_names = [tc.get("name", "unknown") for tc in msg.tool_calls]
                     summary_parts.append(f"AI used tools: {', '.join(tool_names)}")
                 elif msg.content:
+                    content_str = _get_content_str(msg.content)
                     content = (
-                        msg.content[:60] + "..."
-                        if len(msg.content) > 60
-                        else msg.content
+                        content_str[:60] + "..."
+                        if len(content_str) > 60
+                        else content_str
                     )
                     summary_parts.append(f"AI responded: {content}")
 
         return "\n".join(summary_parts[-10:])  # Keep last 10 significant actions
 
-    def _estimate_tokens(self, messages: list[BaseMessage]) -> int:
+    def _estimate_tokens(self, messages: Sequence[AnyMessage]) -> int:
         """Estimate token count using ~4 chars per token.
 
         Counts tokens from all message types including:
@@ -152,7 +175,7 @@ class ContextManager:
         return total_chars // 4
 
 
-def estimate_tokens(messages: list[BaseMessage]) -> int:
+def estimate_tokens(messages: Sequence[AnyMessage]) -> int:
     """Estimate token count from messages list.
 
     Public API for calculating tokens from messages in state.

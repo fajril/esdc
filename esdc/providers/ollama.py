@@ -1,7 +1,10 @@
+# Standard library
 import logging
 
+# Third-party
 from langchain_ollama import ChatOllama
 
+# Local
 from esdc.providers.base import Provider, ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -89,7 +92,7 @@ class OllamaProvider(Provider):
                 info.modelinfo
                 if hasattr(info, "modelinfo")
                 else info.get("model_info", {})
-            )
+            ) or {}
             logger.debug(f"📊 Model info for {model}: {model_info}")
 
             for key, value in model_info.items():

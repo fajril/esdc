@@ -1,4 +1,6 @@
 # esdc/chat/app.py
+
+# Standard library
 import asyncio
 import json
 import logging
@@ -48,15 +50,15 @@ else:
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("markdown_it").setLevel(logging.WARNING)
 
+# Third-party
+from langchain_core.language_models import BaseChatModel  # noqa: E402
+from langchain_core.runnables import Runnable  # noqa: E402
+from langgraph.checkpoint.base import BaseCheckpointSaver  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer  # noqa: E402
 from textual.widget import Widget  # noqa: E402
 from textual.widgets import Static, Input, Markdown, Collapsible  # noqa: E402
-
-from langchain_core.language_models import BaseChatModel  # noqa: E402
-from langchain_core.runnables import Runnable  # noqa: E402
-from langgraph.checkpoint.base import BaseCheckpointSaver  # noqa: E402
 
 MAX_MESSAGE_HISTORY = 100
 MAX_QUERY_HISTORY = 5

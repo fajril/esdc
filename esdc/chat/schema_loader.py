@@ -1,3 +1,6 @@
+"""Database schema loader for ESDC chat agent."""
+
+
 class SchemaLoader:
     CORE_COLUMNS = [
         "project_name",

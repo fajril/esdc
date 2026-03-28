@@ -1,3 +1,5 @@
+"""System prompts for the ESDC chat agent."""
+
 from esdc.chat.schema_loader import SchemaLoader
 
 SYSTEM_PROMPT = """You are an expert data analyst assistant for ESDC (elektronik Sumber Daya dan Cadangan).

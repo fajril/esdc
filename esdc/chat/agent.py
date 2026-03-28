@@ -1,18 +1,16 @@
+# Standard library
 import json
 import logging
 from typing import Any, AsyncGenerator, cast
 
+# Third-party
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import (
-    AnyMessage,
-    HumanMessage,
-    AIMessage,
-    SystemMessage,
-)
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.graph import END, START, MessagesState, StateGraph
 
+# Local
 from esdc.chat.context_manager import manage_context_node
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.tools import (
