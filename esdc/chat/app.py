@@ -14,8 +14,8 @@ log_dir = Path.home() / ".esdc" / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "esdc_chat.log"
 
-# Get log level from env var (priority) or default to INFO
-log_level_str = os.environ.get("ESDC_LOG_LEVEL", "INFO").upper()
+# Get log level from env var (priority) or default to WARNING
+log_level_str = os.environ.get("ESDC_LOG_LEVEL", "WARNING").upper()
 
 # Configure esdc.chat logger
 logger = logging.getLogger("esdc.chat")
@@ -1199,6 +1199,9 @@ class ESDCChatApp(App):
         self.user_input.focus()
 
         from esdc.configs import Config
+
+        # Initialize config if not exists (creates directory and default config)
+        Config.init_config()
 
         self._provider_name = Config.get_default_provider()
         self._model_name = Config.get_provider_model()
