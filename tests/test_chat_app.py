@@ -75,7 +75,8 @@ class TestChatPanel:
 
         panel = ChatPanel()
         assert panel is not None
-        assert hasattr(panel, "_message_container")
+        assert hasattr(panel, "messages")
+        assert panel.messages == []
 
     def test_chat_panel_mount_collapsible(self):
         """Test ChatPanel can mount collapsible widgets."""
@@ -114,8 +115,8 @@ class TestContextSection:
         from esdc.chat.app import ContextSection
 
         section = ContextSection("Test Section")
-        assert section.title == "Test Section"
-        assert section.expanded is False
+        assert section.section_title == "Test Section"
+        assert section.expanded is True  # Default is now True
 
     def test_context_section_expanded(self):
         """Test ContextSection with expanded state."""
@@ -128,7 +129,7 @@ class TestContextSection:
         """Test toggling ContextSection."""
         from esdc.chat.app import ContextSection
 
-        section = ContextSection("Test Section")
+        section = ContextSection("Test Section", expanded=False)
         assert section.expanded is False
         section.toggle()
         assert section.expanded is True
