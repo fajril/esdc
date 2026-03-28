@@ -112,11 +112,11 @@ class ContextSection(Container):
         self.toggle()
 
 
-class TokenUsageWidget(Static):
-    """Widget to display token usage with percentage."""
+class ContextUsageWidget(Static):
+    """Widget to display context usage with percentage."""
 
     DEFAULT_CSS = """
-    TokenUsageWidget {
+    ContextUsageWidget {
         height: auto;
         padding: 1;
         background: transparent;
@@ -124,13 +124,21 @@ class TokenUsageWidget(Static):
         margin: 1 0;
     }
 
-    .token-display {
+    .context-display {
         color: $text;
         text-style: bold;
     }
 
-    .token-muted {
+    .context-muted {
         color: $text-muted;
+    }
+
+    .context-warning {
+        color: $warning;
+    }
+
+    .context-danger {
+        color: $error;
     }
     """
 
@@ -161,8 +169,16 @@ class TokenUsageWidget(Static):
         return f"{self.token_count:,} / {self.context_length:,} ({percentage}%)"
 
     def _update_display(self) -> None:
-        """Update the widget display."""
-        self.update(self.get_formatted())
+        """Update the widget display with color coding."""
+        percentage = self.get_percentage()
+        text = self.get_formatted()
+
+        if percentage >= 90:
+            self.update(f"[context-danger]{text}[/]")
+        elif percentage >= 75:
+            self.update(f"[context-warning]{text}[/]")
+        else:
+            self.update(text)
 
 
 class ToolStatusList(Static):
@@ -917,7 +933,7 @@ class ESDCChatApp(App):
     }
 
     /* ===== Widget - Clean Design ===== */
-    TokenUsageWidget {
+    ContextUsageWidget {
         height: auto;
         padding: 1;
         background: transparent;

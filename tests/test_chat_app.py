@@ -134,40 +134,40 @@ class TestContextSection:
         assert section.expanded is True
 
 
-class TestTokenUsageWidget:
-    """Tests for TokenUsageWidget."""
+class TestContextUsageWidget:
+    """Tests for ContextUsageWidget."""
 
-    def test_token_usage_widget_creation(self):
-        """Test TokenUsageWidget can be created."""
-        from esdc.chat.app import TokenUsageWidget
+    def test_context_usage_widget_creation(self):
+        """Test ContextUsageWidget can be created."""
+        from esdc.chat.app import ContextUsageWidget
 
-        widget = TokenUsageWidget()
+        widget = ContextUsageWidget()
         assert widget.token_count == 0
         assert widget.context_length == 4096
 
-    def test_token_usage_widget_update(self):
+    def test_context_usage_widget_update(self):
         """Test updating token count."""
-        from esdc.chat.app import TokenUsageWidget
+        from esdc.chat.app import ContextUsageWidget
 
-        widget = TokenUsageWidget(context_length=16384)
+        widget = ContextUsageWidget(context_length=16384)
         widget.update_tokens(5432)
         assert widget.token_count == 5432
 
-    def test_token_usage_widget_percentage(self):
+    def test_context_usage_widget_percentage(self):
         """Test percentage calculation."""
-        from esdc.chat.app import TokenUsageWidget
+        from esdc.chat.app import ContextUsageWidget
 
-        widget = TokenUsageWidget(context_length=16384)
+        widget = ContextUsageWidget(context_length=16384)
         assert widget.get_percentage() == 0
 
         widget.update_tokens(8192)
         assert widget.get_percentage() == 50
 
-    def test_token_usage_widget_format(self):
+    def test_context_usage_widget_format(self):
         """Test formatted display."""
-        from esdc.chat.app import TokenUsageWidget
+        from esdc.chat.app import ContextUsageWidget
 
-        widget = TokenUsageWidget(context_length=16384)
+        widget = ContextUsageWidget(context_length=16384)
         widget.update_tokens(5432)
 
         formatted = widget.get_formatted()
