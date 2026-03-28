@@ -242,6 +242,9 @@ async def run_agent_stream(
         agent = agent.compile(checkpointer=checkpointer)  # type: ignore[attr-defined]
 
     stored_tool_calls: list[dict[str, Any]] = []
+    conversation_messages: list[
+        AnyMessage
+    ] = []  # Track messages for real-time token count
 
     logger.info("=" * 60)
     logger.info("🔔 AGENT_STREAM_STARTED: thread_id=%s", thread_id)
@@ -302,15 +305,26 @@ async def run_agent_stream(
                 if context_metadata:
                     logger.info("📦 CONTEXT_METADATA: %s", context_metadata)
                     yield {"type": "context_metadata", "metadata": context_metadata}
-                # Yield messages state for real-time token calculation
+                # Initialize conversation_messages with managed messages
                 if messages:
-                    yield {"type": "messages_state", "messages": messages}
+                    conversation_messages = messages.copy()
+                    yield {
+                        "type": "messages_state",
+                        "messages": conversation_messages.copy(),
+                    }
 
         # Handle completion (tool calls, final message)
         elif event_type == "on_chat_model_end":
             logger.info("🔚 CHAT_MODEL_END: completing LLM call")
             output = data.get("output")
             if output:
+                # Add AI message to conversation for token tracking
+                conversation_messages.append(output)
+                yield {
+                    "type": "messages_state",
+                    "messages": conversation_messages.copy(),
+                }
+
                 # Token usage
                 tokens_used = _extract_token_usage(output, user_input)
                 if tokens_used > 0:
@@ -392,8 +406,10 @@ async def run_agent_stream(
 
             # Extract SQL from stored_tool_calls (pop from front - FIFO order)
             sql = ""
+            tool_call_id = "unknown"
             if stored_tool_calls:
                 stored_tc = stored_tool_calls.pop(0)
+                tool_call_id = stored_tc.get("id", "unknown")
                 if stored_tc.get("name") == "execute_sql":
                     args = stored_tc.get("args", {})
                     if isinstance(args, str):
@@ -414,6 +430,16 @@ async def run_agent_stream(
                     tool_name,
                     len(str(tool_result)),
                 )
+
+            # Add ToolMessage to conversation for token tracking
+            from langchain_core.messages import ToolMessage
+
+            tool_msg = ToolMessage(content=str(tool_result), tool_call_id=tool_call_id)
+            conversation_messages.append(tool_msg)
+            yield {
+                "type": "messages_state",
+                "messages": conversation_messages.copy(),
+            }
 
             yield {
                 "type": "tool_result",
