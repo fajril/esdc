@@ -151,7 +151,7 @@ class TestContextUsageWidget:
         from esdc.chat.app import ContextUsageWidget
 
         widget = ContextUsageWidget(context_length=16384)
-        widget.update_tokens(5432)
+        widget.update_usage(5432)
         assert widget.token_count == 5432
 
     def test_context_usage_widget_percentage(self):
@@ -161,7 +161,7 @@ class TestContextUsageWidget:
         widget = ContextUsageWidget(context_length=16384)
         assert widget.get_percentage() == 0
 
-        widget.update_tokens(8192)
+        widget.update_usage(8192)
         assert widget.get_percentage() == 50
 
     def test_context_usage_widget_format(self):
@@ -169,7 +169,7 @@ class TestContextUsageWidget:
         from esdc.chat.app import ContextUsageWidget
 
         widget = ContextUsageWidget(context_length=16384)
-        widget.update_tokens(5432)
+        widget.update_usage(5432)
 
         formatted = widget.get_formatted()
         assert "5,432" in formatted
