@@ -302,6 +302,33 @@ class QueryHistory(Static):
         self.refresh()
 
 
+class ConversationTitle(Static):
+    """Static conversation title displayed at top of context panel."""
+
+    DEFAULT_CSS = """
+    ConversationTitle {
+        height: auto;
+        padding: 1;
+        background: $surface;
+        border: none;
+        margin: 1 0;
+        text-style: bold;
+        color: $text;
+        content-align: center middle;
+    }
+    """
+
+    def __init__(self, title: str = "", id: str | None = None):
+        super().__init__(id=id)
+        self._title = title
+
+    def compose(self) -> ComposeResult:
+        """Compose the title widget."""
+        from textual.widgets import Static
+
+        yield Static(self._title if self._title else "New Conversation")
+
+
 class ContextPanel(Vertical):
     """Static context panel showing session info and tool status."""
 
@@ -337,13 +364,23 @@ class ContextPanel(Vertical):
         self._provider_name: str = ""
         self._model_name: str = ""
         self._session_thread_id: str = ""
+        self._current_directory: str = ""
         self._tool_status: str = "🔍 Idle"
+        self._conversation_title: str = ""
+        self._token_count: int = 0
+        self._context_length: int = 4096
 
     def compose(self) -> ComposeResult:
         """Compose session info section."""
         from textual.widgets import Static
 
-        # Use instance variables for initial render
+        # 1. Conversation Title (static top)
+        yield ConversationTitle(
+            self._conversation_title,
+            id="conversation-title",
+        )
+
+        # 2. Session Info (collapsible section)
         thread_display = (
             str(self._session_thread_id)[:8] if self._session_thread_id else "N/A"
         )
@@ -360,15 +397,35 @@ class ContextPanel(Vertical):
                 id="session-content",
             )
 
-        # Tool status indicator
+        # 3. Tool status indicator
         yield Static(self._tool_status, classes="tool-status idle", id="tool-status")
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""
+        import os
+
+        self._current_directory = os.getcwd()
+
         logger.debug(
             f"ContextPanel mounted, provider={self._provider_name!r}, model={self._model_name!r}"
         )
-        # Initial refresh to ensure rendering
+        self.refresh()
+
+    def update_conversation_title(self, title: str) -> None:
+        """Update the conversation title."""
+        self._conversation_title = title
+        try:
+            title_widget = self.query_one("#conversation-title", ConversationTitle)
+            title_widget._title = title
+            title_widget.update(title)
+        except Exception:
+            pass
+        self.refresh()
+
+    def update_context_usage(self, token_count: int, context_length: int) -> None:
+        """Update context usage display."""
+        self._token_count = token_count
+        self._context_length = context_length
         self.refresh()
 
     def update_session_info(
