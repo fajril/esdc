@@ -83,7 +83,7 @@ class ContextSection(Container):
         self.expanded = expanded
         self.badge = badge
         self._header: Static | None = None
-        self._content_children: list = []
+        self._content_children: list[Widget] = []
 
     def compose_add_child(self, widget: "Widget") -> None:
         """Capture children from 'with' block to render after header."""
@@ -91,8 +91,6 @@ class ContextSection(Container):
 
     def compose(self) -> ComposeResult:
         """Header first, then content container with children."""
-        from textual.containers import Vertical
-
         icon = "▼" if self.expanded else "▶"
         title_text = f"{icon} {self.section_title}"
         if self.badge:
