@@ -418,10 +418,10 @@ class ContextPanel(Vertical):
                 id="session-content",
             )
 
-        # 3. Context (collapsible, collapsed by default)
+        # 3. Context (collapsible, expanded by default)
         with ContextSection(
             "Context",
-            expanded=False,
+            expanded=True,
             id="context-section",
         ):
             yield ContextUsageWidget(
