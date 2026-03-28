@@ -130,7 +130,7 @@ class ContextSection(Container):
 
 
 class ContextUsageWidget(Static):
-    """Widget to display context usage with percentage."""
+    """Display context usage with compaction status."""
 
     DEFAULT_CSS = """
     ContextUsageWidget {
@@ -157,6 +157,11 @@ class ContextUsageWidget(Static):
     .context-danger {
         color: $error;
     }
+
+    .context-compacted {
+        color: $primary;
+        text-style: italic;
+    }
     """
 
     def __init__(
@@ -168,10 +173,14 @@ class ContextUsageWidget(Static):
         super().__init__(id=id)
         self.token_count = token_count
         self.context_length = context_length
+        self.compaction_info: dict | None = None
 
-    def update_tokens(self, count: int) -> None:
-        """Update token count."""
-        self.token_count = count
+    def update_usage(
+        self, token_count: int, compaction_info: dict | None = None
+    ) -> None:
+        """Update token count and compaction info."""
+        self.token_count = token_count
+        self.compaction_info = compaction_info
         self._update_display()
 
     def get_percentage(self) -> int:
@@ -186,16 +195,25 @@ class ContextUsageWidget(Static):
         return f"{self.token_count:,} / {self.context_length:,} ({percentage}%)"
 
     def _update_display(self) -> None:
-        """Update the widget display with color coding."""
+        """Update the widget display with color coding and compaction status."""
         percentage = self.get_percentage()
         text = self.get_formatted()
 
+        lines = []
+
         if percentage >= 90:
-            self.update(f"[context-danger]{text}[/]")
+            lines.append(f"[context-danger]{text}[/]")
         elif percentage >= 75:
-            self.update(f"[context-warning]{text}[/]")
+            lines.append(f"[context-warning]{text}[/]")
         else:
-            self.update(text)
+            lines.append(text)
+
+        if self.compaction_info and self.compaction_info.get("was_compacted"):
+            lines.append(
+                f"[context-compacted]📦 Compacted: {self.compaction_info['summarized_count']} messages summarized[/]"
+            )
+
+        self.update("\n".join(lines))
 
 
 class ToolStatusList(Static):
@@ -1113,6 +1131,7 @@ class ESDCChatApp(App):
         self._provider_name: str = ""
         self._model_name: str = ""
         self._context_panel_visible: bool = True
+        self._context_metadata: dict | None = None
 
         # Queue-based streaming infrastructure
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -1415,6 +1434,9 @@ class ESDCChatApp(App):
             if self._context_panel:
                 self._context_panel.update_tool_status("✅ Query completed")
 
+        elif chunk_type == "context_metadata":
+            self._context_metadata = chunk.get("metadata")
+
         elif chunk_type == "token_usage":
             tokens = chunk.get("tokens", 0)
             if tokens > 0:
@@ -1434,6 +1456,16 @@ class ESDCChatApp(App):
                         self._token_count,
                         self._context_length,
                     )
+                    # Update ContextUsageWidget with compaction info
+                    try:
+                        context_widget = self._context_panel.query_one(
+                            "#context-usage", ContextUsageWidget
+                        )
+                        context_widget.update_usage(
+                            self._token_count, self._context_metadata
+                        )
+                    except Exception:
+                        pass
 
         elif chunk_type == "complete":
             success = chunk.get("success", True)

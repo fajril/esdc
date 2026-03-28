@@ -274,6 +274,16 @@ async def run_agent_stream(
                         "content": content,
                     }
 
+        # Handle context management node completion
+        elif event_type == "on_chain_end":
+            node_name = event.get("name", "")
+            if node_name == "manage_context":
+                output_data = data.get("output", {})
+                context_metadata = output_data.get("context_metadata")
+                if context_metadata:
+                    logger.info("📦 CONTEXT_METADATA: %s", context_metadata)
+                    yield {"type": "context_metadata", "metadata": context_metadata}
+
         # Handle completion (tool calls, final message)
         elif event_type == "on_chat_model_end":
             logger.info("🔚 CHAT_MODEL_END: completing LLM call")
