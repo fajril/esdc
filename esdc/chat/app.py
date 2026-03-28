@@ -72,7 +72,7 @@ class ContextSection(Container):
         background: transparent;
     }
 
-    ContextSection.collapsed .content {
+    ContextSection .content.hidden {
         display: none;
     }
     """
@@ -89,9 +89,12 @@ class ContextSection(Container):
         self.expanded = expanded
         self.badge = badge
         self._header: Static | None = None
+        self._content_container: Vertical | None = None
 
     def compose(self) -> ComposeResult:
-        """Compose the section."""
+        """Compose the section with header and content wrapper."""
+        from textual.containers import Vertical
+
         icon = "▼" if self.expanded else "▶"
         title_text = f"{icon} {self.section_title}"
         if self.badge:
@@ -100,10 +103,14 @@ class ContextSection(Container):
         self._header = Static(title_text, classes="header")
         yield self._header
 
+        self._content_container = Vertical(classes="content")
+        if not self.expanded:
+            self._content_container.add_class("hidden")
+        yield self._content_container
+
     def on_mount(self) -> None:
         """Set initial expanded state."""
-        if not self.expanded:
-            self.add_class("collapsed")
+        pass
 
     def on_click(self) -> None:
         """Handle click to toggle."""
@@ -114,9 +121,11 @@ class ContextSection(Container):
         self.expanded = not self.expanded
 
         if self.expanded:
-            self.remove_class("collapsed")
+            if self._content_container:
+                self._content_container.remove_class("hidden")
         else:
-            self.add_class("collapsed")
+            if self._content_container:
+                self._content_container.add_class("hidden")
 
         if self._header:
             icon = "▼" if self.expanded else "▶"
