@@ -38,15 +38,15 @@ JSON string with recommended table name and explanation.
 ```python
 # Field query
 get_recommended_table("field")
-# Returns: {"table": "field_resources", "explanation": "Pre-aggregated field-level data..."}
+# Returns: {{"table": "field_resources", "explanation": "Pre-aggregated field-level data..."}}
 
 # Work area query with project detail
 get_recommended_table("work_area", needs_project_detail=True)
-# Returns: {"table": "project_resources", "explanation": "Project details requested..."}
+# Returns: {{"table": "project_resources", "explanation": "Project details requested..."}}
 
 # Unknown entity
 get_recommended_table("unknown_entity")
-# Returns: {"table": "project_resources", "explanation": "Default to most detailed table..."}
+# Returns: {{"table": "project_resources", "explanation": "Default to most detailed table..."}}
 ```
 
 ### resolve_uncertainty_level(level, volume_type)
@@ -69,15 +69,15 @@ JSON string with db_value, type (direct/calculated), calculation formula, and SQ
 ```python
 # Direct value
 resolve_uncertainty_level("2P", "reserves")
-# Returns: {"db_value": "2. Middle Value", "type": "direct", ...}
+# Returns: {{"db_value": "2. Middle Value", "type": "direct", ...}}
 
 # Calculated value (reserves only)
 resolve_uncertainty_level("probable", "reserves")
-# Returns: {"type": "calculated", "calculation": "2P - 1P", ...}
+# Returns: {{"type": "calculated", "calculation": "2P - 1P", ...}}
 
 # Validation error
 resolve_uncertainty_level("probable", "resources")
-# Returns: {"warning": "probable/possible only valid for reserves", ...}
+# Returns: {{"warning": "probable/possible only valid for reserves", ...}}
 ```
 
 **Important:**
@@ -106,10 +106,10 @@ Use tool results to construct efficient queries.
 User: "Berapa cadangan probable lapangan Duri?"
 
 Step 1: Call get_recommended_table("field")
-        → Returns: {"table": "field_resources"}
+        → Returns: {{"table": "field_resources"}}
 
 Step 2: Call resolve_uncertainty_level("probable", "reserves")
-        → Returns: {"type": "calculated", "calculation": "2P - 1P", "sql_template": "..."}
+        → Returns: {{"type": "calculated", "calculation": "2P - 1P", "sql_template": "..."}}
 
 Step 3: Build SQL using tool results:
         SELECT 
@@ -148,7 +148,7 @@ When the user doesn't specify year or uncertainty level, apply these defaults:
 
 ### Year Default
 - Use the LATEST available report year
-- To find latest year: `SELECT MAX(report_year) FROM project_resources`
+- To find latest year: `SELECT MAX(report_year) FROM field_resources`
 - NEVER combine or sum data from different report years
 - If user asks for trends over time, use project_timeseries table instead
 
@@ -177,9 +177,9 @@ When applying defaults, inform the user:
 
 | User Query | Interpretation | SQL Filters |
 |------------|----------------|--------------|
-| "Oil reserves" | Latest year + 2P | `report_year = (SELECT MAX(report_year) FROM project_resources) AND project_class LIKE '%Reserv%' AND uncert_level = 'Mid'` |
-| "Gas in place" | Latest year + P50 | `report_year = (SELECT MAX(report_year) FROM project_resources) AND uncert_level = 'Mid'` (use prj_igip) |
-| "Contingent oil" | Latest year + 2C | `report_year = (SELECT MAX(report_year) FROM project_resources) AND project_class = 'Contingent Resources' AND uncert_level = 'Mid'` |
+| "Oil reserves" | Latest year + 2P | `report_year = (SELECT MAX(report_year) FROM field_resources) AND project_class LIKE '%Reserv%' AND uncert_level = 'Mid'` |
+| "Gas in place" | Latest year + P50 | `report_year = (SELECT MAX(report_year) FROM field_resources) AND uncert_level = 'Mid'` (use prj_igip) |
+| "Contingent oil" | Latest year + 2C | `report_year = (SELECT MAX(report_year) FROM field_resources) AND project_class = 'Contingent Resources' AND uncert_level = 'Mid'` |
 | "Prospective resources 2022" | Year 2022 + 2U | `report_year = 2022 AND project_class = 'Prospective Resources' AND uncert_level = 'Mid'` |
 | "2P reserves by operator" | Latest year + 2P | Use specified uncertainty (2P) |
 | "Reserves trend 2020-2024" | Use project_timeseries | Use year range filter in timeseries table |
@@ -239,6 +239,27 @@ When applying defaults, inform the user:
 - "Show me all projects in field X" → Use `project_resources`
 - "What are the top 10 projects by oil reserves?" → Use `project_resources`
 - "Show me all projects in the North Sumatra basin" → Use `project_resources`
+
+## Example Queries
+
+**Field Reserves Query:**
+```sql
+SELECT SUM(res_oc), SUM(res_an)
+FROM field_resources
+WHERE field_name LIKE '%<FIELD_NAME>%'
+  AND report_year = (SELECT MAX(report_year) FROM field_resources)
+  AND uncert_level = 'Mid'
+```
+
+**Work Area Resources Query:**
+```sql
+SELECT SUM(rec_oc), SUM(rec_an)
+FROM wa_resources
+WHERE wk_name LIKE '%<WORK_AREA>%'
+  AND report_year = (SELECT MAX(report_year) FROM wa_resources)
+  AND uncert_level = 'Mid'
+  AND project_class = '2. Contingent Resources'
+```
 
 Remember: Always use the execute_sql tool to query data when the user asks about specific data.
 """

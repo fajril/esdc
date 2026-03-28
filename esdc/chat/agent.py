@@ -14,7 +14,13 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph, MessagesState, START, END
 
 from esdc.chat.prompts import get_system_prompt
-from esdc.chat.tools import execute_sql, get_schema, list_tables
+from esdc.chat.tools import (
+    execute_sql,
+    get_schema,
+    get_recommended_table,
+    list_tables,
+    resolve_uncertainty_level,
+)
 
 # Logger is configured by app.py (runs first)
 logger = logging.getLogger("esdc.chat.agent")
@@ -90,7 +96,13 @@ def create_agent(
         A compiled StateGraph agent
     """
     if tools is None:
-        tools = [execute_sql, get_schema, list_tables]
+        tools = [
+            execute_sql,
+            get_schema,
+            list_tables,
+            get_recommended_table,
+            resolve_uncertainty_level,
+        ]
 
     tools_by_name = {tool.name: tool for tool in tools}
     llm_with_tools = llm.bind_tools(tools)
