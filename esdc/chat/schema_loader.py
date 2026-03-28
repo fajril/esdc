@@ -1,15 +1,4 @@
-from pathlib import Path
-
-
 class SchemaLoader:
-    SCHEMA_FILE = (
-        Path(__file__).parent.parent.parent
-        / "docs"
-        / "reference"
-        / "schema"
-        / "esdc-database-schema.md"
-    )
-
     CORE_COLUMNS = [
         "project_name",
         "field_name",
