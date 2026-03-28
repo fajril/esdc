@@ -152,105 +152,29 @@ When applying defaults, inform the user:
 - If user specifies uncertainty but not year → use latest year
 - Never combine data from different report years
 
-## Domain Knowledge (Indonesian Oil & Gas Terminology)
+## Domain Knowledge (Indonesian Terminology)
 
-### Key Terms Mapping
+**Use `resolve_uncertainty_level` tool when user mentions uncertainty (1P/2P/probable/etc).**
 
-**Volume Types:**
-- "Cadangan" (Indonesian) / "Reserves" (English) → Use `res_*` columns (res_oc, res_an)
-- "Sumber Daya" (Indonesian) / "Resources" (English) → Use `rec_*` columns (rec_oc, rec_an)
-- "In-Place" / "IOIP/IGIP" → Use `prj_ioip`, `prj_igip` columns
-
-**Uncertainty Levels:**
-
-**Direct Database Values (use with any volume type):**
-- 1P/1R/1C/1U → `uncert_level = '1. Low Value'` (Low estimate)
-- 2P/2R/2C/2U → `uncert_level = '2. Middle Value'` (Best estimate)
-- 3P/3R/3C/3U → `uncert_level = '3. High Value'` (High estimate)
-
-**Calculated Values (Reserves ONLY - use res_* columns):**
-- "Proven" / "Terbukti" → Same as 1P, filter: `uncert_level = '1. Low Value'`
-- "Probable" / "Mungkin" → INCREMENTAL volume = 2P - 1P = Middle - Low
-- "Possible" / "Harapan" → INCREMENTAL volume = 3P - 2P = High - Middle
-
-**CRITICAL: Probable and Possible are calculated differences, NOT database values.**
-When user asks for "probable reserves":
-```sql
--- Probable = 2P - 1P (Middle - Low)
-SELECT 
-    SUM(CASE WHEN uncert_level = '2. Middle Value' THEN res_oc ELSE 0 END) -
-    SUM(CASE WHEN uncert_level = '1. Low Value' THEN res_oc ELSE 0 END) as probable_oc,
-    SUM(CASE WHEN uncert_level = '2. Middle Value' THEN res_an ELSE 0 END) -
-    SUM(CASE WHEN uncert_level = '1. Low Value' THEN res_an ELSE 0 END) as probable_an
-FROM project_resources
-WHERE field_name LIKE '%<FIELD>%'
-  AND report_year = (SELECT MAX(report_year) FROM project_resources)
-```
-
-**Apply to Reserves columns (res_*) ONLY - do NOT use probable/possible with rec_* columns!**
-
-**Project Classes:**
-- Reserves (commercial) → No project_class filter needed (use res_* columns)
-- GRR (Government Recoverable Resources) → Filter: `project_class = '1. Reserves & GRR'`
-- Contingent Resources → Filter: `project_class = '2. Contingent Resources'`
-- Prospective Resources → Filter: `project_class = '3. Prospective Resources'`
-
-**Substances:**
-- Oil + Condensate: Column suffix `_oc` (e.g., res_oc, rec_oc)
-- Total Gas (Associated + Non-associated): Column suffix `_an` (e.g., res_an, rec_an)
-- Associated Gas: Column suffix `_ga`
-- Non-associated Gas: Column suffix `_gn`
-
-**Risked vs Unrisked:**
-- For Prospective Resources, use `rec_*_risked` columns when asked for "risked" volumes
-- Use `rec_*` columns (without _risked) for "unrisked" volumes
-
-**Locations:**
-- "Lapangan" (Indonesian) / "Field" → Filter: `field_name LIKE '%<name>%'`
+**Quick Reference:**
+- "Cadangan" / "Reserves" → `res_*` columns
+- "Sumber Daya" / "Resources" → `rec_*` columns
+- "Lapangan" / "Field" → Filter: `field_name LIKE '%<name>%'`
 - "Wilayah Kerja" / "Work Area" → Filter: `wk_name LIKE '%<name>%'`
 - "Provinsi" / "Province" → Filter: `province LIKE '%<name>%'`
-- "Basin" / "Cekungan" → Filter: `basin128 LIKE '%<name>%'`
+- "Cekungan" / "Basin" → Filter: `basin128 LIKE '%<name>%'`
 
-### Common Query Patterns
+**Substances:**
+- Oil + Condensate: `_oc` suffix
+- Total Gas: `_an` suffix
+- Associated Gas: `_ga` suffix
+- Non-associated Gas: `_gn` suffix
 
-**Field Reserves Query:**
-```sql
-SELECT SUM(res_oc), SUM(res_an)
-FROM project_resources
-WHERE field_name LIKE '%<FIELD>%'
-  AND report_year = (SELECT MAX(report_year) FROM project_resources)
-  AND uncert_level = '2. Middle Value'
-```
-
-**GRR Query:**
-```sql
-SELECT SUM(rec_oc), SUM(rec_an)
-FROM project_resources
-WHERE field_name LIKE '%<FIELD>%'
-  AND report_year = (SELECT MAX(report_year) FROM project_resources)
-  AND uncert_level = '2. Middle Value'
-  AND project_class = '1. Reserves & GRR'
-```
-
-**Contingent Resources Query:**
-```sql
-SELECT SUM(rec_oc), SUM(rec_an)
-FROM project_resources
-WHERE field_name LIKE '%<FIELD>%'
-  AND report_year = (SELECT MAX(report_year) FROM project_resources)
-  AND uncert_level = '2. Middle Value'
-  AND project_class = '2. Contingent Resources'
-```
-
-**Prospective Resources (Risked) Query:**
-```sql
-SELECT SUM(rec_oc_risked), SUM(rec_an_risked)
-FROM project_resources
-WHERE field_name LIKE '%<FIELD>%'
-  AND report_year = (SELECT MAX(report_year) FROM project_resources)
-  AND uncert_level = '2. Middle Value'
-  AND project_class = '3. Prospective Resources'
-```
+**Project Classes:**
+- Reserves → `res_*` columns (default)
+- GRR → `project_class = '1. Reserves & GRR'`
+- Contingent Resources → `project_class = '2. Contingent Resources'`
+- Prospective Resources → `project_class = '3. Prospective Resources'`
 
 ## Table/View Selection Guide
 
