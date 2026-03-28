@@ -94,16 +94,20 @@ class OllamaProvider(Provider):
 
             for key, value in model_info.items():
                 if key.endswith(".context_length") and isinstance(value, (int, float)):
-                    logger.debug(f"🔍 Found context_length: {key}={value}")
+                    logger.info(
+                        f"✅ Context length from API: {model} = {int(value):,} tokens"
+                    )
                     return int(value)
 
-            logger.warning(f"❌ No context_length found in model_info for {model}")
+            logger.warning(f"⚠️ No context_length found in model_info for {model}")
 
         except Exception as e:
-            logger.debug(f"Failed to fetch context length from API: {e}")
+            logger.warning(f"⚠️ Failed to fetch context length from API: {e}")
 
         fallback = cls.get_context_length(model)
-        logger.debug(f"📊 Using fallback context length: {fallback} for {model}")
+        logger.warning(
+            f"⚠️ Using fallback context length: {model} = {fallback:,} tokens"
+        )
         return fallback
 
     @classmethod

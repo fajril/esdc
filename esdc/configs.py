@@ -242,6 +242,25 @@ class Config:
         return "gpt-4o"
 
     @classmethod
+    def get_log_level(cls) -> str:
+        """Get log level from config.
+
+        Priority:
+        1. ESDC_LOG_LEVEL environment variable (0 = disable)
+        2. config.yaml: chat.log_level
+
+        Returns:
+            Log level string: DEBUG, INFO, WARNING, ERROR, or 0 (disable)
+        """
+        env_level = os.environ.get("ESDC_LOG_LEVEL")
+        if env_level:
+            return env_level.upper()
+
+        config = cls._load_config() or {}
+        chat_config = config.get("chat", {})
+        return chat_config.get("log_level", "INFO")
+
+    @classmethod
     def get_provider_base_url(cls) -> str:
         """Get provider base URL from config."""
         provider_config = cls.get_provider_config()

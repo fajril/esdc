@@ -2,27 +2,47 @@
 import asyncio
 import json
 import logging
+import os
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
 # Configure logging FIRST - before any other imports that might use logging
-log_dir = Path.cwd()
+# Log location: ~/.esdc/logs/
+log_dir = Path.home() / ".esdc" / "logs"
+log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "esdc_chat.log"
 
-# Create file handler only (no console output to avoid terminal clutter)
-file_handler = logging.FileHandler(log_file, mode="a")
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(
-    logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
-)
+# Get log level from env var (priority) or default to INFO
+log_level_str = os.environ.get("ESDC_LOG_LEVEL", "INFO").upper()
 
-# Configure esdc.chat logger - isolate from root logger to prevent console output
+# Configure esdc.chat logger
 logger = logging.getLogger("esdc.chat")
-logger.setLevel(logging.DEBUG)
-logger.addHandler(file_handler)
-logger.propagate = False  # Critical: prevent logs from propagating to root logger
 
-logger.info(f"ESDC Chat starting, log file: {log_file}")
+if log_level_str == "0":
+    # Disable logging completely
+    logging.disable(logging.CRITICAL)
+else:
+    # Parse log level
+    log_level = getattr(logging, log_level_str, logging.INFO)
+
+    # Rotating file handler: 10MB max, 5 backups
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
+    )
+
+    logger.setLevel(log_level)
+    logger.addHandler(file_handler)
+    logger.propagate = False  # Critical: prevent logs from propagating to root logger
+
+    logger.info(f"ESDC Chat starting, log file: {log_file}")
 
 # Suppress verbose httpcore and markdown_it logs (only show WARNING+)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -1203,6 +1223,11 @@ class ESDCChatApp(App):
                     self._context_length = provider.get_context_length(
                         provider_config.get("model", "")
                     )
+
+        # Log context length
+        logger.info(
+            f"📊 Context length: {self._model_name} = {self._context_length:,} tokens"
+        )
 
         # Update context panel with session info
         if self._context_panel:
