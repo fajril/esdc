@@ -13,6 +13,7 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph, MessagesState, START, END
 
+from esdc.chat.context_manager import manage_context_node
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.tools import (
     execute_sql,
@@ -173,9 +174,11 @@ def create_agent(
 
     graph = (
         StateGraph(MessagesState)
+        .add_node("manage_context", manage_context_node)
         .add_node("agent", agent_node)
         .add_node("tools", tool_node)
-        .add_edge(START, "agent")
+        .add_edge(START, "manage_context")
+        .add_edge("manage_context", "agent")
         .add_conditional_edges(
             "agent",
             should_continue,
