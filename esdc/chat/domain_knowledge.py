@@ -64,18 +64,21 @@ def get_table_for_query(
     entity_name: Optional[str] = None,
     require_detail: bool = False,
     timeseries_detail: bool = False,
+    prefer_aggregation: bool = True,
 ) -> str:
     """
     Get the recommended table/view for a query.
 
     Uses pre-aggregated views for efficiency at field/work_area/national levels.
     For timeseries: uses views for aggregation, project_timeseries for detail per project.
+    For static resources: uses views for aggregation, project_resources for detail per project.
 
     Args:
-        entity_type: Type of entity (field, work_area, wa, national, nkri)
+        entity_type: Type of entity (field, work_area, wa, national, nkri, project)
         entity_name: Name of specific entity
-        require_detail: If True, use base table (project_resources) for detailed analysis
+        require_detail: If True, use base table (project_resources) for detailed static analysis
         timeseries_detail: If True, use project_timeseries for detail; False for aggregated views
+        prefer_aggregation: If True, prefer aggregated views over detail tables
 
     Returns:
         Table name to query
@@ -95,16 +98,34 @@ def get_table_for_query(
 
         >>> get_table_for_query("field_timeseries", timeseries_detail=True)  # detail
         'project_timeseries'
-    """
-    if require_detail:
-        return "project_resources"
 
+        >>> get_table_for_query("field", prefer_aggregation=False)  # prefer detail
+        'project_resources'
+    """
     if timeseries_detail:
         return "project_timeseries"
 
+    if require_detail:
+        return "project_resources"
+
     if entity_type:
         entity_type = entity_type.lower().strip()
-        return TABLE_HIERARCHY.get(entity_type, "project_resources")
+        table = TABLE_HIERARCHY.get(entity_type, "project_resources")
+
+        # If prefer_aggregation is False and the result is an aggregation view,
+        # return the detail table instead
+        if not prefer_aggregation:
+            aggregation_to_detail = {
+                "field_resources": "project_resources",
+                "wa_resources": "project_resources",
+                "nkri_resources": "project_resources",
+                "field_timeseries": "project_timeseries",
+                "wa_timeseries": "project_timeseries",
+                "nkri_timeseries": "project_timeseries",
+            }
+            return aggregation_to_detail.get(table, table)
+
+        return table
 
     return "project_resources"
 
@@ -2313,10 +2334,21 @@ def get_recommended_table(
         "wilayah_kerja": "wa_resources",
         "national": "nkri_resources",
         "nkri": "nkri_resources",
+        # Static resources - aggregation keywords
+        "field_reserves": "field_resources",
+        "field_resources": "field_resources",
+        "lapangan_reserves": "field_resources",
+        "wa_reserves": "wa_resources",
+        "wa_resources": "wa_resources",
+        "wilayah_kerja_reserves": "wa_resources",
+        "nkri_reserves": "nkri_resources",
+        "nasional_reserves": "nkri_resources",
         # Timeseries base table (for detail)
         "project_timeseries": "project_timeseries",
         "project_forecast": "project_timeseries",
         "detail": "project_timeseries",
+        "detail_reserves": "project_resources",
+        "detail_resources": "project_resources",
         # Timeseries views (for aggregation)
         "field_timeseries": "field_timeseries",
         "ts_field": "field_timeseries",
@@ -2338,12 +2370,14 @@ def get_recommended_table(
         "perkiraan": "field_timeseries",
         "proyeksi": "field_timeseries",
         "produksi kedepan": "field_timeseries",
+        "future production": "field_timeseries",
         "peak_production": "field_timeseries",
         "puncak produksi": "field_timeseries",
         "trend": "field_timeseries",
         "timeseries": "field_timeseries",
         "time series": "field_timeseries",
         "profil produksi": "field_timeseries",
+        "production profile": "field_timeseries",
     }
 
     return table_map.get(entity_type, "project_resources")
