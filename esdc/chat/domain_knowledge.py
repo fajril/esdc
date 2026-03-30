@@ -24,17 +24,26 @@ TABLE_HIERARCHY: Dict[str, str] = {
     "national": "nkri_resources",
     "nkri": "nkri_resources",
     "nasional": "nkri_resources",
-    # Timeseries views
+    # Timeseries base table (for detail per project)
+    "project_timeseries": "project_timeseries",
+    "project_forecast": "project_timeseries",
+    "detail": "project_timeseries",
+    # Timeseries views (for aggregation)
     "field_timeseries": "field_timeseries",
     "timeseries_field": "field_timeseries",
     "ts_field": "field_timeseries",
+    "field_forecast": "field_timeseries",
+    "lapangan_forecast": "field_timeseries",
     "wa_timeseries": "wa_timeseries",
     "timeseries_wa": "wa_timeseries",
     "ts_wa": "wa_timeseries",
+    "wa_forecast": "wa_timeseries",
     "nkri_timeseries": "nkri_timeseries",
     "timeseries_nkri": "nkri_timeseries",
     "ts_nkri": "nkri_timeseries",
     "timeseries_national": "nkri_timeseries",
+    "nkri_forecast": "nkri_timeseries",
+    "nasional_forecast": "nkri_timeseries",
 }
 
 AGGREGATION_LEVELS: List[Tuple[str, str, int]] = [
@@ -42,9 +51,11 @@ AGGREGATION_LEVELS: List[Tuple[str, str, int]] = [
     ("field_resources", "field", 2),
     ("wa_resources", "work_area", 3),
     ("nkri_resources", "national", 4),
-    ("field_timeseries", "field_timeseries", 5),
-    ("wa_timeseries", "wa_timeseries", 6),
-    ("nkri_timeseries", "nkri_timeseries", 7),
+    # Timeseries hierarchy: detail (0) -> aggregate (1-3)
+    ("project_timeseries", "project_timeseries", 0),  # Detail level
+    ("field_timeseries", "field_timeseries", 1),
+    ("wa_timeseries", "wa_timeseries", 2),
+    ("nkri_timeseries", "nkri_timeseries", 3),
 ]
 
 
@@ -52,16 +63,19 @@ def get_table_for_query(
     entity_type: Optional[str] = None,
     entity_name: Optional[str] = None,
     require_detail: bool = False,
+    timeseries_detail: bool = False,
 ) -> str:
     """
     Get the recommended table/view for a query.
 
     Uses pre-aggregated views for efficiency at field/work_area/national levels.
+    For timeseries: uses views for aggregation, project_timeseries for detail per project.
 
     Args:
         entity_type: Type of entity (field, work_area, wa, national, nkri)
-        entity_name: Name of specific entity (not used for selection, but for future use)
-        require_detail: If True, use project_resources for detailed analysis
+        entity_name: Name of specific entity
+        require_detail: If True, use base table (project_resources) for detailed analysis
+        timeseries_detail: If True, use project_timeseries for detail; False for aggregated views
 
     Returns:
         Table name to query
@@ -76,11 +90,17 @@ def get_table_for_query(
         >>> get_table_for_query("field", require_detail=True)
         'project_resources'
 
-        >>> get_table_for_query("project")
-        'project_resources'
+        >>> get_table_for_query("field_timeseries")  # aggregation
+        'field_timeseries'
+
+        >>> get_table_for_query("field_timeseries", timeseries_detail=True)  # detail
+        'project_timeseries'
     """
     if require_detail:
         return "project_resources"
+
+    if timeseries_detail:
+        return "project_timeseries"
 
     if entity_type:
         entity_type = entity_type.lower().strip()
@@ -2193,7 +2213,7 @@ def get_aggregation_table_info() -> Dict[str, Dict]:
             "filter_column": "wk_name",
         },
         "nkri_timeseries": {
-            "level": 7,
+            "level": 3,
             "entity_type": "nkri_timeseries",
             "description": "National timeseries forecast data per year",
             "columns": [
@@ -2215,11 +2235,40 @@ def get_aggregation_table_info() -> Dict[str, Dict]:
             ],
             "filter_column": None,
         },
+        "project_timeseries": {
+            "level": 0,
+            "entity_type": "project_timeseries",
+            "description": "Project-level timeseries forecast data (detail per project per year)",
+            "columns": [
+                "project_id",
+                "project_name",
+                "field_name",
+                "wk_name",
+                "year",
+                "tpf_*",
+                "slf_*",
+                "spf_*",
+                "crf_*",
+                "prf_*",
+                "ciof_*",
+                "lossf_*",
+                "cprd_*",
+                "rate_*",
+            ],
+            "use_for": [
+                "project-specific production forecasts",
+                "detail per project analysis",
+                "comparing projects within same field",
+            ],
+            "filter_column": "project_name",
+        },
     }
 
 
 def get_recommended_table(
-    entity_type: Optional[str] = None, query_needs_detail: bool = False
+    entity_type: Optional[str] = None,
+    query_needs_detail: bool = False,
+    timeseries_detail: bool = False,
 ) -> str:
     """
     Get the recommended table for a query type.
@@ -2227,8 +2276,9 @@ def get_recommended_table(
     This is a helper function to guide the LLM in selecting tables.
 
     Args:
-        entity_type: "field", "work_area", "national", or "project"
-        query_needs_detail: True if query needs project-level details
+        entity_type: "field", "work_area", "national", "project", or timeseries variants
+        query_needs_detail: True if query needs project-level details (for resources)
+        timeseries_detail: True if query needs project-level detail (for timeseries)
 
     Returns:
         Recommended table name
@@ -2239,9 +2289,18 @@ def get_recommended_table(
 
         >>> get_recommended_table("field", query_needs_detail=True)
         'project_resources'
+
+        >>> get_recommended_table("field_forecast")  # aggregated timeseries
+        'field_timeseries'
+
+        >>> get_recommended_table("project_timeseries", timeseries_detail=True)  # detail
+        'project_timeseries'
     """
     if query_needs_detail:
         return "project_resources"
+
+    if timeseries_detail:
+        return "project_timeseries"
 
     entity_type = entity_type.lower().strip() if entity_type else ""
 
@@ -2254,18 +2313,27 @@ def get_recommended_table(
         "wilayah_kerja": "wa_resources",
         "national": "nkri_resources",
         "nkri": "nkri_resources",
-        # Timeseries views
+        # Timeseries base table (for detail)
+        "project_timeseries": "project_timeseries",
+        "project_forecast": "project_timeseries",
+        "detail": "project_timeseries",
+        # Timeseries views (for aggregation)
         "field_timeseries": "field_timeseries",
         "ts_field": "field_timeseries",
         "timeseries_field": "field_timeseries",
+        "field_forecast": "field_timeseries",
+        "lapangan_forecast": "field_timeseries",
         "wa_timeseries": "wa_timeseries",
         "ts_wa": "wa_timeseries",
         "timeseries_wa": "wa_timeseries",
+        "wa_forecast": "wa_timeseries",
         "nkri_timeseries": "nkri_timeseries",
         "ts_nkri": "nkri_timeseries",
         "timeseries_nkri": "nkri_timeseries",
         "timeseries_national": "nkri_timeseries",
-        # Timeseries keywords
+        "nkri_forecast": "nkri_timeseries",
+        "nasional_forecast": "nkri_timeseries",
+        # Timeseries keywords (default to field_timeseries for aggregation)
         "forecast": "field_timeseries",
         "perkiraan": "field_timeseries",
         "proyeksi": "field_timeseries",
