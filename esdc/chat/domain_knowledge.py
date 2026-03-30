@@ -599,6 +599,90 @@ DOMAIN_CONCEPTS: Dict[str, Dict] = {
             "description": "The difference between GRR and reserves",
         },
     },
+    "forecast_types": {
+        "tpf": {
+            "full_name": "Total Potential Forecast",
+            "columns": ["tpf_*"],
+            "description": "Profil perkiraan produksi. Jumlah seluruh TPF sama dengan kolom rec_* (Resources).",
+            "equivalent_to": "resources",
+        },
+        "total_potential_forecast": {
+            "full_name": "Total Potential Forecast",
+            "columns": ["tpf_*"],
+            "description": "Profil perkiraan produksi. Jumlah seluruh TPF sama dengan kolom rec_* (Resources).",
+            "equivalent_to": "resources",
+        },
+        "slf": {
+            "full_name": "Sales Forecast",
+            "columns": ["slf_*"],
+            "description": "Profil perkiraan produksi reserves. Jumlah seluruh SLF sama dengan kolom res_* (Reserves).",
+            "equivalent_to": "reserves",
+        },
+        "sales_forecast": {
+            "full_name": "Sales Forecast",
+            "columns": ["slf_*"],
+            "description": "Profil perkiraan produksi reserves. Jumlah seluruh SLF sama dengan kolom res_* (Reserves).",
+            "equivalent_to": "reserves",
+        },
+        "spf": {
+            "full_name": "Sales Potential Forecast",
+            "columns": ["spf_*"],
+            "description": "Selisih antara TPF dan SLF. Potensi yang bisa diproduksikan andaikata kendala komersial dapat diatasi.",
+            "calculation": "tpf_* - slf_*",
+            "equivalent_to": "sales_potential",
+        },
+        "sales_potential_forecast": {
+            "full_name": "Sales Potential Forecast",
+            "columns": ["spf_*"],
+            "description": "Selisih antara TPF dan SLF. Potensi yang bisa diproduksikan andaikata kendala komersial dapat diatasi.",
+            "calculation": "tpf_* - slf_*",
+            "equivalent_to": "sales_potential",
+        },
+        "crf": {
+            "full_name": "Contingent Resources Forecast",
+            "columns": ["crf_*"],
+            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Contingent Resources.",
+            "applies_to": "contingent_resources",
+        },
+        "contingent_resources_forecast": {
+            "full_name": "Contingent Resources Forecast",
+            "columns": ["crf_*"],
+            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Contingent Resources.",
+            "applies_to": "contingent_resources",
+        },
+        "prf": {
+            "full_name": "Prospective Resources Forecast",
+            "columns": ["prf_*"],
+            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Prospective Resources.",
+            "applies_to": "prospective_resources",
+        },
+        "prospective_resources_forecast": {
+            "full_name": "Prospective Resources Forecast",
+            "columns": ["prf_*"],
+            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Prospective Resources.",
+            "applies_to": "prospective_resources",
+        },
+        "ciof": {
+            "full_name": "Consumed in Operation Forecast",
+            "columns": ["ciof_*"],
+            "description": "Profil produksi yang digunakan oleh kegiatan operasi (Fuel, Flare, Shrinkage).",
+        },
+        "consumed_in_operation_forecast": {
+            "full_name": "Consumed in Operation Forecast",
+            "columns": ["ciof_*"],
+            "description": "Profil produksi yang digunakan oleh kegiatan operasi (Fuel, Flare, Shrinkage).",
+        },
+        "lossf": {
+            "full_name": "Loss Production Forecast",
+            "columns": ["lossf_*"],
+            "description": "Profil loss production yang terjadi.",
+        },
+        "loss_production_forecast": {
+            "full_name": "Loss Production Forecast",
+            "columns": ["lossf_*"],
+            "description": "Profil loss production yang terjadi.",
+        },
+    },
     "volume_types": {
         "cadangan": {
             "columns": ["res_oc", "res_an"],
@@ -677,6 +761,23 @@ SYNONYMS: Dict[str, str] = {
     "wilayah kerja": "wk",
     "wk": "wk",
     "work area": "wk",
+    # Forecast types synonyms
+    "tpf": "tpf",
+    "total potential forecast": "tpf",
+    "slf": "slf",
+    "sales forecast": "slf",
+    "sales lift": "slf",
+    "spf": "spf",
+    "sales potential forecast": "spf",
+    "sales profile": "spf",
+    "crf": "crf",
+    "contingent resources forecast": "crf",
+    "prf": "prf",
+    "prospective resources forecast": "prf",
+    "ciof": "ciof",
+    "consumed in operation forecast": "ciof",
+    "lossf": "lossf",
+    "loss production forecast": "lossf",
     "operator": "operator",
     "basin": "basin",
     "cekungan": "basin",
@@ -1726,6 +1827,12 @@ def resolve_concept(term: str) -> Optional[Dict]:
 
     if normalized in DOMAIN_CONCEPTS["substances"]:
         return {"type": "substance", **DOMAIN_CONCEPTS["substances"][normalized]}
+
+    if normalized in DOMAIN_CONCEPTS["forecast_types"]:
+        return {
+            "type": "forecast_type",
+            **DOMAIN_CONCEPTS["forecast_types"][normalized],
+        }
 
     return None
 
