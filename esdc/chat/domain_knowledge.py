@@ -1132,23 +1132,6 @@ COLUMN_METADATA: Dict[str, ColumnMetadata] = {
         "rate",
         "total_gas",
     ),
-    # Cumulative Production
-    "cprd_grs_oc": ColumnMetadata(
-        "cprd_grs_oc",
-        "Cumulative gross production oil + condensate",
-        "MSTB",
-        "cumulative_production",
-        "production",
-        "oil_condensate",
-    ),
-    "cprd_grs_an": ColumnMetadata(
-        "cprd_grs_an",
-        "Cumulative gross production gas",
-        "BSCF",
-        "cumulative_production",
-        "production",
-        "total_gas",
-    ),
     # Timeseries Forecast Columns - TPF (Total Potential Forecast)
     "tpf_oil": ColumnMetadata(
         "tpf_oil",
