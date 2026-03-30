@@ -42,6 +42,9 @@ AGGREGATION_LEVELS: List[Tuple[str, str, int]] = [
     ("field_resources", "field", 2),
     ("wa_resources", "work_area", 3),
     ("nkri_resources", "national", 4),
+    ("field_timeseries", "field_timeseries", 5),
+    ("wa_timeseries", "wa_timeseries", 6),
+    ("nkri_timeseries", "nkri_timeseries", 7),
 ]
 
 
@@ -112,6 +115,10 @@ def can_use_view_for_calculation(uncertainty: str, table: str) -> bool:
         "field_resources",
         "wa_resources",
         "nkri_resources",
+        # Timeseries views
+        "field_timeseries",
+        "wa_timeseries",
+        "nkri_timeseries",
     ]
 
     if table not in valid_tables:
@@ -125,7 +132,7 @@ def get_entity_filter_column(entity_type: str, table: str) -> Optional[str]:
     Get the column name to filter by for a given entity type.
 
     Args:
-        entity_type: Type of entity (field, work_area, national)
+        entity_type: Type of entity (field, work_area, national, timeseries)
         table: Table name
 
     Returns:
@@ -137,9 +144,13 @@ def get_entity_filter_column(entity_type: str, table: str) -> Optional[str]:
 
         >>> get_entity_filter_column("work_area", "wa_resources")
         'wk_name'
+
+        >>> get_entity_filter_column("field", "field_timeseries")
+        'field_name'
     """
     entity_type = entity_type.lower().strip() if entity_type else ""
 
+    # Static views
     if entity_type in ["field"]:
         return "field_name"
     elif entity_type in ["work_area", "wa"]:
@@ -147,11 +158,33 @@ def get_entity_filter_column(entity_type: str, table: str) -> Optional[str]:
     elif entity_type in ["national", "nkri"]:
         return None
 
+    # Timeseries views
+    if entity_type in ["field_timeseries", "ts_field", "timeseries_field"]:
+        return "field_name"
+    elif entity_type in ["wa_timeseries", "ts_wa", "timeseries_wa"]:
+        return "wk_name"
+    elif entity_type in [
+        "nkri_timeseries",
+        "ts_nkri",
+        "timeseries_nkri",
+        "timeseries_national",
+    ]:
+        return None
+
     if table == "project_resources":
         if "field" in entity_type or entity_type == "":
             return "field_name"
         elif "wk" in entity_type or "work_area" in entity_type:
             return "wk_name"
+
+    # Timeseries tables
+    if "timeseries" in table or table.endswith("_timeseries"):
+        if "field" in entity_type:
+            return "field_name"
+        elif "wk" in entity_type or "work_area" in entity_type or "wa" in entity_type:
+            return "wk_name"
+        elif "national" in entity_type or "nkri" in entity_type:
+            return None
 
     return "field_name"
 
@@ -1075,6 +1108,543 @@ COLUMN_METADATA: Dict[str, ColumnMetadata] = {
         "production",
         "total_gas",
     ),
+    # Timeseries Forecast Columns - TPF (Total Potential Forecast)
+    "tpf_oil": ColumnMetadata(
+        "tpf_oil",
+        "Total Potential Forecast oil",
+        "MSTB",
+        "timeseries_forecast_tpf",
+        "forecast",
+        "oil",
+    ),
+    "tpf_con": ColumnMetadata(
+        "tpf_con",
+        "Total Potential Forecast condensate",
+        "MSTB",
+        "timeseries_forecast_tpf",
+        "forecast",
+        "condensate",
+    ),
+    "tpf_ga": ColumnMetadata(
+        "tpf_ga",
+        "Total Potential Forecast associated gas",
+        "BSCF",
+        "timeseries_forecast_tpf",
+        "forecast",
+        "associated_gas",
+    ),
+    "tpf_gn": ColumnMetadata(
+        "tpf_gn",
+        "Total Potential Forecast non-associated gas",
+        "BSCF",
+        "timeseries_forecast_tpf",
+        "forecast",
+        "non_associated_gas",
+    ),
+    "tpf_oc": ColumnMetadata(
+        "tpf_oc",
+        "Total Potential Forecast oil + condensate",
+        "MSTB",
+        "timeseries_forecast_tpf",
+        "forecast",
+        "oil_condensate",
+    ),
+    "tpf_an": ColumnMetadata(
+        "tpf_an",
+        "Total Potential Forecast total gas",
+        "BSCF",
+        "timeseries_forecast_tpf",
+        "forecast",
+        "total_gas",
+    ),
+    "tpf_risked_oil": ColumnMetadata(
+        "tpf_risked_oil",
+        "Risked Forecast oil",
+        "MSTB",
+        "timeseries_forecast_tpf_risked",
+        "forecast",
+        "oil",
+    ),
+    "tpf_risked_con": ColumnMetadata(
+        "tpf_risked_con",
+        "Risked Forecast condensate",
+        "MSTB",
+        "timeseries_forecast_tpf_risked",
+        "forecast",
+        "condensate",
+    ),
+    "tpf_risked_ga": ColumnMetadata(
+        "tpf_risked_ga",
+        "Risked Forecast associated gas",
+        "BSCF",
+        "timeseries_forecast_tpf_risked",
+        "forecast",
+        "associated_gas",
+    ),
+    "tpf_risked_gn": ColumnMetadata(
+        "tpf_risked_gn",
+        "Risked Forecast non-associated gas",
+        "BSCF",
+        "timeseries_forecast_tpf_risked",
+        "forecast",
+        "non_associated_gas",
+    ),
+    "tpf_risked_oc": ColumnMetadata(
+        "tpf_risked_oc",
+        "Risked Forecast oil + condensate",
+        "MSTB",
+        "timeseries_forecast_tpf_risked",
+        "forecast",
+        "oil_condensate",
+    ),
+    "tpf_risked_an": ColumnMetadata(
+        "tpf_risked_an",
+        "Risked Forecast total gas",
+        "BSCF",
+        "timeseries_forecast_tpf_risked",
+        "forecast",
+        "total_gas",
+    ),
+    # Timeseries Forecast Columns - SLF (Sales Forecast)
+    "slf_oil": ColumnMetadata(
+        "slf_oil",
+        "Sales Forecast oil",
+        "MSTB",
+        "timeseries_forecast_slf",
+        "forecast",
+        "oil",
+    ),
+    "slf_con": ColumnMetadata(
+        "slf_con",
+        "Sales Forecast condensate",
+        "MSTB",
+        "timeseries_forecast_slf",
+        "forecast",
+        "condensate",
+    ),
+    "slf_ga": ColumnMetadata(
+        "slf_ga",
+        "Sales Forecast associated gas",
+        "BSCF",
+        "timeseries_forecast_slf",
+        "forecast",
+        "associated_gas",
+    ),
+    "slf_gn": ColumnMetadata(
+        "slf_gn",
+        "Sales Forecast non-associated gas",
+        "BSCF",
+        "timeseries_forecast_slf",
+        "forecast",
+        "non_associated_gas",
+    ),
+    "slf_oc": ColumnMetadata(
+        "slf_oc",
+        "Sales Forecast oil + condensate",
+        "MSTB",
+        "timeseries_forecast_slf",
+        "forecast",
+        "oil_condensate",
+    ),
+    "slf_an": ColumnMetadata(
+        "slf_an",
+        "Sales Forecast total gas",
+        "BSCF",
+        "timeseries_forecast_slf",
+        "forecast",
+        "total_gas",
+    ),
+    # Timeseries Forecast Columns - SPF (Sales Potential Forecast)
+    "spf_oil": ColumnMetadata(
+        "spf_oil",
+        "Sales Potential Forecast oil",
+        "MSTB",
+        "timeseries_forecast_spf",
+        "forecast",
+        "oil",
+    ),
+    "spf_con": ColumnMetadata(
+        "spf_con",
+        "Sales Potential Forecast condensate",
+        "MSTB",
+        "timeseries_forecast_spf",
+        "forecast",
+        "condensate",
+    ),
+    "spf_ga": ColumnMetadata(
+        "spf_ga",
+        "Sales Potential Forecast associated gas",
+        "BSCF",
+        "timeseries_forecast_spf",
+        "forecast",
+        "associated_gas",
+    ),
+    "spf_gn": ColumnMetadata(
+        "spf_gn",
+        "Sales Potential Forecast non-associated gas",
+        "BSCF",
+        "timeseries_forecast_spf",
+        "forecast",
+        "non_associated_gas",
+    ),
+    "spf_oc": ColumnMetadata(
+        "spf_oc",
+        "Sales Potential Forecast oil + condensate",
+        "MSTB",
+        "timeseries_forecast_spf",
+        "forecast",
+        "oil_condensate",
+    ),
+    "spf_an": ColumnMetadata(
+        "spf_an",
+        "Sales Potential Forecast total gas",
+        "BSCF",
+        "timeseries_forecast_spf",
+        "forecast",
+        "total_gas",
+    ),
+    # Timeseries Forecast Columns - CRF (Contingent Resources Forecast)
+    "crf_oil": ColumnMetadata(
+        "crf_oil",
+        "Contingent Resources Forecast oil",
+        "MSTB",
+        "timeseries_forecast_crf",
+        "forecast",
+        "oil",
+    ),
+    "crf_con": ColumnMetadata(
+        "crf_con",
+        "Contingent Resources Forecast condensate",
+        "MSTB",
+        "timeseries_forecast_crf",
+        "forecast",
+        "condensate",
+    ),
+    "crf_ga": ColumnMetadata(
+        "crf_ga",
+        "Contingent Resources Forecast associated gas",
+        "BSCF",
+        "timeseries_forecast_crf",
+        "forecast",
+        "associated_gas",
+    ),
+    "crf_gn": ColumnMetadata(
+        "crf_gn",
+        "Contingent Resources Forecast non-associated gas",
+        "BSCF",
+        "timeseries_forecast_crf",
+        "forecast",
+        "non_associated_gas",
+    ),
+    "crf_oc": ColumnMetadata(
+        "crf_oc",
+        "Contingent Resources Forecast oil + condensate",
+        "MSTB",
+        "timeseries_forecast_crf",
+        "forecast",
+        "oil_condensate",
+    ),
+    "crf_an": ColumnMetadata(
+        "crf_an",
+        "Contingent Resources Forecast total gas",
+        "BSCF",
+        "timeseries_forecast_crf",
+        "forecast",
+        "total_gas",
+    ),
+    # Timeseries Forecast Columns - PRF (Prospective Resources Forecast)
+    "prf_oil": ColumnMetadata(
+        "prf_oil",
+        "Prospective Resources Forecast oil",
+        "MSTB",
+        "timeseries_forecast_prf",
+        "forecast",
+        "oil",
+    ),
+    "prf_con": ColumnMetadata(
+        "prf_con",
+        "Prospective Resources Forecast condensate",
+        "MSTB",
+        "timeseries_forecast_prf",
+        "forecast",
+        "condensate",
+    ),
+    "prf_ga": ColumnMetadata(
+        "prf_ga",
+        "Prospective Resources Forecast associated gas",
+        "BSCF",
+        "timeseries_forecast_prf",
+        "forecast",
+        "associated_gas",
+    ),
+    "prf_gn": ColumnMetadata(
+        "prf_gn",
+        "Prospective Resources Forecast non-associated gas",
+        "BSCF",
+        "timeseries_forecast_prf",
+        "forecast",
+        "non_associated_gas",
+    ),
+    "prf_oc": ColumnMetadata(
+        "prf_oc",
+        "Prospective Resources Forecast oil + condensate",
+        "MSTB",
+        "timeseries_forecast_prf",
+        "forecast",
+        "oil_condensate",
+    ),
+    "prf_an": ColumnMetadata(
+        "prf_an",
+        "Prospective Resources Forecast total gas",
+        "BSCF",
+        "timeseries_forecast_prf",
+        "forecast",
+        "total_gas",
+    ),
+    # Timeseries Forecast Columns - CIOF (Consumed in Operation Forecast)
+    "ciof_oil": ColumnMetadata(
+        "ciof_oil",
+        "Consumed in Operation Forecast oil",
+        "MSTB",
+        "timeseries_forecast_ciof",
+        "forecast",
+        "oil",
+    ),
+    "ciof_con": ColumnMetadata(
+        "ciof_con",
+        "Consumed in Operation Forecast condensate",
+        "MSTB",
+        "timeseries_forecast_ciof",
+        "forecast",
+        "condensate",
+    ),
+    "ciof_ga": ColumnMetadata(
+        "ciof_ga",
+        "Consumed in Operation Forecast associated gas",
+        "BSCF",
+        "timeseries_forecast_ciof",
+        "forecast",
+        "associated_gas",
+    ),
+    "ciof_gn": ColumnMetadata(
+        "ciof_gn",
+        "Consumed in Operation Forecast non-associated gas",
+        "BSCF",
+        "timeseries_forecast_ciof",
+        "forecast",
+        "non_associated_gas",
+    ),
+    "ciof_oc": ColumnMetadata(
+        "ciof_oc",
+        "Consumed in Operation Forecast oil + condensate",
+        "MSTB",
+        "timeseries_forecast_ciof",
+        "forecast",
+        "oil_condensate",
+    ),
+    "ciof_an": ColumnMetadata(
+        "ciof_an",
+        "Consumed in Operation Forecast total gas",
+        "BSCF",
+        "timeseries_forecast_ciof",
+        "forecast",
+        "total_gas",
+    ),
+    # Timeseries Forecast Columns - LOSSF (Loss Production Forecast)
+    "lossf_oil": ColumnMetadata(
+        "lossf_oil",
+        "Loss Production Forecast oil",
+        "MSTB",
+        "timeseries_forecast_lossf",
+        "forecast",
+        "oil",
+    ),
+    "lossf_con": ColumnMetadata(
+        "lossf_con",
+        "Loss Production Forecast condensate",
+        "MSTB",
+        "timeseries_forecast_lossf",
+        "forecast",
+        "condensate",
+    ),
+    "lossf_ga": ColumnMetadata(
+        "lossf_ga",
+        "Loss Production Forecast associated gas",
+        "BSCF",
+        "timeseries_forecast_lossf",
+        "forecast",
+        "associated_gas",
+    ),
+    "lossf_gn": ColumnMetadata(
+        "lossf_gn",
+        "Loss Production Forecast non-associated gas",
+        "BSCF",
+        "timeseries_forecast_lossf",
+        "forecast",
+        "non_associated_gas",
+    ),
+    "lossf_oc": ColumnMetadata(
+        "lossf_oc",
+        "Loss Production Forecast oil + condensate",
+        "MSTB",
+        "timeseries_forecast_lossf",
+        "forecast",
+        "oil_condensate",
+    ),
+    "lossf_an": ColumnMetadata(
+        "lossf_an",
+        "Loss Production Forecast total gas",
+        "BSCF",
+        "timeseries_forecast_lossf",
+        "forecast",
+        "total_gas",
+    ),
+    # Timeseries Historical Columns - Cumulative Production
+    "cprd_grs_oil": ColumnMetadata(
+        "cprd_grs_oil",
+        "Cumulative gross production oil",
+        "MSTB",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "oil",
+    ),
+    "cprd_grs_con": ColumnMetadata(
+        "cprd_grs_con",
+        "Cumulative gross production condensate",
+        "MSTB",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "condensate",
+    ),
+    "cprd_grs_ga": ColumnMetadata(
+        "cprd_grs_ga",
+        "Cumulative gross production associated gas",
+        "BSCF",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "associated_gas",
+    ),
+    "cprd_grs_gn": ColumnMetadata(
+        "cprd_grs_gn",
+        "Cumulative gross production non-associated gas",
+        "BSCF",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "non_associated_gas",
+    ),
+    "cprd_grs_oc": ColumnMetadata(
+        "cprd_grs_oc",
+        "Cumulative gross production oil + condensate",
+        "MSTB",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "oil_condensate",
+    ),
+    "cprd_grs_an": ColumnMetadata(
+        "cprd_grs_an",
+        "Cumulative gross production total gas",
+        "BSCF",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "total_gas",
+    ),
+    "cprd_sls_oil": ColumnMetadata(
+        "cprd_sls_oil",
+        "Cumulative sales oil",
+        "MSTB",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "oil",
+    ),
+    "cprd_sls_con": ColumnMetadata(
+        "cprd_sls_con",
+        "Cumulative sales condensate",
+        "MSTB",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "condensate",
+    ),
+    "cprd_sls_ga": ColumnMetadata(
+        "cprd_sls_ga",
+        "Cumulative sales associated gas",
+        "BSCF",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "associated_gas",
+    ),
+    "cprd_sls_gn": ColumnMetadata(
+        "cprd_sls_gn",
+        "Cumulative sales non-associated gas",
+        "BSCF",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "non_associated_gas",
+    ),
+    "cprd_sls_oc": ColumnMetadata(
+        "cprd_sls_oc",
+        "Cumulative sales oil + condensate",
+        "MSTB",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "oil_condensate",
+    ),
+    "cprd_sls_an": ColumnMetadata(
+        "cprd_sls_an",
+        "Cumulative sales total gas",
+        "BSCF",
+        "timeseries_historical_cumulative",
+        "cumulative",
+        "total_gas",
+    ),
+    # Timeseries Historical Columns - Production Rate
+    "rate_oil": ColumnMetadata(
+        "rate_oil",
+        "Production rate oil",
+        "MSTB/Y",
+        "timeseries_historical_rate",
+        "rate",
+        "oil",
+    ),
+    "rate_con": ColumnMetadata(
+        "rate_con",
+        "Production rate condensate",
+        "MSTB/Y",
+        "timeseries_historical_rate",
+        "rate",
+        "condensate",
+    ),
+    "rate_ga": ColumnMetadata(
+        "rate_ga",
+        "Production rate associated gas",
+        "BSCF/Y",
+        "timeseries_historical_rate",
+        "rate",
+        "associated_gas",
+    ),
+    "rate_gn": ColumnMetadata(
+        "rate_gn",
+        "Production rate non-associated gas",
+        "BSCF/Y",
+        "timeseries_historical_rate",
+        "rate",
+        "non_associated_gas",
+    ),
+    "rate_oc": ColumnMetadata(
+        "rate_oc",
+        "Production rate oil + condensate",
+        "MSTB/Y",
+        "timeseries_historical_rate",
+        "rate",
+        "oil_condensate",
+    ),
+    "rate_an": ColumnMetadata(
+        "rate_an",
+        "Production rate total gas",
+        "BSCF/Y",
+        "timeseries_historical_rate",
+        "rate",
+        "total_gas",
+    ),
 }
 
 
@@ -1574,6 +2144,77 @@ def get_aggregation_table_info() -> Dict[str, Dict]:
             "use_for": ["national totals", "country-wide statistics"],
             "filter_column": None,
         },
+        "field_timeseries": {
+            "level": 5,
+            "entity_type": "field_timeseries",
+            "description": "Timeseries forecast data aggregated by field per year",
+            "columns": [
+                "field_name",
+                "wk_name",
+                "year",
+                "tpf_*",
+                "slf_*",
+                "spf_*",
+                "crf_*",
+                "prf_*",
+                "ciof_*",
+                "lossf_*",
+                "cprd_*",
+                "rate_*",
+            ],
+            "use_for": [
+                "field-level production forecasts",
+                "peak production analysis",
+                "production trends by field",
+            ],
+            "filter_column": "field_name",
+        },
+        "wa_timeseries": {
+            "level": 6,
+            "entity_type": "wa_timeseries",
+            "description": "Timeseries forecast data aggregated by work area per year",
+            "columns": [
+                "wk_name",
+                "year",
+                "tpf_*",
+                "slf_*",
+                "spf_*",
+                "crf_*",
+                "prf_*",
+                "ciof_*",
+                "lossf_*",
+                "cprd_*",
+                "rate_*",
+            ],
+            "use_for": [
+                "work area production forecasts",
+                "regional production trends",
+            ],
+            "filter_column": "wk_name",
+        },
+        "nkri_timeseries": {
+            "level": 7,
+            "entity_type": "nkri_timeseries",
+            "description": "National timeseries forecast data per year",
+            "columns": [
+                "year",
+                "tpf_*",
+                "slf_*",
+                "spf_*",
+                "crf_*",
+                "prf_*",
+                "ciof_*",
+                "lossf_*",
+                "cprd_*",
+                "rate_*",
+            ],
+            "use_for": [
+                "national production forecasts",
+                "country-wide production trends",
+                "national peak production analysis",
+            ],
+            "filter_column": None,
+        },
     }
 
 
@@ -1613,6 +2254,283 @@ def get_recommended_table(
         "wilayah_kerja": "wa_resources",
         "national": "nkri_resources",
         "nkri": "nkri_resources",
+        # Timeseries views
+        "field_timeseries": "field_timeseries",
+        "ts_field": "field_timeseries",
+        "timeseries_field": "field_timeseries",
+        "wa_timeseries": "wa_timeseries",
+        "ts_wa": "wa_timeseries",
+        "timeseries_wa": "wa_timeseries",
+        "nkri_timeseries": "nkri_timeseries",
+        "ts_nkri": "nkri_timeseries",
+        "timeseries_nkri": "nkri_timeseries",
+        "timeseries_national": "nkri_timeseries",
+        # Timeseries keywords
+        "forecast": "field_timeseries",
+        "perkiraan": "field_timeseries",
+        "proyeksi": "field_timeseries",
+        "produksi kedepan": "field_timeseries",
+        "peak_production": "field_timeseries",
+        "puncak produksi": "field_timeseries",
+        "trend": "field_timeseries",
+        "timeseries": "field_timeseries",
+        "time series": "field_timeseries",
+        "profil produksi": "field_timeseries",
     }
 
     return table_map.get(entity_type, "project_resources")
+
+
+# =============================================================================
+# Timeseries-specific Functions
+# =============================================================================
+
+
+def get_peak_production_year_sql(
+    table: str = "field_timeseries",
+    entity_name: Optional[str] = None,
+    substance: str = "oc",
+) -> str:
+    """
+    Build SQL to find the year with peak production.
+
+    Args:
+        table: Table name (field_timeseries, wa_timeseries, nkri_timeseries)
+        entity_name: Optional entity name to filter (e.g., "Duri")
+        substance: Substance suffix (oil, con, ga, gn, oc, an)
+
+    Returns:
+        SQL query string
+
+    Examples:
+        >>> get_peak_production_year_sql("field_timeseries", "Duri", "oc")
+        "SELECT year, tpf_oc FROM field_timeseries WHERE field_name LIKE '%Duri%' ORDER BY tpf_oc DESC LIMIT 1"
+    """
+    column = f"tpf_{substance}"
+    entity_col = get_entity_filter_column(
+        "field" if "field" in table else "work_area", table
+    )
+
+    sql = f"""SELECT
+    year,
+    {column} as peak_volume
+FROM {table}
+WHERE {column} = (
+    SELECT MAX({column})
+    FROM {table}
+    {f"WHERE {entity_col} LIKE '%{entity_name}%'" if entity_name and entity_col else ""}
+)"""
+
+    if entity_name and entity_col:
+        sql += f" AND {entity_col} LIKE '%{entity_name}%'"
+
+    return sql
+
+
+def get_last_production_year_sql(
+    table: str = "field_timeseries",
+    entity_name: Optional[str] = None,
+    substance: str = "oc",
+) -> str:
+    """
+    Build SQL to find the last year with production > 0 (EOL - End of Life).
+
+    Args:
+        table: Table name (field_timeseries, wa_timeseries, nkri_timeseries)
+        entity_name: Optional entity name to filter
+        substance: Substance suffix (oil, con, ga, gn, oc, an)
+
+    Returns:
+        SQL query string
+
+    Examples:
+        >>> get_last_production_year_sql("field_timeseries", "Duri", "oil")
+        "SELECT MAX(year) FROM field_timeseries WHERE field_name LIKE '%Duri%' AND tpf_oil > 0"
+    """
+    column = f"tpf_{substance}"
+    entity_col = get_entity_filter_column(
+        "field" if "field" in table else "work_area", table
+    )
+
+    sql = f"""SELECT
+    MAX(year) as last_production_year
+FROM {table}
+WHERE {column} > 0"""
+
+    if entity_name and entity_col:
+        sql += f" AND {entity_col} LIKE '%{entity_name}%'"
+
+    return sql
+
+
+def get_onstream_year_sql(
+    table: str = "field_timeseries",
+    entity_name: Optional[str] = None,
+    substance: str = "oc",
+) -> str:
+    """
+    Build SQL to find the onstream year.
+    Uses onstream_year column if available, otherwise finds MIN(year) with production > 0.
+
+    Args:
+        table: Table name
+        entity_name: Optional entity name to filter
+        substance: Substance suffix
+
+    Returns:
+        SQL query string
+    """
+    column = f"tpf_{substance}"
+    entity_col = get_entity_filter_column(
+        "field" if "field" in table else "work_area", table
+    )
+
+    sql = f"""SELECT
+    COALESCE(
+        MIN(onstream_year),
+        (SELECT MIN(year) FROM {table} AS t2 WHERE t2.{column} > 0 {f"AND t2.{entity_col} = t1.{entity_col}" if entity_col else ""})
+    ) as onstream_year
+FROM {table} AS t1
+WHERE 1=1"""
+
+    if entity_name and entity_col:
+        sql += f" AND {entity_col} LIKE '%{entity_name}%'"
+
+    return sql
+
+
+def convert_volume_units(
+    volume: float, from_unit: str, to_unit: str, year: int = 2024
+) -> float:
+    """
+    Convert volume units for timeseries data.
+
+    Args:
+        volume: Volume value
+        from_unit: Source unit (MSTB, BSCF, MSTBY, BSCFY)
+        to_unit: Target unit (BOPD, MMSCFD, MSTBY, BSCFY)
+        year: Year for daily calculation (for leap year detection)
+
+    Returns:
+        Converted volume value
+
+    Examples:
+        >>> convert_volume_units(1000, "MSTB", "BOPD", 2024)
+        2732.24  # 1000 * 1000 / 366
+    """
+    days_in_year = 366 if year % 4 == 0 else 365
+
+    conversions = {
+        ("MSTB", "BOPD"): lambda x: x * 1000 / days_in_year,
+        ("BSCF", "MMSCFD"): lambda x: x * 1000 / days_in_year,
+        ("MSTBY", "BOPD"): lambda x: x / days_in_year,
+        ("BSCFY", "MMSCFD"): lambda x: x / days_in_year,
+        ("MSTB", "MSTBY"): lambda x: x,  # Same unit, different context
+        ("BSCF", "BSCFY"): lambda x: x,
+    }
+
+    converter = conversions.get((from_unit, to_unit))
+    if converter:
+        return round(converter(volume), 2)
+
+    return volume
+
+
+def build_timeseries_query(
+    table: str = "field_timeseries",
+    entity_name: Optional[str] = None,
+    year: Optional[int] = None,
+    year_range: Optional[Tuple[int, int]] = None,
+    substance: str = "oc",
+    include_daily: bool = False,
+) -> Dict[str, str]:
+    """
+    Build SQL query for timeseries data with optional unit conversion.
+
+    Args:
+        table: Table name (field_timeseries, wa_timeseries, nkri_timeseries)
+        entity_name: Entity name to filter
+        year: Specific year to query
+        year_range: Tuple of (start_year, end_year)
+        substance: Substance suffix (oil, con, ga, gn, oc, an)
+        include_daily: Whether to include daily rate conversion (BOPD, MMSCFD)
+
+    Returns:
+        Dict with 'sql' and 'table' keys
+
+    Examples:
+        >>> build_timeseries_query("field_timeseries", "Duri", year=2025)
+        {'sql': 'SELECT year, tpf_oc...', 'table': 'field_timeseries'}
+    """
+    entity_col = get_entity_filter_column(
+        "field" if "field" in table else "work_area", table
+    )
+    forecast_col = f"tpf_{substance}"
+
+    # Determine units
+    is_gas = substance in ["ga", "gn", "an"]
+    annual_unit = "BSCF" if is_gas else "MSTB"
+    daily_unit = "MMSCFD" if is_gas else "BOPD"
+
+    columns = [
+        "year",
+        f"{forecast_col} as forecast_{annual_unit.lower()}",
+    ]
+
+    if include_daily:
+        columns.append(
+            f"ROUND({forecast_col} * 1000 / CASE WHEN year % 4 = 0 THEN 366 ELSE 365 END, 2) as forecast_{daily_unit.lower()}"
+        )
+
+    columns_str = ", ".join(columns)
+
+    sql = f"SELECT {columns_str} FROM {table}"
+    filters = []
+
+    if entity_name and entity_col:
+        filters.append(f"{entity_col} LIKE '%{entity_name}%'")
+
+    if year:
+        filters.append(f"year = {year}")
+    elif year_range:
+        filters.append(f"year BETWEEN {year_range[0]} AND {year_range[1]}")
+
+    if filters:
+        sql += " WHERE " + " AND ".join(filters)
+
+    sql += " ORDER BY year"
+
+    return {"sql": sql, "table": table}
+
+
+def format_timeseries_response(
+    value: Optional[float],
+    unit: str,
+    year: Optional[int] = None,
+    include_daily: bool = False,
+) -> str:
+    """
+    Format timeseries volume with units and optional daily conversion.
+
+    Args:
+        value: Volume value
+        unit: Unit (MSTB, BSCF)
+        year: Year for daily calculation
+        include_daily: Whether to include daily rate
+
+    Returns:
+        Formatted string
+    """
+    if value is None:
+        return "N/A"
+
+    result = format_response_value(value, unit)
+
+    if include_daily and year:
+        daily_value = convert_volume_units(
+            value, unit, "BOPD" if unit == "MSTB" else "MMSCFD", year
+        )
+        daily_unit = "BOPD" if unit == "MSTB" else "MMSCFD"
+        result += f" ({daily_value:,.2f} {daily_unit})"
+
+    return result
