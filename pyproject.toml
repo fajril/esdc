@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esdc"
-version = "0.3.0"
+version = "0.3.1"
 description = "Agentic chat interface for Indonesian oil & gas reserves database (ESDC)"
 requires-python = ">=3.10"
 authors = [
@@ -58,7 +58,7 @@ esdc = "esdc.esdc:app"
 where = ["."]
 
 [tool.setuptools.package-data]
-esdc = ["data/*"]
+esdc = ["sql/*"]
 
 [tool.setuptools.exclude-package-data]
 esdc = ["tests"]
