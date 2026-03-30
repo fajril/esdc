@@ -64,6 +64,10 @@ def load_data_to_db(
         if table_name == "project_resources":
             logging.debug("Creating table view for field, working area, nkri.")
             _ = cursor.executescript(_load_sql_script("create_esdc_view.sql"))
+
+        if table_name == "project_timeseries":
+            logging.debug("Creating timeseries views for field, wa, nkri.")
+            _ = cursor.executescript(_load_sql_script("create_timeseries_views.sql"))
         _ = cursor.execute("VACUUM;")
         conn.commit()
 
