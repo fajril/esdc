@@ -533,5 +533,36 @@ def db_info() -> None:
         )
 
 
+@app.command(name="serve")
+def serve(
+    web: bool = typer.Option(True, "--web", help="Run web server"),
+    port: int = typer.Option(3334, "--port", "-p", help="Server port"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Server host"),
+    log_level: str = typer.Option("info", "--log-level", help="Uvicorn log level"),
+) -> None:
+    """Start OpenAI-compatible API server.
+
+    This command starts a web server that provides an OpenAI-compatible API
+    for the ESDC agent. This allows tools like OpenWebUI to connect to ESDC
+    as an external provider.
+
+    Args:
+        web: Whether to run the web server (default: True)
+        port: Port to run the server on (default: 3334)
+        host: Host to bind the server to (default: 0.0.0.0)
+        log_level: Uvicorn log level (default: info)
+    """
+    from esdc.server.app import run_server
+
+    if web:
+        rich.print(
+            f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]"
+        )
+        rich.print(
+            f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
+        )
+        run_server(host=host, port=port, log_level=log_level)
+
+
 if __name__ == "__main__":
     app()
