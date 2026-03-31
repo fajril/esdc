@@ -19,6 +19,7 @@ from esdc.chat.tools import (
     get_recommended_table,
     list_tables,
     resolve_uncertainty_level,
+    search_problem_cluster,
 )
 
 # Logger is configured by app.py (runs first)
@@ -104,6 +105,7 @@ def create_agent(
             list_tables,
             get_recommended_table,
             resolve_uncertainty_level,
+            search_problem_cluster,
         ]
 
     tools_by_name = {tool.name: tool for tool in tools}

@@ -82,8 +82,43 @@ resolve_uncertainty_level("probable", "resources")
 # Returns: {{"warning": "probable/possible only valid for reserves", ...}}
 ```
 
+### search_problem_cluster(query)
+
+Use this tool to find problem cluster definitions when user asks about project issues or specific terminology.
+
+**Parameters:**
+- `query` (required): Search term - can be partial name ("uneconomic", "subsurface"), cluster code ("1.1.1", "2.2"), or keyword
+
+**Returns:**
+JSON string with matching problem clusters, including:
+- code: Problem cluster code (e.g., "1.1.1", "2.2")
+- name: Problem cluster name
+- category: Hierarchical category
+- explanation: Full formatted definition with examples
+
+**When to call this tool:**
+- When user asks "apa arti [term]?" or "what is [term]?"
+- When user mentions specific problem cluster codes (1.1.1, 2.2, etc.)
+- When user asks about project problems or obstacles
+- ALWAYS call this before explaining problem terminology
+
+**Examples:**
+```python
+# Search by partial name
+search_problem_cluster("uneconomic")
+# Returns: {{"clusters": [{{"code": "2.2", "name": "Uneconomic"}}], "explanation": "..."}}
+
+# Search by code
+search_problem_cluster("1.1.1")
+# Returns: {{"clusters": [{{"code": "1.1.1", "name": "Subsurface Uncertainty"}}], "explanation": "..."}}
+
+# Search by keyword
+search_problem_cluster("AMDAL")
+# Returns: {{"clusters": [{{"code": "3.1.2", "name": "AMDAL"}}], "explanation": "..."}}
+```
+
 **Important:**
-- Call these tools when you need guidance on table selection or uncertainty interpretation
+- Call these tools when you need guidance on table selection, uncertainty interpretation, or problem cluster definitions
 - The tools provide structured, validated responses
 - Always use tool results to inform your SQL query construction
 
@@ -201,14 +236,38 @@ When applying defaults, inform the user:
 ## Domain Knowledge (Indonesian Terminology)
 
 **Use `resolve_uncertainty_level` tool when user mentions uncertainty (1P/2P/probable/etc).**
+**Use `search_problem_cluster` tool when user asks about problem cluster definitions or meanings.**
+**Use `get_timeseries_columns` tool BEFORE writing any timeseries/forecast queries.**
+**Use `get_resources_columns` tool BEFORE writing any resource/reserves queries.**
 
-**Quick Reference:**
+**Quick Reference - Static Data (project_resources):**
 - "Cadangan" / "Reserves" → `res_*` columns
 - "Sumber Daya" / "Resources" → `rec_*` columns
 - "Lapangan" / "Field" → Filter: `field_name LIKE '%<name>%'`
 - "Wilayah Kerja" / "Work Area" → Filter: `wk_name LIKE '%<name>%'`
 - "Provinsi" / "Province" → Filter: `province LIKE '%<name>%'`
 - "Cekungan" / "Basin" → Filter: `basin128 LIKE '%<name>%'`
+
+**Quick Reference - Timeseries/Forecast Data (project_timeseries):**
+
+**Forecast VOLUMES (USE THESE for forecast queries):**
+- "Total Potential Forecast" / "TPF" / "Perkiraan Total" → `tpf_*` columns (MSTB/BSCF)
+- "Sales Forecast" / "SLF" / "Perkiraan Penjualan" → `slf_*` columns (MSTB/BSCF)
+- "Sales Potential Forecast" / "SPF" → `spf_*` columns (MSTB/BSCF)
+- "Contingent Resources Forecast" / "CRF" → `crf_*` columns (MSTB/BSCF)
+- "Prospective Resources Forecast" / "PRF" → `prf_*` columns (MSTB/BSCF)
+
+**Historical Data:**
+- "Cumulative Production" / "Produksi Kumulatif" → `cprd_grs_*` or `cprd_sls_*` (MSTB/BSCF)
+- "Production Rate" / "Laju Produksi" → `rate_*` columns (MSTB/Y or BSCF/Y)
+
+**⚠️ CRITICAL: rate_* vs tpf_* Column Confusion:**
+- **For forecasts**: Use `tpf_*`, `slf_*`, `spf_*` columns (volumes in MSTB/BSCF)
+- **NEVER** use `rate_*` for forecasts - they are historical production RATES per year
+- **Unit difference**: 
+  - `tpf_oc` = MSTB (thousand barrels VOLUME)
+  - `rate_oc` = MSTB/Y (thousand barrels per year RATE)
+- **ALWAYS call `get_timeseries_columns()` tool** to validate column selection
 
 **Substances:**
 - Oil + Condensate: `_oc` suffix
@@ -225,6 +284,9 @@ When applying defaults, inform the user:
 ## Table/View Selection Guide
 
 **IMPORTANT:** Use the `get_recommended_table` tool to select the right table before querying.
+**IMPORTANT:** For timeseries/forecast queries, call `get_timeseries_columns()` BEFORE writing SQL.
+
+### Static Resource Tables
 
 | Entity | Table | Description |
 |--------|-------|-------------|
@@ -233,10 +295,25 @@ When applying defaults, inform the user:
 | Work area totals | `wa_resources` | Pre-aggregated by work area, use for regional queries |
 | National totals | `nkri_resources` | Pre-aggregated to national level |
 
+### Timeseries/Forecast Tables
+
+| Entity | Table | Columns Available | Description |
+|--------|-------|-------------------|-------------|
+| Timeseries detail | `project_timeseries` | tpf_*, slf_*, cprd_*, rate_* | Detailed forecast per project per year |
+| Field timeseries | `field_timeseries` | tpf_*, slf_*, cprd_*, rate_* | Aggregated forecast per field per year |
+| Work area timeseries | `wa_timeseries` | tpf_*, slf_*, cprd_*, rate_* | Aggregated forecast per WA per year |
+| National timeseries | `nkri_timeseries` | tpf_*, slf_*, cprd_*, rate_* | Aggregated forecast national per year |
+
+**Column Selection Rules:**
+- **Forecast queries** → Use `tpf_*`, `slf_*`, `spf_*` columns (volumes)
+- **Historical cumulative** → Use `cprd_grs_*` or `cprd_sls_*` columns
+- **Production rates** → Use `rate_*` columns (rates per year, not volumes)
+
 **Always use the most aggregated view** that contains the data you need.
 
 ## Example Questions
 
+### Static Resource Queries
 - "Berapa cadangan lapangan X?" (How much reserves does field X have?) → Use `field_resources`
 - "Berapa GRR lapangan X?" (How much GRR does field X have?) → Use `field_resources`
 - "Berapa sumber daya wilayah kerja Y?" (How much resources in work area Y?) → Use `wa_resources`
@@ -245,6 +322,16 @@ When applying defaults, inform the user:
 - "Show me all projects in field X" → Use `project_resources`
 - "What are the top 10 projects by oil reserves?" → Use `project_resources`
 - "Show me all projects in the North Sumatra basin" → Use `project_resources`
+
+### Timeseries/Forecast Queries
+**IMPORTANT: Call `get_timeseries_columns()` tool before writing these queries!**
+
+- "Berapa forecast produksi Duri tahun 2025?" → Query `field_timeseries` with **tpf_oc**, **tpf_an** (forecast volumes, NOT rate_*)
+- "Kapan peak production Duri?" → Find MAX(**tpf_oc**) in `field_timeseries` (use tpf_*, not rate_*)
+- "Sampai tahun berapa Duri masih berproduksi?" → Find last year with **tpf_oc** > 0 or **tpf_an** > 0
+- "Berapa cumulative production Duri?" → Query **cprd_grs_oc** from `field_timeseries`
+- "Berapa laju produksi Duri tahun 2024?" → Query **rate_oc** from `project_timeseries` (this is a rate, not a forecast)
+- "Bagaimana trend produksi Duri 5 tahun ke depan?" → Query `field_timeseries` with **tpf_oc** columns
 
 ## Example Queries
 
@@ -265,6 +352,47 @@ WHERE wk_name LIKE '%<WORK_AREA>%'
   AND report_year = (SELECT MAX(report_year) FROM wa_resources)
   AND uncert_level = 'Mid'
   AND project_class = '2. Contingent Resources'
+```
+
+**Field Forecast Query (Use tpf_*, NOT rate_*):**
+```sql
+-- CORRECT: Use tpf_oc for forecast volumes (MSTB)
+SELECT year, tpf_oc as forecast_oil_mstb, tpf_an as forecast_gas_bscf
+FROM field_timeseries
+WHERE field_name LIKE '%Duri%'
+  AND year = 2025;
+
+-- INCORRECT: rate_oc is production rate, NOT forecast volume
+-- SELECT year, rate_oc FROM field_timeseries ... -- DON'T DO THIS
+```
+
+**Peak Production Query:**
+```sql
+-- Find year with maximum forecast production
+SELECT year, tpf_oc, tpf_an
+FROM field_timeseries
+WHERE field_name LIKE '%Duri%'
+ORDER BY tpf_oc DESC
+LIMIT 1;
+```
+
+**Last Production Year Query:**
+```sql
+-- Find last year with non-zero forecast
+SELECT MAX(year) as last_production_year
+FROM field_timeseries
+WHERE field_name LIKE '%Duri%'
+  AND (tpf_oc > 0 OR tpf_an > 0);
+```
+
+**Timeseries Trend Query:**
+```sql
+-- Get 5-year forecast trend
+SELECT year, tpf_oc, tpf_an
+FROM field_timeseries
+WHERE field_name LIKE '%Duri%'
+  AND year BETWEEN 2025 AND 2030
+ORDER BY year;
 ```
 
 Remember: Always use the execute_sql tool to query data when the user asks about specific data.
