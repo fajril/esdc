@@ -94,14 +94,123 @@ def extract_ai_message_from_event(event: dict) -> AIMessage | None:
     return None
 
 
+def extract_content_str(content) -> str:
+    """Extract string content from AIMessage content (handles str, list, dict)."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        return str(content[0]) if content else ""
+    elif isinstance(content, dict):
+        return json.dumps(content, indent=2)
+    else:
+        return str(content)
+
+
+def format_thinking_section(content: str | list | dict | None) -> str:
+    """Format thinking/reasoning section in markdown.
+
+    Args:
+        content: The thinking/reasoning text (can be str, list, dict, or None)
+
+    Returns:
+        Markdown formatted thinking section
+    """
+    # Convert content to string
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        content = str(content[0]) if content else ""
+    elif isinstance(content, dict):
+        content = json.dumps(content, indent=2)
+    else:
+        content = str(content)
+
+    if not content.strip():
+        return ""
+
+    return f"""### 🧠 Thinking Process
+
+{content}
+
+"""
+
+
+def format_tool_section(tool_name: str, tool_args: dict) -> str:
+    """Format tool call section in markdown with syntax highlighting.
+
+    Args:
+        tool_name: Name of the tool
+        tool_args: Tool arguments dictionary
+
+    Returns:
+        Markdown formatted tool section
+    """
+    if tool_name == "execute_sql":
+        sql = tool_args.get("query", "")
+        return f"""### 🛠️ Tool: {tool_name}
+
+```sql
+{sql}
+```
+
+"""
+    else:
+        # For other tools, show as JSON
+        args_str = json.dumps(tool_args, indent=2, ensure_ascii=False)
+        return f"""### 🛠️ Tool: {tool_name}
+
+```json
+{args_str}
+```
+
+"""
+
+
+def build_markdown_response(
+    thinking: str, tool_calls: list[dict], final_response: str
+) -> str:
+    """Build complete markdown response with all sections.
+
+    Args:
+        thinking: The thinking/reasoning text
+        tool_calls: List of tool call dictionaries
+        final_response: The final response content
+
+    Returns:
+        Complete markdown formatted response
+    """
+    sections = []
+
+    # Add thinking section
+    if thinking:
+        sections.append(format_thinking_section(thinking))
+
+    # Add tool sections
+    for tool_call in tool_calls:
+        tool_name = tool_call.get("name", "unknown")
+        tool_args = tool_call.get("args", {})
+        sections.append(format_tool_section(tool_name, tool_args))
+
+    # Add final response
+    if final_response:
+        sections.append(final_response)
+
+    return "\n".join(sections)
+
+
 async def generate_streaming_response(
     messages: list,
     model: str = "esdc-agent",
     temperature: float = 0.7,
 ) -> AsyncGenerator[str, None]:
-    """Generate streaming chat completion response."""
+    """Generate streaming chat completion response with markdown formatting."""
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    created = int(time.time())
+
+    # Accumulate content for markdown
+    thinking_content = ""
+    tool_calls = []
+    final_content = ""
+    is_first_ai_message = True
 
     try:
         # Create LLM and agent
@@ -135,51 +244,65 @@ async def generate_streaming_response(
         lc_messages = convert_messages_to_langchain(messages)
 
         # Stream the response
-        last_content = ""
-
         async for event in agent.astream(
             {"messages": lc_messages},
             config=RunnableConfig(configurable={"thread_id": request_id}),
         ):
-            # Extract AI message from event
             ai_msg = extract_ai_message_from_event(event)
-            if ai_msg and ai_msg.content:
-                content = ai_msg.content
-                if isinstance(content, list):
-                    content = str(content[0]) if content else ""
+            if not ai_msg:
+                continue
 
-                if content and content != last_content:
-                    last_content = content
+            # Capture thinking from first message
+            if is_first_ai_message:
+                content_str = extract_content_str(ai_msg.content)
+                if content_str and content_str.strip():
+                    thinking_content = content_str
+                is_first_ai_message = False
 
-                    chunk = {
-                        "id": request_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": content},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield json.dumps(chunk)
+            # Capture tool calls
+            if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+                tool_calls.extend(ai_msg.tool_calls)
+
+            # Capture final response (last message with content and no tool calls)
+            content_str = extract_content_str(ai_msg.content)
+            if content_str and not (
+                hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+            ):
+                final_content = content_str
+
+        # Stream the markdown response in chunks
+        # Send thinking section
+        if thinking_content:
+            chunk = create_openai_chunk(
+                content=format_thinking_section(thinking_content),
+                model=model,
+            )
+            yield json.dumps(chunk)
+
+        # Send tool sections
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("name", "unknown")
+            tool_args = tool_call.get("args", {})
+            chunk = create_openai_chunk(
+                content=format_tool_section(tool_name, tool_args),
+                model=model,
+            )
+            yield json.dumps(chunk)
+
+        # Send final response
+        if final_content:
+            chunk = create_openai_chunk(
+                content=final_content,
+                model=model,
+            )
+            yield json.dumps(chunk)
 
         # Send final chunk
-        final_chunk = {
-            "id": request_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": ""},
-                    "finish_reason": "stop",
-                }
-            ],
-        }
+        final_chunk = create_openai_chunk(
+            content="",
+            model=model,
+            finish_reason="stop",
+        )
         yield json.dumps(final_chunk)
 
     except Exception as e:
@@ -197,7 +320,7 @@ async def generate_response(
     model: str = "esdc-agent",
     temperature: float = 0.7,
 ) -> dict[str, Any]:
-    """Generate non-streaming chat completion response."""
+    """Generate non-streaming chat completion response with markdown formatting."""
     try:
         # Create LLM and agent
         provider_config = Config.get_provider_config()
@@ -226,33 +349,52 @@ async def generate_response(
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
-        # Run the agent
+        # Accumulate content
+        thinking_content = ""
+        tool_calls = []
         final_content = ""
+        is_first_ai_message = True
 
+        # Run the agent
         async for event in agent.astream(
             {"messages": lc_messages},
             config=RunnableConfig(
                 configurable={"thread_id": f"esdc-{int(time.time())}"}
             ),
         ):
-            # Extract AI message from event
             ai_msg = extract_ai_message_from_event(event)
-            if ai_msg and ai_msg.content:
-                content = ai_msg.content
-                if isinstance(content, list):
-                    content = str(content[0]) if content else ""
-                if content:
-                    final_content = content
+            if not ai_msg:
+                continue
 
-        if final_content:
-            return {
-                "content": final_content,
-                "role": "assistant",
-                "finish_reason": "stop",
-            }
+            # Capture thinking from first message
+            if is_first_ai_message:
+                content_str = extract_content_str(ai_msg.content)
+                if content_str and content_str.strip():
+                    thinking_content = content_str
+                is_first_ai_message = False
+
+            # Capture tool calls
+            if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+                tool_calls.extend(ai_msg.tool_calls)
+
+            # Capture final response
+            content_str = extract_content_str(ai_msg.content)
+            if content_str and not (
+                hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+            ):
+                final_content = content_str
+
+        # Build markdown response
+        markdown_response = build_markdown_response(
+            thinking=thinking_content,
+            tool_calls=tool_calls,
+            final_response=final_content,
+        )
 
         return {
-            "content": "No response generated",
+            "content": markdown_response
+            if markdown_response
+            else "No response generated",
             "role": "assistant",
             "finish_reason": "stop",
         }
