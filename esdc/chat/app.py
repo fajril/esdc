@@ -58,7 +58,7 @@ from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer  # noqa: E402
 from textual.widget import Widget  # noqa: E402
-from textual.widgets import Static, Input, Markdown, Collapsible, TextArea  # noqa: E402
+from textual.widgets import Static, Markdown, Collapsible, TextArea  # noqa: E402
 from textual import events  # noqa: E402
 from textual.message import Message  # noqa: E402
 
@@ -1401,8 +1401,9 @@ class ESDCChatApp(App):
             self.chat_panel.mount(self._streaming_message)
             self._streaming_message.scroll_visible()
             # Scroll to bottom when mounting new AI message (after DOM update)
+            chat_panel = self.chat_panel
             self.call_after_refresh(
-                lambda: self.chat_panel.scroll_end(animate=False, immediate=True)
+                lambda: chat_panel.scroll_end(animate=False, immediate=True)
             )
 
         # Start background streaming task (NON-blocking)
@@ -1493,10 +1494,11 @@ class ESDCChatApp(App):
 
                 # Always scroll to bottom on new content (after DOM update + delay for Markdown)
                 if self.chat_panel:
+                    chat_panel = self.chat_panel
                     self.call_after_refresh(
                         lambda: self.set_timer(
                             0.1,
-                            lambda: self.chat_panel.scroll_end(
+                            lambda: chat_panel.scroll_end(
                                 animate=False, immediate=True
                             ),
                         )
@@ -1511,10 +1513,11 @@ class ESDCChatApp(App):
 
                 # Always scroll to bottom on new content (after DOM update + delay for Markdown)
                 if self.chat_panel:
+                    chat_panel = self.chat_panel
                     self.call_after_refresh(
                         lambda: self.set_timer(
                             0.1,
-                            lambda: self.chat_panel.scroll_end(
+                            lambda: chat_panel.scroll_end(
                                 animate=False, immediate=True
                             ),
                         )
@@ -1568,10 +1571,11 @@ class ESDCChatApp(App):
 
                 # Always scroll to bottom when adding tool indicator (after DOM update + delay for Markdown)
                 if self.chat_panel:
+                    chat_panel = self.chat_panel
                     self.call_after_refresh(
                         lambda: self.set_timer(
                             0.1,
-                            lambda: self.chat_panel.scroll_end(
+                            lambda: chat_panel.scroll_end(
                                 animate=False, immediate=True
                             ),
                         )
@@ -1652,12 +1656,11 @@ class ESDCChatApp(App):
 
             # Final scroll to bottom after streaming completes (critical fix)
             if self.chat_panel:
+                chat_panel = self.chat_panel
                 self.call_after_refresh(
                     lambda: self.set_timer(
                         0.1,
-                        lambda: self.chat_panel.scroll_end(
-                            animate=False, immediate=True
-                        ),
+                        lambda: chat_panel.scroll_end(animate=False, immediate=True),
                     )
                 )
 
