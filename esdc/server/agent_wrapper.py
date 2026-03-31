@@ -66,24 +66,42 @@ def create_openai_chunk(
     }
 
 
+def extract_ai_message_from_event(event: dict) -> AIMessage | None:
+    """Extract AIMessage from LangGraph event.
+
+    LangGraph events have structure: {node_name: {messages: [...]}}
+    We need to look for the 'agent' node which contains AI responses.
+    """
+    # Check for 'agent' node first (contains AI responses)
+    if "agent" in event:
+        agent_data = event["agent"]
+        if isinstance(agent_data, dict) and "messages" in agent_data:
+            messages = agent_data["messages"]
+            if messages:
+                last_msg = messages[-1]
+                if isinstance(last_msg, AIMessage):
+                    return last_msg
+
+    # Fallback: check all keys for messages
+    for key, value in event.items():
+        if isinstance(value, dict) and "messages" in value:
+            messages = value["messages"]
+            if messages:
+                last_msg = messages[-1]
+                if isinstance(last_msg, AIMessage):
+                    return last_msg
+
+    return None
+
+
 async def generate_streaming_response(
     messages: list,
     model: str = "esdc-agent",
     temperature: float = 0.7,
 ) -> AsyncGenerator[str, None]:
-    """Generate streaming chat completion response.
-
-    Args:
-        messages: List of conversation messages
-        model: Model ID
-        temperature: Sampling temperature
-
-    Yields:
-        OpenAI-compatible streaming chunks as SSE formatted strings
-    """
+    """Generate streaming chat completion response."""
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
-    full_content = ""
 
     try:
         # Create LLM and agent
@@ -91,14 +109,13 @@ async def generate_streaming_response(
         if not provider_config:
             yield json.dumps(
                 create_openai_chunk(
-                    content="Error: No provider configured. Please run 'esdc provider add' first.",
+                    content="Error: No provider configured.",
                     model=model,
                     finish_reason="stop",
                 )
             )
             return
 
-        # FIX: Use provider_type instead of provider
         provider_name = provider_config.get("provider_type", "ollama")
         provider_model = provider_config.get("model")
         base_url = provider_config.get("base_url")
@@ -119,41 +136,37 @@ async def generate_streaming_response(
 
         # Stream the response
         last_content = ""
+
         async for event in agent.astream(
             {"messages": lc_messages},
             config=RunnableConfig(configurable={"thread_id": request_id}),
         ):
-            # Handle different event types from LangGraph
-            if "messages" in event:
-                messages_list = event["messages"]
-                if messages_list:
-                    last_message = messages_list[-1]
-                    if isinstance(last_message, AIMessage):
-                        content = last_message.content
-                        if isinstance(content, list):
-                            content = str(content[0]) if content else ""
+            # Extract AI message from event
+            ai_msg = extract_ai_message_from_event(event)
+            if ai_msg and ai_msg.content:
+                content = ai_msg.content
+                if isinstance(content, list):
+                    content = str(content[0]) if content else ""
 
-                        # Only send if content changed
-                        if content and content != last_content:
-                            last_content = content
-                            full_content = content
+                if content and content != last_content:
+                    last_content = content
 
-                            chunk = {
-                                "id": request_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": model,
-                                "choices": [
-                                    {
-                                        "index": 0,
-                                        "delta": {"content": content},
-                                        "finish_reason": None,
-                                    }
-                                ],
+                    chunk = {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": content},
+                                "finish_reason": None,
                             }
-                            yield json.dumps(chunk)
+                        ],
+                    }
+                    yield json.dumps(chunk)
 
-        # Send final chunk with stop reason
+        # Send final chunk
         final_chunk = {
             "id": request_id,
             "object": "chat.completion.chunk",
@@ -170,7 +183,7 @@ async def generate_streaming_response(
         yield json.dumps(final_chunk)
 
     except Exception as e:
-        logger.error(f"Error in streaming response: {e}")
+        logger.error(f"Error in streaming response: {e}", exc_info=True)
         error_chunk = create_openai_chunk(
             content=f"Error: {str(e)}",
             model=model,
@@ -184,27 +197,17 @@ async def generate_response(
     model: str = "esdc-agent",
     temperature: float = 0.7,
 ) -> dict[str, Any]:
-    """Generate non-streaming chat completion response.
-
-    Args:
-        messages: List of conversation messages
-        model: Model ID
-        temperature: Sampling temperature
-
-    Returns:
-        OpenAI-compatible response dictionary
-    """
+    """Generate non-streaming chat completion response."""
     try:
         # Create LLM and agent
         provider_config = Config.get_provider_config()
         if not provider_config:
             return {
-                "content": "Error: No provider configured. Please run 'esdc provider add' first.",
+                "content": "Error: No provider configured.",
                 "role": "assistant",
                 "finish_reason": "stop",
             }
 
-        # FIX: Use provider_type instead of provider
         provider_name = provider_config.get("provider_type", "ollama")
         provider_model = provider_config.get("model")
         base_url = provider_config.get("base_url")
@@ -225,22 +228,21 @@ async def generate_response(
 
         # Run the agent
         final_content = ""
+
         async for event in agent.astream(
             {"messages": lc_messages},
             config=RunnableConfig(
                 configurable={"thread_id": f"esdc-{int(time.time())}"}
             ),
         ):
-            if "messages" in event:
-                messages_list = event["messages"]
-                if messages_list:
-                    last_message = messages_list[-1]
-                    if isinstance(last_message, AIMessage):
-                        content = last_message.content
-                        if isinstance(content, list):
-                            content = str(content[0]) if content else ""
-                        if content:
-                            final_content = content
+            # Extract AI message from event
+            ai_msg = extract_ai_message_from_event(event)
+            if ai_msg and ai_msg.content:
+                content = ai_msg.content
+                if isinstance(content, list):
+                    content = str(content[0]) if content else ""
+                if content:
+                    final_content = content
 
         if final_content:
             return {
@@ -256,7 +258,7 @@ async def generate_response(
         }
 
     except Exception as e:
-        logger.error(f"Error in response generation: {e}")
+        logger.error(f"Error in response generation: {e}", exc_info=True)
         return {
             "content": f"Error: {str(e)}",
             "role": "assistant",
