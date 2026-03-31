@@ -182,4 +182,4 @@ Apache Software License. See `LICENSE` file.
 
 ## Contact
 
-fambia@skkmigas.go.id or fajril@ambia.id
+fambia at skkmigas.go.id or fajril at ambia.id
