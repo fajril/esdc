@@ -1,46 +1,26 @@
 # Standard library
+import json
 import logging
 import time
+import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
 # Third-party
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
 
 # Local
 from esdc.chat.agent import create_agent
-from esdc.chat.memory import get_thread_config as create_thread_config
 from esdc.configs import Config
-from esdc.providers import get_provider
+from esdc.providers import create_llm_from_config
 
 logger = logging.getLogger("esdc.server.agent")
-
-
-async def create_llm_from_config():
-    """Create LLM instance from configuration."""
-    provider_config = Config.get_provider_config()
-
-    if not provider_config:
-        raise ValueError(
-            "No provider configured. Please run 'esdc provider add' first."
-        )
-
-    provider_name = provider_config.get("provider", "ollama")
-    model = provider_config.get("model")
-    base_url = provider_config.get("base_url")
-    api_key = provider_config.get("api_key")
-
-    provider_class = get_provider(provider_name)
-    if not provider_class:
-        raise ValueError(f"Unknown provider: {provider_name}")
-
-    return provider_class.create_llm(
-        model=model,
-        base_url=base_url,
-        api_key=api_key,
-        temperature=0.7,
-    )
 
 
 def convert_messages_to_langchain(messages: list) -> list:
@@ -65,11 +45,32 @@ def convert_messages_to_langchain(messages: list) -> list:
     return lc_messages
 
 
+def create_openai_chunk(
+    content: str = "",
+    model: str = "esdc-agent",
+    finish_reason: str | None = None,
+) -> dict:
+    """Create OpenAI-compatible streaming chunk."""
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+
+
 async def generate_streaming_response(
     messages: list,
     model: str = "esdc-agent",
     temperature: float = 0.7,
-) -> AsyncGenerator[dict, None]:
+) -> AsyncGenerator[str, None]:
     """Generate streaming chat completion response.
 
     Args:
@@ -78,67 +79,103 @@ async def generate_streaming_response(
         temperature: Sampling temperature
 
     Yields:
-        OpenAI-compatible streaming chunks
+        OpenAI-compatible streaming chunks as SSE formatted strings
     """
+    request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+    full_content = ""
+
     try:
         # Create LLM and agent
-        llm = await create_llm_from_config()
+        provider_config = Config.get_provider_config()
+        if not provider_config:
+            yield json.dumps(
+                create_openai_chunk(
+                    content="Error: No provider configured. Please run 'esdc provider add' first.",
+                    model=model,
+                    finish_reason="stop",
+                )
+            )
+            return
+
+        provider_name = provider_config.get("provider", "ollama")
+        provider_model = provider_config.get("model")
+        base_url = provider_config.get("base_url")
+        api_key = provider_config.get("api_key")
+
+        provider_config_obj = {
+            "provider_type": provider_name,
+            "model": provider_model,
+            "base_url": base_url,
+            "api_key": api_key,
+        }
+
+        llm = create_llm_from_config(provider_config_obj)
         agent = create_agent(llm, checkpointer=None)
 
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
-        # Create thread config for this request
-        thread_config = create_thread_config(f"esdc-{int(time.time())}")
-
         # Stream the response
+        last_content = ""
         async for event in agent.astream(
             {"messages": lc_messages},
-            config=thread_config,  # type: ignore[arg-type]
+            config=RunnableConfig(configurable={"thread_id": request_id}),
         ):
-            # Handle different event types
+            # Handle different event types from LangGraph
             if "messages" in event:
-                messages = event["messages"]
-                if messages:
-                    last_message = messages[-1]
+                messages_list = event["messages"]
+                if messages_list:
+                    last_message = messages_list[-1]
                     if isinstance(last_message, AIMessage):
                         content = last_message.content
                         if isinstance(content, list):
                             content = str(content[0]) if content else ""
 
-                        if content:
-                            yield {
-                                "content": content,
-                                "role": "assistant",
-                                "finish_reason": None,
+                        # Only send if content changed
+                        if content and content != last_content:
+                            last_content = content
+                            full_content = content
+
+                            chunk = {
+                                "id": request_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {"content": content},
+                                        "finish_reason": None,
+                                    }
+                                ],
                             }
+                            yield json.dumps(chunk)
 
-            # Handle tool calls
-            if "tool_calls" in event:
-                tool_calls = event["tool_calls"]
-                if tool_calls:
-                    # Send tool calls as part of response
-                    for tool_call in tool_calls:
-                        yield {
-                            "tool_calls": [tool_call],
-                            "role": "assistant",
-                            "finish_reason": None,
-                        }
-
-        # Send final message
-        yield {
-            "content": "",
-            "role": "assistant",
-            "finish_reason": "stop",
+        # Send final chunk with stop reason
+        final_chunk = {
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": ""},
+                    "finish_reason": "stop",
+                }
+            ],
         }
+        yield json.dumps(final_chunk)
 
     except Exception as e:
         logger.error(f"Error in streaming response: {e}")
-        yield {
-            "content": f"Error: {str(e)}",
-            "role": "assistant",
-            "finish_reason": "stop",
-        }
+        error_chunk = create_openai_chunk(
+            content=f"Error: {str(e)}",
+            model=model,
+            finish_reason="stop",
+        )
+        yield json.dumps(error_chunk)
 
 
 async def generate_response(
@@ -158,35 +195,57 @@ async def generate_response(
     """
     try:
         # Create LLM and agent
-        llm = await create_llm_from_config()
+        provider_config = Config.get_provider_config()
+        if not provider_config:
+            return {
+                "content": "Error: No provider configured. Please run 'esdc provider add' first.",
+                "role": "assistant",
+                "finish_reason": "stop",
+            }
+
+        provider_name = provider_config.get("provider", "ollama")
+        provider_model = provider_config.get("model")
+        base_url = provider_config.get("base_url")
+        api_key = provider_config.get("api_key")
+
+        provider_config_obj = {
+            "provider_type": provider_name,
+            "model": provider_model,
+            "base_url": base_url,
+            "api_key": api_key,
+        }
+
+        llm = create_llm_from_config(provider_config_obj)
         agent = create_agent(llm, checkpointer=None)
 
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
-        # Create thread config for this request
-        thread_config = create_thread_config(f"esdc-{int(time.time())}")
-
         # Run the agent
-        result = await agent.ainvoke(
+        final_content = ""
+        async for event in agent.astream(
             {"messages": lc_messages},
-            config=thread_config,  # type: ignore[arg-type]
-        )
+            config=RunnableConfig(
+                configurable={"thread_id": f"esdc-{int(time.time())}"}
+            ),
+        ):
+            if "messages" in event:
+                messages_list = event["messages"]
+                if messages_list:
+                    last_message = messages_list[-1]
+                    if isinstance(last_message, AIMessage):
+                        content = last_message.content
+                        if isinstance(content, list):
+                            content = str(content[0]) if content else ""
+                        if content:
+                            final_content = content
 
-        # Extract the final response
-        final_messages = result.get("messages", [])
-        if final_messages:
-            last_message = final_messages[-1]
-            if isinstance(last_message, AIMessage):
-                content = last_message.content
-                if isinstance(content, list):
-                    content = str(content[0]) if content else ""
-
-                return {
-                    "content": content,
-                    "role": "assistant",
-                    "finish_reason": "stop",
-                }
+        if final_content:
+            return {
+                "content": final_content,
+                "role": "assistant",
+                "finish_reason": "stop",
+            }
 
         return {
             "content": "No response generated",
