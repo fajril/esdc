@@ -98,7 +98,8 @@ async def generate_streaming_response(
             )
             return
 
-        provider_name = provider_config.get("provider", "ollama")
+        # FIX: Use provider_type instead of provider
+        provider_name = provider_config.get("provider_type", "ollama")
         provider_model = provider_config.get("model")
         base_url = provider_config.get("base_url")
         api_key = provider_config.get("api_key")
@@ -203,7 +204,8 @@ async def generate_response(
                 "finish_reason": "stop",
             }
 
-        provider_name = provider_config.get("provider", "ollama")
+        # FIX: Use provider_type instead of provider
+        provider_name = provider_config.get("provider_type", "ollama")
         provider_model = provider_config.get("model")
         base_url = provider_config.get("base_url")
         api_key = provider_config.get("api_key")
