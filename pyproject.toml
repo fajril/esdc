@@ -26,6 +26,7 @@ dependencies = [
     "pyyaml>=6.0",
     "textual>=0.52.0",
     # LangChain ecosystem
+    "langchain>=0.3.0",
     "langchain-core>=0.3.0",
     "langchain-community>=0.3.0",
     "langgraph>=0.2.0",
