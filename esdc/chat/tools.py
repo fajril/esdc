@@ -444,3 +444,282 @@ def resolve_uncertainty_level(
                 "volume_type": volume_type,
             }
         )
+
+
+@tool
+def get_timeseries_columns(
+    data_type: Annotated[
+        str,
+        "Type of timeseries data needed: 'forecast' (future production volumes), "
+        "'historical' (cumulative production), or 'rate' (production rates per year). "
+        "Default is 'forecast'.",
+    ] = "forecast",
+    forecast_type: Annotated[
+        str,
+        "Type of forecast when data_type='forecast': 'tpf' (Total Potential Forecast), "
+        "'slf' (Sales Forecast), 'spf' (Sales Potential Forecast), 'crf' (Contingent Resources Forecast), "
+        "'prf' (Prospective Resources Forecast), 'ciof' (Consumed in Operation Forecast), "
+        "or 'lossf' (Loss Production Forecast). Default is 'tpf'.",
+    ] = "tpf",
+    substance: Annotated[
+        str,
+        "Substance suffix: 'oil' (oil only), 'con' (condensate only), 'ga' (associated gas), "
+        "'gn' (non-associated gas), 'oc' (oil + condensate combined), or 'an' (total gas). "
+        "Default is 'oc'.",
+    ] = "oc",
+) -> str:
+    """Get the correct column names for timeseries queries.
+
+    CRITICAL: This tool prevents common errors where the model confuses rate_* columns
+    (historical production RATES) with tpf_* columns (forecast VOLUMES).
+
+    WHEN TO USE:
+    - ALWAYS call this BEFORE writing SQL for timeseries/forecast queries
+    - When user asks about "forecast", "perkiraan", "proyeksi", "peak production"
+    - When querying project_timeseries, field_timeseries, wa_timeseries, or nkri_timeseries
+
+    COLUMN CATEGORIES:
+    1. Forecast VOLUMES (USE FOR FORECASTS): tpf_*, slf_*, spf_*, crf_*, prf_*
+       - Units: MSTB (oil), BSCF (gas) - these are VOLUMES, not rates
+       - Example: tpf_oc = forecast oil+condensate volume in MSTB
+
+    2. Historical CUMULATIVE: cprd_grs_*, cprd_sls_*
+       - Units: MSTB (oil), BSCF (gas) - cumulative production volumes
+       - Example: cprd_grs_oc = cumulative gross oil+condensate in MSTB
+
+    3. Production RATES: rate_*
+       - Units: MSTB/Y (oil), BSCF/Y (gas) - RATES per year, NOT volumes
+       - Example: rate_oc = production rate in MSTB per year
+       - NEVER use for forecast queries!
+
+    UNIT DIFFERENCE:
+    - tpf_oc = 1000 MSTB means 1 million barrels total volume
+    - rate_oc = 1000 MSTB/Y means 1000 barrels per year production rate
+    These are completely different measurements!
+
+    RETURNS:
+    JSON string with:
+    - column: The column name to use (e.g., "tpf_oc")
+    - description: Human-readable description
+    - unit: Unit abbreviation (MSTB, BSCF, MSTB/Y, BSCF/Y)
+    - unit_description: Detailed unit explanation
+    - category: Column category (forecast, historical, rate)
+    - tables: Applicable tables
+    - warning: Important warning about column usage
+    - incorrect_alternatives: Columns NOT to use (commonly confused)
+    - examples: Example SQL queries
+
+    EXAMPLES:
+    - get_timeseries_columns("forecast", "tpf", "oc") → tpf_oc for forecast volumes
+    - get_timeseries_columns("forecast", "slf", "an") → slf_an for sales forecast gas
+    - get_timeseries_columns("historical", substance="oc") → cprd_grs_oc for cumulative
+    - get_timeseries_columns("rate", substance="oc") → rate_oc for production rate
+
+    IMPORTANT: For forecast queries, the model often incorrectly selects rate_* columns.
+    ALWAYS use this tool to validate your column selection before writing SQL.
+    """
+    import json
+
+    from esdc.chat.domain_knowledge import (
+        get_timeseries_columns as _get_timeseries_columns,
+    )
+
+    try:
+        result = _get_timeseries_columns(
+            data_type=data_type,
+            forecast_type=forecast_type,
+            substance=substance,
+        )
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps(
+            {
+                "error": f"Error getting timeseries columns: {str(e)}",
+                "data_type": data_type,
+                "forecast_type": forecast_type,
+                "substance": substance,
+            }
+        )
+
+
+@tool
+def get_resources_columns(
+    volume_type: Annotated[
+        str,
+        "Type of volume: 'reserves' (commercial reserves only), 'resources' (GRR/Contingent/Prospective), "
+        "or 'risked' (prospective resources with geological chance factor applied). Default is 'reserves'.",
+    ] = "reserves",
+    substance: Annotated[
+        str,
+        "Substance suffix: 'oil' (oil only), 'con' (condensate only), 'ga' (associated gas), "
+        "'gn' (non-associated gas), 'oc' (oil + condensate combined), or 'an' (total gas). "
+        "Default is 'oc'.",
+    ] = "oc",
+) -> str:
+    """Get the correct column names for static resource queries.
+
+    CRITICAL: This tool prevents confusion between res_* (reserves) and rec_* (resources) columns.
+    The model often confuses these two similar prefixes.
+
+    WHEN TO USE:
+    - ALWAYS call this BEFORE writing SQL for resource/reserves queries
+    - When user asks about "cadangan" (reserves), "sumber daya" (resources), or "GRR"
+    - When querying project_resources, field_resources, wa_resources, or nkri_resources
+
+    COLUMN CATEGORIES:
+    1. Reserves (res_*): Commercial reserves only - use for "cadangan" queries
+       - Columns: res_oil, res_con, res_ga, res_gn, res_oc, res_an
+       - Only projects with project_class = '1. Reserves & GRR'
+
+    2. Resources (rec_*): All recoverable resources - use for "sumber daya" queries
+       - Columns: rec_oil, rec_con, rec_ga, rec_gn, rec_oc, rec_an, rec_mboe
+       - Includes Reserves + GRR + Contingent + Prospective
+
+    3. Risked Resources (rec_*_risked): Prospective resources with GCF applied
+       - Columns: rec_oil_risked, rec_con_risked, etc.
+       - Only applies to prospective resources
+
+    PREFIX CONFUSION:
+    - res_* = Reserves (commercial only, "cadangan")
+    - rec_* = Resources (all recoverable, "sumber daya")
+    - These are completely different! res_oc ≠ rec_oc
+
+    RETURNS:
+    JSON string with:
+    - column: The column name to use (e.g., "res_oc" or "rec_oc")
+    - description: Human-readable description
+    - unit: Unit (MSTB or BSCF)
+    - category: Column category (reserves, resources, resources_risked)
+    - tables: Applicable tables
+    - warning: Important warning about res/rec confusion
+    - incorrect_alternatives: Columns NOT to use
+    - examples: Example SQL queries
+
+    EXAMPLES:
+    - get_resources_columns("reserves", "oc") → res_oc for reserves
+    - get_resources_columns("resources", "an") → rec_an for resources
+    - get_resources_columns("risked", "oil") → rec_oil_risked for risked prospective
+
+    IMPORTANT: Always call this tool to validate column selection.
+    The difference between res_* and rec_* is critical - they are NOT interchangeable.
+    """
+    import json
+
+    from esdc.chat.domain_knowledge import (
+        get_resources_columns as _get_resources_columns,
+    )
+
+    try:
+        result = _get_resources_columns(
+            volume_type=volume_type,
+            substance=substance,
+        )
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps(
+            {
+                "error": f"Error getting resources columns: {str(e)}",
+                "volume_type": volume_type,
+                "substance": substance,
+            }
+        )
+
+
+@tool
+def search_problem_cluster(
+    query: Annotated[
+        str,
+        "Search term for problem cluster. Can be partial name (e.g., 'subsurface', 'uneconomic'), "
+        "cluster code (e.g., '1.1.1', '2.2'), or keyword from the problem description.",
+    ],
+) -> str:
+    """Search for problem cluster definitions when user asks about project issues or specific cluster terms.
+
+    CRITICAL: Use this tool when user asks about:
+    - Problem cluster definitions (e.g., "apa arti subsurface uncertainty?")
+    - What specific problem terms mean (e.g., "what is uneconomic?")
+    - Questions about project problems or obstacles
+    - Any cluster code references (e.g., "1.1.1", "2.2", "3.1.2")
+
+    This tool searches the official problem cluster taxonomy with 20 categories
+    covering Technical, Economics, Legal, and Social/Environment issues.
+
+    RETURNS:
+    JSON string with:
+    - clusters: List of matching problem clusters (max 3)
+    - explanation: Full formatted explanation of the top result
+    - code: Problem cluster code (e.g., "1.1.1")
+    - name: Problem cluster name
+    - category: Hierarchical category (e.g., "Technical > Subsurface")
+    - definition: Full Indonesian definition
+    - examples: List of example scenarios
+
+    EXAMPLES:
+    - search_problem_cluster("subsurface") → Subsurface Uncertainty (1.1.1)
+    - search_problem_cluster("uneconomic") → Uneconomic (2.2)
+    - search_problem_cluster("1.1.1") → Exact code match for Subsurface Uncertainty
+    - search_problem_cluster("AMDAL") → AMDAL (3.1.2)
+    """
+    import json
+
+    from esdc.chat.domain_knowledge import (
+        search_problem_clusters,
+        get_cluster_explanation,
+    )
+
+    try:
+        results = search_problem_clusters(query, limit=3)
+
+        if not results:
+            return json.dumps(
+                {
+                    "error": f"No problem cluster found matching '{query}'",
+                    "suggestion": "Try searching for keywords like: subsurface, data, uneconomic, AMDAL, permit, etc.",
+                    "available_categories": [
+                        "Technical > Subsurface (1.1.x)",
+                        "Technical > Non Subsurface (1.2.x)",
+                        "Economics (2.x)",
+                        "Legal > Law and Regulations (3.1.x)",
+                        "Legal > T&C Contracts (3.2.x)",
+                        "Social and Environment (4.x)",
+                    ],
+                }
+            )
+
+        # Get detailed explanation for top result
+        top_result = results[0]
+        explanation = get_cluster_explanation(top_result["code"])
+
+        return json.dumps(
+            {
+                "clusters": [
+                    {
+                        "code": r["code"],
+                        "name": r["name"],
+                        "category": r["category"],
+                        "match_score": r.get("match_score", 0),
+                    }
+                    for r in results
+                ],
+                "top_result": {
+                    "code": top_result["code"],
+                    "name": top_result["name"],
+                    "category": top_result["category"],
+                },
+                "explanation": explanation,
+            },
+            indent=2,
+            ensure_ascii=False,  # Preserve Indonesian characters
+        )
+
+    except Exception as e:
+        return json.dumps(
+            {
+                "error": f"Error searching problem clusters: {str(e)}",
+                "query": query,
+            }
+        )

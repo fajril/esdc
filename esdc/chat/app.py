@@ -58,7 +58,9 @@ from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer  # noqa: E402
 from textual.widget import Widget  # noqa: E402
-from textual.widgets import Static, Input, Markdown, Collapsible  # noqa: E402
+from textual.widgets import Static, Input, Markdown, Collapsible, TextArea  # noqa: E402
+from textual import events  # noqa: E402
+from textual.message import Message  # noqa: E402
 
 MAX_MESSAGE_HISTORY = 100
 MAX_QUERY_HISTORY = 5
@@ -591,8 +593,8 @@ class ChatMessage(Markdown):
         background: transparent;
         color: $text;
         align-horizontal: right;
-        border-left: solid $primary-darken-2;
-        padding-left: 1;
+        border-left: solid #F97316;
+        padding: 1 2 1 1;
     }
     ChatMessage.ai {
         background: transparent;
@@ -611,7 +613,7 @@ class ChatMessage(Markdown):
 
     def __init__(self, role: str, content: str):
         if role == "user":
-            formatted = f"> {content}"
+            formatted = content
         elif role == "ai":
             formatted = content
         else:
@@ -674,6 +676,36 @@ class StatusBar(Static):
         self.update(" | ".join(parts))
 
 
+class ChatInput(TextArea):
+    """TextArea that supports Shift+Enter for newlines and Enter for submission."""
+
+    class Submitted(Message):
+        """Message posted when user presses Enter."""
+
+        def __init__(self, text_area: "ChatInput") -> None:
+            self.text_area = text_area
+            super().__init__()
+
+        @property
+        def control(self) -> "ChatInput":
+            return self.text_area
+
+    async def _on_key(self, event: events.Key) -> None:
+        """Handle Enter vs Shift+Enter at the TextArea level."""
+        if event.key == "shift+enter":
+            # Shift+Enter: insert newline
+            event.stop()
+            event.prevent_default()
+            self.insert("\n")
+        elif event.key == "enter":
+            # Enter: submit
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.Submitted(self))
+        else:
+            await super()._on_key(event)
+
+
 class Footer(Vertical):
     """Footer container for status bar and input field."""
 
@@ -687,12 +719,32 @@ class Footer(Vertical):
     StatusBar {
         height: 1;
     }
+    Footer ChatInput {
+        height: 3;
+        min-height: 3;
+        max-height: 10;
+        width: 100%;
+        border: none;
+        border-left: solid #F97316;
+        background: $surface;
+        padding: 1 1 0 1;
+    }
+    Footer ChatInput:focus {
+        border: none;
+        border-left: solid #F97316;
+    }
     """
 
     def __init__(self):
         super().__init__()
         self.status_bar = StatusBar()
-        self.user_input = Input(placeholder="Ask about your data...", id="user_input")
+        self.user_input = ChatInput(
+            placeholder="Ask about your data... (Enter to send, Shift+Enter for new line)",
+            id="user_input",
+            show_line_numbers=False,
+            soft_wrap=True,
+        )
+        self.user_input.styles.height = 3  # Set initial height via styles
 
     def compose(self) -> ComposeResult:
         yield self.user_input
@@ -721,6 +773,13 @@ class ChatPanel(ScrollableContainer):
 
         if len(self.messages) > MAX_MESSAGE_HISTORY:
             self.messages = self.messages[-MAX_MESSAGE_HISTORY:]
+
+        # Always scroll to bottom when adding new message (after DOM update + small delay)
+        self.call_after_refresh(
+            lambda: self.set_timer(
+                0.1, lambda: self.scroll_end(animate=False, immediate=True)
+            )
+        )
 
     def mount_collapsible(self, collapsible: "Collapsible") -> None:
         """Mount a collapsible widget to the chat panel."""
@@ -1134,9 +1193,19 @@ class ESDCChatApp(App):
         border-top: solid $surface;
     }
     
-    /* Global Input styling - minimal defaults */
-    Footer Input {
+    /* TextArea Chat Input - Plain styling, no color box */
+    .chat-input {
         height: 3;
+        min-height: 3;
+        max-height: 10;
+        width: 100%;
+        /* No border, no background - completely plain */
+    }
+
+    .chat-input TextArea {
+        height: 100%;
+        width: 100%;
+        /* No special styling */
     }
     """
 
@@ -1154,7 +1223,7 @@ class ESDCChatApp(App):
         self.chat_panel: ChatPanel | None = None
         self._context_panel: ContextPanel | None = None
         self.status_bar: StatusBar | None = None
-        self.user_input: Input | None = None
+        self.user_input: ChatInput | None = None
         self._agent: Runnable | None = None
         self._llm: BaseChatModel | None = None
         self._checkpointer: BaseCheckpointSaver | None = None
@@ -1284,10 +1353,25 @@ class ESDCChatApp(App):
         )
         self._thread_id = create_thread_id()
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle user input submission (non-blocking with queue)."""
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Auto-expand TextArea based on content lines."""
+        if not self.user_input:
+            return
 
-        user_input = event.value.strip()
+        # Calculate required height based on number of lines
+        line_count = self.user_input.text.count("\n") + 1
+        new_height = min(max(line_count + 1, 3), 10)  # Min 3, Max 10
+
+        # Update height if changed
+        if self.user_input.styles.height != new_height:
+            self.user_input.styles.height = new_height
+
+    def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
+        """Handle message submission from ChatInput."""
+        if not self.user_input:
+            return
+
+        user_input = self.user_input.text.strip()
         if not user_input:
             return
 
@@ -1298,7 +1382,10 @@ class ESDCChatApp(App):
 
         logger.info(f"User input submitted: {user_input[:50]}...")
         self.display_message("user", user_input)
-        event.input.value = ""
+
+        # Clear the input and reset height
+        self.user_input.text = ""
+        self.user_input.styles.height = 3
         self._cancelled = False
 
         if not self._agent:
@@ -1313,6 +1400,10 @@ class ESDCChatApp(App):
         if self.chat_panel:
             self.chat_panel.mount(self._streaming_message)
             self._streaming_message.scroll_visible()
+            # Scroll to bottom when mounting new AI message (after DOM update)
+            self.call_after_refresh(
+                lambda: self.chat_panel.scroll_end(animate=False, immediate=True)
+            )
 
         # Start background streaming task (NON-blocking)
         asyncio.create_task(self._stream_in_background(user_input))
@@ -1397,33 +1488,37 @@ class ESDCChatApp(App):
         if chunk_type == "token":
             token = chunk.get("content", "")
             if token and self._streaming_message:
-                # Check if user was at bottom BEFORE update (using Textual's built-in)
-                should_scroll = False
-                if self.chat_panel:
-                    should_scroll = self.chat_panel.is_vertical_scroll_end
-
                 self._accumulated_content += token
                 self._streaming_message.update(self._accumulated_content)
 
-                # Scroll AFTER if was at bottom (immediate=True to bypass animation timing)
-                if should_scroll and self.chat_panel:
-                    self.chat_panel.scroll_end(animate=False, immediate=True)
+                # Always scroll to bottom on new content (after DOM update + delay for Markdown)
+                if self.chat_panel:
+                    self.call_after_refresh(
+                        lambda: self.set_timer(
+                            0.1,
+                            lambda: self.chat_panel.scroll_end(
+                                animate=False, immediate=True
+                            ),
+                        )
+                    )
 
         elif chunk_type == "message":
             content = chunk.get("content", "")
             if content and not self._accumulated_content:
-                # Check if user was at bottom BEFORE update
-                should_scroll = False
-                if self.chat_panel:
-                    should_scroll = self.chat_panel.is_vertical_scroll_end
-
                 self._accumulated_content = content
                 if self._streaming_message:
                     self._streaming_message.update(self._accumulated_content)
 
-                # Scroll AFTER if was at bottom
-                if should_scroll and self.chat_panel:
-                    self.chat_panel.scroll_end(animate=False, immediate=True)
+                # Always scroll to bottom on new content (after DOM update + delay for Markdown)
+                if self.chat_panel:
+                    self.call_after_refresh(
+                        lambda: self.set_timer(
+                            0.1,
+                            lambda: self.chat_panel.scroll_end(
+                                animate=False, immediate=True
+                            ),
+                        )
+                    )
 
         elif chunk_type == "tool_call":
             tool_name = chunk.get("tool", "")
@@ -1436,6 +1531,7 @@ class ESDCChatApp(App):
                 "list_tables": "⏳ Listing available tables...",
                 "get_recommended_table": "⏳ Finding recommended table...",
                 "resolve_uncertainty_level": "⏳ Resolving uncertainty level...",
+                "search_problem_cluster": "⏳ Searching problem cluster definitions...",
             }
 
             sql_query = ""
@@ -1463,11 +1559,6 @@ class ESDCChatApp(App):
 
             # Add indicator to message
             if self._streaming_message:
-                # Check if user was at bottom BEFORE update
-                should_scroll = False
-                if self.chat_panel:
-                    should_scroll = self.chat_panel.is_vertical_scroll_end
-
                 indicator_text = f"\n\n{status_msg}"
                 if sql_query and tool_name == "execute_sql":
                     indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
@@ -1475,9 +1566,16 @@ class ESDCChatApp(App):
                 self._accumulated_content += indicator_text
                 self._streaming_message.update(self._accumulated_content)
 
-                # Scroll AFTER if was at bottom
-                if should_scroll and self.chat_panel:
-                    self.chat_panel.scroll_end(animate=False, immediate=True)
+                # Always scroll to bottom when adding tool indicator (after DOM update + delay for Markdown)
+                if self.chat_panel:
+                    self.call_after_refresh(
+                        lambda: self.set_timer(
+                            0.1,
+                            lambda: self.chat_panel.scroll_end(
+                                animate=False, immediate=True
+                            ),
+                        )
+                    )
 
         elif chunk_type == "tool_result":
             result = chunk.get("result", "")
@@ -1496,6 +1594,7 @@ class ESDCChatApp(App):
                 "list_tables": "✅ Tables listed",
                 "get_recommended_table": "✅ Recommended table found",
                 "resolve_uncertainty_level": "✅ Uncertainty level resolved",
+                "search_problem_cluster": "✅ Problem cluster definition found",
             }
 
             # Update tool status
@@ -1550,6 +1649,17 @@ class ESDCChatApp(App):
 
             if not success and error and self._streaming_message:
                 self._streaming_message.update(f"Error: {error}")
+
+            # Final scroll to bottom after streaming completes (critical fix)
+            if self.chat_panel:
+                self.call_after_refresh(
+                    lambda: self.set_timer(
+                        0.1,
+                        lambda: self.chat_panel.scroll_end(
+                            animate=False, immediate=True
+                        ),
+                    )
+                )
 
             # Reset state
             self._streaming_message = None
