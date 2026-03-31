@@ -2,8 +2,6 @@
 
 # Third-party
 from langchain_core.language_models import BaseChatModel
-from langchain_core.runnables import Runnable
-from langgraph.graph.graph import CompiledGraph
 
 # Local
 from esdc.chat.agent import create_agent
@@ -14,7 +12,7 @@ from esdc.providers import create_llm_from_config
 class AgentFactory:
     """Factory for creating ESDC agents."""
 
-    def create_agent(self, llm: BaseChatModel) -> CompiledGraph:
+    def create_agent(self, llm: BaseChatModel):
         """Create ESDC agent with tools.
 
         Args:
