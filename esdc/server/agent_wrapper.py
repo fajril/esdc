@@ -19,6 +19,7 @@ from langchain_core.runnables import RunnableConfig
 from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
+from esdc.server.stream_buffer import StreamingBuffer
 
 logger = logging.getLogger("esdc.server.agent")
 
@@ -106,111 +107,28 @@ def extract_content_str(content) -> str:
         return str(content)
 
 
-def format_thinking_section(content: str | list | dict | None) -> str:
-    """Format thinking/reasoning section in markdown.
-
-    Args:
-        content: The thinking/reasoning text (can be str, list, dict, or None)
-
-    Returns:
-        Markdown formatted thinking section
-    """
-    # Convert content to string
-    if content is None:
-        return ""
-    if isinstance(content, list):
-        content = str(content[0]) if content else ""
-    elif isinstance(content, dict):
-        content = json.dumps(content, indent=2)
-    else:
-        content = str(content)
-
-    if not content.strip():
-        return ""
-
-    return f"""### 🧠 Thinking Process
-
-{content}
-
-"""
-
-
-def format_tool_section(tool_name: str, tool_args: dict) -> str:
-    """Format tool call section in markdown with syntax highlighting.
-
-    Args:
-        tool_name: Name of the tool
-        tool_args: Tool arguments dictionary
-
-    Returns:
-        Markdown formatted tool section
-    """
-    if tool_name == "execute_sql":
-        sql = tool_args.get("query", "")
-        return f"""### 🛠️ Tool: {tool_name}
-
-```sql
-{sql}
-```
-
-"""
-    else:
-        # For other tools, show as JSON
-        args_str = json.dumps(tool_args, indent=2, ensure_ascii=False)
-        return f"""### 🛠️ Tool: {tool_name}
-
-```json
-{args_str}
-```
-
-"""
-
-
-def build_markdown_response(
-    thinking: str, tool_calls: list[dict], final_response: str
-) -> str:
-    """Build complete markdown response with all sections.
-
-    Args:
-        thinking: The thinking/reasoning text
-        tool_calls: List of tool call dictionaries
-        final_response: The final response content
-
-    Returns:
-        Complete markdown formatted response
-    """
-    sections = []
-
-    # Add thinking section
-    if thinking:
-        sections.append(format_thinking_section(thinking))
-
-    # Add tool sections
-    for tool_call in tool_calls:
-        tool_name = tool_call.get("name", "unknown")
-        tool_args = tool_call.get("args", {})
-        sections.append(format_tool_section(tool_name, tool_args))
-
-    # Add final response
-    if final_response:
-        sections.append(final_response)
-
-    return "\n".join(sections)
-
-
 async def generate_streaming_response(
     messages: list,
     model: str = "esdc-agent",
     temperature: float = 0.7,
 ) -> AsyncGenerator[str, None]:
-    """Generate streaming chat completion response with markdown formatting."""
-    request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    """Generate streaming chat completion response with markdown formatting.
 
-    # Accumulate content for markdown
-    thinking_content = ""
-    tool_calls = []
-    final_content = ""
-    is_first_ai_message = True
+    Uses StreamingBuffer for accumulating and flushing content at checkpoints:
+    - Tool calls are flushed immediately with previous content
+    - Content is flushed when buffer exceeds 500 chars or 500ms timeout
+    - Final flush at end of stream
+
+    Args:
+        messages: List of conversation messages
+        model: Model ID
+        temperature: Sampling temperature
+
+    Yields:
+        OpenAI-compatible streaming chunks as SSE formatted strings
+    """
+    request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    buffer = StreamingBuffer()
 
     try:
         # Create LLM and agent
@@ -243,6 +161,9 @@ async def generate_streaming_response(
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
+        # Track first message for thinking
+        is_first_ai_message = True
+
         # Stream the response
         async for event in agent.astream(
             {"messages": lc_messages},
@@ -252,50 +173,56 @@ async def generate_streaming_response(
             if not ai_msg:
                 continue
 
-            # Capture thinking from first message
+            # Handle different message types
             if is_first_ai_message:
+                # First message might contain thinking/reasoning
                 content_str = extract_content_str(ai_msg.content)
                 if content_str and content_str.strip():
-                    thinking_content = content_str
+                    # Check if this is thinking content (not just empty)
+                    should_flush = buffer.add_thinking(content_str)
+                    if should_flush:
+                        content = buffer.flush()
+                        if content:
+                            chunk = create_openai_chunk(content=content, model=model)
+                            yield json.dumps(chunk)
                 is_first_ai_message = False
 
-            # Capture tool calls
-            if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                tool_calls.extend(ai_msg.tool_calls)
+            elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+                # Tool call detected - flush current buffer first
+                if buffer.has_content():
+                    content = buffer.flush()
+                    if content:
+                        chunk = create_openai_chunk(content=content, model=model)
+                        yield json.dumps(chunk)
 
-            # Capture final response (last message with content and no tool calls)
-            content_str = extract_content_str(ai_msg.content)
-            if content_str and not (
-                hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
-            ):
-                final_content = content_str
+                # Stream each tool call immediately
+                for tool_call in ai_msg.tool_calls:
+                    tool_name = tool_call.get("name", "unknown")
+                    tool_args = tool_call.get("args", {})
+                    # Add to buffer and flush immediately
+                    buffer.add_tool_call(tool_name, tool_args)
+                    content = buffer.flush()
+                    if content:
+                        chunk = create_openai_chunk(content=content, model=model)
+                        yield json.dumps(chunk)
 
-        # Stream the markdown response in chunks
-        # Send thinking section
-        if thinking_content:
-            chunk = create_openai_chunk(
-                content=format_thinking_section(thinking_content),
-                model=model,
-            )
-            yield json.dumps(chunk)
+            else:
+                # Final content - accumulate in buffer
+                content_str = extract_content_str(ai_msg.content)
+                if content_str:
+                    should_flush = buffer.add_content(content_str)
+                    if should_flush:
+                        content = buffer.flush()
+                        if content:
+                            chunk = create_openai_chunk(content=content, model=model)
+                            yield json.dumps(chunk)
 
-        # Send tool sections
-        for tool_call in tool_calls:
-            tool_name = tool_call.get("name", "unknown")
-            tool_args = tool_call.get("args", {})
-            chunk = create_openai_chunk(
-                content=format_tool_section(tool_name, tool_args),
-                model=model,
-            )
-            yield json.dumps(chunk)
-
-        # Send final response
-        if final_content:
-            chunk = create_openai_chunk(
-                content=final_content,
-                model=model,
-            )
-            yield json.dumps(chunk)
+        # Flush any remaining content
+        if buffer.has_content():
+            final_content = buffer.flush_final()
+            if final_content:
+                chunk = create_openai_chunk(content=final_content, model=model)
+                yield json.dumps(chunk)
 
         # Send final chunk
         final_chunk = create_openai_chunk(
@@ -320,7 +247,16 @@ async def generate_response(
     model: str = "esdc-agent",
     temperature: float = 0.7,
 ) -> dict[str, Any]:
-    """Generate non-streaming chat completion response with markdown formatting."""
+    """Generate non-streaming chat completion response with markdown formatting.
+
+    Args:
+        messages: List of conversation messages
+        model: Model ID
+        temperature: Sampling temperature
+
+    Returns:
+        OpenAI-compatible response dictionary
+    """
     try:
         # Create LLM and agent
         provider_config = Config.get_provider_config()
@@ -349,10 +285,8 @@ async def generate_response(
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
-        # Accumulate content
-        thinking_content = ""
-        tool_calls = []
-        final_content = ""
+        # Accumulate content menggunakan buffer
+        buffer = StreamingBuffer()
         is_first_ai_message = True
 
         # Run the agent
@@ -366,35 +300,36 @@ async def generate_response(
             if not ai_msg:
                 continue
 
-            # Capture thinking from first message
+            # Handle different message types
             if is_first_ai_message:
                 content_str = extract_content_str(ai_msg.content)
                 if content_str and content_str.strip():
-                    thinking_content = content_str
+                    buffer.add_thinking(content_str)
                 is_first_ai_message = False
 
-            # Capture tool calls
-            if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                tool_calls.extend(ai_msg.tool_calls)
+            elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+                # Flush current content first
+                if buffer.has_content():
+                    buffer.flush()
 
-            # Capture final response
-            content_str = extract_content_str(ai_msg.content)
-            if content_str and not (
-                hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
-            ):
-                final_content = content_str
+                # Add tool calls
+                for tool_call in ai_msg.tool_calls:
+                    tool_name = tool_call.get("name", "unknown")
+                    tool_args = tool_call.get("args", {})
+                    buffer.add_tool_call(tool_name, tool_args)
+                    buffer.flush()  # Flush each tool immediately
 
-        # Build markdown response
-        markdown_response = build_markdown_response(
-            thinking=thinking_content,
-            tool_calls=tool_calls,
-            final_response=final_content,
-        )
+            else:
+                # Final content
+                content_str = extract_content_str(ai_msg.content)
+                if content_str:
+                    buffer.add_content(content_str)
+
+        # Build final markdown response
+        final_content = buffer.flush_final()
 
         return {
-            "content": markdown_response
-            if markdown_response
-            else "No response generated",
+            "content": final_content if final_content else "No response generated",
             "role": "assistant",
             "finish_reason": "stop",
         }

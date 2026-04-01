@@ -10,11 +10,9 @@ from fastapi.responses import StreamingResponse
 # Local
 from esdc.server.agent_wrapper import generate_response, generate_streaming_response
 from esdc.server.models import (
-    ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
     Choice,
-    ChoiceDelta,
     Message,
     ModelInfo,
     ModelList,

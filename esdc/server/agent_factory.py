@@ -1,3 +1,5 @@
+"""Agent Factory module for creating ESDC agents."""
+
 # Standard library
 
 # Third-party
@@ -23,7 +25,7 @@ class AgentFactory:
         """
         return create_agent(llm, checkpointer=None)
 
-    def create_llm(self) -> BaseChatModel:
+    def create_llm(self):
         """Create LLM from config.
 
         Returns:
@@ -39,7 +41,7 @@ class AgentFactory:
                 "No provider configured. Please run 'esdc provider add' first."
             )
 
-        provider_name = provider_config.get("provider", "ollama")
+        provider_name = provider_config.get("provider_type", "ollama")
         model = provider_config.get("model")
         base_url = provider_config.get("base_url")
         api_key = provider_config.get("api_key")
