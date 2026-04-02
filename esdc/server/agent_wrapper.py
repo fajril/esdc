@@ -24,6 +24,7 @@ from esdc.server.thinking_parser import (
     extract_thinking_content,
     has_thinking_tags,
 )
+from esdc.server.thinking_state import ThinkingState
 
 logger = logging.getLogger("esdc.server.agent")
 
@@ -111,6 +112,37 @@ def extract_content_str(content) -> str:
         return str(content)
 
 
+def extract_thinking_for_interleaved(message: AIMessage) -> str | None:
+    """Extract thinking content from AIMessage when interleaved with tool calls.
+
+    Only extracts thinking when message has tool_calls (interleaved scenario).
+
+    Args:
+        message: AIMessage that may contain reasoning_content
+
+    Returns:
+        Thinking content if present and message has tool calls, None otherwise
+    """
+    # Only extract for interleaved scenario (tool calls present)
+    if not hasattr(message, "tool_calls") or not message.tool_calls:
+        return None
+
+    # Try reasoning_content from additional_kwargs
+    if hasattr(message, "additional_kwargs") and message.additional_kwargs:
+        reasoning = message.additional_kwargs.get("reasoning_content")
+        if reasoning:
+            return str(reasoning).strip()
+
+    # Try extracting from content with thinking tags
+    content_str = extract_content_str(message.content)
+    if has_thinking_tags(content_str):
+        thinking, _ = extract_thinking_content(content_str)
+        if thinking:
+            return thinking.strip()
+
+    return None
+
+
 async def generate_streaming_response(
     messages: list,
     model: str = "esdc-agent",
@@ -133,6 +165,7 @@ async def generate_streaming_response(
     """
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     buffer = StreamingBuffer()
+    thinking_state = ThinkingState()
 
     try:
         # Create LLM and agent
@@ -218,6 +251,11 @@ async def generate_streaming_response(
                 is_first_ai_message = False
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+                # Extract and preserve thinking before tool execution
+                thinking = extract_thinking_for_interleaved(ai_msg)
+                if thinking:
+                    thinking_state.preserve_thinking(thinking)
+
                 # Tool call detected - flush current buffer first
                 if buffer.has_content():
                     content = buffer.flush()
@@ -237,6 +275,12 @@ async def generate_streaming_response(
                         yield json.dumps(chunk)
 
             else:
+                # Check if we have preserved thinking to inject before final content
+                if thinking_state.has_thinking():
+                    preserved = thinking_state.get_thinking()
+                    if preserved:
+                        buffer.add_preserved_thinking(preserved)
+
                 # Final content - accumulate in buffer
                 content_str = extract_content_str(ai_msg.content)
                 if content_str:
@@ -317,6 +361,7 @@ async def generate_response(
 
         # Accumulate content menggunakan buffer
         buffer = StreamingBuffer()
+        thinking_state = ThinkingState()
         is_first_ai_message = True
 
         # Run the agent
@@ -347,6 +392,11 @@ async def generate_response(
                 is_first_ai_message = False
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+                # Extract and preserve thinking before tool execution
+                thinking = extract_thinking_for_interleaved(ai_msg)
+                if thinking:
+                    thinking_state.preserve_thinking(thinking)
+
                 # Flush current content first
                 if buffer.has_content():
                     buffer.flush()
@@ -359,6 +409,12 @@ async def generate_response(
                     buffer.flush()  # Flush each tool immediately
 
             else:
+                # Check if we have preserved thinking to inject before final content
+                if thinking_state.has_thinking():
+                    preserved = thinking_state.get_thinking()
+                    if preserved:
+                        buffer.add_preserved_thinking(preserved)
+
                 # Final content
                 content_str = extract_content_str(ai_msg.content)
                 if content_str:
