@@ -78,6 +78,7 @@ class StreamingBuffer:
         self.last_flush_time: float = time.time()
         self.buffer_size_limit: int = buffer_size_limit
         self.timeout_ms: int = timeout_ms
+        self.preserved_thinking: str | None = None
 
     def add_thinking(self, content: str) -> bool:
         """Add thinking content to buffer.
@@ -116,6 +117,16 @@ class StreamingBuffer:
         self.content_buffer.append(content)
         return self._should_flush()
 
+    def add_preserved_thinking(self, thinking: str) -> None:
+        """Store thinking content that was preserved from a previous turn.
+
+        This content will be formatted with  thinking tags when flushed.
+
+        Args:
+            thinking: Thinking/reasoning text from previous turn
+        """
+        self.preserved_thinking = thinking
+
     def _should_flush(self) -> bool:
         """Check if buffer should be flushed.
 
@@ -140,6 +151,11 @@ class StreamingBuffer:
             Formatted markdown string from accumulated buffers
         """
         sections: list[str] = []
+
+        # Add preserved thinking from previous turn first
+        if self.preserved_thinking:
+            sections.append(format_thinking_section(self.preserved_thinking))
+            self.preserved_thinking = None
 
         # Build thinking section
         if self.thinking_buffer:
@@ -176,5 +192,8 @@ class StreamingBuffer:
             True if any buffer is not empty
         """
         return bool(
-            self.thinking_buffer or self.tool_calls_buffer or self.content_buffer
+            self.preserved_thinking
+            or self.thinking_buffer
+            or self.tool_calls_buffer
+            or self.content_buffer
         )
