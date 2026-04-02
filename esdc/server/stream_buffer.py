@@ -6,14 +6,22 @@ import time
 
 
 def format_thinking_section(content: str) -> str:
-    """Format thinking/reasoning section in markdown."""
+    """Format thinking/reasoning section with OpenWebUI compatible tags.
+
+    Uses <think> tags which OpenWebUI renders as collapsible sections.
+    Reference: https://docs.openwebui.com/features/chat-conversations/chat-features/reasoning-models
+
+    Args:
+        content: The thinking content to format
+
+    Returns:
+        Formatted string with think tags
+    """
     if not content or not content.strip():
         return ""
-    return f"""### 🧠 Thinking Process
-
+    return f"""<think>
 {content}
-
-"""
+</think>"""
 
 
 def format_tool_section(tool_name: str, tool_args: dict) -> str:

@@ -20,6 +20,10 @@ from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.stream_buffer import StreamingBuffer
+from esdc.server.thinking_parser import (
+    extract_thinking_content,
+    has_thinking_tags,
+)
 
 logger = logging.getLogger("esdc.server.agent")
 
@@ -178,13 +182,39 @@ async def generate_streaming_response(
                 # First message might contain thinking/reasoning
                 content_str = extract_content_str(ai_msg.content)
                 if content_str and content_str.strip():
-                    # Check if this is thinking content (not just empty)
-                    should_flush = buffer.add_thinking(content_str)
-                    if should_flush:
-                        content = buffer.flush()
-                        if content:
-                            chunk = create_openai_chunk(content=content, model=model)
-                            yield json.dumps(chunk)
+                    # Check if content has thinking tags
+                    if has_thinking_tags(content_str):
+                        thinking, final = extract_thinking_content(content_str)
+                        if thinking:
+                            # Add thinking to buffer (will be formatted with <think> tags)
+                            should_flush = buffer.add_thinking(thinking)
+                            if should_flush:
+                                content = buffer.flush()
+                                if content:
+                                    chunk = create_openai_chunk(
+                                        content=content, model=model
+                                    )
+                                    yield json.dumps(chunk)
+                        if final:
+                            # Add final response
+                            should_flush = buffer.add_content(final)
+                            if should_flush:
+                                content = buffer.flush()
+                                if content:
+                                    chunk = create_openai_chunk(
+                                        content=content, model=model
+                                    )
+                                    yield json.dumps(chunk)
+                    else:
+                        # No thinking tags, treat as regular content
+                        should_flush = buffer.add_thinking(content_str)
+                        if should_flush:
+                            content = buffer.flush()
+                            if content:
+                                chunk = create_openai_chunk(
+                                    content=content, model=model
+                                )
+                                yield json.dumps(chunk)
                 is_first_ai_message = False
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
@@ -304,7 +334,16 @@ async def generate_response(
             if is_first_ai_message:
                 content_str = extract_content_str(ai_msg.content)
                 if content_str and content_str.strip():
-                    buffer.add_thinking(content_str)
+                    # Check if content has thinking tags
+                    if has_thinking_tags(content_str):
+                        thinking, final = extract_thinking_content(content_str)
+                        if thinking:
+                            buffer.add_thinking(thinking)
+                        if final:
+                            buffer.add_content(final)
+                    else:
+                        # No thinking tags, treat as regular content
+                        buffer.add_thinking(content_str)
                 is_first_ai_message = False
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
