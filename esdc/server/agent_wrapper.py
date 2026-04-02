@@ -25,6 +25,10 @@ from esdc.server.thinking_parser import (
     has_thinking_tags,
 )
 from esdc.server.thinking_state import ThinkingState
+from esdc.server.tool_formatter import (
+    create_tool_call_chunk,
+    create_final_chunk,
+)
 
 logger = logging.getLogger("esdc.server.agent")
 
@@ -147,6 +151,7 @@ async def generate_streaming_response(
     messages: list,
     model: str = "esdc-agent",
     temperature: float = 0.7,
+    use_native_format: bool = True,
 ) -> AsyncGenerator[str, None]:
     """Generate streaming chat completion response with markdown formatting.
 
@@ -159,6 +164,7 @@ async def generate_streaming_response(
         messages: List of conversation messages
         model: Model ID
         temperature: Sampling temperature
+        use_native_format: Whether to use native tool_calls format or markdown
 
     Yields:
         OpenAI-compatible streaming chunks as SSE formatted strings
@@ -256,23 +262,26 @@ async def generate_streaming_response(
                 if thinking:
                     thinking_state.preserve_thinking(thinking)
 
-                # Tool call detected - flush current buffer first
-                if buffer.has_content():
-                    content = buffer.flush()
-                    if content:
-                        chunk = create_openai_chunk(content=content, model=model)
-                        yield json.dumps(chunk)
+                if use_native_format:
+                    # Emit native tool_calls chunk
+                    chunk = create_tool_call_chunk(ai_msg.tool_calls, model)
+                    yield json.dumps(chunk)
+                else:
+                    # Fallback to markdown format
+                    if buffer.has_content():
+                        content = buffer.flush()
+                        if content:
+                            chunk = create_openai_chunk(content=content, model=model)
+                            yield json.dumps(chunk)
 
-                # Stream each tool call immediately
-                for tool_call in ai_msg.tool_calls:
-                    tool_name = tool_call.get("name", "unknown")
-                    tool_args = tool_call.get("args", {})
-                    # Add to buffer and flush immediately
-                    buffer.add_tool_call(tool_name, tool_args)
-                    content = buffer.flush()
-                    if content:
-                        chunk = create_openai_chunk(content=content, model=model)
-                        yield json.dumps(chunk)
+                    for tool_call in ai_msg.tool_calls:
+                        tool_name = tool_call.get("name", "unknown")
+                        tool_args = tool_call.get("args", {})
+                        buffer.add_tool_call(tool_name, tool_args)
+                        content = buffer.flush()
+                        if content:
+                            chunk = create_openai_chunk(content=content, model=model)
+                            yield json.dumps(chunk)
 
             else:
                 # Check if we have preserved thinking to inject before final content
@@ -298,13 +307,18 @@ async def generate_streaming_response(
                 chunk = create_openai_chunk(content=final_content, model=model)
                 yield json.dumps(chunk)
 
-        # Send final chunk
-        final_chunk = create_openai_chunk(
-            content="",
-            model=model,
-            finish_reason="stop",
-        )
-        yield json.dumps(final_chunk)
+        if use_native_format:
+            # Send final chunk
+            final_chunk = create_final_chunk(model)
+            yield json.dumps(final_chunk)
+        else:
+            # Legacy markdown final chunk
+            final_chunk = create_openai_chunk(
+                content="",
+                model=model,
+                finish_reason="stop",
+            )
+            yield json.dumps(final_chunk)
 
     except Exception as e:
         logger.error(f"Error in streaming response: {e}", exc_info=True)
