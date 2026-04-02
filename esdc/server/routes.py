@@ -4,8 +4,11 @@ import uuid
 from typing import AsyncGenerator
 
 # Third-party
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+
+# Local
+from esdc.server.tool_formatter import detect_native_format
 
 # Local
 from esdc.server.agent_wrapper import generate_response, generate_streaming_response
@@ -42,6 +45,7 @@ async def list_models() -> ModelList:
 @router.post("/chat/completions", response_model=None)
 async def chat_completions(
     request: ChatCompletionRequest,
+    request_obj: Request,
 ):
     """Create chat completion.
 
@@ -50,12 +54,17 @@ async def chat_completions(
 
     Args:
         request: Chat completion request
+        request_obj: FastAPI request object for header access
 
     Returns:
         StreamingResponse for streaming requests, ChatCompletionResponse otherwise
     """
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
+
+    # Detect format preference from headers
+    headers = dict(request_obj.headers)
+    use_native = detect_native_format(headers, request.stream)
 
     if request.stream:
         # Return streaming response
@@ -66,6 +75,7 @@ async def chat_completions(
                     messages=request.messages,
                     model=request.model,
                     temperature=request.temperature or 0.7,
+                    use_native_format=use_native,
                 ):
                     # Format as SSE data
                     yield f"data: {chunk}\n\n"
@@ -103,6 +113,7 @@ async def chat_completions(
                 messages=request.messages,
                 model=request.model,
                 temperature=request.temperature or 0.7,
+                use_native_format=use_native,
             )
 
             return ChatCompletionResponse(
