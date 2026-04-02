@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 # Local
-from esdc.server.tool_formatter import detect_native_format
+from esdc.server.tool_formatter import should_use_native_format
 
 # Local
 from esdc.server.agent_wrapper import generate_response, generate_streaming_response
@@ -64,7 +64,7 @@ async def chat_completions(
 
     # Detect format preference from headers
     headers = dict(request_obj.headers)
-    use_native = detect_native_format(headers, request.stream)
+    use_native = should_use_native_format(headers, request.stream)
 
     if request.stream:
         # Return streaming response
