@@ -334,6 +334,7 @@ async def generate_response(
     messages: list,
     model: str = "esdc-agent",
     temperature: float = 0.7,
+    use_native_format: bool = True,
 ) -> dict[str, Any]:
     """Generate non-streaming chat completion response with markdown formatting.
 
@@ -376,6 +377,7 @@ async def generate_response(
         # Accumulate content menggunakan buffer
         buffer = StreamingBuffer()
         thinking_state = ThinkingState()
+        stored_tool_calls = []  # Store tool calls for native format
         is_first_ai_message = True
 
         # Run the agent
@@ -406,21 +408,26 @@ async def generate_response(
                 is_first_ai_message = False
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                # Extract and preserve thinking before tool execution
+                # Extract and preserve thinking
                 thinking = extract_thinking_for_interleaved(ai_msg)
                 if thinking:
                     thinking_state.preserve_thinking(thinking)
 
-                # Flush current content first
-                if buffer.has_content():
-                    buffer.flush()
+                if not use_native_format:
+                    # Only flush buffer for markdown mode
+                    if buffer.has_content():
+                        buffer.flush()
 
-                # Add tool calls
-                for tool_call in ai_msg.tool_calls:
-                    tool_name = tool_call.get("name", "unknown")
-                    tool_args = tool_call.get("args", {})
-                    buffer.add_tool_call(tool_name, tool_args)
-                    buffer.flush()  # Flush each tool immediately
+                # Store tool calls for final response
+                stored_tool_calls = ai_msg.tool_calls
+
+                if not use_native_format:
+                    # Add to buffer for markdown mode
+                    for tool_call in ai_msg.tool_calls:
+                        tool_name = tool_call.get("name", "unknown")
+                        tool_args = tool_call.get("args", {})
+                        buffer.add_tool_call(tool_name, tool_args)
+                        buffer.flush()  # Flush each tool immediately
 
             else:
                 # Check if we have preserved thinking to inject before final content
@@ -434,14 +441,43 @@ async def generate_response(
                 if content_str:
                     buffer.add_content(content_str)
 
-        # Build final markdown response
-        final_content = buffer.flush_final()
+        # Build final response
+        if use_native_format:
+            # Import formatter
+            from esdc.server.tool_formatter import format_tool_calls_for_response
 
-        return {
-            "content": final_content if final_content else "No response generated",
-            "role": "assistant",
-            "finish_reason": "stop",
-        }
+            final_content = buffer.flush_final()
+            tool_calls_formatted = (
+                format_tool_calls_for_response(stored_tool_calls)
+                if stored_tool_calls
+                else None
+            )
+
+            return {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": final_content if final_content else None,
+                            "tool_calls": tool_calls_formatted,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        else:
+            # Legacy markdown response
+            final_content = buffer.flush_final()
+            return {
+                "content": final_content if final_content else "No response generated",
+                "role": "assistant",
+                "finish_reason": "stop",
+            }
 
     except Exception as e:
         logger.error(f"Error in response generation: {e}", exc_info=True)
