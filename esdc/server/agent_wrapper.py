@@ -48,9 +48,7 @@ def convert_messages_to_langchain(messages: list) -> list:
         elif role == "assistant":
             lc_messages.append(AIMessage(content=content))
         elif role == "tool":
-            lc_messages.append(
-                ToolMessage(content=content, tool_call_id=msg.tool_call_id or "")
-            )
+            lc_messages.append(ToolMessage(content=content, tool_call_id=msg.tool_call_id or ""))
 
     return lc_messages
 
@@ -218,21 +216,22 @@ async def generate_streaming_response(
 
             # Handle different message types
             if is_first_ai_message:
-                # First message might contain thinking/reasoning
+                # First message might contain thinking/reasoning and/or tool calls
                 content_str = extract_content_str(ai_msg.content)
+                should_emit_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+
+                # Always emit content FIRST if present
                 if content_str and content_str.strip():
                     # Check if content has thinking tags
                     if has_thinking_tags(content_str):
                         thinking, final = extract_thinking_content(content_str)
                         if thinking:
-                            # Add thinking to buffer (will be formatted with <think> tags)
+                            # Add thinking to buffer (will be formatted with  thinking tags)
                             should_flush = buffer.add_thinking(thinking)
                             if should_flush:
                                 content = buffer.flush()
                                 if content:
-                                    chunk = create_openai_chunk(
-                                        content=content, model=model
-                                    )
+                                    chunk = create_openai_chunk(content=content, model=model)
                                     yield json.dumps(chunk)
                         if final:
                             # Add final response
@@ -240,9 +239,7 @@ async def generate_streaming_response(
                             if should_flush:
                                 content = buffer.flush()
                                 if content:
-                                    chunk = create_openai_chunk(
-                                        content=content, model=model
-                                    )
+                                    chunk = create_openai_chunk(content=content, model=model)
                                     yield json.dumps(chunk)
                     else:
                         # No thinking tags, treat as regular content
@@ -250,10 +247,35 @@ async def generate_streaming_response(
                         if should_flush:
                             content = buffer.flush()
                             if content:
-                                chunk = create_openai_chunk(
-                                    content=content, model=model
-                                )
+                                chunk = create_openai_chunk(content=content, model=model)
                                 yield json.dumps(chunk)
+
+                # If there's remaining content in buffer, flush it before tool_calls
+                if buffer.has_content():
+                    content = buffer.flush()
+                    if content:
+                        chunk = create_openai_chunk(content=content, model=model)
+                        yield json.dumps(chunk)
+
+                # NOW emit tool_calls AFTER content is emitted
+                if should_emit_tool_calls:
+                    thinking = extract_thinking_for_interleaved(ai_msg)
+                    if thinking:
+                        thinking_state.preserve_thinking(thinking)
+
+                    if use_native_format:
+                        # Convert ToolCall objects to dict format
+                        tool_calls_dict = [
+                            {
+                                "name": tc.get("name", ""),
+                                "args": tc.get("args", {}),
+                                "id": tc.get("id", ""),
+                            }
+                            for tc in ai_msg.tool_calls
+                        ]
+                        chunk = create_tool_call_chunk(tool_calls_dict, model)
+                        yield json.dumps(chunk)
+
                 is_first_ai_message = False
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
@@ -264,7 +286,16 @@ async def generate_streaming_response(
 
                 if use_native_format:
                     # Emit native tool_calls chunk
-                    chunk = create_tool_call_chunk(ai_msg.tool_calls, model)
+                    # Convert ToolCall objects to dict format
+                    tool_calls_dict = [
+                        {
+                            "name": tc.get("name", ""),
+                            "args": tc.get("args", {}),
+                            "id": tc.get("id", ""),
+                        }
+                        for tc in ai_msg.tool_calls
+                    ]
+                    chunk = create_tool_call_chunk(tool_calls_dict, model)
                     yield json.dumps(chunk)
                 else:
                     # Fallback to markdown format
@@ -383,9 +414,7 @@ async def generate_response(
         # Run the agent
         async for event in agent.astream(
             {"messages": lc_messages},
-            config=RunnableConfig(
-                configurable={"thread_id": f"esdc-{int(time.time())}"}
-            ),
+            config=RunnableConfig(configurable={"thread_id": f"esdc-{int(time.time())}"}),
         ):
             ai_msg = extract_ai_message_from_event(event)
             if not ai_msg:
@@ -418,8 +447,11 @@ async def generate_response(
                     if buffer.has_content():
                         buffer.flush()
 
-                # Store tool calls for final response
-                stored_tool_calls = ai_msg.tool_calls
+                # Store tool calls for final response (convert to dict format)
+                stored_tool_calls = [
+                    {"name": tc.get("name", ""), "args": tc.get("args", {}), "id": tc.get("id", "")}
+                    for tc in ai_msg.tool_calls
+                ]
 
                 if not use_native_format:
                     # Add to buffer for markdown mode
@@ -448,9 +480,7 @@ async def generate_response(
 
             final_content = buffer.flush_final()
             tool_calls_formatted = (
-                format_tool_calls_for_response(stored_tool_calls)
-                if stored_tool_calls
-                else None
+                format_tool_calls_for_response(stored_tool_calls) if stored_tool_calls else None
             )
 
             return {

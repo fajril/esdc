@@ -11,7 +11,7 @@ class OpenAICompatibleProvider(Provider):
 
     @classmethod
     def list_models(
-        cls, base_url: str | None = None, api_key: str | None = None
+        cls, base_url: str | None = None, api_key: str | None = None, **kwargs: Any
     ) -> list[str]:
         """List available models from OpenAI-compatible server."""
         if not base_url:

@@ -71,6 +71,9 @@ from .functions import (
     get_use_case_sql_pattern,
     get_forecast_vs_historical_guide,
     is_forecast_data,
+    get_volume_columns,
+    build_aggregate_query,
+    get_recommended_table,
 )
 
 # =============================================================================
@@ -152,4 +155,7 @@ __all__ = [
     "get_use_case_sql_pattern",
     "get_forecast_vs_historical_guide",
     "is_forecast_data",
+    "get_volume_columns",
+    "build_aggregate_query",
+    "get_recommended_table",
 ]
