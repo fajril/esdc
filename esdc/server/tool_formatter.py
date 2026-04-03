@@ -12,22 +12,33 @@ def should_use_native_format(headers: dict[str, str], stream: bool) -> bool:
     """Determine whether to use native tool calling format.
 
     Priority:
-    1. Environment variable override
-    2. Auto-detect based on headers
+    1. Environment variable ESDC_TOOL_FORMAT (highest priority)
+    2. Config file tool_format setting
+    3. Auto-detect based on headers (lowest priority)
 
-    Environment variable ESDC_TOOL_FORMAT:
-    - "auto" (default): Auto-detect based on headers
+    Valid values for both env var and config:
     - "native": Force native format
     - "markdown": Force markdown format
+    - "auto": Auto-detect based on headers
     """
-    force_format = os.getenv("ESDC_TOOL_FORMAT", "auto").lower()
-
-    if force_format == "native":
+    # Priority 1: Environment variable
+    env_format = os.getenv("ESDC_TOOL_FORMAT", "").lower()
+    if env_format == "native":
         return True
-    elif force_format == "markdown":
+    elif env_format == "markdown":
         return False
-    else:  # auto
-        return detect_native_format(headers, stream)
+
+    # Priority 2: Config file (import here to avoid circular import)
+    from esdc.configs import Config
+
+    config_format = Config.get_tool_format()
+    if config_format == "native":
+        return True
+    elif config_format == "markdown":
+        return False
+
+    # Priority 3: Auto-detect
+    return detect_native_format(headers, stream)
 
 
 def create_tool_call_chunk(
