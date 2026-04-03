@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esdc"
-version = "0.3.1"
+version = "0.4.0"
 description = "Agentic chat interface for Indonesian oil & gas reserves database (ESDC)"
 requires-python = ">=3.10"
 authors = [
@@ -36,6 +36,10 @@ dependencies = [
     "ollama>=0.4.0",
     "httpx>=0.27.0",
     "click>=8.0.0",
+    # Web server
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "sse-starlette>=1.6.0",
 ]
 
 [project.urls]
@@ -55,7 +59,7 @@ esdc = ["tests"]
 
 [tool.basedpyright]
 pythonVersion = "3.10"
-typeCheckingMode = "basic"
+typeCheckingMode = "standard"
 
 # These are expected in this codebase - suppress them
 reportMissingTypeStubs = false
@@ -69,13 +73,47 @@ reportUnknownLambdaType = false
 reportUnknownArgumentType = false
 reportCallInDefaultInitializer = false
 
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "D",    # pydocstyle
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "D100",  # Missing docstring in public module
+    "D104",  # Missing docstring in public package
+    "D107",  # Missing docstring in __init__
+    "D203",  # 1 blank line required before class docstring
+    "D212",  # Multi-line docstring summary should start at first line
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-asyncio>=0.23.0",
     "pytest-mock>=3.15.1",
     "responses>=0.26.0",
     "pylint>=4.0.1",
     "basedpyright>=1.38.2",
     "pandas-stubs>=2.2.2",
+    "types-requests>=2.33.0.20260402",
+    "types-tabulate>=0.10.0.20260308",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
