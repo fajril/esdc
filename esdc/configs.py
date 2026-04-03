@@ -59,6 +59,7 @@ class Config:
             default_config = {
                 "api_url": cls.BASE_API_URL_V2,
                 "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
+                "tool_format": "native",  # native, markdown, or auto
             }
             with open(config_file, "w") as f:
                 yaml.dump(default_config, f, default_flow_style=False)
@@ -75,6 +76,31 @@ class Config:
             return config["api_url"]
 
         return cls.BASE_API_URL_V2
+
+    @classmethod
+    def get_tool_format(cls) -> str:
+        """Get tool format with priority: env var > config.yaml > default.
+
+        Environment variable ESDC_TOOL_FORMAT overrides config file.
+        Valid values: "native", "markdown", "auto"
+
+        Returns:
+            Tool format string (native, markdown, or auto)
+        """
+        # Priority 1: Environment variable
+        env_format = os.environ.get("ESDC_TOOL_FORMAT", "").lower()
+        if env_format in ("native", "markdown", "auto"):
+            return env_format
+
+        # Priority 2: Config file
+        config = cls._load_config()
+        if config and "tool_format" in config:
+            config_format = config["tool_format"].lower()
+            if config_format in ("native", "markdown", "auto"):
+                return config_format
+
+        # Priority 3: Default
+        return "native"
 
     @classmethod
     def get_credentials(cls) -> tuple[str, str]:

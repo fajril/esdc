@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Configuration**: Added `tool_format` config option to config.yaml
+  - Supports "native" (default), "markdown", or "auto" values
+  - Priority: Environment variable `ESDC_TOOL_FORMAT` > config.yaml > default
+  - Controls tool output format (native OpenAI format vs markdown)
+
 ## [0.4.1] - 2025-04-03
 
 ### Added
