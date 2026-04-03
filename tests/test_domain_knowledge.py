@@ -58,12 +58,8 @@ class TestDomainConcepts:
     def test_uncertainty_db_values(self):
         """Test that uncertainty levels map to correct DB values."""
         assert DOMAIN_CONCEPTS["uncertainty_levels"]["1P"]["db_value"] == "1. Low Value"
-        assert (
-            DOMAIN_CONCEPTS["uncertainty_levels"]["2P"]["db_value"] == "2. Middle Value"
-        )
-        assert (
-            DOMAIN_CONCEPTS["uncertainty_levels"]["3P"]["db_value"] == "3. High Value"
-        )
+        assert DOMAIN_CONCEPTS["uncertainty_levels"]["2P"]["db_value"] == "2. Middle Value"
+        assert DOMAIN_CONCEPTS["uncertainty_levels"]["3P"]["db_value"] == "3. High Value"
 
 
 class TestSynonyms:
@@ -352,10 +348,7 @@ class TestGetProjectClassFilter:
     def test_contingent_filter(self):
         """Test Contingent project class filter."""
         assert get_project_class_filter("contingent") == "2. Contingent Resources"
-        assert (
-            get_project_class_filter("Contingent Resources")
-            == "2. Contingent Resources"
-        )
+        assert get_project_class_filter("Contingent Resources") == "2. Contingent Resources"
 
     def test_prospective_filter(self):
         """Test Prospective project class filter."""
@@ -491,7 +484,7 @@ class TestTableHierarchy:
     def test_aggregation_levels_exist(self):
         """Test AGGREGATION_LEVELS is defined."""
         assert AGGREGATION_LEVELS is not None
-        assert len(AGGREGATION_LEVELS) == 4
+        assert len(AGGREGATION_LEVELS) == 8
 
 
 class TestGetTableForQuery:
@@ -518,12 +511,8 @@ class TestGetTableForQuery:
     def test_get_table_require_detail(self):
         """Test getting project_resources when detail required."""
         assert get_table_for_query("field", require_detail=True) == "project_resources"
-        assert (
-            get_table_for_query("work_area", require_detail=True) == "project_resources"
-        )
-        assert (
-            get_table_for_query("national", require_detail=True) == "project_resources"
-        )
+        assert get_table_for_query("work_area", require_detail=True) == "project_resources"
+        assert get_table_for_query("national", require_detail=True) == "project_resources"
 
     def test_get_table_unknown_entity(self):
         """Test getting table for unknown entity."""
@@ -600,17 +589,13 @@ class TestBuildAggregateQuery:
 
     def test_build_query_with_project_class(self):
         """Test building query with GRR project class."""
-        result = build_aggregate_query(
-            "field", "Duri", "sumber_daya", "2P", project_class="grr"
-        )
+        result = build_aggregate_query("field", "Duri", "sumber_daya", "2P", project_class="grr")
         assert result["table"] == "field_resources"
         assert "1. Reserves & GRR" in result["sql"]
 
     def test_build_query_use_view_false(self):
         """Test building query with use_view=False returns project_resources."""
-        result = build_aggregate_query(
-            "field", "Duri", "cadangan", "2P", use_view=False
-        )
+        result = build_aggregate_query("field", "Duri", "cadangan", "2P", use_view=False)
         assert result["table"] == "project_resources"
 
 
@@ -663,14 +648,8 @@ class TestGetRecommendedTable:
 
     def test_recommended_table_with_detail_needed(self):
         """Test recommended table when detail is needed."""
-        assert (
-            get_recommended_table("field", query_needs_detail=True)
-            == "project_resources"
-        )
-        assert (
-            get_recommended_table("work_area", query_needs_detail=True)
-            == "project_resources"
-        )
+        assert get_recommended_table("field", query_needs_detail=True) == "project_resources"
+        assert get_recommended_table("work_area", query_needs_detail=True) == "project_resources"
 
     def test_recommended_table_unknown(self):
         """Test recommended table for unknown entity."""

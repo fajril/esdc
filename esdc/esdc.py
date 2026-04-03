@@ -97,9 +97,7 @@ def main(verbose: int = 0):
             logger.setLevel(logging.INFO)
         else:
             logger.setLevel(logging.WARNING)
-        logger.info(
-            "Log level set to %s", logging.getLevelName(logger.getEffectiveLevel())
-        )
+        logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
 
 
 # ... (previous imports remain unchanged)
@@ -135,22 +133,16 @@ def fetch(
     username, password = Config.get_credentials()
 
     if filetype == "csv":
-        load_esdc_data(
-            filetype=FileType.CSV, to_file=save, username=username, password=password
-        )
+        load_esdc_data(filetype=FileType.CSV, to_file=save, username=username, password=password)
     elif filetype == "json":
-        load_esdc_data(
-            filetype=FileType.JSON, to_file=save, username=username, password=password
-        )
+        load_esdc_data(filetype=FileType.JSON, to_file=save, username=username, password=password)
     else:
         logging.warning("File type %s is not available.", filetype)
 
 
 @app.command()
 def reload(
-    filetype: Annotated[
-        str | None, typer.Option(help="Options: csv, json, zip")
-    ] = "csv",
+    filetype: Annotated[str | None, typer.Option(help="Options: csv, json, zip")] = "csv",
 ) -> None:
     """
     Reload data from binary files and save it to a file.
@@ -175,9 +167,7 @@ def reload(
             elif filetype == "json":
                 _load_file_as_json(filename, table.value)
             else:
-                logging.debug(
-                    "failed to load %s. Unknown %s format", filename, filetype
-                )
+                logging.debug("failed to load %s. Unknown %s format", filename, filetype)
         else:
             logging.warning("File %s is not found.", filename)
 
@@ -187,9 +177,7 @@ def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
     where: Annotated[str | None, typer.Option(help="Column to search.")] = None,
     search: Annotated[str | None, typer.Option(help="Filter value")] = "",
-    year: Annotated[
-        int | None, typer.Option(min=2019, help="Filter year value")
-    ] = None,
+    year: Annotated[int | None, typer.Option(min=2019, help="Filter year value")] = None,
     output: Annotated[int, typer.Option(help="Detail of output.")] = 0,
     save: bool = typer.Option(
         False,
@@ -234,8 +222,10 @@ def show(
     )
     if df is not None:
         pd.options.display.float_format = "{:,.2f}".format
+        # Convert DataFrame to list of dicts for type compatibility with tabulate
+        formatted_df = df.map(lambda x: f"{x:<,.2f}" if isinstance(x, float) else x)
         formatted_table = tabulate(
-            df.map(lambda x: f"{x:<,.2f}" if isinstance(x, float) else x),
+            formatted_df.to_dict("records"),
             headers="keys",
             tablefmt="psql",
             showindex=False,
@@ -245,9 +235,7 @@ def show(
         # Save the result to a Excel file if requested
         if save:
             today = date.today().strftime("%Y%m%d")
-            df.to_excel(
-                f"view_{table}_{today}.xlsx", index=False, sheet_name="resources report"
-            )
+            df.to_excel(f"view_{table}_{today}.xlsx", index=False, sheet_name="resources report")
     else:
         logging.warning("Unable to show data. The query is none.")
 
@@ -415,9 +403,7 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
         if response.status_code == 200:
             file_size = int(response.headers.get("Content-Length", 0))
             logging.debug("File size is %s bytes", file_size)
-            logging.debug(
-                "Encoding format: %s", response.headers.get("Content-Encoding")
-            )
+            logging.debug("Encoding format: %s", response.headers.get("Content-Encoding"))
 
             with closing(io.BytesIO()) as f:
                 with Progress(
@@ -555,12 +541,8 @@ def serve(
     from esdc.server.app import run_server
 
     if web:
-        rich.print(
-            f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]"
-        )
-        rich.print(
-            f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
-        )
+        rich.print(f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]")
+        rich.print(f"[dim]API documentation available at http://{host}:{port}/docs[/dim]")
         run_server(host=host, port=port, log_level=log_level)
 
 

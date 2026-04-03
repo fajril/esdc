@@ -4,17 +4,18 @@ import uuid
 from typing import AsyncGenerator
 
 # Third-party
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+
+# Local
+from esdc.server.tool_formatter import should_use_native_format
 
 # Local
 from esdc.server.agent_wrapper import generate_response, generate_streaming_response
 from esdc.server.models import (
-    ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
     Choice,
-    ChoiceDelta,
     Message,
     ModelInfo,
     ModelList,
@@ -44,6 +45,7 @@ async def list_models() -> ModelList:
 @router.post("/chat/completions", response_model=None)
 async def chat_completions(
     request: ChatCompletionRequest,
+    request_obj: Request,
 ):
     """Create chat completion.
 
@@ -52,12 +54,17 @@ async def chat_completions(
 
     Args:
         request: Chat completion request
+        request_obj: FastAPI request object for header access
 
     Returns:
         StreamingResponse for streaming requests, ChatCompletionResponse otherwise
     """
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
+
+    # Detect format preference from headers
+    headers = dict(request_obj.headers)
+    use_native = should_use_native_format(headers, request.stream)
 
     if request.stream:
         # Return streaming response
@@ -68,61 +75,30 @@ async def chat_completions(
                     messages=request.messages,
                     model=request.model,
                     temperature=request.temperature or 0.7,
+                    use_native_format=use_native,
                 ):
-                    # Check if this is the final message
-                    finish_reason = chunk.get("finish_reason")
+                    # Format as SSE data
+                    yield f"data: {chunk}\n\n"
 
-                    if finish_reason:
-                        # Final chunk
-                        response_chunk = ChatCompletionChunk(
-                            id=request_id,
-                            created=created,
-                            model=request.model,
-                            choices=[
-                                ChoiceDelta(
-                                    delta=Message(role="assistant", content=""),
-                                    finish_reason=finish_reason,
-                                )
-                            ],
-                        )
-                        yield f"data: {response_chunk.model_dump_json()}\n\n"
-                        yield "data: [DONE]\n\n"
-                    else:
-                        # Regular chunk
-                        content = chunk.get("content", "")
-                        tool_calls = chunk.get("tool_calls")
-
-                        delta = Message(role="assistant", content=content)
-                        if tool_calls:
-                            delta.tool_calls = tool_calls
-
-                        response_chunk = ChatCompletionChunk(
-                            id=request_id,
-                            created=created,
-                            model=request.model,
-                            choices=[
-                                ChoiceDelta(
-                                    delta=delta,
-                                    finish_reason=None,
-                                )
-                            ],
-                        )
-                        yield f"data: {response_chunk.model_dump_json()}\n\n"
+                # Send final [DONE] marker
+                yield "data: [DONE]\n\n"
 
             except Exception as e:
                 # Send error as final chunk
-                response_chunk = ChatCompletionChunk(
-                    id=request_id,
-                    created=created,
-                    model=request.model,
-                    choices=[
-                        ChoiceDelta(
-                            delta=Message(role="assistant", content=f"Error: {str(e)}"),
-                            finish_reason="stop",
-                        )
+                error_chunk = {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": request.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": f"Error: {str(e)}"},
+                            "finish_reason": "stop",
+                        }
                     ],
-                )
-                yield f"data: {response_chunk.model_dump_json()}\n\n"
+                }
+                yield f"data: {error_chunk}\n\n"
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -137,6 +113,7 @@ async def chat_completions(
                 messages=request.messages,
                 model=request.model,
                 temperature=request.temperature or 0.7,
+                use_native_format=use_native,
             )
 
             return ChatCompletionResponse(

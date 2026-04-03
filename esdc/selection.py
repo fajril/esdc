@@ -50,6 +50,14 @@ class FileType(Enum):
 
 
 class Severity(Enum):
+    """Enum for severity levels.
+
+    Attributes:
+        STRICT (str): Strict severity level.
+        WARNING (str): Warning severity level.
+        INFO (str): Info severity level.
+    """
+
     STRICT = "strict"
     WARNING = "warning"
     INFO = "info"

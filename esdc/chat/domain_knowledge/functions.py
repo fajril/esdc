@@ -1,6 +1,6 @@
 """Functions for domain knowledge mapping and SQL building."""
 
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from .concepts import DOMAIN_CONCEPTS
 from .synonyms import SYNONYMS
@@ -101,7 +101,7 @@ def build_sql_pattern(
         columns = concept_info.get("columns", ["res_oc", "res_an"])
 
         base_query = f"""
-        SELECT 
+        SELECT
             SUM(pr.{columns[0]}) as oil_condensate,
             SUM(pr.{columns[1]}) as gas
         FROM project_resources pr
@@ -123,13 +123,9 @@ def build_sql_pattern(
             if project_class.lower() in ["grr", "reserves_grr"]:
                 base_query += "\n        AND pr.project_class = '1. Reserves & GRR'"
             elif project_class.lower() in ["contingent"]:
-                base_query += (
-                    "\n        AND pr.project_class = '2. Contingent Resources'"
-                )
+                base_query += "\n        AND pr.project_class = '2. Contingent Resources'"
             elif project_class.lower() in ["prospective"]:
-                base_query += (
-                    "\n        AND pr.project_class = '3. Prospective Resources'"
-                )
+                base_query += "\n        AND pr.project_class = '3. Prospective Resources'"
 
         patterns["base"] = base_query
 
@@ -315,9 +311,7 @@ def get_onstream_year(
     }
 
 
-def convert_volume_units(
-    volume: float, from_unit: str, to_unit: str, year: int = 2024
-) -> float:
+def convert_volume_units(volume: float, from_unit: str, to_unit: str, year: int = 2024) -> float:
     """
     Convert volume units for timeseries data.
 
@@ -381,9 +375,7 @@ def build_timeseries_query(
     # Import here to avoid circular import
     from .tables import get_entity_filter_column
 
-    entity_col = get_entity_filter_column(
-        "field" if "field" in table else "work_area", table
-    )
+    entity_col = get_entity_filter_column("field" if "field" in table else "work_area", table)
     forecast_col = f"tpf_{substance}"
 
     # Determine units
@@ -470,6 +462,12 @@ def get_timeseries_columns(
     data_type = data_type.lower().strip()
     forecast_type = forecast_type.lower().strip()
     substance = substance.lower().strip()
+
+    # Initialize variables that will be set in conditionals
+    category: str = ""
+    prefix: str = ""
+    unit_suffix: str = ""
+    description_base: str = ""
 
     if data_type not in valid_data_types:
         return {
@@ -575,9 +573,7 @@ def get_timeseries_columns(
             "SELECT year, tpf_oc FROM field_timeseries WHERE field_name LIKE '%Duri%' ORDER BY tpf_oc DESC LIMIT 1",
         ]
     elif category == "historical":
-        examples = [
-            "SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"
-        ]
+        examples = ["SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"]
     elif category == "rate":
         examples = [
             "SELECT year, rate_oc FROM project_timeseries WHERE project_name LIKE '%Duri%' AND year = 2024"
@@ -652,9 +648,7 @@ def get_resources_columns(
 
     is_gas = substance in ["ga", "gn", "an"]
     unit = "BSCF" if is_gas else "MSTB"
-    unit_description = (
-        "Billion Standard Cubic Feet" if is_gas else "Thousand Stock Tank Barrels"
-    )
+    unit_description = "Billion Standard Cubic Feet" if is_gas else "Thousand Stock Tank Barrels"
 
     substance_desc = substance_descriptions.get(substance, substance)
     description = f"{volume_desc} for {substance_desc}"
@@ -879,14 +873,14 @@ def get_use_case_sql_pattern(use_case: str) -> Dict[str, Any]:
         "peak_production": {
             "description": "Find the year with maximum production for a project/field",
             "sql_template": """
-SELECT 
+SELECT
     year,
     {forecast_col}
 FROM {table}
 WHERE {entity_col} LIKE '%{entity_name}%'
     AND {forecast_col} = (
-        SELECT MAX({forecast_col}) 
-        FROM {table} 
+        SELECT MAX({forecast_col})
+        FROM {table}
         WHERE {entity_col} LIKE '%{entity_name}%'
     );
 """,
@@ -906,10 +900,10 @@ WHERE {entity_col} LIKE '%{entity_name}%'
             "description": "Find the first year of production (onstream)",
             "sql_template": """
 -- Option A: Use onstream_year column if available
-SELECT DISTINCT 
-    COALESCE(onstream_year, 
-        (SELECT MIN(year) 
-         FROM {table} AS pt2 
+SELECT DISTINCT
+    COALESCE(onstream_year,
+        (SELECT MIN(year)
+         FROM {table} AS pt2
          WHERE pt2.{entity_col} = pt1.{entity_col}
          AND ({oil_col} > 0 OR {gas_col} > 0))) as onstream_year
 FROM {table} AS pt1
@@ -920,21 +914,21 @@ WHERE {entity_col} LIKE '%{entity_name}%';
         "forecast_volume": {
             "description": "Get forecast volume for a specific year with unit conversion",
             "sql_template": """
-SELECT 
+SELECT
     {entity_col},
     year,
     {oil_col} as forecast_oil_condensate_mstb,
     {gas_col} as forecast_gas_bscf,
-    ROUND({oil_col} * 1000 / CASE 
-        WHEN year % 4 = 0 THEN 366 
-        ELSE 365 
+    ROUND({oil_col} * 1000 / CASE
+        WHEN year % 4 = 0 THEN 366
+        ELSE 365
     END, 2) as forecast_oil_condensate_bopd,
-    ROUND({gas_col} * 1000 / CASE 
-        WHEN year % 4 = 0 THEN 366 
-        ELSE 365 
+    ROUND({gas_col} * 1000 / CASE
+        WHEN year % 4 = 0 THEN 366
+        ELSE 365
     END, 2) as forecast_gas_mmscfd
 FROM {table}
-WHERE {entity_col} LIKE '%{entity_name}%' 
+WHERE {entity_col} LIKE '%{entity_name}%'
     AND year = {target_year};
 """,
             "notes": "Returns MSTB/BSCF and converts to BOPD/MMSCFD. BOPD = MSTB * 1000 / days_in_year",
@@ -942,7 +936,7 @@ WHERE {entity_col} LIKE '%{entity_name}%'
         "production_trend": {
             "description": "Get production trend over a time range",
             "sql_template": """
-SELECT 
+SELECT
     year,
     {oil_col},
     {gas_col}
@@ -1102,3 +1096,157 @@ def is_forecast_data(
     if report_year is not None and year > report_year:
         return True
     return False
+
+
+def get_volume_columns(volume_type: str, is_risked: bool = False) -> Tuple[str, str]:
+    """
+    Get the column names for oil/condensate and gas volumes.
+
+    Args:
+        volume_type: Type of volume (cadangan, sumber_daya, grr)
+        is_risked: Whether to return risked column names (for resources only)
+
+    Returns:
+        Tuple of (oil_condensate_column, gas_column)
+
+    Examples:
+        >>> get_volume_columns("cadangan")
+        ('res_oc', 'res_an')
+        >>> get_volume_columns("sumber_daya")
+        ('rec_oc', 'rec_an')
+        >>> get_volume_columns("sumber_daya", is_risked=True)
+        ('rec_oc_risked', 'rec_an_risked')
+    """
+    volume_type = volume_type.lower().strip()
+
+    # Map volume types to prefixes
+    if volume_type == "cadangan":
+        prefix = "res"
+    elif volume_type in ("sumber_daya", "grr"):
+        prefix = "rec"
+    else:
+        raise ValueError(f"Unknown volume type: {volume_type}")
+
+    # Handle risked suffix
+    suffix = "_risked" if is_risked and prefix == "rec" else ""
+
+    return (f"{prefix}_oc{suffix}", f"{prefix}_an{suffix}")
+
+
+def get_recommended_table(entity_type: Optional[str], query_needs_detail: bool = False) -> str:
+    """
+    Get the recommended table for a query.
+
+    Args:
+        entity_type: Type of entity (field, work_area, national, project)
+        query_needs_detail: Whether query needs project-level details
+
+    Returns:
+        Recommended table name
+    """
+    from .tables import get_table_for_query
+
+    return get_table_for_query(entity_type, require_detail=query_needs_detail)
+
+
+def build_aggregate_query(
+    entity_type: str,
+    entity_name: Optional[str],
+    volume_type: str,
+    uncertainty: str,
+    project_class: Optional[str] = None,
+    use_view: bool = True,
+) -> Dict[str, Any]:
+    """
+    Build an aggregate query for resource data.
+
+    Args:
+        entity_type: Type of entity (field, work_area, national)
+        entity_name: Name of the entity (can be None for national)
+        volume_type: Type of volume (cadangan, sumber_daya)
+        uncertainty: Uncertainty level (1P, 2P, 3P, probable, etc.)
+        project_class: Optional project class filter (grr, etc.)
+        use_view: Whether to use aggregation views (default True)
+
+    Returns:
+        Dict with 'sql' and 'table' keys
+
+    Examples:
+        >>> result = build_aggregate_query("field", "Duri", "cadangan", "2P")
+        >>> result["table"]
+        'field_resources'
+    """
+    from .tables import (
+        get_entity_filter_column,
+    )
+
+    # Get volume columns
+    oc_col, gas_col = get_volume_columns(volume_type)
+
+    # Determine table based on entity_type
+    if entity_type == "field":
+        table = "field_resources" if use_view else "project_resources"
+    elif entity_type == "work_area":
+        table = "wa_resources" if use_view else "project_resources"
+    elif entity_type == "national":
+        table = "nkri_resources"
+    else:
+        table = "project_resources"
+
+    # Get filter column
+    filter_col = get_entity_filter_column(entity_type, table) if entity_name else None
+
+    # Handle calculated uncertainties (like probable = 2P - 1P)
+    is_calculated = uncertainty.lower() == "probable"
+
+    # Determine uncertainty filter
+    uncert_filter = None
+    if uncertainty.upper() == "1P" or uncertainty.lower() == "proven":
+        uncert_filter = "pr.uncert_level = '1. Low Value'"
+    elif uncertainty.upper() == "2P":
+        # 2P = 1P + 2P
+        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value')"
+    elif uncertainty.lower() == "probable":
+        # probable = 2P - 1P, but we'll filter for both and use CASE WHEN
+        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value')"
+    elif uncertainty.upper() == "3P":
+        # 3P = 1P + 2P + 3P
+        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+    elif uncertainty.upper() == "1C":
+        uncert_filter = "pr.uncert_level = '1. Low Value'"
+    elif uncertainty.upper() == "2C":
+        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value')"
+    elif uncertainty.upper() == "3C":
+        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+
+    # Build SQL with CASE WHEN for calculated uncertainties
+    if is_calculated:
+        sql = f"""SELECT
+    SUM(CASE WHEN pr.uncert_level = '2. Middle Value' THEN pr.{oc_col} ELSE 0 END)
+    - SUM(CASE WHEN pr.uncert_level = '1. Low Value' THEN pr.{oc_col} ELSE 0 END) as oil_condensate,
+    SUM(CASE WHEN pr.uncert_level = '2. Middle Value' THEN pr.{gas_col} ELSE 0 END)
+    - SUM(CASE WHEN pr.uncert_level = '1. Low Value' THEN pr.{gas_col} ELSE 0 END) as gas
+FROM {table} pr
+WHERE pr.report_year = (SELECT MAX(report_year) FROM project_resources)"""
+    else:
+        sql = f"""SELECT
+    SUM(pr.{oc_col}) as oil_condensate,
+    SUM(pr.{gas_col}) as gas
+FROM {table} pr
+WHERE pr.report_year = (SELECT MAX(report_year) FROM project_resources)"""
+
+    # Add entity filter
+    if filter_col and entity_name:
+        sql += f"\n    AND pr.{filter_col} LIKE '%{entity_name}%'"
+
+    # Add uncertainty filter
+    if uncert_filter:
+        sql += f"\n    AND {uncert_filter}"
+
+    # Add project class filter
+    if project_class:
+        pc_filter = get_project_class_filter(project_class)
+        if pc_filter:
+            sql += f"\n    AND pr.project_class = '{pc_filter}'"
+
+    return {"sql": sql, "table": table}
