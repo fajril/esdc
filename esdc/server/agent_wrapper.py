@@ -219,6 +219,10 @@ async def generate_streaming_response(
         # Track first message for thinking
         is_first_ai_message = True
 
+        # SAFETY FLAG: Track if thinking was already processed in First AI Message block
+        # This prevents duplication when thinking is extracted multiple times
+        thinking_already_processed = False
+
         # Stream the response
         async for event in agent.astream(
             {"messages": lc_messages},
@@ -263,7 +267,9 @@ async def generate_streaming_response(
                     if has_thinking_tags(content_str):
                         thinking, final = extract_thinking_content(content_str)
                         if thinking:
-                            # Add thinking to buffer (will be formatted with  thinking tags)
+                            # SAFETY: Mark thinking as processed to avoid duplication
+                            thinking_already_processed = True
+                            # Add thinking to buffer (will be formatted with thinking tags)
                             should_flush = buffer.add_thinking(thinking)
                             if should_flush:
                                 content = buffer.flush()
@@ -305,11 +311,18 @@ async def generate_streaming_response(
 
                 # NOW emit tool_calls AFTER content is emitted
                 if should_emit_tool_calls:
-                    thinking = extract_thinking_for_interleaved(ai_msg)
-                    if thinking:
-                        thinking_state.preserve_thinking(thinking)
+                    # SAFETY: Skip extracting thinking again if already processed
+                    # This prevents duplication when thinking was extracted from content above
+                    if not thinking_already_processed:
+                        thinking = extract_thinking_for_interleaved(ai_msg)
+                        if thinking:
+                            thinking_state.preserve_thinking(thinking)
+                            logger.debug(
+                                f"[THINKING] Preserved thinking for interleaved: {thinking[:50]}..."
+                            )
+                    else:
                         logger.debug(
-                            f"[THINKING] Preserved thinking for interleaved: {thinking[:50]}..."
+                            "[THINKING] Skipping extraction - thinking already processed in content"
                         )
 
                     if use_native_format:
@@ -338,9 +351,15 @@ async def generate_streaming_response(
                     f"tool_ids={[tc.get('id', 'no-id') for tc in ai_msg.tool_calls]})"
                 )
                 # Extract and preserve thinking before tool execution
-                thinking = extract_thinking_for_interleaved(ai_msg)
-                if thinking:
-                    thinking_state.preserve_thinking(thinking)
+                # SAFETY: Only extract if not already processed in First AI Message block
+                if not thinking_already_processed:
+                    thinking = extract_thinking_for_interleaved(ai_msg)
+                    if thinking:
+                        thinking_state.preserve_thinking(thinking)
+                else:
+                    logger.debug(
+                        "[THINKING] Skipping extraction in elif block - already processed"
+                    )
 
                 if use_native_format:
                     # Emit native tool_calls chunk
@@ -386,8 +405,9 @@ async def generate_streaming_response(
                 )
                 # Check if we have preserved thinking to inject before final content
                 # SAFETY: Only inject if final content doesn't already have thinking tags
+                # AND if thinking was not already processed in First AI Message block
                 # This prevents duplication when model includes thinking in final response
-                if thinking_state.has_thinking():
+                if thinking_state.has_thinking() and not thinking_already_processed:
                     content_str = extract_content_str(ai_msg.content)
                     if not has_thinking_tags(content_str):
                         # Content has no thinking tags, safe to inject preserved thinking
@@ -400,6 +420,13 @@ async def generate_streaming_response(
                             "[THINKING] Skipping preserved thinking injection - "
                             "content already contains thinking tags"
                         )
+                        thinking_state.clear()
+                elif thinking_already_processed:
+                    logger.debug(
+                        "[THINKING] Skipping injection - thinking already in buffer from First AI Message"
+                    )
+                    # Clear any remaining preserved thinking to avoid confusion
+                    if thinking_state.has_thinking():
                         thinking_state.clear()
 
                 # Final content - accumulate in buffer
