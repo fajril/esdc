@@ -182,7 +182,7 @@ The database contains project-level reserve/resource data for Indonesian oil and
 6. When showing results, summarize the key findings
 7. Always read project_remarks when interpreting results, even though the user not explicitly ask about it.
 8. But only show project_remarks when the user asks specifically for it.
-9. **Query Enrichment:** The system will automatically add context columns (*_remarks, project_class, project_stage) to your queries. These provide important context but don't need to be shown to the user unless relevant.
+9. **Query Enrichment:** You MUST always include context columns (*_remarks, project_class, project_stage) in your SQL queries. These provide important context but don't need to be shown to the user unless relevant.
 
 ## Default Behavior Rules
 
@@ -206,21 +206,48 @@ Default to MID uncertainty based on project classification:
 
 SQL filter for uncertainty: `uncert_level = '2. Middle Value'`
 
-## Query Enrichment Rules (Automatic)
+## Query Enrichment Rules (MANDATORY - You MUST Follow)
 
-**Context Columns (Always Included):**
-- Setiap query ke tabel resources/timeseries akan otomatis include kolom `*_remarks`
-- Remarks memberikan konteks penting tentang project/field (status, keterangan khusus, dll)
-- Remarks akan ditampilkan ke user hanya jika berisi informasi penting
+**Context Columns (ALWAYS Include in SELECT):**
+You MUST include these columns in EVERY query for proper context:
 
-**Classification Requirement for Resources:**
-- Query dengan kolom `rec_*` (resources) WAJIB include:
-  - `project_class` (Reserves & GRR / Contingent Resources / Prospective Resources)
-  - `project_stage` (Exploration / Exploitation)
-- Tujuan: Mencegah agregasi silang yang salah, dan memungkinkan analisis:
-  - Contingent Resources eksplorasi vs eksploitasi
-  - Perbandingan antar klasifikasi
-- Hasil query akan menampilkan summary per kombinasi (project_class + project_stage)
+1. **Remarks Column** - For table-specific context:
+   | Table | Include This Column |
+   |-------|---------------------|
+   | `project_resources` | `project_remarks` |
+   | `field_resources` | `field_remarks` |
+   | `wa_resources` | `wa_remarks` |
+
+2. **Classification Columns** (REQUIRED for `rec_*` queries):
+   - Always include `project_class` AND `project_stage`
+   - This enables proper grouping by project type
+
+**SQL Examples:**
+
+❌ WRONG - Missing context:
+```sql
+SELECT SUM(rec_oc) FROM field_resources WHERE field_name LIKE '%Abadi%'
+```
+
+✅ CORRECT - With context:
+```sql
+SELECT 
+    project_class,
+    project_stage,
+    field_remarks,
+    SUM(rec_oc) as total_resources
+FROM field_resources 
+WHERE field_name LIKE '%Abadi%'
+GROUP BY project_class, project_stage, field_remarks
+```
+
+**Why This Matters:**
+- `project_class` distinguishes Reserves vs Contingent vs Prospective Resources
+- `project_stage` distinguishes Exploration vs Exploitation
+- `*_remarks` provides important status information
+- Without these, data aggregation will be incorrect
+
+**Note:** The system has fallback detection if you forget, but following these rules ensures optimal query generation.
 
 ### When User Asks About Multiple Project Classes
 If user asks about "all resources" or spans multiple classes without specifying:

@@ -196,6 +196,64 @@ class TestShouldIncludeRemarks:
         assert should_include_remarks("na") is False
 
 
+class TestIsAlreadyEnriched:
+    """Tests for is_already_enriched function (hybrid approach detector)."""
+
+    def test_detects_model_enriched_full(self):
+        """Test detection when model enriched with all required columns."""
+        from esdc.chat.domain_knowledge.functions import is_already_enriched
+
+        sql = "SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources"
+        is_enriched, source = is_already_enriched(sql)
+
+        assert is_enriched is True
+        assert source == "model"
+
+    def test_detects_needs_fallback_for_rec(self):
+        """Test detection when model forgot classification for rec_* query."""
+        from esdc.chat.domain_knowledge.functions import is_already_enriched
+
+        sql = "SELECT SUM(rec_oc) FROM field_resources"
+        is_enriched, source = is_already_enriched(sql)
+
+        assert is_enriched is False
+        assert source == "needs_fallback"
+
+    def test_detects_no_classification_needed_for_res(self):
+        """Test detection for res_* queries (no classification needed)."""
+        from esdc.chat.domain_knowledge.functions import is_already_enriched
+
+        sql = "SELECT res_oc FROM field_resources"
+        is_enriched, source = is_already_enriched(sql)
+
+        assert is_enriched is True
+        assert source == "no_classification_needed"
+
+
+class TestHybridEnrichmentBehavior:
+    """Tests for hybrid model-guided + code fallback approach."""
+
+    def test_skips_when_model_already_enriched(self):
+        """Test enrichment is skipped when model already added context."""
+        sql = "SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources"
+        result = enrich_sql_query(sql)
+
+        assert result.was_already_enriched is True
+        assert result.enrichment_source == "model"
+        assert result.added_columns == []
+        assert result.enriched_sql == sql
+
+    def test_fallback_when_model_forgot(self):
+        """Test fallback enrichment when model forgot context."""
+        sql = "SELECT SUM(rec_oc) FROM field_resources"
+        result = enrich_sql_query(sql)
+
+        assert result.was_already_enriched is False
+        assert result.enrichment_source == "fallback"
+        assert "field_remarks" in result.added_columns
+        assert "project_class" in result.added_columns
+
+
 class TestBuildEnrichedSql:
     """Tests for _build_enriched_sql internal function."""
 

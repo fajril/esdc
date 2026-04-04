@@ -24,6 +24,8 @@ class EnrichedQuery:
     remarks_column: str | None
     classification_columns: list[str]
     table: str
+    was_already_enriched: bool = False  # Track if model already enriched
+    enrichment_source: str = "unknown"  # "model" | "fallback" | "none"
 
 
 def extract_table_from_sql(sql: str) -> str | None:
@@ -114,36 +116,119 @@ def requires_classification_context(columns: list[str]) -> bool:
     return any(col.lower().startswith("rec_") for col in columns)
 
 
+def is_already_enriched(sql: str) -> tuple[bool, str]:
+    """
+    Check if model already included context columns in the query.
+
+    This function acts as a detector for the hybrid enrichment approach:
+    - If model followed system prompt rules → returns (True, "model")
+    - If model forgot → returns (False, "needs_fallback")
+
+    Args:
+        sql: SQL query string
+
+    Returns:
+        Tuple of (is_enriched, source_reason)
+        - is_enriched: True if query has context columns
+        - source_reason: "model", "needs_fallback", or "no_classification_needed"
+
+    Examples:
+        >>> is_already_enriched("SELECT field_remarks, SUM(rec_oc) FROM field_resources")
+        (True, "model")
+        >>> is_already_enriched("SELECT SUM(rec_oc) FROM field_resources")
+        (False, "needs_fallback")
+        >>> is_already_enriched("SELECT res_oc FROM field_resources")
+        (True, "no_classification_needed")
+    """
+    sql_lower = sql.lower()
+
+    # Check for remarks columns
+    has_remarks = bool(re.search(r"\b\w+_remarks\b", sql, re.IGNORECASE))
+
+    # Check for classification columns
+    has_project_class = "project_class" in sql_lower
+    has_project_stage = "project_stage" in sql_lower
+    has_classification = has_project_class and has_project_stage
+
+    # Extract columns to check if classification is needed
+    selected_cols = extract_selected_columns(sql)
+    needs_classification = any(col.lower().startswith("rec_") for col in selected_cols)
+
+    if needs_classification:
+        # For rec_* queries, need both remarks AND classification
+        if has_remarks and has_classification:
+            return True, "model"
+        else:
+            return False, "needs_fallback"
+    else:
+        # For non-rec queries, only remarks needed (optional)
+        if has_remarks:
+            return True, "model"
+        else:
+            return True, "no_classification_needed"
+
+
 def enrich_sql_query(
     sql: str,
     table: str | None = None,
 ) -> EnrichedQuery:
     """
-    Enrich SQL query with context columns for better data interpretation.
+    Enrich SQL query with context columns (Hybrid: Model-guided + Code fallback).
 
-    Automatically adds:
+    PRIMARY APPROACH:
+    Model is instructed via system prompt to include context columns.
+    This function detects if model already enriched the query.
+
+    FALLBACK:
+    If model forgot, this function automatically adds:
     1. *_remarks column for context (if available)
     2. project_class and project_stage for rec_* queries
     3. GROUP BY clause when classification columns are added
 
     Args:
-        sql: Original SQL query
+        sql: Original SQL query (from model)
         table: Table name (auto-detected if not provided)
 
     Returns:
-        EnrichedQuery with context columns added
+        EnrichedQuery with metadata about enrichment source
 
     Examples:
+        >>> # Model already enriched → no changes
+        >>> result = enrich_sql_query("SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources")
+        >>> result.was_already_enriched
+        True
+        >>> result.enrichment_source
+        "model"
+
+        >>> # Model forgot → fallback enrichment
         >>> result = enrich_sql_query("SELECT SUM(rec_oc) FROM field_resources")
         >>> "project_class" in result.enriched_sql
         True
-        >>> "field_remarks" in result.enriched_sql
-        True
+        >>> result.enrichment_source
+        "fallback"
     """
     from .tables import (
         get_classification_context_columns,
         get_remarks_column,
     )
+
+    # Check if model already enriched the query
+    is_enriched, source = is_already_enriched(sql)
+
+    if is_enriched and source == "model":
+        # Model did its job! Return query unchanged with metadata
+        detected_table = table or extract_table_from_sql(sql) or ""
+        return EnrichedQuery(
+            original_sql=sql,
+            enriched_sql=sql,
+            added_columns=[],
+            group_by_columns=[],
+            remarks_column=None,
+            classification_columns=[],
+            table=detected_table,
+            was_already_enriched=True,
+            enrichment_source="model",
+        )
 
     # Auto-detect table if not provided
     if table is None:
@@ -159,6 +244,8 @@ def enrich_sql_query(
             remarks_column=None,
             classification_columns=[],
             table="",
+            was_already_enriched=False,
+            enrichment_source="none",
         )
 
     # Extract selected columns
@@ -196,6 +283,8 @@ def enrich_sql_query(
         remarks_column=remarks_col,
         classification_columns=classification_columns,
         table=table,
+        was_already_enriched=False,
+        enrichment_source="fallback" if added_columns else "none",
     )
 
 

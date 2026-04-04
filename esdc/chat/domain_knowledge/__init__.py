@@ -184,6 +184,7 @@ __all__ = [
     "enrich_sql_query",
     "extract_table_from_sql",
     "extract_selected_columns",
+    "is_already_enriched",
     "requires_classification_context",
     "should_include_remarks",
 ]
