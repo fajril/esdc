@@ -9,6 +9,7 @@ class ColumnMetadata:
     category: str | None = None
     volume_type: str | None = None
     substance: str | None = None
+    requires_classification: bool = False  # True for rec_* columns
 
 
 COLUMN_GROUPS: dict[str, list[str]] = {

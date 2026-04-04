@@ -78,10 +78,48 @@ from .problems import (
 from .synonyms import SYNONYMS
 from .tables import (
     AGGREGATION_LEVELS,
+    CLASSIFICATION_CONTEXT_COLUMNS,
+    REQUIRES_CLASSIFICATION_PREFIXES,
     TABLE_HIERARCHY,
+    TABLE_REMARKS_COLUMNS,
     can_use_view_for_calculation,
+    get_classification_context_columns,
     get_entity_filter_column,
+    get_remarks_column,
     get_table_for_query,
+    requires_classification_columns,
+)
+
+# =============================================================================
+# Functions Module (continued)
+# =============================================================================
+from .functions import (
+    build_aggregate_query,
+    build_sql_pattern,
+    build_timeseries_query,
+    calculate_eol_year,
+    calculate_peak_production_year,
+    convert_volume_units,
+    enrich_sql_query,
+    extract_selected_columns,
+    extract_table_from_sql,
+    format_response_value,
+    format_timeseries_response,
+    get_aggregation_table_info,
+    get_columns_for_concept,
+    get_columns_for_substance,
+    get_forecast_vs_historical_guide,
+    get_onstream_year,
+    get_project_class_filter,
+    get_recommended_table,
+    get_resources_columns,
+    get_timeseries_columns,
+    get_use_case_sql_pattern,
+    get_volume_columns,
+    is_forecast_data,
+    requires_classification_context,
+    resolve_concept,
+    should_include_remarks,
 )
 
 # =============================================================================
@@ -118,9 +156,15 @@ __all__ = [
     # Tables
     "TABLE_HIERARCHY",
     "AGGREGATION_LEVELS",
+    "TABLE_REMARKS_COLUMNS",
+    "REQUIRES_CLASSIFICATION_PREFIXES",
+    "CLASSIFICATION_CONTEXT_COLUMNS",
     "get_table_for_query",
     "can_use_view_for_calculation",
     "get_entity_filter_column",
+    "get_remarks_column",
+    "requires_classification_columns",
+    "get_classification_context_columns",
     # Columns
     "ColumnMetadata",
     "COLUMN_GROUPS",
@@ -137,7 +181,7 @@ __all__ = [
     "get_uncertainty_filter",
     "get_uncertainty_spec",
     "build_uncertainty_sql",
-    # Functions
+    # Functions - Query Building
     "resolve_concept",
     "get_columns_for_concept",
     "build_sql_pattern",
@@ -159,4 +203,10 @@ __all__ = [
     "get_volume_columns",
     "build_aggregate_query",
     "get_recommended_table",
+    # Functions - Query Enrichment (New)
+    "enrich_sql_query",
+    "extract_table_from_sql",
+    "extract_selected_columns",
+    "requires_classification_context",
+    "should_include_remarks",
 ]

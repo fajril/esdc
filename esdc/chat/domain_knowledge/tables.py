@@ -51,6 +51,94 @@ AGGREGATION_LEVELS: List[Tuple[str, str, int]] = [
     ("nkri_timeseries", "nkri_timeseries", 3),
 ]
 
+# =============================================================================
+# Context Enrichment Metadata
+# =============================================================================
+
+# Mapping table to their respective remarks columns
+# Used for auto-including context information in queries
+TABLE_REMARKS_COLUMNS: Dict[str, str | None] = {
+    "project_resources": "project_remarks",
+    "field_resources": "field_remarks",
+    "wa_resources": "wa_remarks",
+    "nkri_resources": None,  # No remarks at national level
+    "project_timeseries": "project_remarks",
+    "field_timeseries": "field_remarks",
+    "wa_timeseries": "wa_remarks",
+    "nkri_timeseries": None,  # No remarks at national level
+}
+
+# Columns that require classification context when queried
+# These columns must include project_class and project_stage for proper aggregation
+REQUIRES_CLASSIFICATION_PREFIXES: Tuple[str, ...] = (
+    "rec_",  # Resources columns require classification
+    "rec_",  # Risked resources also require classification
+)
+
+# Context columns that must be included for proper data interpretation
+CLASSIFICATION_CONTEXT_COLUMNS: List[str] = ["project_class", "project_stage"]
+
+
+def get_remarks_column(table: str) -> str | None:
+    """
+    Get the remarks column name for a given table.
+
+    Args:
+        table: Table name (e.g., "field_resources", "project_timeseries")
+
+    Returns:
+        Remarks column name, or None if table has no remarks column
+
+    Examples:
+        >>> get_remarks_column("field_resources")
+        'field_remarks'
+        >>> get_remarks_column("nkri_resources")
+        None
+    """
+    return TABLE_REMARKS_COLUMNS.get(table)
+
+
+def requires_classification_columns(column: str) -> bool:
+    """
+    Check if a column requires classification context (project_class, project_stage).
+
+    Resources columns (rec_*) require classification to prevent incorrect aggregation
+    across different project classes (Reserves vs Contingent vs Prospective).
+
+    Args:
+        column: Column name to check
+
+    Returns:
+        True if column requires classification context
+
+    Examples:
+        >>> requires_classification_columns("rec_oc")
+        True
+        >>> requires_classification_columns("res_oc")
+        False
+        >>> requires_classification_columns("tpf_oc")
+        False
+    """
+    column_lower = column.lower()
+    return column_lower.startswith("rec_")
+
+
+def get_classification_context_columns() -> List[str]:
+    """
+    Get the list of classification context columns.
+
+    These columns should be included when querying resources data to enable
+    proper aggregation by project class and stage.
+
+    Returns:
+        List of classification context column names
+
+    Examples:
+        >>> get_classification_context_columns()
+        ['project_class', 'project_stage']
+    """
+    return CLASSIFICATION_CONTEXT_COLUMNS.copy()
+
 
 def get_table_for_query(
     entity_type: Optional[str] = None,

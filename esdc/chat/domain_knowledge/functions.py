@@ -1,9 +1,298 @@
 """Functions for domain knowledge mapping and SQL building."""
 
+import re
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .concepts import DOMAIN_CONCEPTS
 from .synonyms import SYNONYMS
+
+
+# =============================================================================
+# SQL Query Enrichment
+# =============================================================================
+
+
+@dataclass
+class EnrichedQuery:
+    """Represents an enriched SQL query with context columns."""
+
+    original_sql: str
+    enriched_sql: str
+    added_columns: List[str]
+    group_by_columns: List[str]
+    remarks_column: str | None
+    classification_columns: List[str]
+    table: str
+
+
+def extract_table_from_sql(sql: str) -> str | None:
+    """
+    Extract table name from SQL query.
+
+    Args:
+        sql: SQL query string
+
+    Returns:
+        Table name, or None if not found
+
+    Examples:
+        >>> extract_table_from_sql("SELECT * FROM field_resources WHERE ...")
+        'field_resources'
+        >>> extract_table_from_sql("SELECT SUM(rec_oc) FROM wa_resources")
+        'wa_resources'
+    """
+    # Match FROM clause - handle aliases like "FROM table AS t" or "FROM table t"
+    from_pattern = re.compile(
+        r"FROM\s+(\w+)",
+        re.IGNORECASE,
+    )
+    match = from_pattern.search(sql)
+    return match.group(1) if match else None
+
+
+def extract_selected_columns(sql: str) -> List[str]:
+    """
+    Extract column names from SELECT clause.
+
+    Args:
+        sql: SQL query string
+
+    Returns:
+        List of column names (without aliases)
+
+    Examples:
+        >>> extract_selected_columns("SELECT rec_oc, rec_an FROM ...")
+        ['rec_oc', 'rec_an']
+        >>> extract_selected_columns("SELECT SUM(rec_oc) as total FROM ...")
+        ['rec_oc']
+    """
+    # Match SELECT clause until FROM
+    select_pattern = re.compile(
+        r"SELECT\s+(.+?)\s+FROM",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = select_pattern.search(sql)
+    if not match:
+        return []
+
+    select_clause = match.group(1)
+
+    # Split by comma and clean up
+    columns = []
+    for col in select_clause.split(","):
+        col = col.strip()
+        # Remove SUM(), MAX(), etc.
+        col = re.sub(r"\w+\s*\(\s*(\w+)\s*\)", r"\1", col)
+        # Remove table prefix (e.g., "pr.rec_oc" -> "rec_oc")
+        col = re.sub(r"\w+\.(\w+)", r"\1", col)
+        # Remove alias (e.g., "rec_oc as total" -> "rec_oc")
+        col = re.sub(r"\s+(?:as|AS)\s+\w+", "", col)
+        col = col.strip()
+        if col and col != "*":
+            columns.append(col)
+
+    return columns
+
+
+def requires_classification_context(columns: List[str]) -> bool:
+    """
+    Check if any column requires classification context.
+
+    Args:
+        columns: List of selected column names
+
+    Returns:
+        True if any column requires classification (rec_*)
+
+    Examples:
+        >>> requires_classification_context(["rec_oc", "res_oc"])
+        True
+        >>> requires_classification_context(["res_oc", "tpf_oc"])
+        False
+    """
+    return any(col.lower().startswith("rec_") for col in columns)
+
+
+def enrich_sql_query(
+    sql: str,
+    table: str | None = None,
+) -> EnrichedQuery:
+    """
+    Enrich SQL query with context columns for better data interpretation.
+
+    Automatically adds:
+    1. *_remarks column for context (if available)
+    2. project_class and project_stage for rec_* queries
+    3. GROUP BY clause when classification columns are added
+
+    Args:
+        sql: Original SQL query
+        table: Table name (auto-detected if not provided)
+
+    Returns:
+        EnrichedQuery with context columns added
+
+    Examples:
+        >>> result = enrich_sql_query("SELECT SUM(rec_oc) FROM field_resources")
+        >>> "project_class" in result.enriched_sql
+        True
+        >>> "field_remarks" in result.enriched_sql
+        True
+    """
+    from .tables import (
+        get_classification_context_columns,
+        get_remarks_column,
+    )
+
+    # Auto-detect table if not provided
+    if table is None:
+        table = extract_table_from_sql(sql)
+
+    if not table:
+        # Cannot enrich without table information
+        return EnrichedQuery(
+            original_sql=sql,
+            enriched_sql=sql,
+            added_columns=[],
+            group_by_columns=[],
+            remarks_column=None,
+            classification_columns=[],
+            table="",
+        )
+
+    # Extract selected columns
+    selected_columns = extract_selected_columns(sql)
+
+    # Determine what to add
+    added_columns = []
+    classification_columns = []
+    group_by_columns = []
+
+    # Check if classification context is needed
+    if requires_classification_context(selected_columns):
+        classification_columns = get_classification_context_columns()
+        added_columns.extend(classification_columns)
+        group_by_columns.extend(classification_columns)
+
+    # Check if remarks column is available
+    remarks_col = get_remarks_column(table)
+    if remarks_col:
+        added_columns.append(remarks_col)
+        group_by_columns.append(remarks_col)
+
+    # Build enriched SQL
+    enriched_sql = _build_enriched_sql(
+        original_sql=sql,
+        added_columns=added_columns,
+        group_by_columns=group_by_columns if group_by_columns else None,
+    )
+
+    return EnrichedQuery(
+        original_sql=sql,
+        enriched_sql=enriched_sql,
+        added_columns=added_columns,
+        group_by_columns=group_by_columns,
+        remarks_column=remarks_col,
+        classification_columns=classification_columns,
+        table=table,
+    )
+
+
+def _build_enriched_sql(
+    original_sql: str,
+    added_columns: List[str],
+    group_by_columns: List[str] | None,
+) -> str:
+    """
+    Build enriched SQL by injecting context columns.
+
+    Args:
+        original_sql: Original SQL query
+        added_columns: Columns to add to SELECT
+        group_by_columns: Columns for GROUP BY (if any)
+
+    Returns:
+        Enriched SQL query
+    """
+    if not added_columns:
+        return original_sql
+
+    # Find the SELECT clause and insert new columns
+    select_match = re.search(
+        r"(SELECT\s+)(.+?)(\s+FROM)", original_sql, re.IGNORECASE | re.DOTALL
+    )
+    if not select_match:
+        return original_sql
+
+    select_keyword = select_match.group(1)
+    existing_select = select_match.group(2)
+    from_clause = select_match.group(3)
+
+    # Build new SELECT clause
+    # Add table prefix "pr." for consistency
+    new_columns = ", ".join([f"pr.{col}" for col in added_columns])
+
+    # Check if existing select has aggregation
+    has_aggregation = bool(
+        re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", existing_select, re.IGNORECASE)
+    )
+
+    if has_aggregation:
+        # Add classification columns before aggregation
+        enriched_select = f"{new_columns}, {existing_select}"
+    else:
+        # Just append new columns
+        enriched_select = f"{existing_select}, {new_columns}"
+
+    # Replace SELECT clause
+    enriched_sql = (
+        original_sql[: select_match.start()]
+        + select_keyword
+        + enriched_select
+        + from_clause
+        + original_sql[select_match.end() :]
+    )
+
+    # Add GROUP BY if needed
+    if group_by_columns and has_aggregation:
+        # Check if already has GROUP BY
+        if not re.search(r"\bGROUP\s+BY\b", enriched_sql, re.IGNORECASE):
+            group_by_sql = ", ".join([f"pr.{col}" for col in group_by_columns])
+            enriched_sql += f"\nGROUP BY {group_by_sql}"
+
+    return enriched_sql
+
+
+def should_include_remarks(remarks_value: str | None) -> bool:
+    """
+    Determine if remarks should be shown to user based on content.
+
+    Remarks are only shown if they contain meaningful information.
+
+    Args:
+        remarks_value: The remarks column value
+
+    Returns:
+        True if remarks should be displayed to user
+
+    Examples:
+        >>> should_include_remarks("Field under development planning")
+        True
+        >>> should_include_remarks("")
+        False
+        >>> should_include_remarks(None)
+        False
+    """
+    if not remarks_value:
+        return False
+
+    # Skip generic/empty values
+    meaningless_values = ["", "-", "null", "none", "n/a", "na"]
+    if remarks_value.lower().strip() in meaningless_values:
+        return False
+
+    return True
 
 
 def resolve_concept(term: str) -> Optional[Dict]:
@@ -123,9 +412,13 @@ def build_sql_pattern(
             if project_class.lower() in ["grr", "reserves_grr"]:
                 base_query += "\n        AND pr.project_class = '1. Reserves & GRR'"
             elif project_class.lower() in ["contingent"]:
-                base_query += "\n        AND pr.project_class = '2. Contingent Resources'"
+                base_query += (
+                    "\n        AND pr.project_class = '2. Contingent Resources'"
+                )
             elif project_class.lower() in ["prospective"]:
-                base_query += "\n        AND pr.project_class = '3. Prospective Resources'"
+                base_query += (
+                    "\n        AND pr.project_class = '3. Prospective Resources'"
+                )
 
         patterns["base"] = base_query
 
@@ -311,7 +604,9 @@ def get_onstream_year(
     }
 
 
-def convert_volume_units(volume: float, from_unit: str, to_unit: str, year: int = 2024) -> float:
+def convert_volume_units(
+    volume: float, from_unit: str, to_unit: str, year: int = 2024
+) -> float:
     """
     Convert volume units for timeseries data.
 
@@ -375,7 +670,9 @@ def build_timeseries_query(
     # Import here to avoid circular import
     from .tables import get_entity_filter_column
 
-    entity_col = get_entity_filter_column("field" if "field" in table else "work_area", table)
+    entity_col = get_entity_filter_column(
+        "field" if "field" in table else "work_area", table
+    )
     forecast_col = f"tpf_{substance}"
 
     # Determine units
@@ -573,7 +870,9 @@ def get_timeseries_columns(
             "SELECT year, tpf_oc FROM field_timeseries WHERE field_name LIKE '%Duri%' ORDER BY tpf_oc DESC LIMIT 1",
         ]
     elif category == "historical":
-        examples = ["SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"]
+        examples = [
+            "SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"
+        ]
     elif category == "rate":
         examples = [
             "SELECT year, rate_oc FROM project_timeseries WHERE project_name LIKE '%Duri%' AND year = 2024"
@@ -648,7 +947,9 @@ def get_resources_columns(
 
     is_gas = substance in ["ga", "gn", "an"]
     unit = "BSCF" if is_gas else "MSTB"
-    unit_description = "Billion Standard Cubic Feet" if is_gas else "Thousand Stock Tank Barrels"
+    unit_description = (
+        "Billion Standard Cubic Feet" if is_gas else "Thousand Stock Tank Barrels"
+    )
 
     substance_desc = substance_descriptions.get(substance, substance)
     description = f"{volume_desc} for {substance_desc}"
@@ -1133,7 +1434,9 @@ def get_volume_columns(volume_type: str, is_risked: bool = False) -> Tuple[str, 
     return (f"{prefix}_oc{suffix}", f"{prefix}_an{suffix}")
 
 
-def get_recommended_table(entity_type: Optional[str], query_needs_detail: bool = False) -> str:
+def get_recommended_table(
+    entity_type: Optional[str], query_needs_detail: bool = False
+) -> str:
     """
     Get the recommended table for a query.
 
@@ -1211,13 +1514,17 @@ def build_aggregate_query(
         uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value')"
     elif uncertainty.upper() == "3P":
         # 3P = 1P + 2P + 3P
-        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+        uncert_filter = (
+            "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+        )
     elif uncertainty.upper() == "1C":
         uncert_filter = "pr.uncert_level = '1. Low Value'"
     elif uncertainty.upper() == "2C":
         uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value')"
     elif uncertainty.upper() == "3C":
-        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+        uncert_filter = (
+            "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+        )
 
     # Build SQL with CASE WHEN for calculated uncertainties
     if is_calculated:

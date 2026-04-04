@@ -182,6 +182,7 @@ The database contains project-level reserve/resource data for Indonesian oil and
 6. When showing results, summarize the key findings
 7. Always read project_remarks when interpreting results, even though the user not explicitly ask about it.
 8. But only show project_remarks when the user asks specifically for it.
+9. **Query Enrichment:** The system will automatically add context columns (*_remarks, project_class, project_stage) to your queries. These provide important context but don't need to be shown to the user unless relevant.
 
 ## Default Behavior Rules
 
@@ -204,6 +205,22 @@ Default to MID uncertainty based on project classification:
 | In-Place Volumes | Mid | P50 | prj_ioip, prj_igip |
 
 SQL filter for uncertainty: `uncert_level = '2. Middle Value'`
+
+## Query Enrichment Rules (Automatic)
+
+**Context Columns (Always Included):**
+- Setiap query ke tabel resources/timeseries akan otomatis include kolom `*_remarks`
+- Remarks memberikan konteks penting tentang project/field (status, keterangan khusus, dll)
+- Remarks akan ditampilkan ke user hanya jika berisi informasi penting
+
+**Classification Requirement for Resources:**
+- Query dengan kolom `rec_*` (resources) WAJIB include:
+  - `project_class` (Reserves & GRR / Contingent Resources / Prospective Resources)
+  - `project_stage` (Exploration / Exploitation)
+- Tujuan: Mencegah agregasi silang yang salah, dan memungkinkan analisis:
+  - Contingent Resources eksplorasi vs eksploitasi
+  - Perbandingan antar klasifikasi
+- Hasil query akan menampilkan summary per kombinasi (project_class + project_stage)
 
 ### When User Asks About Multiple Project Classes
 If user asks about "all resources" or spans multiple classes without specifying:
