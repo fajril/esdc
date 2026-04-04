@@ -219,15 +219,17 @@ class TestIsAlreadyEnriched:
         assert is_enriched is False
         assert source == "needs_fallback"
 
-    def test_detects_no_classification_needed_for_res(self):
-        """Test detection for res_* queries (no classification needed)."""
+    def test_detects_optional_remarks_for_res(self):
+        """Test detection for res_* queries (remarks optional but recommended)."""
         from esdc.chat.domain_knowledge.functions import is_already_enriched
 
+        # res_* queries don't need classification, but remarks are recommended
         sql = "SELECT res_oc FROM field_resources"
         is_enriched, source = is_already_enriched(sql)
 
-        assert is_enriched is True
-        assert source == "no_classification_needed"
+        # Should return False since remarks are missing (though optional)
+        assert is_enriched is False
+        assert source == "optional_remarks_only"
 
 
 class TestHybridEnrichmentBehavior:

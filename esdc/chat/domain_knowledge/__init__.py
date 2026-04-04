@@ -51,6 +51,7 @@ from .functions import (
     get_timeseries_columns,
     get_use_case_sql_pattern,
     get_volume_columns,
+    is_already_enriched,
     is_forecast_data,
     requires_classification_context,
     resolve_concept,

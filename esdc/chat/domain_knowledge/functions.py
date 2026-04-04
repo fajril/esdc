@@ -7,7 +7,6 @@ from typing import Any
 from .concepts import DOMAIN_CONCEPTS
 from .synonyms import SYNONYMS
 
-
 # =============================================================================
 # SQL Query Enrichment
 # =============================================================================
@@ -161,11 +160,14 @@ def is_already_enriched(sql: str) -> tuple[bool, str]:
         else:
             return False, "needs_fallback"
     else:
-        # For non-rec queries, only remarks needed (optional)
+        # For non-rec queries, remarks is recommended but not required
+        # Return True with appropriate source to indicate no action needed
         if has_remarks:
             return True, "model"
         else:
-            return True, "no_classification_needed"
+            # Non-rec queries don't strictly need classification
+            # but remarks are still valuable for context
+            return False, "optional_remarks_only"
 
 
 def enrich_sql_query(
@@ -538,7 +540,7 @@ def get_project_class_filter(project_class: str) -> str | None:
         "prospek": "3. Prospective Resources",
     }
 
-    return mapping.get(project_class, None)
+    return mapping.get(project_class)
 
 
 def get_columns_for_substance(substance: str) -> list[str]:
