@@ -1,8 +1,9 @@
 import os
-import yaml
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 # Note: frozen=True was removed to allow method-based configuration updates
@@ -40,7 +41,7 @@ class Config:
 
         config_file = cls.get_config_file()
         if config_file.exists():
-            with open(config_file, "r") as f:
+            with open(config_file) as f:
                 cls._config_cache = yaml.safe_load(f) or {}
                 return cls._config_cache
         cls._config_cache = {}

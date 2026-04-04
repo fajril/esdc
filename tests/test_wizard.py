@@ -1,17 +1,16 @@
 """Tests for the wizard module."""
 
-import pytest
-from unittest.mock import MagicMock, patch
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from esdc.chat.wizard import (
-    WelcomeScreen,
-    ProviderSelectScreen,
-    OllamaSetupScreen,
-    OpenAISetupScreen,
-    OpenAICompatibleSetupScreen,
     DatabasePathScreen,
+    OllamaSetupScreen,
+    OpenAICompatibleSetupScreen,
+    OpenAISetupScreen,
+    ProviderSelectScreen,
     SummaryScreen,
+    WelcomeScreen,
     WizardApp,
 )
 from esdc.configs import Config

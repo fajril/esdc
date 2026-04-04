@@ -1,7 +1,6 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
 import yaml
-from pathlib import Path
 
 from esdc.configs import Config
 

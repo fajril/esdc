@@ -1,7 +1,8 @@
 # Standard library
 import json
 import logging
-from typing import Any, AsyncGenerator, cast
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 
 # Third-party
 from langchain_core.language_models import BaseChatModel
@@ -15,8 +16,8 @@ from esdc.chat.context_manager import manage_context_node
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.tools import (
     execute_sql,
-    get_schema,
     get_recommended_table,
+    get_schema,
     list_tables,
     resolve_uncertainty_level,
     search_problem_cluster,

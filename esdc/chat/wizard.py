@@ -4,7 +4,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
 from textual.screen import Screen
-from textual.widgets import Button, Header, Footer, Static, Input, SelectionList, Select
+from textual.widgets import Button, Footer, Header, Input, Select, SelectionList, Static
 
 from esdc.auth import start_oauth_flow
 from esdc.configs import Config

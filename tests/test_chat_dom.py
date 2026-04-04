@@ -10,20 +10,18 @@ Tests verify:
 """
 
 import pytest
-from textual.app import App
-from textual.widgets import Static, Markdown
 from textual.containers import ScrollableContainer
-from textual.widgets import Collapsible
+from textual.widgets import Collapsible, Markdown
 
 # Import the app and widgets
 from esdc.chat.app import (
-    ESDCChatApp,
-    ChatPanel,
     ChatMessage,
-    ThinkingIndicator,
-    SQLPanel,
-    ResultsPanel,
+    ChatPanel,
     ContextPanel,
+    ESDCChatApp,
+    ResultsPanel,
+    SQLPanel,
+    ThinkingIndicator,
 )
 
 

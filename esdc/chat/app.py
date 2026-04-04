@@ -5,10 +5,11 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any
 
 # Configure logging FIRST - before any other imports that might use logging
 # Log location: ~/.esdc/logs/
@@ -54,13 +55,18 @@ logging.getLogger("markdown_it").setLevel(logging.WARNING)
 from langchain_core.language_models import BaseChatModel  # noqa: E402
 from langchain_core.runnables import Runnable  # noqa: E402
 from langgraph.checkpoint.base import BaseCheckpointSaver  # noqa: E402
+from textual import events  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer  # noqa: E402
-from textual.widget import Widget  # noqa: E402
-from textual.widgets import Static, Markdown, Collapsible, TextArea  # noqa: E402
-from textual import events  # noqa: E402
+from textual.containers import (  # noqa: E402
+    Container,
+    Horizontal,
+    ScrollableContainer,
+    Vertical,
+)
 from textual.message import Message  # noqa: E402
+from textual.widget import Widget  # noqa: E402
+from textual.widgets import Collapsible, Markdown, Static, TextArea  # noqa: E402
 
 MAX_MESSAGE_HISTORY = 100
 MAX_QUERY_HISTORY = 5
@@ -612,9 +618,7 @@ class ChatMessage(Markdown):
     """
 
     def __init__(self, role: str, content: str):
-        if role == "user":
-            formatted = content
-        elif role == "ai":
+        if role == "user" or role == "ai":
             formatted = content
         else:
             formatted = f"**[{role.upper()}]** {content}"
@@ -1331,10 +1335,10 @@ class ESDCChatApp(App):
 
     def _init_agent(self) -> None:
         """Initialize the LLM and agent."""
-        from esdc.configs import Config
-        from esdc.providers import create_llm_from_config
         from esdc.chat.agent import create_agent
         from esdc.chat.memory import create_checkpointer, create_thread_id
+        from esdc.configs import Config
+        from esdc.providers import create_llm_from_config
 
         provider_config = Config.get_provider_config()
         if not provider_config:
@@ -1711,11 +1715,11 @@ class ESDCChatApp(App):
                 result = chunk.get("result", "")
                 sql = chunk.get("sql", "")
                 yield {"type": "tool_result", "result": result, "sql": sql}
-            elif chunk["type"] == "token_usage":
-                yield chunk
-            elif chunk["type"] == "messages_state":
-                yield chunk
-            elif chunk["type"] == "context_metadata":
+            elif (
+                chunk["type"] == "token_usage"
+                or chunk["type"] == "messages_state"
+                or chunk["type"] == "context_metadata"
+            ):
                 yield chunk
 
     def display_message(self, role: str, content: str) -> None:

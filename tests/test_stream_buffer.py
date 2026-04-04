@@ -1,6 +1,5 @@
 """Tests for StreamingBuffer class."""
 
-
 from esdc.server.stream_buffer import StreamingBuffer, format_thinking_section
 
 

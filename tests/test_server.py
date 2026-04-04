@@ -1,12 +1,10 @@
 """Tests for ESDC server API."""
 
 # Standard library
-import json
 
 # Third-party
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
 
 # Local
 from esdc.server.app import create_app

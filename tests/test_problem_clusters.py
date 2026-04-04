@@ -1,15 +1,14 @@
 """Tests for problem cluster extraction functionality."""
 
-import pytest
 from esdc.chat.domain_knowledge.problems import (
     PROBLEM_CLUSTERS,
-    get_problem_cluster,
-    get_clusters_by_category,
+    enrich_project_with_clusters,
     extract_problem_clusters,
     extract_problem_clusters_from_project,
-    enrich_project_with_clusters,
-    get_projects_by_cluster,
     get_cluster_summary,
+    get_clusters_by_category,
+    get_problem_cluster,
+    get_projects_by_cluster,
 )
 
 

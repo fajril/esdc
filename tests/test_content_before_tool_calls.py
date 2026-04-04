@@ -6,14 +6,13 @@ tools before the thinking/reasoning text.
 """
 
 import json
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage
 
 from esdc.server.agent_wrapper import (
     generate_streaming_response,
-    create_openai_chunk,
-    create_tool_call_chunk,
 )
 from esdc.server.models import Message
 
