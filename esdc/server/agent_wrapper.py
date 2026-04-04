@@ -89,7 +89,7 @@ def extract_ai_message_from_event(event: dict) -> AIMessage | None:
                     return last_msg
 
     # Fallback: check all keys for messages
-    for key, value in event.items():
+    for _key, value in event.items():
         if isinstance(value, dict) and "messages" in value:
             messages = value["messages"]
             if messages:
@@ -98,6 +98,31 @@ def extract_ai_message_from_event(event: dict) -> AIMessage | None:
                     return last_msg
 
     return None
+
+
+def extract_tool_messages_from_event(event: dict) -> list[Any]:
+    """Extract ToolMessage objects from LangGraph event.
+
+    The 'tools' node contains tool execution results.
+
+    Args:
+        event: LangGraph event dictionary
+
+    Returns:
+        List of ToolMessage objects from the event
+    """
+    tool_messages = []
+
+    # Check for 'tools' node (contains tool results)
+    if "tools" in event:
+        tools_data = event["tools"]
+        if isinstance(tools_data, dict) and "messages" in tools_data:
+            messages = tools_data["messages"]
+            for msg in messages:
+                if isinstance(msg, ToolMessage):
+                    tool_messages.append(msg)
+
+    return tool_messages
 
 
 def extract_content_str(content) -> str:
@@ -184,12 +209,44 @@ async def generate_streaming_response(
         is_first_ai_message = True
 
         # Stream the response
+        # Track which tool_call_ids we've emitted to avoid duplicates
+        emitted_tool_call_ids: set[str] = set()
+
         async for event in agent.astream(
             {"messages": lc_messages},
             config=RunnableConfig(configurable={"thread_id": request_id}),
         ):
             event_counter += 1
             logger.debug(f"[EVENT #{event_counter}] Event keys: {list(event.keys())}")
+
+            # Check for tool execution results FIRST (before AI messages)
+            if use_native_format:
+                tool_messages = extract_tool_messages_from_event(event)
+                for tool_msg in tool_messages:
+                    # Avoid emitting duplicates
+                    if tool_msg.tool_call_id in emitted_tool_call_ids:
+                        logger.debug(
+                            f"[EVENT #{event_counter}] Skipping duplicate "
+                            f"tool result for {tool_msg.tool_call_id}"
+                        )
+                        continue
+
+                    # Emit tool result chunk
+                    chunk = create_tool_result_chunk(
+                        tool_call_id=tool_msg.tool_call_id,
+                        content=str(tool_msg.content),
+                        model=model,
+                    )
+                    logger.debug(
+                        f"[YIELD] Tool result chunk for call_id={tool_msg.tool_call_id}, "
+                        f"content_length={len(str(tool_msg.content))}"
+                    )
+                    yield json.dumps(chunk)
+                    emitted_tool_call_ids.add(tool_msg.tool_call_id)
+
+                # If we found tool messages, skip normal AI message processing
+                if tool_messages:
+                    continue
 
             ai_msg = extract_ai_message_from_event(event)
             if not ai_msg:

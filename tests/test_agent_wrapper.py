@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from esdc.server.agent_wrapper import (
     convert_messages_to_langchain,
     create_openai_chunk,
-    extract_thinking_for_interleaved,
+    generate_streaming_response,
 )
 
 
@@ -329,3 +329,177 @@ class TestExtractThinkingForInterleaved:
 
             assert len(chunks) == 1
             assert "Error" in chunks[0]["choices"][0]["delta"]["content"]
+
+
+class TestToolResultStreaming:
+    """Test suite for tool result streaming."""
+
+    @pytest.mark.asyncio
+    async def test_tool_results_emitted_in_stream(self):
+        """Test that tool results are emitted as streaming chunks."""
+        # Simulate: agent calls tool, tool executes, agent responds
+        tool_call_event = {
+            "agent": {
+                "messages": [
+                    MagicMock(
+                        spec=AIMessage,
+                        content="",
+                        tool_calls=[
+                            {"id": "call_123", "name": "test_tool", "args": {"x": 1}}
+                        ],
+                    )
+                ]
+            }
+        }
+
+        tool_result_event = {
+            "tools": {
+                "messages": [
+                    MagicMock(
+                        spec=ToolMessage,
+                        content="Tool executed successfully",
+                        tool_call_id="call_123",
+                    )
+                ]
+            }
+        }
+
+        final_event = {
+            "agent": {
+                "messages": [
+                    MagicMock(
+                        spec=AIMessage,
+                        content="Final answer",
+                        tool_calls=[],
+                    )
+                ]
+            }
+        }
+
+        # Create async generator mock
+        async def mock_astream(*args, **kwargs):
+            for event in [tool_call_event, tool_result_event, final_event]:
+                yield event
+
+        with patch(
+            "esdc.server.agent_wrapper.Config.get_provider_config"
+        ) as mock_config:
+            with patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm:
+                with patch("esdc.server.agent_wrapper.create_agent") as mock_agent:
+                    mock_config.return_value = {
+                        "provider_type": "ollama",
+                        "model": "test-model",
+                    }
+                    mock_llm.return_value = MagicMock()
+                    mock_agent.return_value = MagicMock()
+                    mock_agent.return_value.astream = mock_astream
+
+                    chunks = []
+                    async for chunk in generate_streaming_response(
+                        messages=[MagicMock(role="user", content="Hello")],
+                        model="esdc-agent",
+                        use_native_format=True,
+                    ):
+                        chunks.append(json.loads(chunk))
+
+                    # Find tool_calls chunk
+                    tool_calls_chunks = [
+                        c for c in chunks if "tool_calls" in c["choices"][0]["delta"]
+                    ]
+                    assert len(tool_calls_chunks) >= 1, "Should have tool_calls chunk"
+
+                    # Find tool result chunk (role="tool")
+                    tool_result_chunks = [
+                        c
+                        for c in chunks
+                        if c["choices"][0]["delta"].get("role") == "tool"
+                    ]
+                    assert len(tool_result_chunks) >= 1, "Should have tool result chunk"
+                    assert (
+                        tool_result_chunks[0]["choices"][0]["delta"]["tool_call_id"]
+                        == "call_123"
+                    )
+                    assert (
+                        "success"
+                        in tool_result_chunks[0]["choices"][0]["delta"][
+                            "content"
+                        ].lower()
+                    )
+
+    @pytest.mark.asyncio
+    async def test_multiple_tool_results_emitted_sequentially(self):
+        """Test that multiple tool results are emitted in order."""
+        tool_call_event = {
+            "agent": {
+                "messages": [
+                    MagicMock(
+                        spec=AIMessage,
+                        content="",
+                        tool_calls=[
+                            {"id": "call_1", "name": "tool_a", "args": {}},
+                            {"id": "call_2", "name": "tool_b", "args": {}},
+                        ],
+                    )
+                ]
+            }
+        }
+
+        tool_result_event = {
+            "tools": {
+                "messages": [
+                    MagicMock(
+                        spec=ToolMessage, content="Result A", tool_call_id="call_1"
+                    ),
+                    MagicMock(
+                        spec=ToolMessage, content="Result B", tool_call_id="call_2"
+                    ),
+                ]
+            }
+        }
+
+        final_event = {
+            "agent": {
+                "messages": [MagicMock(spec=AIMessage, content="Done", tool_calls=[])]
+            }
+        }
+
+        # Create async generator mock
+        async def mock_astream(*args, **kwargs):
+            for event in [tool_call_event, tool_result_event, final_event]:
+                yield event
+
+        with patch(
+            "esdc.server.agent_wrapper.Config.get_provider_config"
+        ) as mock_config:
+            with patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm:
+                with patch("esdc.server.agent_wrapper.create_agent") as mock_agent:
+                    mock_config.return_value = {
+                        "provider_type": "ollama",
+                        "model": "test",
+                    }
+                    mock_llm.return_value = MagicMock()
+                    mock_agent.return_value = MagicMock()
+                    mock_agent.return_value.astream = mock_astream
+
+                    chunks = []
+                    async for chunk in generate_streaming_response(
+                        messages=[MagicMock(role="user", content="Test")],
+                        use_native_format=True,
+                    ):
+                        chunks.append(json.loads(chunk))
+
+                    tool_result_chunks = [
+                        c
+                        for c in chunks
+                        if c["choices"][0]["delta"].get("role") == "tool"
+                    ]
+                    assert len(tool_result_chunks) >= 2, (
+                        "Should have >=2 tool result chunks"
+                    )
+                    # Check tool_call_ids match
+                    tool_call_ids = [
+                        tc["choices"][0]["delta"]["tool_call_id"]
+                        for tc in tool_result_chunks
+                    ]
+                    assert "call_1" in tool_call_ids
+                    assert "call_2" in tool_call_ids
