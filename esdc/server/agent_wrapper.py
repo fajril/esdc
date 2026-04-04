@@ -385,10 +385,22 @@ async def generate_streaming_response(
                     f"[PATH] Final content block executed (count={path_final_content_count})"
                 )
                 # Check if we have preserved thinking to inject before final content
+                # SAFETY: Only inject if final content doesn't already have thinking tags
+                # This prevents duplication when model includes thinking in final response
                 if thinking_state.has_thinking():
-                    preserved = thinking_state.get_thinking()
-                    if preserved:
-                        buffer.add_preserved_thinking(preserved)
+                    content_str = extract_content_str(ai_msg.content)
+                    if not has_thinking_tags(content_str):
+                        # Content has no thinking tags, safe to inject preserved thinking
+                        preserved = thinking_state.get_thinking()
+                        if preserved:
+                            buffer.add_preserved_thinking(preserved)
+                    else:
+                        # Content already has thinking tags, skip injection to avoid duplication
+                        logger.debug(
+                            "[THINKING] Skipping preserved thinking injection - "
+                            "content already contains thinking tags"
+                        )
+                        thinking_state.clear()
 
                 # Final content - accumulate in buffer
                 content_str = extract_content_str(ai_msg.content)
