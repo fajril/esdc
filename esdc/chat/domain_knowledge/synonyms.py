@@ -1,8 +1,7 @@
 """Synonym mappings for Indonesian/English terminology."""
 
-from typing import Dict
 
-SYNONYMS: Dict[str, str] = {
+SYNONYMS: dict[str, str] = {
     "cadangan": "cadangan",
     "reserves": "cadangan",
     "reserve": "cadangan",

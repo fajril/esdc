@@ -1,7 +1,7 @@
 """Uncertainty level definitions and utilities."""
 
 from dataclasses import dataclass
-from typing import Dict, Literal, Optional
+from typing import Literal
 
 
 @dataclass
@@ -9,15 +9,15 @@ class UncertaintySpec:
     """Specification for an uncertainty level."""
 
     type: Literal["direct", "calculated"]
-    db_value: Optional[str] = None
-    calculation: Optional[str] = None
+    db_value: str | None = None
+    calculation: str | None = None
     is_cumulative: bool = False
     reserves_only: bool = False
-    sql_template: Optional[str] = None
+    sql_template: str | None = None
     description: str = ""
 
 
-UNCERTAINTY_MAP: Dict[str, UncertaintySpec] = {
+UNCERTAINTY_MAP: dict[str, UncertaintySpec] = {
     "1P": UncertaintySpec(
         type="direct",
         db_value="1. Low Value",
@@ -152,7 +152,7 @@ UNCERTAINTY_MAP: Dict[str, UncertaintySpec] = {
 
 # Direct database value synonyms for model-friendly resolution
 # These map generic terms like "low", "mid", "high" directly to database values
-DB_VALUE_SYNONYMS: Dict[str, str] = {
+DB_VALUE_SYNONYMS: dict[str, str] = {
     "low_value": "1. Low Value",
     "middle_value": "2. Middle Value",
     "high_value": "3. High Value",
@@ -190,8 +190,8 @@ def get_uncertainty_filter(uncertainty: str) -> str:
 
 
 def get_uncertainty_spec(
-    uncertainty: str, volume_type: Optional[str] = None
-) -> Optional[UncertaintySpec]:
+    uncertainty: str, volume_type: str | None = None
+) -> UncertaintySpec | None:
     """
     Get the full specification for an uncertainty level.
 

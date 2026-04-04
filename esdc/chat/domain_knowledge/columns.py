@@ -1,18 +1,17 @@
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 
 @dataclass
 class ColumnMetadata:
     column_name: str
     description: str
-    units: Optional[str] = None
-    category: Optional[str] = None
-    volume_type: Optional[str] = None
-    substance: Optional[str] = None
+    units: str | None = None
+    category: str | None = None
+    volume_type: str | None = None
+    substance: str | None = None
 
 
-COLUMN_GROUPS: Dict[str, List[str]] = {
+COLUMN_GROUPS: dict[str, list[str]] = {
     "reserves": ["res_oil", "res_con", "res_ga", "res_gn", "res_oc", "res_an"],
     "resources": [
         "rec_oil",
@@ -289,7 +288,7 @@ COLUMN_GROUPS: Dict[str, List[str]] = {
 }
 
 
-COLUMN_METADATA: Dict[str, ColumnMetadata] = {
+COLUMN_METADATA: dict[str, ColumnMetadata] = {
     # Identification
     "id": ColumnMetadata("id", "Primary key (auto-increment)", None, "identification"),
     "uuid": ColumnMetadata(
@@ -1064,7 +1063,7 @@ COLUMN_METADATA: Dict[str, ColumnMetadata] = {
 }
 
 
-def get_column_group(column_name: str) -> Optional[str]:
+def get_column_group(column_name: str) -> str | None:
     """
     Get the group name for a column.
 

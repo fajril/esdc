@@ -10,21 +10,13 @@ backward compatibility.
 # =============================================================================
 # Tables Module
 # =============================================================================
-from .tables import (
-    TABLE_HIERARCHY,
-    AGGREGATION_LEVELS,
-    get_table_for_query,
-    can_use_view_for_calculation,
-    get_entity_filter_column,
-)
-
 # =============================================================================
 # Columns Module
 # =============================================================================
 from .columns import (
-    ColumnMetadata,
     COLUMN_GROUPS,
     COLUMN_METADATA,
+    ColumnMetadata,
     get_column_group,
 )
 
@@ -34,67 +26,74 @@ from .columns import (
 from .concepts import DOMAIN_CONCEPTS
 
 # =============================================================================
-# Synonyms Module
-# =============================================================================
-from .synonyms import SYNONYMS
-
-# =============================================================================
-# Uncertainty Module
-# =============================================================================
-from .uncertainty import (
-    UncertaintySpec,
-    UNCERTAINTY_MAP,
-    DB_VALUE_SYNONYMS,
-    get_uncertainty_filter,
-    get_uncertainty_spec,
-    build_uncertainty_sql,
-)
-
-# =============================================================================
 # Functions Module
 # =============================================================================
 from .functions import (
-    resolve_concept,
-    get_columns_for_concept,
-    build_sql_pattern,
-    get_project_class_filter,
-    get_columns_for_substance,
-    format_response_value,
-    calculate_peak_production_year,
-    calculate_eol_year,
-    get_onstream_year,
-    convert_volume_units,
-    build_timeseries_query,
-    format_timeseries_response,
-    get_timeseries_columns,
-    get_resources_columns,
-    get_aggregation_table_info,
-    get_use_case_sql_pattern,
-    get_forecast_vs_historical_guide,
-    is_forecast_data,
-    get_volume_columns,
     build_aggregate_query,
+    build_sql_pattern,
+    build_timeseries_query,
+    calculate_eol_year,
+    calculate_peak_production_year,
+    convert_volume_units,
+    format_response_value,
+    format_timeseries_response,
+    get_aggregation_table_info,
+    get_columns_for_concept,
+    get_columns_for_substance,
+    get_forecast_vs_historical_guide,
+    get_onstream_year,
+    get_project_class_filter,
     get_recommended_table,
+    get_resources_columns,
+    get_timeseries_columns,
+    get_use_case_sql_pattern,
+    get_volume_columns,
+    is_forecast_data,
+    resolve_concept,
 )
 
 # =============================================================================
 # Problems Module
 # =============================================================================
 from .problems import (
-    PROBLEM_CLUSTERS,
     PROBLEM_CLUSTER_CODE_PATTERN,
     PROBLEM_CLUSTER_PREFIX_PATTERNS,
-    get_problem_cluster,
-    get_all_problem_clusters,
-    get_clusters_by_category,
+    PROBLEM_CLUSTERS,
+    enrich_project_with_clusters,
     extract_problem_clusters,
     extract_problem_clusters_from_project,
-    enrich_project_with_clusters,
-    get_projects_by_cluster,
-    get_cluster_summary,
     format_cluster_for_display,
-    search_problem_clusters,
+    get_all_problem_clusters,
     get_cluster_explanation,
+    get_cluster_summary,
+    get_clusters_by_category,
+    get_problem_cluster,
+    get_projects_by_cluster,
+    search_problem_clusters,
+)
+
+# =============================================================================
+# Synonyms Module
+# =============================================================================
+from .synonyms import SYNONYMS
+from .tables import (
+    AGGREGATION_LEVELS,
+    TABLE_HIERARCHY,
+    can_use_view_for_calculation,
+    get_entity_filter_column,
+    get_table_for_query,
+)
+
+# =============================================================================
+# Uncertainty Module
+# =============================================================================
+from .uncertainty import (
+    DB_VALUE_SYNONYMS,
+    UNCERTAINTY_MAP,
+    UncertaintySpec,
+    build_uncertainty_sql,
+    get_uncertainty_filter,
+    get_uncertainty_spec,
 )
 
 # =============================================================================
