@@ -101,15 +101,16 @@ def extract_ai_message_from_event(event: dict) -> AIMessage | None:
 
 
 def extract_tool_messages_from_event(event: dict) -> list[Any]:
-    """Extract ToolMessage objects from LangGraph event.
+    """Extract tool results from LangGraph event.
 
-    The 'tools' node contains tool execution results.
+    LangGraph's tool_node returns dicts with 'role': 'tool',
+    NOT ToolMessage objects.
 
     Args:
         event: LangGraph event dictionary
 
     Returns:
-        List of ToolMessage objects from the event
+        List of tool result dicts from the event
     """
     tool_messages = []
 
@@ -119,7 +120,8 @@ def extract_tool_messages_from_event(event: dict) -> list[Any]:
         if isinstance(tools_data, dict) and "messages" in tools_data:
             messages = tools_data["messages"]
             for msg in messages:
-                if isinstance(msg, ToolMessage):
+                # LangGraph returns dicts with role="tool"
+                if isinstance(msg, dict) and msg.get("role") == "tool":
                     tool_messages.append(msg)
 
     return tool_messages
@@ -222,27 +224,37 @@ async def generate_streaming_response(
             # Check for tool execution results FIRST (before AI messages)
             if use_native_format:
                 tool_messages = extract_tool_messages_from_event(event)
+
+                if tool_messages:
+                    logger.debug(
+                        f"[EVENT #{event_counter}] Found {len(tool_messages)} tool result(s)"
+                    )
+
                 for tool_msg in tool_messages:
+                    # Extract tool_call_id and content from dict
+                    tool_call_id = tool_msg.get("tool_call_id")
+                    content = str(tool_msg.get("content", ""))
+
                     # Avoid emitting duplicates
-                    if tool_msg.tool_call_id in emitted_tool_call_ids:
+                    if tool_call_id in emitted_tool_call_ids:
                         logger.debug(
                             f"[EVENT #{event_counter}] Skipping duplicate "
-                            f"tool result for {tool_msg.tool_call_id}"
+                            f"tool result for {tool_call_id}"
                         )
                         continue
 
                     # Emit tool result chunk
                     chunk = create_tool_result_chunk(
-                        tool_call_id=tool_msg.tool_call_id,
-                        content=str(tool_msg.content),
+                        tool_call_id=tool_call_id,
+                        content=content,
                         model=model,
                     )
                     logger.debug(
-                        f"[YIELD] Tool result chunk for call_id={tool_msg.tool_call_id}, "
-                        f"content_length={len(str(tool_msg.content))}"
+                        f"[YIELD] Tool result chunk for call_id={tool_call_id}, "
+                        f"content_length={len(content)}"
                     )
                     yield json.dumps(chunk)
-                    emitted_tool_call_ids.add(tool_msg.tool_call_id)
+                    emitted_tool_call_ids.add(tool_call_id)
 
                 # If we found tool messages, skip normal AI message processing
                 if tool_messages:

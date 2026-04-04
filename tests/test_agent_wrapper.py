@@ -355,11 +355,11 @@ class TestToolResultStreaming:
         tool_result_event = {
             "tools": {
                 "messages": [
-                    MagicMock(
-                        spec=ToolMessage,
-                        content="Tool executed successfully",
-                        tool_call_id="call_123",
-                    )
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_123",
+                        "content": "Tool executed successfully",
+                    }
                 ]
             }
         }
@@ -447,12 +447,8 @@ class TestToolResultStreaming:
         tool_result_event = {
             "tools": {
                 "messages": [
-                    MagicMock(
-                        spec=ToolMessage, content="Result A", tool_call_id="call_1"
-                    ),
-                    MagicMock(
-                        spec=ToolMessage, content="Result B", tool_call_id="call_2"
-                    ),
+                    {"role": "tool", "content": "Result A", "tool_call_id": "call_1"},
+                    {"role": "tool", "content": "Result B", "tool_call_id": "call_2"},
                 ]
             }
         }
