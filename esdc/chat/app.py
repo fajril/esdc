@@ -1530,11 +1530,17 @@ class ESDCChatApp(App):
             # Tool-specific status messages
             TOOL_STATUS_MAP = {
                 "execute_sql": "⏳ Executing SQL query...",
+                "SQL Executor": "🛠️ Using SQL Executor...",
                 "get_schema": "⏳ Getting table schema...",
+                "Schema Inspector": "🛠️ Using Schema Inspector...",
                 "list_tables": "⏳ Listing available tables...",
+                "Table Lister": "🛠️ Using Table Lister...",
                 "get_recommended_table": "⏳ Finding recommended table...",
+                "Table Selector": "🛠️ Using Table Selector...",
                 "resolve_uncertainty_level": "⏳ Resolving uncertainty level...",
+                "Uncertainty Resolver": "🛠️ Using Uncertainty Resolver...",
                 "search_problem_cluster": "⏳ Searching problem cluster definitions...",
+                "Problem Cluster Search": "🛠️ Using Problem Cluster Search...",
             }
 
             sql_query = ""
@@ -1563,7 +1569,7 @@ class ESDCChatApp(App):
             # Add indicator to message
             if self._streaming_message:
                 indicator_text = f"\n\n{status_msg}"
-                if sql_query and tool_name == "execute_sql":
+                if sql_query and tool_name in ("execute_sql", "SQL Executor"):
                     indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
 
                 self._accumulated_content += indicator_text
@@ -1594,11 +1600,17 @@ class ESDCChatApp(App):
             # Tool-specific completion messages
             TOOL_COMPLETED_MAP = {
                 "execute_sql": "✅ SQL query completed",
+                "SQL Executor": "✅ SQL Executor completed",
                 "get_schema": "✅ Schema retrieved",
+                "Schema Inspector": "✅ Schema Inspector completed",
                 "list_tables": "✅ Tables listed",
+                "Table Lister": "✅ Table Lister completed",
                 "get_recommended_table": "✅ Recommended table found",
+                "Table Selector": "✅ Table Selector completed",
                 "resolve_uncertainty_level": "✅ Uncertainty level resolved",
+                "Uncertainty Resolver": "✅ Uncertainty Resolver completed",
                 "search_problem_cluster": "✅ Problem cluster definition found",
+                "Problem Cluster Search": "✅ Problem Cluster Search completed",
             }
 
             # Update tool status
