@@ -40,7 +40,7 @@ def get_db_connection(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-@tool
+@tool("SQL Executor")
 async def execute_sql(
     query: Annotated[
         str, "A valid SQL SELECT query to execute against the ESDC database."
@@ -116,7 +116,7 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
             conn.close()
 
 
-@tool
+@tool("Schema Inspector")
 def get_schema(
     table_name: Annotated[
         str | None,
@@ -176,7 +176,7 @@ def get_schema(
             conn.close()
 
 
-@tool
+@tool("Table Lister")
 def list_tables() -> str:
     """List all available tables and views in the ESDC database.
 
@@ -219,7 +219,7 @@ def list_tables() -> str:
         return f"Error: {str(e)}"
 
 
-@tool
+@tool("Model Checker")
 def list_available_models(provider_type: str = "ollama") -> str:
     """List available models for a given provider type.
 
@@ -248,7 +248,7 @@ def list_available_models(provider_type: str = "ollama") -> str:
         return f"Error: {str(e)}"
 
 
-@tool
+@tool("Table Selector")
 def get_recommended_table(
     entity_type: Annotated[
         str,
@@ -341,7 +341,7 @@ def get_recommended_table(
         )
 
 
-@tool
+@tool("Uncertainty Resolver")
 def resolve_uncertainty_level(
     level: Annotated[
         str,
@@ -446,7 +446,7 @@ def resolve_uncertainty_level(
         )
 
 
-@tool
+@tool("Timeseries Column Guide")
 def get_timeseries_columns(
     data_type: Annotated[
         str,
@@ -544,7 +544,7 @@ def get_timeseries_columns(
         )
 
 
-@tool
+@tool("Resources Column Guide")
 def get_resources_columns(
     volume_type: Annotated[
         str,
@@ -629,7 +629,7 @@ def get_resources_columns(
         )
 
 
-@tool
+@tool("Problem Cluster Search")
 def search_problem_cluster(
     query: Annotated[
         str,
