@@ -2,6 +2,7 @@
 
 from esdc.server.tool_formatter import (
     create_tool_call_chunk,
+    create_tool_result_chunk,
     detect_native_format,
     format_tool_calls_for_response,
 )
@@ -39,6 +40,53 @@ class TestToolFormatter:
     def test_detect_native_format_fallback(self):
         headers = {"accept": "text/plain"}
         assert detect_native_format(headers, stream=False) is False
+
+
+class TestToolResultChunk:
+    """Test suite for tool result chunk creation."""
+
+    def test_create_tool_result_chunk_basic(self):
+        """Test creating basic tool result chunk."""
+        chunk = create_tool_result_chunk(
+            tool_call_id="call_123",
+            content="Query returned 5 rows",
+            model="esdc-agent",
+        )
+
+        assert chunk["object"] == "chat.completion.chunk"
+        assert chunk["model"] == "esdc-agent"
+        assert len(chunk["choices"]) == 1
+
+        delta = chunk["choices"][0]["delta"]
+        assert delta["role"] == "tool"
+        assert delta["tool_call_id"] == "call_123"
+        assert delta["content"] == "Query returned 5 rows"
+        assert chunk["choices"][0]["finish_reason"] is None
+
+    def test_create_tool_result_chunk_with_model_default(self):
+        """Test tool result chunk with default model."""
+        chunk = create_tool_result_chunk(
+            tool_call_id="call_abc",
+            content="Success",
+        )
+
+        assert chunk["model"] == "esdc-agent"
+        assert chunk["choices"][0]["delta"]["tool_call_id"] == "call_abc"
+
+    def test_create_tool_result_chunk_has_required_fields(self):
+        """Test chunk has all required OpenAI fields."""
+        chunk = create_tool_result_chunk(
+            tool_call_id="call_xyz",
+            content="Result",
+        )
+
+        assert "id" in chunk
+        assert "object" in chunk
+        assert "created" in chunk
+        assert "model" in chunk
+        assert "choices" in chunk
+        assert isinstance(chunk["created"], int)
+        assert chunk["object"] == "chat.completion.chunk"
 
 
 class TestRoutes:

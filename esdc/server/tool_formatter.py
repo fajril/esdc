@@ -81,6 +81,40 @@ def create_tool_call_chunk(
     }
 
 
+def create_tool_result_chunk(
+    tool_call_id: str,
+    content: str,
+    model: str = "esdc-agent",
+) -> dict[str, Any]:
+    """Create OpenAI-compatible streaming chunk with tool result.
+
+    Args:
+        tool_call_id: ID of the tool call this result corresponds to
+        content: Tool execution result content
+        model: Model identifier
+
+    Returns:
+        OpenAI-compatible chat.completion.chunk dict with role="tool"
+    """
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": content,
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+
 def format_tool_calls_for_response(
     tool_calls: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -123,15 +157,10 @@ def detect_native_format(headers: dict[str, str], stream: bool) -> bool:
     accept = headers.get("accept", "").lower()
 
     # Streaming clients with SSE support native
-    if "text/event-stream" in accept:
-        return True
-
     # Non-streaming with JSON accept support native
-    if "application/json" in accept and not stream:
-        return True
-
-    # Default to markdown for unknown/legacy clients
-    return False
+    return "text/event-stream" in accept or (
+        "application/json" in accept and not stream
+    )
 
 
 def create_final_chunk(model: str = "esdc-agent") -> dict[str, Any]:
