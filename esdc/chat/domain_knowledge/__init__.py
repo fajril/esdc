@@ -35,6 +35,9 @@ from .functions import (
     calculate_eol_year,
     calculate_peak_production_year,
     convert_volume_units,
+    enrich_sql_query,
+    extract_selected_columns,
+    extract_table_from_sql,
     format_response_value,
     format_timeseries_response,
     get_aggregation_table_info,
@@ -49,7 +52,9 @@ from .functions import (
     get_use_case_sql_pattern,
     get_volume_columns,
     is_forecast_data,
+    requires_classification_context,
     resolve_concept,
+    should_include_remarks,
 )
 
 # =============================================================================
@@ -76,6 +81,10 @@ from .problems import (
 # Synonyms Module
 # =============================================================================
 from .synonyms import SYNONYMS
+
+# =============================================================================
+# Tables Module
+# =============================================================================
 from .tables import (
     AGGREGATION_LEVELS,
     CLASSIFICATION_CONTEXT_COLUMNS,
@@ -88,38 +97,6 @@ from .tables import (
     get_remarks_column,
     get_table_for_query,
     requires_classification_columns,
-)
-
-# =============================================================================
-# Functions Module (continued)
-# =============================================================================
-from .functions import (
-    build_aggregate_query,
-    build_sql_pattern,
-    build_timeseries_query,
-    calculate_eol_year,
-    calculate_peak_production_year,
-    convert_volume_units,
-    enrich_sql_query,
-    extract_selected_columns,
-    extract_table_from_sql,
-    format_response_value,
-    format_timeseries_response,
-    get_aggregation_table_info,
-    get_columns_for_concept,
-    get_columns_for_substance,
-    get_forecast_vs_historical_guide,
-    get_onstream_year,
-    get_project_class_filter,
-    get_recommended_table,
-    get_resources_columns,
-    get_timeseries_columns,
-    get_use_case_sql_pattern,
-    get_volume_columns,
-    is_forecast_data,
-    requires_classification_context,
-    resolve_concept,
-    should_include_remarks,
 )
 
 # =============================================================================

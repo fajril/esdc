@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .concepts import DOMAIN_CONCEPTS
 from .synonyms import SYNONYMS
@@ -19,10 +19,10 @@ class EnrichedQuery:
 
     original_sql: str
     enriched_sql: str
-    added_columns: List[str]
-    group_by_columns: List[str]
+    added_columns: list[str]
+    group_by_columns: list[str]
     remarks_column: str | None
-    classification_columns: List[str]
+    classification_columns: list[str]
     table: str
 
 
@@ -51,7 +51,7 @@ def extract_table_from_sql(sql: str) -> str | None:
     return match.group(1) if match else None
 
 
-def extract_selected_columns(sql: str) -> List[str]:
+def extract_selected_columns(sql: str) -> list[str]:
     """
     Extract column names from SELECT clause.
 
@@ -95,7 +95,7 @@ def extract_selected_columns(sql: str) -> List[str]:
     return columns
 
 
-def requires_classification_context(columns: List[str]) -> bool:
+def requires_classification_context(columns: list[str]) -> bool:
     """
     Check if any column requires classification context.
 
@@ -201,8 +201,8 @@ def enrich_sql_query(
 
 def _build_enriched_sql(
     original_sql: str,
-    added_columns: List[str],
-    group_by_columns: List[str] | None,
+    added_columns: list[str],
+    group_by_columns: list[str] | None,
 ) -> str:
     """
     Build enriched SQL by injecting context columns.
@@ -295,7 +295,7 @@ def should_include_remarks(remarks_value: str | None) -> bool:
     return True
 
 
-def resolve_concept(term: str) -> Optional[Dict]:
+def resolve_concept(term: str) -> dict | None:
     """
     Resolve a term to its domain concept.
 
@@ -338,8 +338,8 @@ def resolve_concept(term: str) -> Optional[Dict]:
 
 
 def get_columns_for_concept(
-    concept_type: str, concept_name: str, substance: Optional[str] = None
-) -> List[str]:
+    concept_type: str, concept_name: str, substance: str | None = None
+) -> list[str]:
     """
     Get the database columns for a domain concept.
 
@@ -364,10 +364,10 @@ def get_columns_for_concept(
 
 def build_sql_pattern(
     concept: str,
-    location_filter: Optional[str] = None,
-    uncertainty: Optional[str] = None,
-    project_class: Optional[str] = None,
-) -> Dict[str, str]:
+    location_filter: str | None = None,
+    uncertainty: str | None = None,
+    project_class: str | None = None,
+) -> dict[str, str]:
     """
     Build SQL query patterns for common queries.
 
@@ -425,7 +425,7 @@ def build_sql_pattern(
     return patterns
 
 
-def get_project_class_filter(project_class: str) -> Optional[str]:
+def get_project_class_filter(project_class: str) -> str | None:
     """
     Get the database filter value for a project class.
 
@@ -452,7 +452,7 @@ def get_project_class_filter(project_class: str) -> Optional[str]:
     return mapping.get(project_class, None)
 
 
-def get_columns_for_substance(substance: str) -> List[str]:
+def get_columns_for_substance(substance: str) -> list[str]:
     """
     Get column suffixes for a substance type.
 
@@ -477,7 +477,7 @@ def get_columns_for_substance(substance: str) -> List[str]:
     return mapping.get(substance, [])
 
 
-def format_response_value(value: Optional[float], unit: str) -> str:
+def format_response_value(value: float | None, unit: str) -> str:
     """
     Format a numeric value with units for display.
 
@@ -502,10 +502,10 @@ def format_response_value(value: Optional[float], unit: str) -> str:
 
 def calculate_peak_production_year(
     table: str,
-    entity_name: Optional[str] = None,
+    entity_name: str | None = None,
     substance: str = "oc",
     forecast_type: str = "tpf",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Calculate the year with peak production from a timeseries table.
 
@@ -546,10 +546,10 @@ def calculate_peak_production_year(
 
 def calculate_eol_year(
     table: str,
-    entity_name: Optional[str] = None,
+    entity_name: str | None = None,
     substance: str = "oc",
     forecast_type: str = "tpf",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Calculate the End of Life (EOL) year from a timeseries table.
 
@@ -575,9 +575,9 @@ def calculate_eol_year(
 
 def get_onstream_year(
     table: str,
-    entity_name: Optional[str] = None,
+    entity_name: str | None = None,
     substance: str = "oc",
-) -> Dict[str, Optional[str]]:
+) -> dict[str, str | None]:
     """
     Get the onstream (start production) year.
 
@@ -643,12 +643,12 @@ def convert_volume_units(
 
 def build_timeseries_query(
     table: str = "field_timeseries",
-    entity_name: Optional[str] = None,
-    year: Optional[int] = None,
-    year_range: Optional[Tuple[int, int]] = None,
+    entity_name: str | None = None,
+    year: int | None = None,
+    year_range: tuple[int, int] | None = None,
     substance: str = "oc",
     include_daily: bool = False,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Build SQL query for timeseries data with optional unit conversion.
 
@@ -712,9 +712,9 @@ def build_timeseries_query(
 
 
 def format_timeseries_response(
-    value: Optional[float],
+    value: float | None,
     unit: str,
-    year: Optional[int] = None,
+    year: int | None = None,
     include_daily: bool = False,
 ) -> str:
     """
@@ -748,7 +748,7 @@ def get_timeseries_columns(
     data_type: str = "forecast",
     forecast_type: str = "tpf",
     substance: str = "oc",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get the correct column names for timeseries queries.
     """
@@ -897,7 +897,7 @@ def get_timeseries_columns(
 def get_resources_columns(
     volume_type: str = "reserves",
     substance: str = "oc",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get the correct column names for static resource tables.
     """
@@ -989,7 +989,7 @@ def get_resources_columns(
     }
 
 
-def get_aggregation_table_info() -> Dict[str, Dict]:
+def get_aggregation_table_info() -> dict[str, dict]:
     """
     Get information about all tables/views in the aggregation hierarchy.
 
@@ -1147,7 +1147,7 @@ def get_aggregation_table_info() -> Dict[str, Dict]:
     }
 
 
-def get_use_case_sql_pattern(use_case: str) -> Dict[str, Any]:
+def get_use_case_sql_pattern(use_case: str) -> dict[str, Any]:
     """
     Get SQL patterns for common timeseries use cases.
 
@@ -1260,7 +1260,7 @@ ORDER BY year;
     return patterns[use_case]
 
 
-def get_forecast_vs_historical_guide() -> Dict[str, Any]:
+def get_forecast_vs_historical_guide() -> dict[str, Any]:
     """
     Get guidance on distinguishing forecast vs historical data.
 
@@ -1373,7 +1373,7 @@ def get_forecast_vs_historical_guide() -> Dict[str, Any]:
 
 
 def is_forecast_data(
-    year: int, hist_year: Optional[int] = None, report_year: Optional[int] = None
+    year: int, hist_year: int | None = None, report_year: int | None = None
 ) -> bool:
     """
     Determine if a given year represents forecast data.
@@ -1399,7 +1399,7 @@ def is_forecast_data(
     return False
 
 
-def get_volume_columns(volume_type: str, is_risked: bool = False) -> Tuple[str, str]:
+def get_volume_columns(volume_type: str, is_risked: bool = False) -> tuple[str, str]:
     """
     Get the column names for oil/condensate and gas volumes.
 
@@ -1435,7 +1435,7 @@ def get_volume_columns(volume_type: str, is_risked: bool = False) -> Tuple[str, 
 
 
 def get_recommended_table(
-    entity_type: Optional[str], query_needs_detail: bool = False
+    entity_type: str | None, query_needs_detail: bool = False
 ) -> str:
     """
     Get the recommended table for a query.
@@ -1454,12 +1454,12 @@ def get_recommended_table(
 
 def build_aggregate_query(
     entity_type: str,
-    entity_name: Optional[str],
+    entity_name: str | None,
     volume_type: str,
     uncertainty: str,
-    project_class: Optional[str] = None,
+    project_class: str | None = None,
     use_view: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build an aggregate query for resource data.
 
