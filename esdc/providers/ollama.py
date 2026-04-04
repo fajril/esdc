@@ -65,11 +65,15 @@ class OllamaProvider(Provider):
         for key, value in cls.CONTEXT_LENGTHS.items():
             if model_base == key.lower():
                 return value
-        logger.debug(f"📊 No hardcoded context length for {model_base}, using default 4096")
+        logger.debug(
+            f"📊 No hardcoded context length for {model_base}, using default 4096"
+        )
         return 4096
 
     @classmethod
-    def get_context_length_from_api(cls, model: str, base_url: str | None = None) -> int:
+    def get_context_length_from_api(
+        cls, model: str, base_url: str | None = None
+    ) -> int:
         """Fetch context length dynamically from Ollama API.
 
         Args:
@@ -86,13 +90,17 @@ class OllamaProvider(Provider):
             info = client.show(model)
 
             model_info = (
-                info.modelinfo if hasattr(info, "modelinfo") else info.get("model_info", {})
+                info.modelinfo
+                if hasattr(info, "modelinfo")
+                else info.get("model_info", {})
             ) or {}
             logger.debug(f"📊 Model info for {model}: {model_info}")
 
             for key, value in model_info.items():
                 if key.endswith(".context_length") and isinstance(value, (int, float)):
-                    logger.info(f"✅ Context length from API: {model} = {int(value):,} tokens")
+                    logger.info(
+                        f"✅ Context length from API: {model} = {int(value):,} tokens"
+                    )
                     return int(value)
 
             logger.warning(f"⚠️ No context_length found in model_info for {model}")
@@ -101,7 +109,9 @@ class OllamaProvider(Provider):
             logger.warning(f"⚠️ Failed to fetch context length from API: {e}")
 
         fallback = cls.get_context_length(model)
-        logger.warning(f"⚠️ Using fallback context length: {model} = {fallback:,} tokens")
+        logger.warning(
+            f"⚠️ Using fallback context length: {model} = {fallback:,} tokens"
+        )
         return fallback
 
     @classmethod

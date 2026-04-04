@@ -4,9 +4,7 @@ This module contains the hierarchical classification system for oil & gas upstre
 problems, enabling extraction and analysis of problem references from project remarks.
 """
 
-from typing import Dict, List, Optional
 import re
-
 
 # Problem cluster code pattern: X.X.X (e.g., 1.1.1, 2.3, 3.1.2)
 PROBLEM_CLUSTER_CODE_PATTERN = re.compile(
@@ -24,7 +22,7 @@ PROBLEM_CLUSTER_PREFIX_PATTERNS = [
 ]
 
 
-PROBLEM_CLUSTERS: Dict[str, Dict] = {
+PROBLEM_CLUSTERS: dict[str, dict] = {
     # Technical > Subsurface
     "1.1.1": {
         "category": "Technical > Subsurface",
@@ -279,7 +277,7 @@ PROBLEM_CLUSTERS: Dict[str, Dict] = {
 }
 
 
-def get_problem_cluster(code: str) -> Optional[Dict]:
+def get_problem_cluster(code: str) -> dict | None:
     """
     Get problem cluster definition by code.
 
@@ -292,7 +290,7 @@ def get_problem_cluster(code: str) -> Optional[Dict]:
     return PROBLEM_CLUSTERS.get(code)
 
 
-def get_all_problem_clusters() -> Dict[str, Dict]:
+def get_all_problem_clusters() -> dict[str, dict]:
     """
     Get all problem cluster definitions.
 
@@ -302,7 +300,7 @@ def get_all_problem_clusters() -> Dict[str, Dict]:
     return PROBLEM_CLUSTERS.copy()
 
 
-def get_clusters_by_category(category: str) -> Dict[str, Dict]:
+def get_clusters_by_category(category: str) -> dict[str, dict]:
     """
     Get all problem clusters in a specific category.
 
@@ -319,7 +317,7 @@ def get_clusters_by_category(category: str) -> Dict[str, Dict]:
     }
 
 
-def extract_problem_clusters(text: str) -> List[Dict]:
+def extract_problem_clusters(text: str) -> list[dict]:
     """
     Extract problem cluster references from text.
 
@@ -380,7 +378,7 @@ def extract_problem_clusters(text: str) -> List[Dict]:
     return clusters
 
 
-def extract_problem_clusters_from_project(project_data: Dict) -> List[Dict]:
+def extract_problem_clusters_from_project(project_data: dict) -> list[dict]:
     """
     Extract problem clusters from all remarks fields in a project.
 
@@ -414,7 +412,7 @@ def extract_problem_clusters_from_project(project_data: Dict) -> List[Dict]:
     return all_clusters
 
 
-def enrich_project_with_clusters(project_data: Dict) -> Dict:
+def enrich_project_with_clusters(project_data: dict) -> dict:
     """
     Enrich project data with extracted problem clusters.
 
@@ -432,7 +430,7 @@ def enrich_project_with_clusters(project_data: Dict) -> Dict:
     return enriched
 
 
-def get_projects_by_cluster(projects: List[Dict], cluster_code: str) -> List[Dict]:
+def get_projects_by_cluster(projects: list[dict], cluster_code: str) -> list[dict]:
     """
     Filter projects that contain a specific problem cluster.
 
@@ -454,7 +452,7 @@ def get_projects_by_cluster(projects: List[Dict], cluster_code: str) -> List[Dic
     return matching_projects
 
 
-def get_cluster_summary(projects: List[Dict]) -> Dict[str, int]:
+def get_cluster_summary(projects: list[dict]) -> dict[str, int]:
     """
     Get summary of problem clusters across multiple projects.
 
@@ -475,7 +473,7 @@ def get_cluster_summary(projects: List[Dict]) -> Dict[str, int]:
     return summary
 
 
-def format_cluster_for_display(cluster: Dict) -> str:
+def format_cluster_for_display(cluster: dict) -> str:
     """
     Format a problem cluster for display.
 
@@ -488,7 +486,7 @@ def format_cluster_for_display(cluster: Dict) -> str:
     return f"{cluster['code']} - {cluster['name']} ({cluster['category']})"
 
 
-def search_problem_clusters(query: str, limit: int = 3) -> List[Dict]:
+def search_problem_clusters(query: str, limit: int = 3) -> list[dict]:
     """
     Search problem clusters by partial name/code match.
 
@@ -557,7 +555,7 @@ def get_cluster_explanation(cluster_code: str) -> str:
         Definition:
         Ketidakpastian dari reservoir yang berdampak pada penentuan...
 
-        Examples:
+    Examples:
         - Fluid Contact tidak terdefinisi dengan jelas
         - sebaran reservoir properties tidak dapat ditentukan...
     """

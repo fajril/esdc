@@ -20,14 +20,9 @@ from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.stream_buffer import StreamingBuffer
-from esdc.server.thinking_parser import (
-    extract_thinking_content,
-    has_thinking_tags,
-)
-from esdc.server.thinking_state import ThinkingState
 from esdc.server.tool_formatter import (
-    create_tool_call_chunk,
     create_final_chunk,
+    create_tool_call_chunk,
 )
 
 logger = logging.getLogger("esdc.server.agent")
@@ -48,7 +43,9 @@ def convert_messages_to_langchain(messages: list) -> list:
         elif role == "assistant":
             lc_messages.append(AIMessage(content=content))
         elif role == "tool":
-            lc_messages.append(ToolMessage(content=content, tool_call_id=msg.tool_call_id or ""))
+            lc_messages.append(
+                ToolMessage(content=content, tool_call_id=msg.tool_call_id or "")
+            )
 
     return lc_messages
 
@@ -114,37 +111,6 @@ def extract_content_str(content) -> str:
         return str(content)
 
 
-def extract_thinking_for_interleaved(message: AIMessage) -> str | None:
-    """Extract thinking content from AIMessage when interleaved with tool calls.
-
-    Only extracts thinking when message has tool_calls (interleaved scenario).
-
-    Args:
-        message: AIMessage that may contain reasoning_content
-
-    Returns:
-        Thinking content if present and message has tool calls, None otherwise
-    """
-    # Only extract for interleaved scenario (tool calls present)
-    if not hasattr(message, "tool_calls") or not message.tool_calls:
-        return None
-
-    # Try reasoning_content from additional_kwargs
-    if hasattr(message, "additional_kwargs") and message.additional_kwargs:
-        reasoning = message.additional_kwargs.get("reasoning_content")
-        if reasoning:
-            return str(reasoning).strip()
-
-    # Try extracting from content with thinking tags
-    content_str = extract_content_str(message.content)
-    if has_thinking_tags(content_str):
-        thinking, _ = extract_thinking_content(content_str)
-        if thinking:
-            return thinking.strip()
-
-    return None
-
-
 async def generate_streaming_response(
     messages: list,
     model: str = "esdc-agent",
@@ -169,7 +135,18 @@ async def generate_streaming_response(
     """
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     buffer = StreamingBuffer()
-    thinking_state = ThinkingState()
+
+    # DEBUG: Counters for tracking execution paths
+    event_counter = 0
+    path_first_msg_count = 0
+    path_tool_calls_count = 0
+    path_final_content_count = 0
+
+    logger.debug("=" * 80)
+    logger.debug(
+        f"[STREAM_START] request_id={request_id}, use_native_format={use_native_format}"
+    )
+    logger.debug(f"[STREAM_START] num_messages={len(messages)}")
 
     try:
         # Create LLM and agent
@@ -202,7 +179,7 @@ async def generate_streaming_response(
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
-        # Track first message for thinking
+        # Track first message
         is_first_ai_message = True
 
         # Stream the response
@@ -210,59 +187,53 @@ async def generate_streaming_response(
             {"messages": lc_messages},
             config=RunnableConfig(configurable={"thread_id": request_id}),
         ):
+            event_counter += 1
+            logger.debug(f"[EVENT #{event_counter}] Event keys: {list(event.keys())}")
+
             ai_msg = extract_ai_message_from_event(event)
             if not ai_msg:
+                logger.debug(
+                    f"[EVENT #{event_counter}] No AIMessage extracted, skipping"
+                )
                 continue
+
+            # DEBUG: Log AIMessage details
+            msg_id = getattr(ai_msg, "id", "no-id")
+            msg_content_preview = (
+                str(ai_msg.content)[:100] if ai_msg.content else "None"
+            )
+            has_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+            tool_call_count = len(ai_msg.tool_calls) if has_tool_calls else 0
+            logger.debug(
+                f"[EVENT #{event_counter}] AIMessage: id={msg_id}, content_preview='{msg_content_preview}...', tool_calls={tool_call_count}"
+            )
 
             # Handle different message types
             if is_first_ai_message:
-                # First message might contain thinking/reasoning and/or tool calls
+                path_first_msg_count += 1
+                logger.debug(
+                    f"[PATH] First AI message block executed (count={path_first_msg_count}, is_first={is_first_ai_message})"
+                )
+                # First message might contain tool calls
                 content_str = extract_content_str(ai_msg.content)
-                should_emit_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+                should_emit_tool_calls = (
+                    hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+                )
 
-                # Always emit content FIRST if present
+                # Emit content if present
                 if content_str and content_str.strip():
-                    # Check if content has thinking tags
-                    if has_thinking_tags(content_str):
-                        thinking, final = extract_thinking_content(content_str)
-                        if thinking:
-                            # Add thinking to buffer (will be formatted with  thinking tags)
-                            should_flush = buffer.add_thinking(thinking)
-                            if should_flush:
-                                content = buffer.flush()
-                                if content:
-                                    chunk = create_openai_chunk(content=content, model=model)
-                                    yield json.dumps(chunk)
-                        if final:
-                            # Add final response
-                            should_flush = buffer.add_content(final)
-                            if should_flush:
-                                content = buffer.flush()
-                                if content:
-                                    chunk = create_openai_chunk(content=content, model=model)
-                                    yield json.dumps(chunk)
-                    else:
-                        # No thinking tags, treat as regular content
-                        should_flush = buffer.add_thinking(content_str)
-                        if should_flush:
-                            content = buffer.flush()
-                            if content:
-                                chunk = create_openai_chunk(content=content, model=model)
-                                yield json.dumps(chunk)
-
-                # If there's remaining content in buffer, flush it before tool_calls
-                if buffer.has_content():
-                    content = buffer.flush()
-                    if content:
-                        chunk = create_openai_chunk(content=content, model=model)
-                        yield json.dumps(chunk)
+                    should_flush = buffer.add_content(content_str)
+                    if should_flush:
+                        content = buffer.flush()
+                        if content:
+                            chunk = create_openai_chunk(content=content, model=model)
+                            logger.debug(
+                                f"[YIELD] First msg - content chunk: {content[:50]}..."
+                            )
+                            yield json.dumps(chunk)
 
                 # NOW emit tool_calls AFTER content is emitted
                 if should_emit_tool_calls:
-                    thinking = extract_thinking_for_interleaved(ai_msg)
-                    if thinking:
-                        thinking_state.preserve_thinking(thinking)
-
                     if use_native_format:
                         # Convert ToolCall objects to dict format
                         tool_calls_dict = [
@@ -274,15 +245,20 @@ async def generate_streaming_response(
                             for tc in ai_msg.tool_calls
                         ]
                         chunk = create_tool_call_chunk(tool_calls_dict, model)
+                        logger.debug(
+                            f"[YIELD] First msg - tool_calls chunk: {len(tool_calls_dict)} tool(s)"
+                        )
                         yield json.dumps(chunk)
 
                 is_first_ai_message = False
+                logger.debug("[STATE] is_first_ai_message set to False")
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                # Extract and preserve thinking before tool execution
-                thinking = extract_thinking_for_interleaved(ai_msg)
-                if thinking:
-                    thinking_state.preserve_thinking(thinking)
+                path_tool_calls_count += 1
+                logger.debug(
+                    f"[PATH] Elif tool_calls block executed (count={path_tool_calls_count}, "
+                    f"tool_ids={[tc.get('id', 'no-id') for tc in ai_msg.tool_calls]})"
+                )
 
                 if use_native_format:
                     # Emit native tool_calls chunk
@@ -296,6 +272,9 @@ async def generate_streaming_response(
                         for tc in ai_msg.tool_calls
                     ]
                     chunk = create_tool_call_chunk(tool_calls_dict, model)
+                    logger.debug(
+                        f"[YIELD] Elif block - tool_calls chunk: {len(tool_calls_dict)} tool(s)"
+                    )
                     yield json.dumps(chunk)
                 else:
                     # Fallback to markdown format
@@ -303,6 +282,9 @@ async def generate_streaming_response(
                         content = buffer.flush()
                         if content:
                             chunk = create_openai_chunk(content=content, model=model)
+                            logger.debug(
+                                f"[YIELD] Elif block - content chunk: {content[:50]}..."
+                            )
                             yield json.dumps(chunk)
 
                     for tool_call in ai_msg.tool_calls:
@@ -312,15 +294,14 @@ async def generate_streaming_response(
                         content = buffer.flush()
                         if content:
                             chunk = create_openai_chunk(content=content, model=model)
+                            logger.debug("[YIELD] Elif block - tool content chunk")
                             yield json.dumps(chunk)
 
             else:
-                # Check if we have preserved thinking to inject before final content
-                if thinking_state.has_thinking():
-                    preserved = thinking_state.get_thinking()
-                    if preserved:
-                        buffer.add_preserved_thinking(preserved)
-
+                path_final_content_count += 1
+                logger.debug(
+                    f"[PATH] Final content block executed (count={path_final_content_count})"
+                )
                 # Final content - accumulate in buffer
                 content_str = extract_content_str(ai_msg.content)
                 if content_str:
@@ -329,18 +310,28 @@ async def generate_streaming_response(
                         content = buffer.flush()
                         if content:
                             chunk = create_openai_chunk(content=content, model=model)
+                            logger.debug(
+                                f"[YIELD] Final content block - chunk: {content[:50]}..."
+                            )
                             yield json.dumps(chunk)
 
         # Flush any remaining content
+        logger.debug(
+            f"[SUMMARY] Events processed: {event_counter}, First msg path: {path_first_msg_count}, Tool calls path: {path_tool_calls_count}, Final content path: {path_final_content_count}"
+        )
         if buffer.has_content():
             final_content = buffer.flush_final()
             if final_content:
                 chunk = create_openai_chunk(content=final_content, model=model)
+                logger.debug(
+                    f"[YIELD] Final flush - remaining content: {len(final_content)} chars"
+                )
                 yield json.dumps(chunk)
 
         if use_native_format:
             # Send final chunk
             final_chunk = create_final_chunk(model)
+            logger.debug("[YIELD] Final [DONE] chunk")
             yield json.dumps(final_chunk)
         else:
             # Legacy markdown final chunk
@@ -349,10 +340,16 @@ async def generate_streaming_response(
                 model=model,
                 finish_reason="stop",
             )
+            logger.debug("[YIELD] Final [DONE] chunk (legacy)")
             yield json.dumps(final_chunk)
 
+        logger.debug(f"[STREAM_END] request_id={request_id}")
+
     except Exception as e:
-        logger.error(f"Error in streaming response: {e}", exc_info=True)
+        logger.error(
+            f"[{request_id}] FATAL ERROR in streaming: {type(e).__name__}: {str(e)}",
+            exc_info=True,
+        )
         error_chunk = create_openai_chunk(
             content=f"Error: {str(e)}",
             model=model,
@@ -407,14 +404,15 @@ async def generate_response(
 
         # Accumulate content menggunakan buffer
         buffer = StreamingBuffer()
-        thinking_state = ThinkingState()
         stored_tool_calls = []  # Store tool calls for native format
         is_first_ai_message = True
 
         # Run the agent
         async for event in agent.astream(
             {"messages": lc_messages},
-            config=RunnableConfig(configurable={"thread_id": f"esdc-{int(time.time())}"}),
+            config=RunnableConfig(
+                configurable={"request_id": f"esdc-{int(time.time())}"}
+            ),
         ):
             ai_msg = extract_ai_message_from_event(event)
             if not ai_msg:
@@ -424,24 +422,10 @@ async def generate_response(
             if is_first_ai_message:
                 content_str = extract_content_str(ai_msg.content)
                 if content_str and content_str.strip():
-                    # Check if content has thinking tags
-                    if has_thinking_tags(content_str):
-                        thinking, final = extract_thinking_content(content_str)
-                        if thinking:
-                            buffer.add_thinking(thinking)
-                        if final:
-                            buffer.add_content(final)
-                    else:
-                        # No thinking tags, treat as regular content
-                        buffer.add_thinking(content_str)
+                    buffer.add_content(content_str)
                 is_first_ai_message = False
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                # Extract and preserve thinking
-                thinking = extract_thinking_for_interleaved(ai_msg)
-                if thinking:
-                    thinking_state.preserve_thinking(thinking)
-
                 if not use_native_format:
                     # Only flush buffer for markdown mode
                     if buffer.has_content():
@@ -449,7 +433,11 @@ async def generate_response(
 
                 # Store tool calls for final response (convert to dict format)
                 stored_tool_calls = [
-                    {"name": tc.get("name", ""), "args": tc.get("args", {}), "id": tc.get("id", "")}
+                    {
+                        "name": tc.get("name", ""),
+                        "args": tc.get("args", {}),
+                        "id": tc.get("id", ""),
+                    }
                     for tc in ai_msg.tool_calls
                 ]
 
@@ -462,12 +450,6 @@ async def generate_response(
                         buffer.flush()  # Flush each tool immediately
 
             else:
-                # Check if we have preserved thinking to inject before final content
-                if thinking_state.has_thinking():
-                    preserved = thinking_state.get_thinking()
-                    if preserved:
-                        buffer.add_preserved_thinking(preserved)
-
                 # Final content
                 content_str = extract_content_str(ai_msg.content)
                 if content_str:
@@ -480,7 +462,9 @@ async def generate_response(
 
             final_content = buffer.flush_final()
             tool_calls_formatted = (
-                format_tool_calls_for_response(stored_tool_calls) if stored_tool_calls else None
+                format_tool_calls_for_response(stored_tool_calls)
+                if stored_tool_calls
+                else None
             )
 
             return {

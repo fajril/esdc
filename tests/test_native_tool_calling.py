@@ -1,14 +1,9 @@
 """Tests for native tool calling functionality."""
 
-import json
-import pytest
-from fastapi.testclient import TestClient
-
 from esdc.server.tool_formatter import (
     create_tool_call_chunk,
-    format_tool_calls_for_response,
     detect_native_format,
-    create_final_chunk,
+    format_tool_calls_for_response,
 )
 
 
@@ -49,8 +44,9 @@ class TestToolFormatter:
 class TestRoutes:
     def test_chat_completions_endpoint_accepts_request_obj(self):
         # Just verify the endpoint signature works
-        from esdc.server.routes import chat_completions
         import inspect
+
+        from esdc.server.routes import chat_completions
 
         sig = inspect.signature(chat_completions)
         params = list(sig.parameters.keys())

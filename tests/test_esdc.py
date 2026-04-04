@@ -1,13 +1,13 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from esdc.esdc import (
-    _read_csv,
-    esdc_url_builder,
     _load_file_as_csv,
     _load_file_as_json,
+    _read_csv,
     esdc_downloader,
+    esdc_url_builder,
 )
-from esdc.selection import TableName, FileType
+from esdc.selection import FileType, TableName
 
 
 class TestEsdcUrlBuilder:

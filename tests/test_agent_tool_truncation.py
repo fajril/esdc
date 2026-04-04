@@ -1,7 +1,5 @@
 """Tests for tool result truncation in agent.py."""
 
-import pytest
-
 
 class TestToolResultTruncation:
     """Tests for truncating large tool results."""

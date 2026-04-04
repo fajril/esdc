@@ -5,8 +5,8 @@ import pytest
 
 from esdc.dbmanager import (
     _load_sql_script,
-    run_query,
     load_data_to_db,
+    run_query,
 )
 from esdc.selection import TableName
 

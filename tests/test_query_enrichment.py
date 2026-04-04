@@ -1,6 +1,5 @@
 """Tests for SQL query enrichment functionality."""
 
-
 from esdc.chat.domain_knowledge import (
     REQUIRES_CLASSIFICATION_PREFIXES,
     enrich_sql_query,

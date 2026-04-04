@@ -1,6 +1,5 @@
 """Synonym mappings for Indonesian/English terminology."""
 
-
 SYNONYMS: dict[str, str] = {
     "cadangan": "cadangan",
     "reserves": "cadangan",

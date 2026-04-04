@@ -12,11 +12,11 @@ from textual.containers import ScrollableContainer
 from textual.widgets import Markdown
 
 from esdc.chat.app import (
-    ChatPanel,
     ChatMessage,
-    ThinkingIndicator,
-    SQLPanel,
+    ChatPanel,
     ResultsPanel,
+    SQLPanel,
+    ThinkingIndicator,
 )
 
 

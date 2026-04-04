@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from esdc.providers.base import Provider, ProviderConfig
+from esdc.providers.base import ProviderConfig
 
 
 def test_ollama_get_context_length_from_api():

@@ -1,14 +1,13 @@
 """Test logging configuration module."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-import logging
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 from esdc.server.logging_config import (
+    get_request_logger,
     parse_size,
     setup_server_logging,
-    get_request_logger,
 )
 
 

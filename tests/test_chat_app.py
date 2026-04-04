@@ -1,6 +1,6 @@
 # tests/test_chat_app.py
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 
 class TestChatMessage:

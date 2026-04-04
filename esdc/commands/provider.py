@@ -1,5 +1,6 @@
 # esdc/commands/provider.py
 import typer
+
 from esdc.configs import Config
 
 provider_app = typer.Typer(invoke_without_command=False)
@@ -76,7 +77,7 @@ def provider_set_default(name: str):
 @provider_app.command("test")
 def provider_test(name: str = ""):
     """Test provider connection. Uses default provider if name not provided."""
-    from esdc.providers import get_provider, ProviderConfig
+    from esdc.providers import ProviderConfig, get_provider
 
     if name:
         providers = Config.get_providers()
