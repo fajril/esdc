@@ -1,21 +1,17 @@
 """Tests for SQL query enrichment functionality."""
 
-import pytest
 
 from esdc.chat.domain_knowledge import (
-    CLASSIFICATION_CONTEXT_COLUMNS,
     REQUIRES_CLASSIFICATION_PREFIXES,
-    TABLE_REMARKS_COLUMNS,
     enrich_sql_query,
     extract_selected_columns,
     extract_table_from_sql,
     get_classification_context_columns,
     get_remarks_column,
-    requires_classification_columns,
     requires_classification_context,
     should_include_remarks,
 )
-from esdc.chat.domain_knowledge.functions import _build_enriched_sql, EnrichedQuery
+from esdc.chat.domain_knowledge.functions import _build_enriched_sql
 
 
 class TestExtractTableFromSql:
@@ -121,42 +117,52 @@ class TestGetRemarksColumn:
 class TestEnrichSqlQuery:
     """Tests for enrich_sql_query function."""
 
-    def test_enrich_resources_query_adds_classification(self):
-        """Test that rec_* queries get classification columns."""
-        sql = "SELECT SUM(rec_oc) FROM field_resources WHERE field_name LIKE '%Abadi%'"
+    def test_enrich_resources_query_skipped_for_aggregate_view(self):
+        """Test that enrichment is skipped for pre-aggregated views."""
+        sql = "SELECT SUM(rec_oc) FROM field_resources"
+        result = enrich_sql_query(sql)
+
+        # For aggregate views, enrichment should be skipped
+        assert result.enrichment_source == "skipped_aggregate_view"
+        assert result.added_columns == []
+        assert result.enriched_sql == sql  # Unchanged
+
+    def test_enrich_detail_table_adds_classification(self):
+        """Test that rec_* queries on detail tables get classification."""
+        sql = "SELECT SUM(rec_oc) FROM project_resources"
         result = enrich_sql_query(sql)
 
         assert "project_class" in result.enriched_sql
         assert "project_stage" in result.enriched_sql
-        assert "field_remarks" in result.enriched_sql
+        assert "project_remarks" in result.enriched_sql
 
-    def test_enrich_resources_query_adds_group_by(self):
-        """Test that rec_* queries get GROUP BY clause."""
-        sql = "SELECT SUM(rec_oc) FROM field_resources"
+    def test_enrich_detail_table_adds_group_by(self):
+        """Test that rec_* queries on detail tables get GROUP BY."""
+        sql = "SELECT SUM(rec_oc) FROM project_resources"
         result = enrich_sql_query(sql)
 
         assert "GROUP BY" in result.enriched_sql.upper()
         assert "pr.project_class" in result.enriched_sql
         assert "pr.project_stage" in result.enriched_sql
 
-    def test_enrich_reserves_query_no_classification(self):
-        """Test that res_* queries don't get classification columns."""
+    def test_enrich_reserves_on_aggregate_skipped(self):
+        """Test that res_* queries on aggregate views skip enrichment."""
         sql = "SELECT SUM(res_oc) FROM field_resources"
         result = enrich_sql_query(sql)
 
-        assert "project_class" not in result.enriched_sql
-        assert "project_stage" not in result.enriched_sql
-        assert "field_remarks" in result.enriched_sql  # But remarks still added
+        # Should skip enrichment for aggregate view
+        assert result.enrichment_source == "skipped_aggregate_view"
+        assert result.added_columns == []
 
-    def test_enrich_returns_correct_metadata(self):
-        """Test that enrichment returns correct metadata."""
-        sql = "SELECT rec_oc, rec_an FROM field_resources"
+    def test_enrich_detail_table_returns_correct_metadata(self):
+        """Test enrichment on detail table returns correct metadata."""
+        sql = "SELECT rec_oc, rec_an FROM project_resources"
         result = enrich_sql_query(sql)
 
-        assert result.table == "field_resources"
+        assert result.table == "project_resources"
         assert "project_class" in result.classification_columns
         assert "project_stage" in result.classification_columns
-        assert result.remarks_column == "field_remarks"
+        assert result.remarks_column == "project_remarks"
 
     def test_enrich_no_table_returns_unchanged(self):
         """Test that queries without table are returned unchanged."""
@@ -245,14 +251,14 @@ class TestHybridEnrichmentBehavior:
         assert result.added_columns == []
         assert result.enriched_sql == sql
 
-    def test_fallback_when_model_forgot(self):
-        """Test fallback enrichment when model forgot context."""
-        sql = "SELECT SUM(rec_oc) FROM field_resources"
+    def test_fallback_when_model_forgot_detail_table(self):
+        """Test fallback enrichment when model forgot context on detail table."""
+        sql = "SELECT SUM(rec_oc) FROM project_resources"
         result = enrich_sql_query(sql)
 
         assert result.was_already_enriched is False
         assert result.enrichment_source == "fallback"
-        assert "field_remarks" in result.added_columns
+        assert "project_remarks" in result.added_columns
         assert "project_class" in result.added_columns
 
 
@@ -289,19 +295,19 @@ class TestClassificationConstants:
 class TestIntegration:
     """Integration tests combining multiple functions."""
 
-    def test_full_enrichment_pipeline(self):
-        """Test complete enrichment pipeline for resources query."""
+    def test_full_enrichment_pipeline_detail_table(self):
+        """Test complete enrichment pipeline for detail table query."""
         original_sql = """
             SELECT SUM(rec_oc) as oil_total, SUM(rec_an) as gas_total
-            FROM field_resources
+            FROM project_resources
             WHERE field_name LIKE '%Abadi%'
-            AND report_year = (SELECT MAX(report_year) FROM field_resources)
+            AND report_year = (SELECT MAX(report_year) FROM project_resources)
         """
 
         result = enrich_sql_query(original_sql)
 
-        # Verify enrichment happened
-        assert result.table == "field_resources"
+        # For detail tables, enrichment should work
+        assert result.table == "project_resources"
         assert len(result.added_columns) > 0
 
         # Verify classification columns added
@@ -309,7 +315,7 @@ class TestIntegration:
         assert "project_stage" in result.enriched_sql
 
         # Verify remarks added
-        assert "field_remarks" in result.enriched_sql
+        assert "project_remarks" in result.enriched_sql
 
         # Verify GROUP BY added
         assert "GROUP BY" in result.enriched_sql.upper()
@@ -318,12 +324,13 @@ class TestIntegration:
         assert "field_name LIKE '%Abadi%'" in result.enriched_sql
         assert "MAX(report_year)" in result.enriched_sql
 
-    def test_enrichment_for_work_area_query(self):
-        """Test enrichment for work area resources query."""
+    def test_skipped_enrichment_for_aggregate_view(self):
+        """Test enrichment skipped for pre-aggregated view."""
         sql = "SELECT SUM(rec_oc) FROM wa_resources WHERE wk_name = 'Masela'"
         result = enrich_sql_query(sql)
 
+        # For aggregate views, enrichment should be skipped
         assert result.table == "wa_resources"
-        assert "project_class" in result.enriched_sql
-        assert "project_stage" in result.enriched_sql
-        assert "wa_remarks" in result.enriched_sql
+        assert result.enrichment_source == "skipped_aggregate_view"
+        assert result.added_columns == []
+        assert result.enriched_sql == sql  # Unchanged

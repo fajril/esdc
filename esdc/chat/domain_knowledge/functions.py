@@ -212,6 +212,8 @@ def enrich_sql_query(
     from .tables import (
         get_classification_context_columns,
         get_remarks_column,
+        is_aggregate_view,
+        is_detail_table,
     )
 
     # Check if model already enriched the query
@@ -234,7 +236,21 @@ def enrich_sql_query(
 
     # Auto-detect table if not provided
     if table is None:
-        table = extract_table_from_sql(sql)
+        table = extract_table_from_sql(sql) or ""
+
+    # SKIP enrichment for aggregate views (data already pre-aggregated)
+    if is_aggregate_view(table):
+        return EnrichedQuery(
+            original_sql=sql,
+            enriched_sql=sql,
+            added_columns=[],
+            group_by_columns=[],
+            remarks_column=None,
+            classification_columns=[],
+            table=table,
+            was_already_enriched=False,
+            enrichment_source="skipped_aggregate_view",
+        )
 
     if not table:
         # Cannot enrich without table information
@@ -248,6 +264,20 @@ def enrich_sql_query(
             table="",
             was_already_enriched=False,
             enrichment_source="none",
+        )
+
+    # SKIP enrichment for non-detail tables
+    if not is_detail_table(table):
+        return EnrichedQuery(
+            original_sql=sql,
+            enriched_sql=sql,
+            added_columns=[],
+            group_by_columns=[],
+            remarks_column=None,
+            classification_columns=[],
+            table=table,
+            was_already_enriched=False,
+            enrichment_source="skipped_non_detail",
         )
 
     # Extract selected columns
