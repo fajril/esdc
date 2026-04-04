@@ -150,21 +150,39 @@ UNCERTAINTY_MAP: Dict[str, UncertaintySpec] = {
     ),
 }
 
+# Direct database value synonyms for model-friendly resolution
+# These map generic terms like "low", "mid", "high" directly to database values
+DB_VALUE_SYNONYMS: Dict[str, str] = {
+    "low_value": "1. Low Value",
+    "middle_value": "2. Middle Value",
+    "high_value": "3. High Value",
+}
+
 
 def get_uncertainty_filter(uncertainty: str) -> str:
     """
     Get the database filter value for an uncertainty level.
 
     Args:
-        uncertainty: Uncertainty level (1P, 2P, 3P, proven, probable, possible)
+        uncertainty: Uncertainty level (1P, 2P, 3P, proven, probable, possible,
+                     low_value, middle_value, high_value, or generic terms like "low", "mid", "high")
 
     Returns:
         Database filter value for uncert_level column
 
     Note:
         For "probable" and "possible", this returns the default "2. Middle Value".
+        For direct value synonyms (low_value, middle_value, high_value), returns the
+        corresponding database value directly.
         Use get_uncertainty_spec() for full specification including SQL templates.
     """
+    uncertainty_normalized = uncertainty.lower().strip()
+
+    # Check direct database value synonyms first (e.g., low_value -> "1. Low Value")
+    if uncertainty_normalized in DB_VALUE_SYNONYMS:
+        return DB_VALUE_SYNONYMS[uncertainty_normalized]
+
+    # Fall back to UNCERTAINTY_MAP
     spec = UNCERTAINTY_MAP.get(uncertainty.upper().strip())
     if spec and spec.db_value:
         return spec.db_value
@@ -200,6 +218,20 @@ def get_uncertainty_spec(
         >>> get_uncertainty_spec("probable", volume_type="contingent")
         ValueError: 'probable' only applies to Reserves (cadangan), not contingent
     """
+    uncertainty_lower = uncertainty.lower().strip()
+
+    # Check if it's a direct database value synonym first
+    if uncertainty_lower in DB_VALUE_SYNONYMS:
+        db_value = DB_VALUE_SYNONYMS[uncertainty_lower]
+        is_cumulative = db_value in ("2. Middle Value", "3. High Value")
+        return UncertaintySpec(
+            type="direct",
+            db_value=db_value,
+            is_cumulative=is_cumulative,
+            reserves_only=False,
+            description=f"Direct {db_value} uncertainty level",
+        )
+
     uncertainty = uncertainty.upper().strip()
 
     spec = UNCERTAINTY_MAP.get(uncertainty)

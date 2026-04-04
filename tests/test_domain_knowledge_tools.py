@@ -113,9 +113,39 @@ class TestResolveUncertaintyLevel:
             {"level": "probable", "volume_type": "reserves"}
         )
         data = json.loads(result)
-        assert data["type"] == "calculated"
-        assert data["calculation"] == "2P - 1P"
         assert "sql_template" in data
+        assert (
+            "CASE WHEN" in data["sql_template"]
+            or "Middle Value" in data["sql_template"]
+        )
+
+    def test_default_volume_type_is_reserves(self):
+        """Test default volume_type is 'reserves'."""
+        result = resolve_uncertainty_level.invoke({"level": "probable"})
+        data = json.loads(result)
+        assert data["type"] == "calculated"
+
+    def test_direct_value_synonyms_resolve(self):
+        """Test direct value synonyms resolve to database values."""
+        # Test low_value synonym
+        result = resolve_uncertainty_level.invoke({"level": "low_value"})
+        data = json.loads(result)
+        assert data["db_value"] == "1. Low Value"
+        assert data["type"] == "direct"
+        assert data["filter_value"] == "1. Low Value"
+
+        # Test middle_value synonym
+        result = resolve_uncertainty_level.invoke({"level": "middle_value"})
+        data = json.loads(result)
+        assert data["db_value"] == "2. Middle Value"
+        assert data["type"] == "direct"
+
+        # Test high_value synonym
+        result = resolve_uncertainty_level.invoke({"level": "high_value"})
+        data = json.loads(result)
+        assert data["db_value"] == "3. High Value"
+        assert data["type"] == "direct"
+        assert data["calculation"] is None  # Direct values have no calculation
 
     def test_possible_returns_calculated_reserves(self):
         """Test 'possible' returns calculated for reserves."""

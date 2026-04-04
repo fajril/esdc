@@ -44,6 +44,7 @@ from .synonyms import SYNONYMS
 from .uncertainty import (
     UncertaintySpec,
     UNCERTAINTY_MAP,
+    DB_VALUE_SYNONYMS,
     get_uncertainty_filter,
     get_uncertainty_spec,
     build_uncertainty_sql,
@@ -133,6 +134,7 @@ __all__ = [
     # Uncertainty
     "UncertaintySpec",
     "UNCERTAINTY_MAP",
+    "DB_VALUE_SYNONYMS",
     "get_uncertainty_filter",
     "get_uncertainty_spec",
     "build_uncertainty_sql",
