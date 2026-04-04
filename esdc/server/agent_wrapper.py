@@ -23,6 +23,7 @@ from esdc.server.stream_buffer import StreamingBuffer
 from esdc.server.tool_formatter import (
     create_final_chunk,
     create_tool_call_chunk,
+    create_tool_result_chunk,
 )
 
 logger = logging.getLogger("esdc.server.agent")
