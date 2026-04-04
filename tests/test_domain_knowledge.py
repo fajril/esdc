@@ -1,30 +1,31 @@
 """Tests for domain_knowledge module."""
 
 import pytest
+
 from esdc.chat.domain_knowledge import (
+    AGGREGATION_LEVELS,
+    COLUMN_METADATA,
     DOMAIN_CONCEPTS,
     SYNONYMS,
-    COLUMN_METADATA,
+    TABLE_HIERARCHY,
     UNCERTAINTY_MAP,
     UncertaintySpec,
-    TABLE_HIERARCHY,
-    AGGREGATION_LEVELS,
-    resolve_concept,
+    build_aggregate_query,
+    build_sql_pattern,
+    build_uncertainty_sql,
+    can_use_view_for_calculation,
+    format_response_value,
+    get_aggregation_table_info,
+    get_column_group,
+    get_columns_for_substance,
+    get_entity_filter_column,
+    get_project_class_filter,
+    get_recommended_table,
+    get_table_for_query,
     get_uncertainty_filter,
     get_uncertainty_spec,
-    build_uncertainty_sql,
-    get_project_class_filter,
     get_volume_columns,
-    get_columns_for_substance,
-    get_column_group,
-    format_response_value,
-    build_sql_pattern,
-    get_table_for_query,
-    can_use_view_for_calculation,
-    get_entity_filter_column,
-    build_aggregate_query,
-    get_aggregation_table_info,
-    get_recommended_table,
+    resolve_concept,
 )
 
 
@@ -361,10 +362,13 @@ class TestDBValueSynonyms:
     def test_synonyms_not_reserves_only(self):
         """Test that direct value synonyms are not reserves_only."""
         spec = get_uncertainty_spec("low_value")
+        assert spec is not None
         assert spec.reserves_only is False
         spec = get_uncertainty_spec("middle_value")
+        assert spec is not None
         assert spec.reserves_only is False
         spec = get_uncertainty_spec("high_value")
+        assert spec is not None
         assert spec.reserves_only is False
 
 
