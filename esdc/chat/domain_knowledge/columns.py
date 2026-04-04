@@ -324,7 +324,10 @@ COLUMN_METADATA: Dict[str, ColumnMetadata] = {
         "classification",
     ),
     "uncert_level": ColumnMetadata(
-        "uncert_level", "Uncertainty level (Low, Middle, High)", None, "classification"
+        "uncert_level",
+        "Uncertainty level (1. Low Value, 2. Middle Value, 3. High Value)",
+        None,
+        "classification",
     ),
     "project_level": ColumnMetadata(
         "project_level", "Project maturity level", None, "classification"

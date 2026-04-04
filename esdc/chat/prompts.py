@@ -203,7 +203,7 @@ Default to MID uncertainty based on project classification:
 | Prospective Resources | Mid | 2U | rec_oil, rec_con, rec_ga, rec_gn |
 | In-Place Volumes | Mid | P50 | prj_ioip, prj_igip |
 
-SQL filter for uncertainty: `uncert_level = 'Mid'`
+SQL filter for uncertainty: `uncert_level = '2. Middle Value'`
 
 ### When User Asks About Multiple Project Classes
 If user asks about "all resources" or spans multiple classes without specifying:
@@ -218,17 +218,17 @@ When applying defaults, inform the user:
 
 | User Query | Interpretation | SQL Filters |
 |------------|----------------|--------------|
-| "Oil reserves" | Latest year + 2P | `report_year = (SELECT MAX(report_year) FROM field_resources) AND project_class LIKE '%Reserv%' AND uncert_level = 'Mid'` |
-| "Gas in place" | Latest year + P50 | `report_year = (SELECT MAX(report_year) FROM field_resources) AND uncert_level = 'Mid'` (use prj_igip) |
-| "Contingent oil" | Latest year + 2C | `report_year = (SELECT MAX(report_year) FROM field_resources) AND project_class = 'Contingent Resources' AND uncert_level = 'Mid'` |
-| "Prospective resources 2022" | Year 2022 + 2U | `report_year = 2022 AND project_class = 'Prospective Resources' AND uncert_level = 'Mid'` |
+| "Oil reserves" | Latest year + 2P | `report_year = (SELECT MAX(report_year) FROM field_resources) AND project_class LIKE '%Reserv%' AND uncert_level = '2. Middle Value'` |
+| "Gas in place" | Latest year + P50 | `report_year = (SELECT MAX(report_year) FROM field_resources) AND uncert_level = '2. Middle Value'` (use prj_igip) |
+| "Contingent oil" | Latest year + 2C | `report_year = (SELECT MAX(report_year) FROM field_resources) AND project_class = 'Contingent Resources' AND uncert_level = '2. Middle Value'` |
+| "Prospective resources 2022" | Year 2022 + 2U | `report_year = 2022 AND project_class = 'Prospective Resources' AND uncert_level = '2. Middle Value'` |
 | "2P reserves by operator" | Latest year + 2P | Use specified uncertainty (2P) |
 | "Reserves trend 2020-2024" | Use project_timeseries | Use year range filter in timeseries table |
 
 ## Important Notes
 
 - Project Maturity Level (project_level: E0-E8, X0-X6, A1-A2) is DIFFERENT from uncertainty level (1P/2P/3P, 1C/2C/3C, 1U/2U/3U)
-- Uncertainty level is stored in `uncert_level` column with values 'Low', 'Mid', 'High'
+- Uncertainty level is stored in `uncert_level` column with values '1. Low Value', '2. Middle Value', '3. High Value'
 - If user specifies year but not uncertainty → apply mid default
 - If user specifies uncertainty but not year → use latest year
 - Never combine data from different report years
@@ -341,7 +341,7 @@ SELECT SUM(res_oc), SUM(res_an)
 FROM field_resources
 WHERE field_name LIKE '%<FIELD_NAME>%'
   AND report_year = (SELECT MAX(report_year) FROM field_resources)
-  AND uncert_level = 'Mid'
+  AND uncert_level = '2. Middle Value'
 ```
 
 **Work Area Resources Query:**
@@ -350,7 +350,7 @@ SELECT SUM(rec_oc), SUM(rec_an)
 FROM wa_resources
 WHERE wk_name LIKE '%<WORK_AREA>%'
   AND report_year = (SELECT MAX(report_year) FROM wa_resources)
-  AND uncert_level = 'Mid'
+  AND uncert_level = '2. Middle Value'
   AND project_class = '2. Contingent Resources'
 ```
 
