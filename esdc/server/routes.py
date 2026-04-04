@@ -18,8 +18,11 @@ from esdc.server.models import (
     ModelInfo,
     ModelList,
 )
-
-# Local
+from esdc.server.responses_models import ResponsesRequest
+from esdc.server.responses_wrapper import (
+    generate_responses_stream,
+    generate_responses_sync,
+)
 from esdc.server.tool_formatter import should_use_native_format
 
 router = APIRouter()
@@ -100,8 +103,9 @@ async def chat_completions(
                     )
 
                 except Exception as e:
+                    error_msg = f"{type(e).__name__}: {str(e)}"
                     logger.exception(
-                        f"[REQUEST {request_id}] ERROR during streaming: {type(e).__name__}: {str(e)}"
+                        f"[REQUEST {request_id}] ERROR during streaming: {error_msg}"
                     )
                     # Send error as final chunk
                     error_chunk = {
@@ -182,17 +186,114 @@ async def chat_completions(
                     )
 
             except Exception as e:
+                error_msg = f"{type(e).__name__}: {str(e)}"
                 logger.exception(
-                    f"[REQUEST {request_id}] ERROR in non-streaming: {type(e).__name__}: {str(e)}"
+                    f"[REQUEST {request_id}] ERROR in non-streaming: {error_msg}"
                 )
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(
-            f"[REQUEST {request_id}] FATAL ERROR: {type(e).__name__}: {str(e)}"
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        logger.exception(f"[REQUEST {request_id}] FATAL ERROR: {error_msg}")
+        raise HTTPException(status_code=500, detail=str(e)) from None
     finally:
         logger.info(f"[REQUEST {request_id}] END")
+
+
+@router.post("/responses", response_model=None)
+async def create_response(
+    request: ResponsesRequest,
+    request_obj: Request,
+):
+    """Create response using Open Responses API format.
+
+    Handles both streaming and non-streaming responses.
+    Stateless mode only (no previous_response_id support).
+
+    Args:
+        request: Responses API request
+        request_obj: FastAPI request object
+
+    Returns:
+        StreamingResponse for streaming requests, Response object otherwise
+    """
+    request_id = f"resp_{uuid.uuid4().hex[:24]}"
+
+    # Log request details
+    input_type = (
+        "string" if isinstance(request.input, str) else f"list({len(request.input)})"
+    )
+    logger.info(
+        f"[RESPONSES {request_id}] START - stream={request.stream}, "
+        f"input={input_type}, model={request.model}"
+    )
+
+    try:
+        if request.stream:
+            # Return streaming response
+            async def generate_stream() -> AsyncGenerator[str, None]:
+                """Generate SSE stream for Responses API."""
+                logger.debug(f"[RESPONSES {request_id}] Starting streaming response")
+                try:
+                    async for event in generate_responses_stream(
+                        input_messages=request.input,
+                        model=request.model,
+                        instructions=request.instructions,
+                        tools=request.tools,
+                        temperature=request.temperature or 0.7,
+                    ):
+                        yield event
+
+                    # Send final [DONE] marker
+                    yield "data: [DONE]\n\n"
+                    logger.info(
+                        f"[RESPONSES {request_id}] Streaming completed successfully"
+                    )
+
+                except Exception as e:
+                    error_msg = f"{type(e).__name__}: {str(e)}"
+                    logger.exception(
+                        f"[RESPONSES {request_id}] ERROR during streaming: {error_msg}"
+                    )
+                    # Error events are already formatted in the stream
+                    yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                generate_stream(),
+                media_type="text/event-stream",
+            )
+
+        else:
+            # Return non-streaming response
+            logger.debug(f"[RESPONSES {request_id}] Processing non-streaming response")
+            try:
+                result = await generate_responses_sync(
+                    input_messages=request.input,
+                    model=request.model,
+                    instructions=request.instructions,
+                    tools=request.tools,
+                    temperature=request.temperature or 0.7,
+                )
+
+                logger.info(
+                    f"[RESPONSES {request_id}] Non-streaming response completed"
+                )
+                return result
+
+            except Exception as e:
+                error_msg = f"{type(e).__name__}: {str(e)}"
+                logger.exception(
+                    f"[RESPONSES {request_id}] ERROR in non-streaming: {error_msg}"
+                )
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        logger.exception(f"[RESPONSES {request_id}] FATAL ERROR: {error_msg}")
+        raise HTTPException(status_code=500, detail=str(e)) from None
+    finally:
+        logger.info(f"[RESPONSES {request_id}] END")
