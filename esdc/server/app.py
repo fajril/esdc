@@ -1,14 +1,16 @@
 # Standard library
 import logging
 
+import uvicorn
+
 # Third-party
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import uvicorn
 
 # Local
 from esdc.configs import Config
+from esdc.server.logging_config import setup_server_logging
 from esdc.server.routes import router
 
 # Logger
@@ -43,11 +45,24 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request, exc):
-        """Handle generic exceptions."""
-        logger.error(f"Unhandled exception: {exc}")
+        """Handle generic exceptions with full context."""
+        import traceback
+
+        error_msg = f"Unhandled exception: {type(exc).__name__}: {str(exc)}"
+        stack_trace = traceback.format_exc()
+
+        logger.error(f"[EXCEPTION] {error_msg}")
+        logger.error(f"[STACK TRACE]\n{stack_trace}")
+
         return JSONResponse(
             status_code=500,
-            content={"error": {"message": str(exc), "type": "internal_error"}},
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": type(exc).__name__,
+                    "detail": "Check server logs for full traceback",
+                }
+            },
         )
 
     return app
@@ -66,14 +81,28 @@ def run_server(
     # Initialize configuration
     Config.init_config()
 
+    # Setup proper logging configuration
+    setup_server_logging(
+        {
+            "level": "DEBUG",
+            "server": {
+                "level": "DEBUG",
+                "file": {
+                    "enabled": True,
+                    "path": "logs/esdc_server.log",
+                    "max_size": "10MB",
+                    "backup_count": 5,
+                },
+                "console": {
+                    "enabled": True,
+                    "level": "DEBUG",
+                },
+            },
+        }
+    )
+
     # Create FastAPI app
     app = create_app()
-
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    )
 
     logger.info(f"Starting ESDC server on http://{host}:{port}")
     logger.info(f"API documentation available at http://{host}:{port}/docs")

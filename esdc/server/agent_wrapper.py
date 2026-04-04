@@ -26,8 +26,8 @@ from esdc.server.thinking_parser import (
 )
 from esdc.server.thinking_state import ThinkingState
 from esdc.server.tool_formatter import (
-    create_tool_call_chunk,
     create_final_chunk,
+    create_tool_call_chunk,
 )
 
 logger = logging.getLogger("esdc.server.agent")
@@ -48,7 +48,9 @@ def convert_messages_to_langchain(messages: list) -> list:
         elif role == "assistant":
             lc_messages.append(AIMessage(content=content))
         elif role == "tool":
-            lc_messages.append(ToolMessage(content=content, tool_call_id=msg.tool_call_id or ""))
+            lc_messages.append(
+                ToolMessage(content=content, tool_call_id=msg.tool_call_id or "")
+            )
 
     return lc_messages
 
@@ -171,6 +173,18 @@ async def generate_streaming_response(
     buffer = StreamingBuffer()
     thinking_state = ThinkingState()
 
+    # DEBUG: Counters for tracking execution paths
+    event_counter = 0
+    path_first_msg_count = 0
+    path_tool_calls_count = 0
+    path_final_content_count = 0
+
+    logger.debug("=" * 80)
+    logger.debug(
+        f"[STREAM_START] request_id={request_id}, use_native_format={use_native_format}"
+    )
+    logger.debug(f"[STREAM_START] num_messages={len(messages)}")
+
     try:
         # Create LLM and agent
         provider_config = Config.get_provider_config()
@@ -210,15 +224,38 @@ async def generate_streaming_response(
             {"messages": lc_messages},
             config=RunnableConfig(configurable={"thread_id": request_id}),
         ):
+            event_counter += 1
+            logger.debug(f"[EVENT #{event_counter}] Event keys: {list(event.keys())}")
+
             ai_msg = extract_ai_message_from_event(event)
             if not ai_msg:
+                logger.debug(
+                    f"[EVENT #{event_counter}] No AIMessage extracted, skipping"
+                )
                 continue
+
+            # DEBUG: Log AIMessage details
+            msg_id = getattr(ai_msg, "id", "no-id")
+            msg_content_preview = (
+                str(ai_msg.content)[:100] if ai_msg.content else "None"
+            )
+            has_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+            tool_call_count = len(ai_msg.tool_calls) if has_tool_calls else 0
+            logger.debug(
+                f"[EVENT #{event_counter}] AIMessage: id={msg_id}, content_preview='{msg_content_preview}...', tool_calls={tool_call_count}"
+            )
 
             # Handle different message types
             if is_first_ai_message:
+                path_first_msg_count += 1
+                logger.debug(
+                    f"[PATH] First AI message block executed (count={path_first_msg_count}, is_first={is_first_ai_message})"
+                )
                 # First message might contain thinking/reasoning and/or tool calls
                 content_str = extract_content_str(ai_msg.content)
-                should_emit_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+                should_emit_tool_calls = (
+                    hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
+                )
 
                 # Always emit content FIRST if present
                 if content_str and content_str.strip():
@@ -231,7 +268,9 @@ async def generate_streaming_response(
                             if should_flush:
                                 content = buffer.flush()
                                 if content:
-                                    chunk = create_openai_chunk(content=content, model=model)
+                                    chunk = create_openai_chunk(
+                                        content=content, model=model
+                                    )
                                     yield json.dumps(chunk)
                         if final:
                             # Add final response
@@ -239,7 +278,9 @@ async def generate_streaming_response(
                             if should_flush:
                                 content = buffer.flush()
                                 if content:
-                                    chunk = create_openai_chunk(content=content, model=model)
+                                    chunk = create_openai_chunk(
+                                        content=content, model=model
+                                    )
                                     yield json.dumps(chunk)
                     else:
                         # No thinking tags, treat as regular content
@@ -247,7 +288,9 @@ async def generate_streaming_response(
                         if should_flush:
                             content = buffer.flush()
                             if content:
-                                chunk = create_openai_chunk(content=content, model=model)
+                                chunk = create_openai_chunk(
+                                    content=content, model=model
+                                )
                                 yield json.dumps(chunk)
 
                 # If there's remaining content in buffer, flush it before tool_calls
@@ -255,6 +298,9 @@ async def generate_streaming_response(
                     content = buffer.flush()
                     if content:
                         chunk = create_openai_chunk(content=content, model=model)
+                        logger.debug(
+                            f"[YIELD] First msg - content chunk: {content[:50]}..."
+                        )
                         yield json.dumps(chunk)
 
                 # NOW emit tool_calls AFTER content is emitted
@@ -262,6 +308,9 @@ async def generate_streaming_response(
                     thinking = extract_thinking_for_interleaved(ai_msg)
                     if thinking:
                         thinking_state.preserve_thinking(thinking)
+                        logger.debug(
+                            f"[THINKING] Preserved thinking for interleaved: {thinking[:50]}..."
+                        )
 
                     if use_native_format:
                         # Convert ToolCall objects to dict format
@@ -274,11 +323,20 @@ async def generate_streaming_response(
                             for tc in ai_msg.tool_calls
                         ]
                         chunk = create_tool_call_chunk(tool_calls_dict, model)
+                        logger.debug(
+                            f"[YIELD] First msg - tool_calls chunk: {len(tool_calls_dict)} tool(s)"
+                        )
                         yield json.dumps(chunk)
 
                 is_first_ai_message = False
+                logger.debug("[STATE] is_first_ai_message set to False")
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+                path_tool_calls_count += 1
+                logger.debug(
+                    f"[PATH] Elif tool_calls block executed (count={path_tool_calls_count}, "
+                    f"tool_ids={[tc.get('id', 'no-id') for tc in ai_msg.tool_calls]})"
+                )
                 # Extract and preserve thinking before tool execution
                 thinking = extract_thinking_for_interleaved(ai_msg)
                 if thinking:
@@ -296,6 +354,9 @@ async def generate_streaming_response(
                         for tc in ai_msg.tool_calls
                     ]
                     chunk = create_tool_call_chunk(tool_calls_dict, model)
+                    logger.debug(
+                        f"[YIELD] Elif block - tool_calls chunk: {len(tool_calls_dict)} tool(s)"
+                    )
                     yield json.dumps(chunk)
                 else:
                     # Fallback to markdown format
@@ -303,6 +364,9 @@ async def generate_streaming_response(
                         content = buffer.flush()
                         if content:
                             chunk = create_openai_chunk(content=content, model=model)
+                            logger.debug(
+                                f"[YIELD] Elif block - content chunk: {content[:50]}..."
+                            )
                             yield json.dumps(chunk)
 
                     for tool_call in ai_msg.tool_calls:
@@ -312,9 +376,14 @@ async def generate_streaming_response(
                         content = buffer.flush()
                         if content:
                             chunk = create_openai_chunk(content=content, model=model)
+                            logger.debug("[YIELD] Elif block - tool content chunk")
                             yield json.dumps(chunk)
 
             else:
+                path_final_content_count += 1
+                logger.debug(
+                    f"[PATH] Final content block executed (count={path_final_content_count})"
+                )
                 # Check if we have preserved thinking to inject before final content
                 if thinking_state.has_thinking():
                     preserved = thinking_state.get_thinking()
@@ -329,18 +398,28 @@ async def generate_streaming_response(
                         content = buffer.flush()
                         if content:
                             chunk = create_openai_chunk(content=content, model=model)
+                            logger.debug(
+                                f"[YIELD] Final content block - chunk: {content[:50]}..."
+                            )
                             yield json.dumps(chunk)
 
         # Flush any remaining content
+        logger.debug(
+            f"[SUMMARY] Events processed: {event_counter}, First msg path: {path_first_msg_count}, Tool calls path: {path_tool_calls_count}, Final content path: {path_final_content_count}"
+        )
         if buffer.has_content():
             final_content = buffer.flush_final()
             if final_content:
                 chunk = create_openai_chunk(content=final_content, model=model)
+                logger.debug(
+                    f"[YIELD] Final flush - remaining content: {len(final_content)} chars"
+                )
                 yield json.dumps(chunk)
 
         if use_native_format:
             # Send final chunk
             final_chunk = create_final_chunk(model)
+            logger.debug("[YIELD] Final [DONE] chunk")
             yield json.dumps(final_chunk)
         else:
             # Legacy markdown final chunk
@@ -349,10 +428,16 @@ async def generate_streaming_response(
                 model=model,
                 finish_reason="stop",
             )
+            logger.debug("[YIELD] Final [DONE] chunk (legacy)")
             yield json.dumps(final_chunk)
 
+        logger.debug(f"[STREAM_END] request_id={request_id}")
+
     except Exception as e:
-        logger.error(f"Error in streaming response: {e}", exc_info=True)
+        logger.error(
+            f"[{request_id}] FATAL ERROR in streaming: {type(e).__name__}: {str(e)}",
+            exc_info=True,
+        )
         error_chunk = create_openai_chunk(
             content=f"Error: {str(e)}",
             model=model,
@@ -414,7 +499,9 @@ async def generate_response(
         # Run the agent
         async for event in agent.astream(
             {"messages": lc_messages},
-            config=RunnableConfig(configurable={"thread_id": f"esdc-{int(time.time())}"}),
+            config=RunnableConfig(
+                configurable={"thread_id": f"esdc-{int(time.time())}"}
+            ),
         ):
             ai_msg = extract_ai_message_from_event(event)
             if not ai_msg:
@@ -449,7 +536,11 @@ async def generate_response(
 
                 # Store tool calls for final response (convert to dict format)
                 stored_tool_calls = [
-                    {"name": tc.get("name", ""), "args": tc.get("args", {}), "id": tc.get("id", "")}
+                    {
+                        "name": tc.get("name", ""),
+                        "args": tc.get("args", {}),
+                        "id": tc.get("id", ""),
+                    }
                     for tc in ai_msg.tool_calls
                 ]
 
@@ -480,7 +571,9 @@ async def generate_response(
 
             final_content = buffer.flush_final()
             tool_calls_formatted = (
-                format_tool_calls_for_response(stored_tool_calls) if stored_tool_calls else None
+                format_tool_calls_for_response(stored_tool_calls)
+                if stored_tool_calls
+                else None
             )
 
             return {

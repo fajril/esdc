@@ -95,6 +95,9 @@ def setup_server_logging(config: dict[str, Any]) -> logging.Logger:
     logging.getLogger("markdown_it").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+    # Set agent logger to DEBUG for detailed streaming logs
+    logging.getLogger("esdc.server.agent").setLevel(logging.DEBUG)
+
     logger.info("ESDC Server logging initialized")
 
     return logger
