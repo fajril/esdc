@@ -45,13 +45,14 @@ class SequenceCounter:
 
 
 def convert_responses_input_to_langchain(
-    input_data: str | list[ResponseInputItem],
+    input_data: str | list[Any],
     instructions: str | None = None,
 ) -> list[Any]:
     """Convert Responses API input to LangChain messages.
 
     Args:
-        input_data: Either a string (single user message) or list of input items
+        input_data: Either a string (single user message) or list of input items.
+            Items can be ResponseInputItem Pydantic models or plain dicts.
         instructions: Optional system message / instructions
 
     Returns:
@@ -69,27 +70,67 @@ def convert_responses_input_to_langchain(
         return messages
 
     # Handle list of input items
-    for item in input_data:
-        if item.type == "message":
-            # Handle message item
-            role = item.role
-            content = item.content
+    for idx, item in enumerate(input_data):
+        # Handle dict items (from JSON/API)
+        if isinstance(item, dict):
+            item_type = item.get("type")
+            role = item.get("role")
+            content = item.get("content")
+            call_id = item.get("call_id")
+            output = item.get("output")
+        else:
+            # Handle Pydantic model items
+            item_type = getattr(item, "type", None)
+            role = getattr(item, "role", None)
+            content = getattr(item, "content", None)
+            call_id = getattr(item, "call_id", None)
+            output = getattr(item, "output", None)
 
+        if item_type == "message":
+            # Handle message item
             # Extract text content
+            text = ""
             if isinstance(content, str):
                 text = content
+                logger.debug(
+                    f"[convert_responses_input] Item {idx}: str, len={len(text)}"
+                )
             elif isinstance(content, list):
-                # List of content parts
+                # List of content parts - can include strings, dicts, or Pydantic
+                logger.debug(
+                    f"[convert_responses_input] Item {idx}: list, len={len(content)}"
+                )
                 texts = []
+
                 for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "input_text":
+                    # Handle string parts
+                    if isinstance(part, str):
+                        texts.append(part)
+                    # Handle dict parts
+                    elif isinstance(part, dict):
+                        ptype = part.get("type", "")
+                        if ptype in ("input_text", "text", "output_text"):
                             texts.append(part.get("text", ""))
+                        else:
+                            texts.append(part.get("text", ""))
+                    # Handle Pydantic model objects or objects with .text
                     elif hasattr(part, "text"):
-                        texts.append(part.text)
+                        texts.append(str(part.text))
+                    # Unknown type - convert to string as fallback
+                    else:
+                        texts.append(str(part) if part else "")
+
                 text = "\n".join(texts)
+                logger.debug(
+                    f"[convert_responses_input] Item {idx}: combined len={len(text)}"
+                )
             else:
+                # Unknown content type - convert to string
                 text = str(content) if content else ""
+                logger.warning(
+                    f"[convert_responses_input] Item {idx}: unknown content type "
+                    f"{type(content).__name__}"
+                )
 
             if role == "user":
                 messages.append(HumanMessage(content=text))
@@ -98,19 +139,54 @@ def convert_responses_input_to_langchain(
             elif role == "system":
                 messages.append(SystemMessage(content=text))
 
-        elif item.type == "function_call_output":
+        elif item_type == "function_call":
+            # Function call from previous assistant turn
+            # This is part of conversation history but LangGraph doesn't need it
+            # Just log and skip
+            logger.debug(
+                f"[convert_responses_input] Item {idx}: function_call, skipping"
+            )
+
+        elif item_type == "function_call_output":
             # Tool result from client (for multi-turn conversations)
-            # This would be used in stateful mode, but we include it for completeness
             # LangGraph expects this as a ToolMessage
+            # Output can be either a string or array of content parts (OpenWebUI format)
             from langchain_core.messages import ToolMessage
+
+            output_content = ""
+            if isinstance(output, str):
+                output_content = output
+            elif isinstance(output, list):
+                # Extract text from content parts array
+                text_parts = []
+                for part in output:
+                    if isinstance(part, dict):
+                        ptype = part.get("type")
+                        if ptype in ("input_text", "output_text", "text"):
+                            text_parts.append(part.get("text", ""))
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                output_content = "\n".join(text_parts) if text_parts else str(output)
+
+            output_len = len(output_content) if output_content else 0
+            logger.debug(
+                f"[convert_responses_input] Item {idx}: function_call_output, "
+                f"call_id={call_id}, output_len={output_len}"
+            )
 
             messages.append(
                 ToolMessage(
-                    content=item.output or "",
-                    tool_call_id=item.call_id or "",
+                    content=output_content,
+                    tool_call_id=call_id or "",
                 )
             )
 
+        else:
+            logger.warning(
+                f"[convert_responses_input] Item {idx}: unknown type={item_type}"
+            )
+
+    logger.debug(f"[convert_responses_input] Created {len(messages)} messages")
     return messages
 
 
@@ -170,15 +246,41 @@ def extract_tool_messages_from_event(event: dict) -> list[dict[str, Any]]:
 
 
 def extract_content_str(content) -> str:
-    """Extract string content from AIMessage content (handles str, list, dict)."""
+    """Extract string content from AIMessage content (handles str, list, dict).
+
+    Supports various content formats:
+    - str: Direct string content
+    - list: List of content parts (strings, dicts, or objects)
+    - dict: Dictionary content (JSON formatted)
+    """
     if content is None:
         return ""
+
+    if isinstance(content, str):
+        return content
+
     if isinstance(content, list):
-        return str(content[0]) if content else ""
-    elif isinstance(content, dict):
+        # Handle list of content parts
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                # Handle dict with 'text' or 'content' fields
+                text = part.get("text") or part.get("content") or ""
+                parts.append(str(text))
+            elif hasattr(part, "text"):
+                # Handle objects with .text attribute
+                parts.append(str(part.text))
+            else:
+                # Fallback to string conversion
+                parts.append(str(part) if part else "")
+        return " ".join(parts) if parts else ""
+
+    if isinstance(content, dict):
         return json.dumps(content, indent=2)
-    else:
-        return str(content)
+
+    return str(content)
 
 
 def generate_item_id(prefix: str = "msg") -> str:
@@ -329,7 +431,7 @@ async def generate_responses_stream(
                         "type": "function_call_output",
                         "status": "completed",
                         "call_id": tool_call_id,
-                        "output": tool_content,
+                        "output": [{"type": "input_text", "text": tool_content}],
                     }
 
                     # Emit item added
@@ -743,7 +845,12 @@ async def generate_responses_sync(
                             "type": "function_call_output",
                             "status": "completed",
                             "call_id": call_id,
-                            "output": str(tool_msg.get("content", "")),
+                            "output": [
+                                {
+                                    "type": "input_text",
+                                    "text": str(tool_msg.get("content", "")),
+                                }
+                            ],
                         }
                     )
                 continue

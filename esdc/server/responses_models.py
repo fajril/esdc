@@ -1,15 +1,193 @@
-# Standard library
-from typing import Any, Literal
+"""Responses API models with discriminated unions and flexible input handling."""
 
-# Third-party
-from pydantic import BaseModel, Field
+from typing import Annotated, Any, Literal, Union
+
+from pydantic import BaseModel, Discriminator, Field, field_validator
 
 
-class InputTextContent(BaseModel):
-    """Input text content part."""
+def normalize_content_type(v: str) -> str:
+    """Normalize various content type names to standard format.
 
-    type: Literal["input_text"] = "input_text"
-    text: str
+    OpenWebUI may send 'text' instead of 'input_text'.
+    This ensures consistent type names.
+    """
+    if v == "text":
+        return "input_text"
+    return v
+
+
+class FlexibleContentPart(BaseModel):
+    """Content part that accepts various formats and normalizes them.
+
+    Handles different type names ('text', 'input_text', 'output_text')
+    and allows extra fields for forward compatibility.
+    """
+
+    type: str = "input_text"
+    text: str = ""
+
+    model_config = {"extra": "allow"}
+
+
+def _normalize_content(v: Any) -> str | list[dict[str, Any]] | None:
+    """Normalize content to accept mixed string/dict arrays.
+
+    Converts:
+    - Plain strings -> keep as is
+    - List of mixed items -> list of dicts
+    - None -> None
+    """
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        result = []
+        for item in v:
+            if isinstance(item, str):
+                result.append({"type": "input_text", "text": item})
+            elif isinstance(item, dict):
+                result.append(item)
+            else:
+                result.append({"type": "input_text", "text": str(item)})
+        return result
+    return v
+
+
+def _get_input_item_type(v: Any) -> str:
+    """Get the type from a dict or model for discriminated union.
+
+    Args:
+        v: Input item (dict or BaseModel)
+
+    Returns:
+        Type string for discrimination
+    """
+    if isinstance(v, dict):
+        return v.get("type", "message")
+    return getattr(v, "type", "message")
+
+
+class ResponseInputMessageItem(BaseModel):
+    """Input message item from user/assistant/system.
+
+    This is one variant of the discriminated union for ResponseInputItem.
+    """
+
+    type: Literal["message"] = "message"
+    role: Literal["user", "assistant", "system"]
+    content: str | list[FlexibleContentPart] | list[dict[str, Any]]
+
+    model_config = {"extra": "allow"}
+
+
+class ResponseInputFunctionCallItem(BaseModel):
+    """Input function call item from previous assistant response.
+
+    This is one variant of the discriminated union for ResponseInputItem.
+    Used when OpenWebUI sends conversation history containing tool calls.
+    """
+
+    type: Literal["function_call"] = "function_call"
+    id: str = Field(default="", description="Function call ID")
+    name: str = Field(default="", description="Function name")
+    arguments: str = Field(default="", description="Function arguments (JSON)")
+    call_id: str = Field(default="", description="Call ID for tracking")
+    status: Literal["in_progress", "completed", "failed"] = "completed"
+
+    model_config = {"extra": "allow"}
+
+
+class ResponseInputFunctionCallOutputItem(BaseModel):
+    """Input function call output item (tool result from client).
+
+    This is one variant of the discriminated union for ResponseInputItem.
+    """
+
+    type: Literal["function_call_output"] = "function_call_output"
+    call_id: str = Field(description="ID of the function call being answered")
+    output: str | list[FlexibleContentPart] = Field(
+        description="Tool result (string or content parts)"
+    )
+    status: Literal["completed", "in_progress", "failed"] = "completed"
+
+    model_config = {"extra": "allow"}
+
+
+# Discriminated union type for input items
+ResponseInputItemUnion = Annotated[
+    Union[
+        ResponseInputMessageItem,
+        ResponseInputFunctionCallItem,
+        ResponseInputFunctionCallOutputItem,
+    ],
+    Discriminator(_get_input_item_type),
+]
+
+
+class ResponseInputItem(BaseModel):
+    """Backward-compatible wrapper for ResponseInputItemUnion.
+
+    This class allows existing code that uses ResponseInputItem(type="message", ...)
+    to continue working, while internally using the discriminated union.
+
+    Can be:
+    - message: user/assistant/system message
+    - function_call: previous assistant tool call
+    - function_call_output: tool result from client
+    """
+
+    type: Literal["message", "function_call", "function_call_output"]
+    role: Literal["user", "assistant", "system"] | None = None
+    content: Any = None
+    call_id: str | None = None
+    output: Any = None
+    id: str | None = None
+    name: str | None = None
+    arguments: str | None = None
+    status: str = "completed"
+
+    model_config = {"extra": "allow"}
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _normalize_content_field(cls, v: Any) -> Any:
+        """Normalize content to accept mixed string/dict arrays."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            result = []
+            for item in v:
+                if isinstance(item, str):
+                    result.append({"type": "input_text", "text": item})
+                elif isinstance(item, dict):
+                    result.append(item)
+                else:
+                    result.append({"type": "input_text", "text": str(item)})
+            return result
+        return v
+
+    @field_validator("output", mode="before")
+    @classmethod
+    def _normalize_output_field(cls, v: Any) -> Any:
+        """Normalize output to accept mixed string/dict arrays."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            result = []
+            for item in v:
+                if isinstance(item, str):
+                    result.append({"type": "input_text", "text": item})
+                elif isinstance(item, dict):
+                    result.append(item)
+                else:
+                    result.append({"type": "input_text", "text": str(item)})
+            return result
+        return v
 
 
 class OutputTextContent(BaseModel):
@@ -20,41 +198,11 @@ class OutputTextContent(BaseModel):
     annotations: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class ResponseInputMessage(BaseModel):
-    """Input message item."""
+class InputTextContent(BaseModel):
+    """Input text content part (legacy, kept for backward compatibility)."""
 
-    type: Literal["message"] = "message"
-    role: Literal["user", "assistant", "system"]
-    content: str | list[InputTextContent]
-
-
-class ResponseFunctionCallOutput(BaseModel):
-    """Function call output item (tool result submitted by client)."""
-
-    type: Literal["function_call_output"] = "function_call_output"
-    call_id: str
-    output: str
-    status: Literal["completed", "in_progress", "failed"] = "completed"
-
-
-class ResponseInputItem(BaseModel):
-    """Input item for Responses API.
-
-    Can be:
-    - message: user/assistant/system message
-    - function_call_output: tool result from client
-    """
-
-    # Discriminator field
-    type: Literal["message", "function_call_output"]
-
-    # Message fields
-    role: Literal["user", "assistant", "system"] | None = None
-    content: str | list[InputTextContent] | None = None
-
-    # Function call output fields
-    call_id: str | None = None
-    output: str | None = None
+    type: Literal["input_text"] = "input_text"
+    text: str
 
 
 class ResponseOutputMessage(BaseModel):
@@ -85,7 +233,7 @@ class ResponseFunctionCallResult(BaseModel):
     type: Literal["function_call_output"] = "function_call_output"
     status: Literal["completed", "failed"]
     call_id: str
-    output: str
+    output: str | list[dict[str, Any]]
 
 
 class ResponseOutputItem(BaseModel):
@@ -97,25 +245,18 @@ class ResponseOutputItem(BaseModel):
     - function_call_output: server-side tool execution result
     """
 
-    # Using model as a container for discriminated union
-    # The actual type is determined by the 'type' field
     model_config = {"extra": "allow"}
 
     id: str
     type: Literal["message", "function_call", "function_call_output"]
     status: Literal["in_progress", "completed", "failed", "incomplete"]
 
-    # Message fields
     role: Literal["assistant"] | None = None
     content: list[OutputTextContent] | None = None
-
-    # Function call fields
     name: str | None = None
     call_id: str | None = None
     arguments: str | None = None
-
-    # Function call output fields
-    output: str | None = None
+    output: str | list[dict[str, Any]] | None = None
 
 
 class ResponsesRequest(BaseModel):
@@ -143,9 +284,6 @@ class ResponsesRequest(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=1)
     top_p: float | None = Field(default=1, ge=0, le=1)
 
-    # Stateless mode (ESDC doesn't support previous_response_id)
-    # previous_response_id is intentionally omitted
-
 
 class Response(BaseModel):
     """Non-streaming response object."""
@@ -167,18 +305,15 @@ class Response(BaseModel):
         """
         texts: list[str] = []
         for item in self.output:
-            # Defensive: ensure item is a dict
             if not isinstance(item, dict):
                 continue
 
             if item.get("type") == "message":
                 content = item.get("content", [])
-                # Defensive: ensure content is a list
                 if not isinstance(content, list):
                     continue
 
                 for part in content:
-                    # Defensive: ensure part is a dict
                     if not isinstance(part, dict):
                         continue
 
