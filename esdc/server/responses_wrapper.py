@@ -191,35 +191,27 @@ def generate_item_id(prefix: str = "msg") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:24]}"
 
 
-def chunk_text(text: str, chunk_size: int = 5) -> Generator[str, None, None]:
-    """Split text into chunks for streaming.
+def chunk_text(text: str, chunk_size: int = 3) -> Generator[str, None, None]:
+    """Split text into small character-level chunks for streaming.
+
+    This ensures markdown tokens (##, **, |, etc.) are never split
+    across SSE chunks, which would break rendering in OpenWebUI.
 
     Args:
         text: Text to chunk
-        chunk_size: Approximate characters per chunk (default 5)
+        chunk_size: Characters per chunk (default 3 for markdown safety)
 
     Yields:
-        Text chunks
+        Text chunks of approximately chunk_size characters
+
+    Example:
+        >>> list(chunk_text("## Header", chunk_size=3))
+        ['## ', 'Hea', 'der']
     """
-    # For Responses API, we chunk at word boundaries for better UX
-    words = text.split()
-    chunks: list[str] = []
-
-    for i, word in enumerate(words):
-        if i == 0:
-            chunks.append(word)
-        else:
-            # Add space before word
-            chunks.append(" " + word)
-
-        # Yield every few words
-        if len(chunks) >= 3:
-            yield "".join(chunks)
-            chunks = []
-
-    # Yield remaining
-    if chunks:
-        yield "".join(chunks)
+    # Stream character-by-character in small groups
+    # This prevents markdown token splitting across SSE chunks
+    for i in range(0, len(text), chunk_size):
+        yield text[i : i + chunk_size]
 
 
 def chunk_json(json_str: str, chunk_size: int = 10) -> Generator[str, None, None]:
