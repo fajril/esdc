@@ -2,7 +2,7 @@
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator
 from typing import Any
 
 # Third-party
@@ -26,6 +26,7 @@ from esdc.server.responses_events import (
     format_sse_event,
 )
 from esdc.server.responses_models import ResponseInputItem
+from esdc.server.stream_utils import chunk_json, chunk_text
 
 logger = logging.getLogger("esdc.server.responses")
 
@@ -189,43 +190,6 @@ def generate_item_id(prefix: str = "msg") -> str:
     - fco: function_call_output items
     """
     return f"{prefix}_{uuid.uuid4().hex[:24]}"
-
-
-def chunk_text(text: str, chunk_size: int = 3) -> Generator[str, None, None]:
-    """Split text into small character-level chunks for streaming.
-
-    This ensures markdown tokens (##, **, |, etc.) are never split
-    across SSE chunks, which would break rendering in OpenWebUI.
-
-    Args:
-        text: Text to chunk
-        chunk_size: Characters per chunk (default 3 for markdown safety)
-
-    Yields:
-        Text chunks of approximately chunk_size characters
-
-    Example:
-        >>> list(chunk_text("## Header", chunk_size=3))
-        ['## ', 'Hea', 'der']
-    """
-    # Stream character-by-character in small groups
-    # This prevents markdown token splitting across SSE chunks
-    for i in range(0, len(text), chunk_size):
-        yield text[i : i + chunk_size]
-
-
-def chunk_json(json_str: str, chunk_size: int = 10) -> Generator[str, None, None]:
-    """Split JSON into chunks for streaming function call arguments.
-
-    Args:
-        json_str: JSON string to chunk
-        chunk_size: Characters per chunk
-
-    Yields:
-        JSON string chunks
-    """
-    for i in range(0, len(json_str), chunk_size):
-        yield json_str[i : i + chunk_size]
 
 
 async def generate_responses_stream(
