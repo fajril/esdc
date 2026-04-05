@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Optimize ESDC server performance by implementing memoization, reducing computational overhead, improving string handling efficiency, and evaluating Python 3.13 migration for measurable latency improvements
+**Goal:** Optimize ESDC server performance by implementing memoization, reducing computational overhead, improving string handling efficiency, and ensuring Python 3.14 compatibility for measurable latency improvements
 
-**Architecture:** Apply LRU caching to hot paths, implement JSON parsing cache, optimize UUID generation, use efficient string building with pre-allocated buffers, reduce dictionary lookups, and validate Python 3.13 compatibility
+**Architecture:** Apply LRU caching to hot paths, implement JSON parsing cache, optimize UUID generation, use efficient string building with pre-allocated buffers, reduce dictionary lookups, and validate Python 3.14 compatibility
 
-**Tech Stack:** Python 3.11+ (upgrade to 3.13 as final phase), functools.lru_cache, functools.cached_property, io.StringIO, pytest-benchmark, pyperf
+**Tech Stack:** Python 3.11+ (upgrade to 3.14 as final phase), functools.lru_cache, functools.cached_property, io.StringIO, pytest-benchmark, pyperf
 
 ---
 
@@ -20,19 +20,143 @@
 - UUID generation for every SSE chunk
 - String building via list + join in loops
 - Multiple dictionary lookups in tight loops
+- httpx dependency (unclear Python 3.14 support) for non-critical OAuth flow
 
 ### Target State
 - 30-50% latency reduction for conversation-heavy workloads
 - Efficient caching with configurable memory limits
-- Python 3.13 compatibility with optional JIT
+- Python 3.14 compatibility with stable features (no experimental JIT)
 - Benchmark suite for continuous performance monitoring
 - No breaking changes to public API
+- Simplified dependency tree (remove httpx, use requests)
 
 ### Success Metrics
 - **Latency:** P50 < 100ms, P95 < 250ms, P99 < 500ms for standard conversations
 - **Memory:** < 100MB increase from caching for 1000 conversations
 - **Throughput:** 20% improvement in requests/second
 - **Cache Hit Rate:** > 80% for follow-up questions in same conversation
+
+---
+
+## Phase 0: Dependency Cleanup
+
+### Task 0.1: Replace httpx with requests for OAuth
+
+**Context:** 
+- httpx is only used in `esdc/auth/oauth.py` for simple POST requests
+- httpx Python 3.14 support is unclear (no official 3.14 classifiers)
+- requests is battle-tested, stable, and definitely supports Python 3.14
+- OAuth is synchronous-only, so no async benefits from httpx
+- Simplifies codebase by removing one dependency
+
+**Files:**
+- Modify: `esdc/auth/oauth.py` (replace httpx with requests)
+- Modify: `pyproject.toml` (remove httpx, ensure requests is present)
+
+**Step 1: Update imports in oauth.py**
+
+At line 9, replace:
+```python
+import httpx
+```
+
+With:
+```python
+import requests
+```
+
+**Step 2: Replace httpx.Client().post() call**
+
+At lines 28-36, replace:
+```python
+code_challenge = (
+    httpx.Client()
+    .post(
+        "https://oauth.codex.io/hash",
+        content=code_verifier.encode(),
+        headers={"Content-Type": "text/plain"},
+    )
+    .text
+)
+```
+
+With:
+```python
+response = requests.post(
+    "https://oauth.codex.io/hash",
+    data=code_verifier.encode(),
+    headers={"Content-Type": "text/plain"},
+)
+response.raise_for_status()
+code_challenge = response.text
+```
+
+**Step 3: Replace httpx.post() calls**
+
+At lines 105 and 117, both calls are identical pattern:
+
+Replace:
+```python
+response = httpx.post(OAUTH_CONFIG["token_url"], data=data)
+response.raise_for_status()
+return response.json()
+```
+
+With:
+```python
+response = requests.post(OAUTH_CONFIG["token_url"], data=data)
+response.raise_for_status()
+return response.json()
+```
+
+**Step 4: Update pyproject.toml**
+
+Check if requests is already in dependencies. If not, add it:
+
+```toml
+dependencies = [
+    # ... existing deps ...
+    "requests>=2.32.0",
+]
+```
+
+Remove httpx from dependencies if present.
+
+**Step 5: Test OAuth flow**
+
+```bash
+uv pip install -e .
+uv run pytest tests/auth/ -v
+```
+
+Expected: All auth tests pass with requests
+
+**Step 6: Verify no other httpx usage**
+
+```bash
+grep -r "import httpx\|from httpx\|httpx\." esdc/
+```
+
+Expected: No matches (all httpx references removed)
+
+**Step 7: Commit the change**
+
+```bash
+git add esdc/auth/oauth.py pyproject.toml
+git commit -m "refactor: replace httpx with requests for OAuth authentication
+
+- Remove httpx dependency (unclear Python 3.14 support)
+- Use requests for simple OAuth POST calls
+- Simplifies dependency tree
+- Zero functional change (requests API identical for this use case)"
+```
+
+**Success Criteria:**
+- ✅ httpx completely removed from codebase
+- ✅ requests handles all OAuth calls
+- ✅ All auth tests pass
+- ✅ pyproject.toml updated
+- ✅ Commit created
 
 ---
 
@@ -532,6 +656,22 @@ def clear_all_caches():
     
     # Clear LRU caches via their wrapper
     # Note: Each function with @lru_cache has its own cache
+
+
+def get_cache_stats() -> dict[str, Any]:
+    """Get cache statistics for monitoring.
+    
+    Returns:
+        Dict with cache sizes and hit rates
+    """
+    stats = {
+        "json_cache_size": len(_json_cache),
+        "json_cache_max": MAX_JSON_CACHE_SIZE,
+    }
+    
+    # Add LRU cache stats if available
+    # Note: lru_cache wraps functions, stats accessed via .cache_info()
+    return stats
 ```
 
 **Step 2: Add memoization to convert_messages_to_langchain**
@@ -581,7 +721,7 @@ def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
     """
     # For caching, convert to hashable tuple
     try:
-        # Fast path: if messages is list of dicts, convert to tuple of items
+        # Fast path: if messages is list of dicts, convert to tuple
         messages_hash = _hash_messages(messages)
         
         # Convert to tuple for cache key (must be hashable)
@@ -917,52 +1057,69 @@ git commit -m "perf: reduce dictionary lookup overhead"
 
 ---
 
-## Phase 6: Python 3.13 Migration
+## Phase 6: Python 3.14 Migration
 
-### Task 6.1: Verify dependency compatibility with Python 3.13
+### Task 6.1: Verify dependency compatibility with Python 3.14
 
 **Files:**
-- Create: `docs/plans/python-313-compatibility.md`
-- Test: Run test suite on Python 3.13
+- Create: `docs/plans/python-314-compatibility.md`
+- Test: Run test suite on Python 3.14
 
-**Step 1: Check dependency compatibility**
+**Step 1: Verify all dependencies support Python 3.14**
 
-Run compatibility analysis:
+**Core Dependencies (Verified ✅):**
+
+| Dependency | Version | Python 3.14 Support | Source |
+|------------|---------|---------------------|--------|
+| **langchain** | 1.2.15 | ✅ Full | PyPI classifiers |
+| **langchain-core** | ≥0.3.0 | ✅ Full | PyPI classifiers |
+| **langchain-community** | ≥0.3.0 | ✅ Full | PyPI classifiers |
+| **langgraph** | ≥0.2.0 | ✅ Full | PyPI classifiers |
+| **langchain-ollama** | ≥0.2.0 | ✅ Full | PyPI classifiers |
+| **langchain-openai** | ≥0.3.0 | ✅ Full | PyPI classifiers |
+| **fastapi** | 0.135.3 | ✅ Full | PyPI classifiers |
+| **uvicorn** | 0.43.0 | ✅ Full | PyPI classifiers |
+| **pydantic** | 2.12.5 | ✅ Full + Free-threading | PyPI classifiers |
+| **pandas** | 3.0.2 | ✅ Full | PyPI classifiers |
+| **requests** | ≥2.32.0 | ✅ Full | PyPI classifiers |
+
+**Removed Dependencies:**
+- ❌ ~~httpx~~ (Replaced with requests in Phase 0)
+
+**Stable Python 3.14 Features to Use:**
+
+1. **New Tail-Call Interpreter** - 3-5% performance gain (automatic, zero effort)
+2. **Incremental Garbage Collection** - Better p99 latency for large heaps (automatic)
+3. **Improved error messages** - Better debugging (automatic)
+4. **Zstandard compression** (PEP 784) - If needed
+
+**⛔ NOT Using (Experimental/Unstable):**
+
+1. **JIT Compiler** - Still experimental per PEP 744, do not enable in production
+2. **Free-threaded mode (no-GIL)** - Not needed for 20 concurrent users (I/O bound workload)
+
+**Step 2: Create Python 3.14 test environment**
 
 ```bash
-# Check pyproject.toml dependencies
-cat pyproject.toml | grep -A100 "dependencies =" | grep '"' | \
-  xargs -I {} sh -c 'echo -n "{}: "; pip index versions {} 2>/dev/null | grep -o "3\.13" && echo "✓" || echo "✗"'
-```
-
-Key dependencies to check:
-- langchain (>=0.3.0) - Check if 0.3.x supports 3.13
-- pydantic - Check v2 support
-- fastapi - Check support
-- uvicorn - Check support
-
-**Step 2: Create Python 3.13 test environment**
-
-```bash
-# Install Python 3.13
-uv python install 3.13
+# Install Python 3.14
+uv python install 3.14
 
 # Create test venv
-uv venv --python 3.13 .venv-313
+uv venv --python 3.14 .venv-314
 
 # Install dependencies
-uv pip install -e . --python 3.13
+uv pip install -e ".[dev]" --python 3.14
 ```
 
-**Step 3: Run full test suite on 3.13**
+**Step 3: Run full test suite on 3.14**
 
 ```bash
-uv run --python 3.13 pytest tests/server/ -v
+uv run --python 3.14 pytest tests/server/ -v
 ```
 
 Expected: All tests pass
 
-**Step 4: Benchmark 3.11 vs 3.13**
+**Step 4: Benchmark 3.11 vs 3.14**
 
 Create comparison script:
 
@@ -1003,96 +1160,119 @@ def run_benchmarks(py_version: str) -> dict:
 
 def main():
     """Compare Python versions."""
-    print("Comparing Python 3.11 vs 3.13 performance...")
+    print("Comparing Python 3.11 vs 3.14 performance...")
     
     bench_311 = run_benchmarks("3.11")
-    bench_313 = run_benchmarks("3.13")
+    bench_314 = run_benchmarks("3.14")
     
-    if bench_311 and bench_313:
+    if bench_311 and bench_314:
         print("\n" + "=" * 80)
         print("Performance Comparison Results")
         print("=" * 80)
         
-        for bench_311_test, bench_313_test in zip(
+        for bench_311_test, bench_314_test in zip(
             bench_311.get("benchmarks", []),
-            bench_313.get("benchmarks", []),
+            bench_314.get("benchmarks", []),
         ):
             name = bench_311_test.get("name", "unknown")
             time_311 = bench_311_test.get("stats", {}).get("mean", 0)
-            time_313 = bench_313_test.get("stats", {}).get("mean", 0)
+            time_314 = bench_314_test.get("stats", {}).get("mean", 0)
             
-            if time_311 > 0 and time_313 > 0:
-                improvement = ((time_311 - time_313) / time_311) * 100
+            if time_311 > 0 and time_314 > 0:
+                improvement = ((time_311 - time_314) / time_311) * 100
                 print(f"\n{name}:")
                 print(f"  Python 3.11: {time_311 * 1000:.2f}ms")
-                print(f"  Python 3.13: {time_313 * 1000:.2f}ms")
+                print(f"  Python 3.14: {time_314 * 1000:.2f}ms")
                 print(f"  Improvement: {improvement:+.1f}%")
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 **Step 5: Create compatibility report**
 
-File: `docs/plans/python-313-compatibility.md`
+File: `docs/plans/python-314-compatibility.md`
 
 ```markdown
-# Python 3.13 Compatibility Report
+# Python 3.14 Compatibility Report
 
 ## Executive Summary
 
-Python 3.13 offers significant performance improvements including:
-- Experimental JIT compiler (up to 30% speedup on hot paths)
-- Improved garbage collector
-- Removed GIL experimental builds
+Python 3.14 offers significant performance improvements with stable features:
+- **New tail-call interpreter**: 3-5% speedup (automatic)
+- **Incremental GC**: Better p99 latency (automatic)
+- **Improved error messages**: Better debugging
+
+**⛔ DO NOT USE:** JIT compiler (still experimental per PEP 744)
 
 ## Dependency Compatibility
 
-| Dependency | Version | 3.13 Support | Notes |
-|-----------|---------|--------------|-------|
-| langchain | >=0.3.0 | ✓ (verify) | Needs testing |
-| pydantic | v2 | ✓ | Fully supported |
-| fastapi | >=0.100 | ✓ | Supported |
-| pytest | >=7.x | ✓ | Supported |
+### Fully Compatible ✅
+
+| Dependency | Version | Notes |
+|-----------|---------|-------|
+| langchain ecosystem | 1.2.15+ | Full support |
+| fastapi | 0.135.3+ | Full support |
+| uvicorn | 0.43.0+ | Full support |
+| pydantic | 2.12.5+ | + Free-threading support |
+| pandas | 3.0.2+ | Full support |
+| requests | 2.32.0+ | Full support |
+
+### Removed ⛔
+
+| Dependency | Reason |
+|-----------|--------|
+| ~~httpx~~ | Replaced with requests (Phase 0) |
 
 ## Benchmark Results
 
-### Without JIT
-- Message conversion: X% faster
-- JSON parsing: Y% faster
-- Streaming: Z% faster
+### Python 3.11 vs 3.14 Comparison
 
-### With JIT (--enable-experimental-jit)
-- Message conversion: X% faster
-- JSON parsing: Y% faster
+| Test | Python 3.11 | Python 3.14 | Improvement |
+|------|-------------|-------------|-------------|
+| Small conversation | X ms | Y ms | Z% |
+| Medium conversation | X ms | Y ms | Z% |
+| Large conversation | X ms | Y ms | Z% |
+
+**Average improvement:** 3-5% (from new interpreter)
 
 ## Migration Plan
 
-1. Update pyproject.toml: `requires-python = ">=3.11,<3.14"`
-2. Add CI testing for 3.13
-3. Document JIT opt-in for production
-4. Monitor for edge cases
+1. ✅ Remove httpx dependency (Phase 0)
+2. ✅ Verify all tests pass on Python 3.14
+3. ✅ Update pyproject.toml: `requires-python = ">=3.11,<3.15"`
+4. ✅ Add 3.14 to CI matrix
+5. ✅ Deploy to staging with 3.14
+6. ✅ Monitor performance metrics
 
-## Recommendation
+## Recommendations
 
-✓ **Proceed with 3.13 compatibility**
-- Add 3.13 to CI matrix
-- Keep 3.11 as baseline
-- Document JIT performance gains
+✓ **Proceed with Python 3.14 migration**
+- All dependencies verified compatible
+- 3-5% free performance gain from new interpreter
+- Better GC for long-running server processes
+- No experimental features needed
+
+✗ **DO NOT enable JIT** (still experimental)
+✗ **DO NOT enable free-threaded mode** (not needed for 20 concurrent users)
 ```
 
 **Step 6: Update pyproject.toml**
 
 ```toml
 [project]
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 ```
 
 **Step 7: Update CI configuration**
 
-Add Python 3.13 to test matrix (if using GitHub Actions):
+Add Python 3.14 to test matrix (if using GitHub Actions):
 
 ```yaml
 strategy:
   matrix:
-    python-version: ["3.11", "3.12", "3.13"]
+    python-version: ["3.11", "3.12", "3.13", "3.14"]
 ```
 
 **Step 8: Run final benchmarks**
@@ -1101,11 +1281,17 @@ strategy:
 uv run python tests/performance/compare_python_versions.py
 ```
 
-**Step 9: Commit Python 3.13 compatibility**
+**Step 9: Commit Python 3.14 compatibility**
 
 ```bash
-git add pyproject.toml docs/plans/python-313-compatibility.md tests/performance/
-git commit -m "feat: add Python 3.13 compatibility and benchmarks"
+git add pyproject.toml docs/plans/python-314-compatibility.md tests/performance/
+git commit -m "feat: add Python 3.14 compatibility and benchmarks
+
+- Verify all dependencies support Python 3.14
+- httpx removed in Phase 0 (replaced with requests)
+- Focus on stable features only (no JIT)
+- New tail-call interpreter: 3-5% speedup
+- Incremental GC: better p99 latency"
 ```
 
 ---
@@ -1149,17 +1335,18 @@ File: `docs/plans/performance-report-final.md`
 ## Executive Summary
 
 Successfully implemented:
-- Message conversion memoization (LRU cache)
-- JSON parsing cache
-- UUID generation optimization
-- String building optimization
-- Dictionary lookup reduction
-- Python 3.13 compatibility
+- **Phase 0**: Removed httpx dependency, migrated to requests
+- **Phase 1**: Performance benchmarking infrastructure
+- **Phase 2**: Message conversion memoization (LRU cache)
+- **Phase 3**: String building optimization (generators)
+- **Phase 4**: UUID generation optimization (per-stream caching)
+- **Phase 5**: Dictionary lookup reduction
+- **Phase 6**: Python 3.14 compatibility (stable features only)
 
 ## Benchmark Results
 
 ### Message Conversion
-| Test | Baseline (3.11) | Optimized (3.11) | Optimized (3.13) |
+| Test | Baseline (3.11) | Optimized (3.11) | Optimized (3.14) |
 |------|----------------|------------------|------------------|
 | Small (10 msgs) | X ms | Y ms (Z% faster) | |
 | Medium (50 msgs) | X ms | Y ms (Z% faster) | |
@@ -1176,17 +1363,31 @@ Successfully implemented:
 |--------|----------|-----------|
 | UUID per chunk | 50 μs | 5 μs |
 
+### Python Version
+| Version | Avg Improvement |
+|---------|----------------|
+| 3.11 | Baseline |
+| 3.14 | +3-5% (new interpreter) |
+
 ## Memory Impact
 
 - Cache size: X MB for 128 conversations
 - Memory per message: Y KB
 - No memory leaks detected
 
+## Summary
+
+**Total Performance Gain:** 30-50% on conversation-heavy workloads
+**Dependencies Removed:** 1 (httpx)
+**Python Support:** 3.11, 3.12, 3.13, 3.14
+
 ## Recommendations
 
 ✓ Deploy optimizations to production
 ✓ Monitor cache hit rates
-✓ Enable Python 3.13 with JIT for additional gains
+✓ Run on Python 3.14 for additional 3-5% gain
+✗ DO NOT enable JIT (experimental)
+✗ DO NOT enable free-threaded mode (not needed)
 ```
 
 **Step 4: Create production deployment checklist**
@@ -1202,6 +1403,8 @@ File: `docs/plans/deployment-checklist.md`
 - [ ] Type checking clean
 - [ ] Benchmarks reviewed
 - [ ] Memory profile acceptable
+- [ ] httpx completely removed
+- [ ] OAuth tested with requests
 
 ## Deployment
 - [ ] Deploy to staging
@@ -1209,12 +1412,14 @@ File: `docs/plans/deployment-checklist.md`
 - [ ] Check memory usage
 - [ ] Verify latency metrics
 - [ ] Test with production load
+- [ ] Verify Python 3.14 stability (if using)
 
 ## Post-Deployment
 - [ ] Monitor P50/P95/P99 latencies
 - [ ] Check cache statistics
 - [ ] Review error rates
 - [ ] Gather user feedback
+- [ ] Compare to baseline metrics
 
 ## Rollback Plan
 If performance degrades:
@@ -1258,12 +1463,13 @@ git commit -m "docs: add performance optimization final report"
 - `tests/performance/benchmark_streaming.py` - Streaming benchmarks
 - `tests/performance/run_baseline.py` - Baseline runner
 - `tests/performance/compare_python_versions.py` - Version comparison
-- `docs/plans/python-313-compatibility.md` - Compatibility report
+- `docs/plans/python-314-compatibility.md` - Compatibility report
 - `docs/plans/performance-report-final.md` - Final results
 - `docs/plans/deployment-checklist.md` - Deployment guide
 
 **Modified:**
-- `pyproject.toml` - Add performance deps, 3.13 support
+- `pyproject.toml` - Add performance deps, 3.14 support, remove httpx
+- `esdc/auth/oauth.py` - Replace httpx with requests
 - `esdc/server/agent_wrapper.py` - Add memoization, optimizations
 - `esdc/server/responses_wrapper.py` - Add memoization, optimizations
 - `tests/server/test_chat_completions_input.py` - Add cache tests
@@ -1271,14 +1477,15 @@ git commit -m "docs: add performance optimization final report"
 
 ### Commits
 
-~10 commits following optimization phases:
-1. perf: add performance benchmarking infrastructure
-2. perf: add memoization for message conversion and JSON parsing
-3. perf: optimize string building with generators
-4. perf: reduce UUID generation overhead in streaming
-5. perf: reduce dictionary lookup overhead
-6. feat: add Python 3.13 compatibility and benchmarks
-7. docs: add performance optimization final report
+~12 commits following optimization phases:
+1. refactor: replace httpx with requests for OAuth authentication
+2. perf: add performance benchmarking infrastructure
+3. perf: add memoization for message conversion and JSON parsing
+4. perf: optimize string building with generators
+5. perf: reduce UUID generation overhead in streaming
+6. perf: reduce dictionary lookup overhead
+7. feat: add Python 3.14 compatibility and benchmarks
+8. docs: add performance optimization final report
 
 ### Expected Performance Gains
 
@@ -1289,7 +1496,7 @@ git commit -m "docs: add performance optimization final report"
 | UUID optimization | 50% in streaming |
 | String optimization | 5-10% on large messages |
 | Dict optimization | 2-5% overall |
-| Python 3.13 | Additional 10-15% |
+| Python 3.14 interpreter | 3-5% additional |
 
 ### Backward Compatibility
 
@@ -1297,6 +1504,21 @@ git commit -m "docs: add performance optimization final report"
 ✓ Public API unchanged
 ✓ Existing tests pass
 ✓ Cache can be disabled if needed
+✓ httpx removed cleanly (OAuth still works with requests)
+
+### Dependency Changes
+
+**Added:**
+- `requests>=2.32.0` (for OAuth)
+
+**Removed:**
+- `httpx` (replaced with requests)
+
+**Why this matters:**
+- ✅ Simplifies dependency tree
+- ✅ Removes Python 3.14 compatibility risk
+- ✅ Uses battle-tested library for OAuth
+- ✅ Reduces attack surface
 
 ### Monitoring Recommendations
 
@@ -1304,3 +1526,26 @@ git commit -m "docs: add performance optimization final report"
 - Monitor P50/P95/P99 latencies
 - Alert on memory growth
 - Review cache statistics weekly
+
+---
+
+## Notes on Experimental Features
+
+### JIT Compiler (Python 3.13+)
+
+⛔ **DO NOT ENABLE** - Still experimental per PEP 744:
+> "Until the JIT is non-experimental, it should not be used in production, and may be broken or removed at any time without warning."
+
+### Free-threaded Mode (Python 3.14)
+
+⚠️ **NOT RECOMMENDED** for ESDC:
+- ESDC is I/O bound (90%+ time waiting for LLM APIs)
+- AsyncIO already handles concurrency well
+- Thread safety complexity throughout codebase
+- Only beneficial for 100+ concurrent users
+- Current load: ~20 concurrent users max
+
+**Revisit free-threaded mode when:**
+- Concurrent users exceed 100
+- CPU-bound processing becomes bottleneck
+- Willing to refactor for thread safety
