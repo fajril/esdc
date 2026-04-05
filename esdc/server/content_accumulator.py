@@ -1,4 +1,4 @@
-"""Streaming buffer for accumulating and formatting agent events."""
+"""Content accumulator for formatting non-streaming agent responses."""
 
 # Standard library
 import json
@@ -27,15 +27,14 @@ def format_tool_section(tool_name: str, tool_args: dict) -> str:
 """
 
 
-class StreamingBuffer:
-    """Buffer for accumulating events and flushing at checkpoints.
+class ContentAccumulator:
+    """Accumulator for collecting events and formatting non-streaming responses.
 
     This class accumulates agent events (content and tool calls)
-    and flushes them. Flushing occurs on:
-    - Tool call detected (immediate flush)
-    - Buffer exceeds 500 characters
-    - Timeout of 500ms exceeded
-    - Final flush at end of stream
+    for non-streaming responses. Used in generate_response() to build
+    the final markdown output.
+
+    Note: For streaming responses, use chunk_text from stream_utils instead.
 
     Attributes:
         tool_calls_buffer: List of tool call dictionaries
@@ -46,7 +45,7 @@ class StreamingBuffer:
     """
 
     def __init__(self, buffer_size_limit: int = 500, timeout_ms: int = 500):
-        """Initialize streaming buffer.
+        """Initialize content accumulator.
 
         Args:
             buffer_size_limit: Maximum characters before auto-flush
@@ -95,10 +94,7 @@ class StreamingBuffer:
             return True
 
         elapsed_ms = (time.time() - self.last_flush_time) * 1000
-        if elapsed_ms > self.timeout_ms:
-            return True
-
-        return False
+        return elapsed_ms > self.timeout_ms
 
     def flush(self) -> str:
         """Build markdown from buffers and return.

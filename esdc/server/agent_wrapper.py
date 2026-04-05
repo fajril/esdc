@@ -19,7 +19,7 @@ from langchain_core.runnables import RunnableConfig
 from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
-from esdc.server.stream_buffer import StreamingBuffer
+from esdc.server.content_accumulator import ContentAccumulator
 from esdc.server.tool_formatter import (
     create_final_chunk,
     create_tool_call_chunk,
@@ -29,12 +29,36 @@ logger = logging.getLogger("esdc.server.agent")
 
 
 def convert_messages_to_langchain(messages: list) -> list:
-    """Convert OpenAI-compatible messages to LangChain messages."""
+    """Convert OpenAI-compatible messages to LangChain messages.
+
+    Handles both standard Chat Completions format and Responses API format
+    with 'output' field for assistant messages.
+    """
     lc_messages = []
 
     for msg in messages:
-        role = msg.role
-        content = msg.content or ""
+        if isinstance(msg, dict):
+            role = msg.get("role", "")
+            content = msg.get("content", "") or ""
+
+            if role == "assistant" and "output" in msg:
+                output = msg["output"]
+                if isinstance(output, list):
+                    texts = []
+                    for item in output:
+                        if isinstance(item, dict) and item.get("type") == "message":
+                            content_parts = item.get("content", [])
+                            for part in content_parts:
+                                if (
+                                    isinstance(part, dict)
+                                    and part.get("type") == "output_text"
+                                ):
+                                    texts.append(part.get("text", ""))
+                    if texts:
+                        content = "\n".join(texts)
+        else:
+            role = getattr(msg, "role", "")
+            content = getattr(msg, "content", "") or ""
 
         if role == "system":
             lc_messages.append(SystemMessage(content=content))
@@ -43,9 +67,12 @@ def convert_messages_to_langchain(messages: list) -> list:
         elif role == "assistant":
             lc_messages.append(AIMessage(content=content))
         elif role == "tool":
-            lc_messages.append(
-                ToolMessage(content=content, tool_call_id=msg.tool_call_id or "")
+            tool_call_id = (
+                msg.get("tool_call_id", "")
+                if isinstance(msg, dict)
+                else getattr(msg, "tool_call_id", "")
             )
+            lc_messages.append(ToolMessage(content=content, tool_call_id=tool_call_id))
 
     return lc_messages
 
@@ -88,7 +115,7 @@ def extract_ai_message_from_event(event: dict) -> AIMessage | None:
                     return last_msg
 
     # Fallback: check all keys for messages
-    for key, value in event.items():
+    for _key, value in event.items():
         if isinstance(value, dict) and "messages" in value:
             messages = value["messages"]
             if messages:
@@ -119,7 +146,7 @@ async def generate_streaming_response(
 ) -> AsyncGenerator[str, None]:
     """Generate streaming chat completion response with markdown formatting.
 
-    Uses StreamingBuffer for accumulating and flushing content at checkpoints:
+    Uses ContentAccumulator for accumulating and flushing content at checkpoints:
     - Tool calls are flushed immediately with previous content
     - Content is flushed when buffer exceeds 500 chars or 500ms timeout
     - Final flush at end of stream
@@ -134,7 +161,7 @@ async def generate_streaming_response(
         OpenAI-compatible streaming chunks as SSE formatted strings
     """
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    buffer = StreamingBuffer()
+    buffer = ContentAccumulator()
 
     # DEBUG: Counters for tracking execution paths
     event_counter = 0
@@ -403,7 +430,7 @@ async def generate_response(
         lc_messages = convert_messages_to_langchain(messages)
 
         # Accumulate content menggunakan buffer
-        buffer = StreamingBuffer()
+        buffer = ContentAccumulator()
         stored_tool_calls = []  # Store tool calls for native format
         is_first_ai_message = True
 
