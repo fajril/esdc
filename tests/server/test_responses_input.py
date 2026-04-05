@@ -237,3 +237,11 @@ class TestBackwardCompatibility:
         )
         assert item.type == "function_call"
         assert item.name == "get_data"
+
+    def test_dict_input_instead_of_pydantic(self) -> None:
+        """Test that plain dicts work as input."""
+        messages = convert_responses_input_to_langchain(
+            [{"type": "message", "role": "user", "content": "Hello"}]
+        )
+        assert len(messages) == 1
+        assert messages[0].content == "Hello"
