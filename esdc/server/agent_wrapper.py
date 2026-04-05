@@ -20,6 +20,7 @@ from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.content_accumulator import ContentAccumulator, format_tool_section
+from esdc.server.message_utils import extract_ai_message_from_event, extract_content_str
 from esdc.server.responses_wrapper import extract_tool_messages_from_event
 from esdc.server.stream_utils import chunk_text
 from esdc.server.tool_formatter import (
@@ -194,72 +195,6 @@ def create_openai_chunk(
             }
         ],
     }
-
-
-def extract_ai_message_from_event(event: dict) -> AIMessage | None:
-    """Extract AIMessage from LangGraph event.
-
-    LangGraph events have structure: {node_name: {messages: [...]}}
-    We need to look for the 'agent' node which contains AI responses.
-    """
-    # Check for 'agent' node first (contains AI responses)
-    if "agent" in event:
-        agent_data = event["agent"]
-        if isinstance(agent_data, dict) and "messages" in agent_data:
-            messages = agent_data["messages"]
-            if messages:
-                last_msg = messages[-1]
-                if isinstance(last_msg, AIMessage):
-                    return last_msg
-
-    # Fallback: check all keys for messages
-    for _key, value in event.items():
-        if isinstance(value, dict) and "messages" in value:
-            messages = value["messages"]
-            if messages:
-                last_msg = messages[-1]
-                if isinstance(last_msg, AIMessage):
-                    return last_msg
-
-    return None
-
-
-def extract_content_str(content) -> str:
-    """Extract string content from AIMessage content (handles str, list, dict).
-
-    Supports various content formats:
-    - str: Direct string content
-    - list: List of content parts (strings, dicts, or objects)
-    - dict: Dictionary content (JSON formatted)
-    """
-    if content is None:
-        return ""
-
-    if isinstance(content, str):
-        return content
-
-    if isinstance(content, list):
-        # Handle list of content parts
-        parts = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict):
-                # Handle dict with 'text' or 'content' fields
-                text = part.get("text") or part.get("content") or ""
-                parts.append(str(text))
-            elif hasattr(part, "text"):
-                # Handle objects with .text attribute
-                parts.append(str(part.text))
-            else:
-                # Fallback to string conversion
-                parts.append(str(part) if part else "")
-        return " ".join(parts) if parts else ""
-
-    if isinstance(content, dict):
-        return json.dumps(content, indent=2)
-
-    return str(content)
 
 
 async def generate_streaming_response(
