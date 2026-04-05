@@ -1,3 +1,17 @@
+"""Chat Completions API wrapper for LangGraph agent.
+
+This module provides OpenAI-compatible chat completion endpoints that:
+- Convert messages between OpenAI and LangChain formats
+- Handle OpenWebUI's extended format with output arrays
+- Stream responses with character-level chunking
+- Support native tool calling and markdown formats
+
+Key Functions:
+    - convert_messages_to_langchain: Convert OpenAI messages to LangChain
+    - generate_streaming_response: SSE streaming for chat completions
+    - generate_response: Non-streaming response generation
+"""
+
 # Standard library
 import json
 import logging
@@ -47,6 +61,12 @@ def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
 
     This needs to be converted to LangChain's format of AIMessage (with tool_calls)
     followed by ToolMessage objects.
+
+    Example:
+        >>> messages = [{"role": "user", "content": "Hello"}]
+        >>> lc_messages = convert_messages_to_langchain(messages)
+        >>> isinstance(lc_messages[0], HumanMessage)
+        True
     """
     lc_messages: list[Any] = []
 
