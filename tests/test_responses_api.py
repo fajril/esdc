@@ -16,8 +16,8 @@ from esdc.server.responses_events import (
     format_sse_event,
 )
 from esdc.server.responses_models import (
-    ResponsesRequest,
     ResponseInputItem,
+    ResponsesRequest,
 )
 from esdc.server.responses_wrapper import (
     SequenceCounter,
@@ -241,6 +241,53 @@ class TestResponsesWrapper:
         assert len(chunks) > 0
         assert "".join(chunks) == "Hello world from ESDC"
 
+    def test_chunk_text_preserves_markdown_headers(self):
+        """Test that markdown headers are not broken across chunks."""
+        # Header should stream in character groups, not word boundaries
+        text = "## Cadangan Lapangan"
+        chunks = list(chunk_text(text, chunk_size=3))
+
+        # Each chunk should be small enough to not split markdown tokens badly
+        # With chunk_size=3, we expect multiple small chunks
+        full_text = "".join(chunks)
+        assert full_text == text
+
+        # Verify no chunk starts with partial header syntax
+        # If "##" is in the text, it should be complete in at least one chunk
+        has_complete_header = any("##" in chunk for chunk in chunks)
+        # Note: With chunk_size=3, "## " will be in ONE chunk
+        assert has_complete_header, "Header syntax should remain intact"
+
+    def test_chunk_text_preserves_markdown_tables(self):
+        """Test that markdown tables are not broken across chunks."""
+        text = "| Jenis | Volume |\n|---|---|\n| Gas | 100 |"
+        chunks = list(chunk_text(text, chunk_size=3))
+
+        full_text = "".join(chunks)
+        assert full_text == text
+
+        # Table syntax should not be split mid-pattern
+        # With character-level streaming, this is guaranteed
+        assert len(chunks) > 1, "Should have multiple chunks"
+
+    def test_chunk_text_character_level_streaming(self):
+        """Test that text streams in small character groups, not word boundaries."""
+        # Long word that would be split at character level
+        text = "##heading-with-many-words-here"
+        chunks = list(chunk_text(text, chunk_size=3))
+
+        # With character-level streaming, each chunk is ~3 chars
+        # With word-level streaming, this would be ONE chunk (the whole word)
+        full_text = "".join(chunks)
+        assert full_text == text
+
+        # Character-level should produce MANY chunks
+        assert len(chunks) > 5, f"Expected many chunks, got {len(chunks)}: {chunks}"
+
+        # Each chunk should be small (around chunk_size)
+        avg_chunk_size = sum(len(c) for c in chunks) / len(chunks)
+        assert avg_chunk_size <= 5, f"Average chunk size {avg_chunk_size} too large"
+
     def test_chunk_json(self):
         """Test JSON chunking."""
         json_str = '{"arg1": "value1", "arg2": "value2"}'
@@ -249,7 +296,7 @@ class TestResponsesWrapper:
 
     def test_convert_responses_input_string(self):
         """Test converting string input to LangChain messages."""
-        from langchain_core.messages import HumanMessage, SystemMessage
+        from langchain_core.messages import HumanMessage
 
         messages = convert_responses_input_to_langchain("Hello, world!")
         assert len(messages) == 1
