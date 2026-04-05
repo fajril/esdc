@@ -1,3 +1,17 @@
+"""Responses API wrapper for LangGraph agent.
+
+This module provides Open Responses API compatible endpoints that:
+- Handle Responses API specific format with input items
+- Support string or list input formats
+- Stream responses with SSE events
+- Support discriminated union input types
+
+Key Functions:
+    - convert_responses_input_to_langchain: Convert Responses API input
+    - generate_responses_stream: SSE streaming for Responses API
+    - generate_responses_sync: Non-streaming response generation
+"""
+
 # Standard library
 import json
 import logging
@@ -58,6 +72,22 @@ def convert_responses_input_to_langchain(
 
     Returns:
         List of LangChain messages
+
+    Example:
+        >>> messages = convert_responses_input_to_langchain("Hello")
+        >>> len(messages)
+        1
+        >>> messages[0].content
+        'Hello'
+
+        >>> messages = convert_responses_input_to_langchain(
+        ...     [{"type": "message", "role": "user", "content": "Hi"}],
+        ...     instructions="Be helpful"
+        ... )
+        >>> len(messages)
+        2
+        >>> messages[0].content
+        'Be helpful'
     """
     messages: list[Any] = []
 
