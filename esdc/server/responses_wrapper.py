@@ -542,6 +542,21 @@ async def generate_responses_stream(
                     f"Processing {len(ai_msg.tool_calls)} tool call(s)"
                 )
                 for tc_idx, tc in enumerate(ai_msg.tool_calls):
+                    # DIAGNOSTIC: Log type and value of each tool_call
+                    logger.debug(
+                        f"[RESPONSES {response_id}] EVENT #{event_counter} "
+                        f"tool_call[{tc_idx}] type: {type(tc).__name__}, "
+                        f"value: {repr(tc)[:200]}"
+                    )
+                    # If it's not a dict, skip and log warning
+                    if not isinstance(tc, dict):
+                        logger.warning(
+                            f"[RESPONSES {response_id}] EVENT #{event_counter} "
+                            f"SKIPPING malformed tool_call[{tc_idx}] "
+                            f"- expected dict, got {type(tc).__name__}: "
+                            f"{repr(tc)[:100]}"
+                        )
+                        continue
                     item_id = generate_item_id("fc")
                     tc_name = tc.get("name", "")
                     tc_id = tc.get("id", "")
