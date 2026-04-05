@@ -167,8 +167,24 @@ class Response(BaseModel):
         """
         texts: list[str] = []
         for item in self.output:
+            # Defensive: ensure item is a dict
+            if not isinstance(item, dict):
+                continue
+
             if item.get("type") == "message":
-                for content in item.get("content", []):
-                    if content.get("type") == "output_text":
-                        texts.append(content.get("text", ""))
+                content = item.get("content", [])
+                # Defensive: ensure content is a list
+                if not isinstance(content, list):
+                    continue
+
+                for part in content:
+                    # Defensive: ensure part is a dict
+                    if not isinstance(part, dict):
+                        continue
+
+                    if part.get("type") == "output_text":
+                        text = part.get("text", "")
+                        if isinstance(text, str):
+                            texts.append(text)
+
         return "".join(texts)

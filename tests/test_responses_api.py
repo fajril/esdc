@@ -16,6 +16,7 @@ from esdc.server.responses_events import (
     format_sse_event,
 )
 from esdc.server.responses_models import (
+    Response,
     ResponseInputItem,
     ResponsesRequest,
 )
@@ -74,6 +75,107 @@ class TestResponsesModels:
         assert item.type == "function_call_output"
         assert item.call_id == "call_123"
         assert item.output == "result"
+
+    def test_response_output_text_with_dict_items(self):
+        """Test output_text with valid dict items."""
+        response = Response(
+            id="test",
+            object="response",
+            created_at=1234567890,
+            model="test",
+            status="completed",
+            output=[
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello"}],
+                }
+            ],
+        )
+        assert response.output_text == "Hello"
+
+    def test_response_output_text_with_string_items(self):
+        """Test output_text handles string items gracefully.
+
+        Pydantic validates at model creation, so we bypass by setting
+        output directly to test defensive code in the property.
+        """
+        response = Response(
+            id="test",
+            object="response",
+            created_at=1234567890,
+            model="test",
+            status="completed",
+            output=[],
+        )
+        # Bypass Pydantic validation to test defensive code
+        response.output = [
+            "invalid string",
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "World"}],
+            },
+        ]
+        assert response.output_text == "World"
+
+    def test_response_output_text_with_malformed_content(self):
+        """Test output_text handles malformed content."""
+        response = Response(
+            id="test",
+            object="response",
+            created_at=1234567890,
+            model="test",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "content": [
+                        "not a dict",
+                        {"type": "output_text", "text": "Test"},
+                    ],
+                }
+            ],
+        )
+        assert response.output_text == "Test"
+
+    def test_response_output_text_with_non_string_text(self):
+        """Test output_text handles non-string text fields."""
+        response = Response(
+            id="test",
+            object="response",
+            created_at=1234567890,
+            model="test",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": 123},  # Non-string text
+                        {"type": "output_text", "text": "Valid"},
+                    ],
+                }
+            ],
+        )
+        assert response.output_text == "Valid"
+
+    def test_response_output_text_with_non_list_content(self):
+        """Test output_text handles non-list content."""
+        response = Response(
+            id="test",
+            object="response",
+            created_at=1234567890,
+            model="test",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "content": "not a list",  # Should be list
+                }
+            ],
+        )
+        assert response.output_text == ""
 
 
 class TestResponsesEvents:
