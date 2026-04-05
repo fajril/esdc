@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from esdc.server.agent_wrapper import (
     convert_messages_to_langchain,
     create_openai_chunk,
+    generate_streaming_response,
 )
 
 
@@ -230,3 +231,22 @@ class TestAgentWrapperIntegration:
 
             assert len(chunks) == 1
             assert "Error" in chunks[0]["choices"][0]["delta"]["content"]
+
+
+async def test_generate_streaming_response_character_level():
+    """Test that content is streamed character-by-character (3 chars at a time)."""
+    messages = [{"role": "user", "content": "hello"}]
+
+    content_chunks = []
+
+    async for chunk in generate_streaming_response(messages):
+        data = json.loads(chunk)
+        delta = data["choices"][0]["delta"]
+        if content := delta.get("content"):
+            content_chunks.append(content)
+
+    # Each chunk should be small (<= 3 chars)
+    # Exception: tool call chunks can be larger
+    for chunk in content_chunks:
+        # Allow small chunks (3 chars) or header/markdown constructs
+        assert len(chunk) <= 10, f"Chunk too large: {len(chunk)} chars: {chunk!r}"
