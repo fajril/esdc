@@ -19,7 +19,8 @@ from langchain_core.runnables import RunnableConfig
 from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
-from esdc.server.content_accumulator import ContentAccumulator
+from esdc.server.content_accumulator import ContentAccumulator, format_tool_section
+from esdc.server.stream_utils import chunk_text
 from esdc.server.tool_formatter import (
     create_final_chunk,
     create_tool_call_chunk,
@@ -144,12 +145,10 @@ async def generate_streaming_response(
     temperature: float = 0.7,
     use_native_format: bool = True,
 ) -> AsyncGenerator[str, None]:
-    """Generate streaming chat completion response with markdown formatting.
+    """Generate streaming chat completion response with character-level streaming.
 
-    Uses ContentAccumulator for accumulating and flushing content at checkpoints:
-    - Tool calls are flushed immediately with previous content
-    - Content is flushed when buffer exceeds 500 chars or 500ms timeout
-    - Final flush at end of stream
+    Streams content 3 characters at a time using chunk_text(), matching
+    the Responses API implementation for consistent streaming behavior.
 
     Args:
         messages: List of conversation messages
@@ -161,7 +160,6 @@ async def generate_streaming_response(
         OpenAI-compatible streaming chunks as SSE formatted strings
     """
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    buffer = ContentAccumulator()
 
     # DEBUG: Counters for tracking execution paths
     event_counter = 0
@@ -232,64 +230,34 @@ async def generate_streaming_response(
             has_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
             tool_call_count = len(ai_msg.tool_calls) if has_tool_calls else 0
             logger.debug(
-                f"[EVENT #{event_counter}] AIMessage: id={msg_id}, content_preview='{msg_content_preview}...', tool_calls={tool_call_count}"
+                f"[EVENT #{event_counter}] AIMessage: id={msg_id}, "
+                f"content_preview='{msg_content_preview}...', "
+                f"tool_calls={tool_call_count}"
             )
 
             # Handle different message types
             if is_first_ai_message:
                 path_first_msg_count += 1
                 logger.debug(
-                    f"[PATH] First AI message block executed (count={path_first_msg_count}, is_first={is_first_ai_message})"
+                    f"[PATH] First AI message block executed "
+                    f"(count={path_first_msg_count}, is_first={is_first_ai_message})"
                 )
-                # First message might contain tool calls
+
                 content_str = extract_content_str(ai_msg.content)
-                should_emit_tool_calls = (
-                    hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
-                )
 
-                # Emit content if present
+                # Stream content character-by-character (3 chars at a time)
                 if content_str and content_str.strip():
-                    should_flush = buffer.add_content(content_str)
-                    if should_flush:
-                        content = buffer.flush()
-                        if content:
-                            chunk = create_openai_chunk(content=content, model=model)
-                            logger.debug(
-                                f"[YIELD] First msg - content chunk: {content[:50]}..."
-                            )
-                            yield json.dumps(chunk)
-
-                # NOW emit tool_calls AFTER content is emitted
-                if should_emit_tool_calls:
-                    if use_native_format:
-                        # Convert ToolCall objects to dict format
-                        tool_calls_dict = [
-                            {
-                                "name": tc.get("name", ""),
-                                "args": tc.get("args", {}),
-                                "id": tc.get("id", ""),
-                            }
-                            for tc in ai_msg.tool_calls
-                        ]
-                        chunk = create_tool_call_chunk(tool_calls_dict, model)
-                        logger.debug(
-                            f"[YIELD] First msg - tool_calls chunk: {len(tool_calls_dict)} tool(s)"
+                    for chunk in chunk_text(content_str):
+                        yield json.dumps(
+                            create_openai_chunk(content=chunk, model=model)
                         )
-                        yield json.dumps(chunk)
 
-                is_first_ai_message = False
-                logger.debug("[STATE] is_first_ai_message set to False")
-
-            elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                path_tool_calls_count += 1
-                logger.debug(
-                    f"[PATH] Elif tool_calls block executed (count={path_tool_calls_count}, "
-                    f"tool_ids={[tc.get('id', 'no-id') for tc in ai_msg.tool_calls]})"
-                )
-
-                if use_native_format:
-                    # Emit native tool_calls chunk
-                    # Convert ToolCall objects to dict format
+                # Emit tool calls after content
+                if (
+                    hasattr(ai_msg, "tool_calls")
+                    and ai_msg.tool_calls
+                    and use_native_format
+                ):
                     tool_calls_dict = [
                         {
                             "name": tc.get("name", ""),
@@ -300,60 +268,71 @@ async def generate_streaming_response(
                     ]
                     chunk = create_tool_call_chunk(tool_calls_dict, model)
                     logger.debug(
-                        f"[YIELD] Elif block - tool_calls chunk: {len(tool_calls_dict)} tool(s)"
+                        f"[YIELD] First msg - tool_calls chunk: "
+                        f"{len(tool_calls_dict)} tool(s)"
+                    )
+                    yield json.dumps(chunk)
+
+                is_first_ai_message = False
+                logger.debug("[STATE] is_first_ai_message set to False")
+
+            elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+                path_tool_calls_count += 1
+                logger.debug(
+                    f"[PATH] Elif tool_calls block executed "
+                    f"(count={path_tool_calls_count}, "
+                    f"tool_ids={[tc.get('id', 'no-id') for tc in ai_msg.tool_calls]})"
+                )
+
+                if use_native_format:
+                    # Emit tool calls chunk (no buffering)
+                    tool_calls_dict = [
+                        {
+                            "name": tc.get("name", ""),
+                            "args": tc.get("args", {}),
+                            "id": tc.get("id", ""),
+                        }
+                        for tc in ai_msg.tool_calls
+                    ]
+                    chunk = create_tool_call_chunk(tool_calls_dict, model)
+                    logger.debug(
+                        f"[YIELD] Elif block - tool_calls chunk: "
+                        f"{len(tool_calls_dict)} tool(s)"
                     )
                     yield json.dumps(chunk)
                 else:
-                    # Fallback to markdown format
-                    if buffer.has_content():
-                        content = buffer.flush()
-                        if content:
-                            chunk = create_openai_chunk(content=content, model=model)
-                            logger.debug(
-                                f"[YIELD] Elif block - content chunk: {content[:50]}..."
-                            )
-                            yield json.dumps(chunk)
-
+                    # Legacy markdown mode: stream tool info
                     for tool_call in ai_msg.tool_calls:
                         tool_name = tool_call.get("name", "unknown")
                         tool_args = tool_call.get("args", {})
-                        buffer.add_tool_call(tool_name, tool_args)
-                        content = buffer.flush()
-                        if content:
-                            chunk = create_openai_chunk(content=content, model=model)
-                            logger.debug("[YIELD] Elif block - tool content chunk")
-                            yield json.dumps(chunk)
+                        tool_section = format_tool_section(tool_name, tool_args)
+                        for chunk in chunk_text(tool_section):
+                            yield json.dumps(
+                                create_openai_chunk(content=chunk, model=model)
+                            )
 
             else:
                 path_final_content_count += 1
                 logger.debug(
-                    f"[PATH] Final content block executed (count={path_final_content_count})"
+                    f"[PATH] Final content block executed "
+                    f"(count={path_final_content_count})"
                 )
-                # Final content - accumulate in buffer
+
+                # Stream content character-by-character
                 content_str = extract_content_str(ai_msg.content)
-                if content_str:
-                    should_flush = buffer.add_content(content_str)
-                    if should_flush:
-                        content = buffer.flush()
-                        if content:
-                            chunk = create_openai_chunk(content=content, model=model)
-                            logger.debug(
-                                f"[YIELD] Final content block - chunk: {content[:50]}..."
-                            )
-                            yield json.dumps(chunk)
+                if content_str and content_str.strip():
+                    for chunk in chunk_text(content_str):
+                        yield json.dumps(
+                            create_openai_chunk(content=chunk, model=model)
+                        )
 
         # Flush any remaining content
         logger.debug(
-            f"[SUMMARY] Events processed: {event_counter}, First msg path: {path_first_msg_count}, Tool calls path: {path_tool_calls_count}, Final content path: {path_final_content_count}"
+            f"[SUMMARY] Events processed: {event_counter}, "
+            f"First msg path: {path_first_msg_count}, "
+            f"Tool calls path: {path_tool_calls_count}, "
+            f"Final content path: {path_final_content_count}"
         )
-        if buffer.has_content():
-            final_content = buffer.flush_final()
-            if final_content:
-                chunk = create_openai_chunk(content=final_content, model=model)
-                logger.debug(
-                    f"[YIELD] Final flush - remaining content: {len(final_content)} chars"
-                )
-                yield json.dumps(chunk)
 
         if use_native_format:
             # Send final chunk
@@ -397,6 +376,7 @@ async def generate_response(
         messages: List of conversation messages
         model: Model ID
         temperature: Sampling temperature
+        use_native_format: Whether to use native tool_calls format or markdown
 
     Returns:
         OpenAI-compatible response dictionary
@@ -453,10 +433,9 @@ async def generate_response(
                 is_first_ai_message = False
 
             elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                if not use_native_format:
-                    # Only flush buffer for markdown mode
-                    if buffer.has_content():
-                        buffer.flush()
+                # Only flush buffer for markdown mode
+                if not use_native_format and buffer.has_content():
+                    buffer.flush()
 
                 # Store tool calls for final response (convert to dict format)
                 stored_tool_calls = [
