@@ -331,3 +331,27 @@ class TestEdgeCases:
         lc_messages = convert_messages_to_langchain(messages)
         assert len(lc_messages) == 1
         assert lc_messages[0].tool_calls[0]["args"] == {}
+
+
+class TestPydanticModelInput:
+    """Tests for Pydantic model inputs."""
+
+    def test_pydantic_user_message(self) -> None:
+        """Test user message as Pydantic model."""
+        from esdc.server.models import Message
+
+        messages = [Message(role="user", content="Hello from Pydantic")]
+        lc_messages = convert_messages_to_langchain(messages)
+        assert len(lc_messages) == 1
+        assert isinstance(lc_messages[0], HumanMessage)
+        assert lc_messages[0].content == "Hello from Pydantic"
+
+    def test_pydantic_assistant_message(self) -> None:
+        """Test assistant message as Pydantic model."""
+        from esdc.server.models import Message
+
+        messages = [Message(role="assistant", content="Response")]
+        lc_messages = convert_messages_to_langchain(messages)
+        assert len(lc_messages) == 1
+        assert isinstance(lc_messages[0], AIMessage)
+        assert lc_messages[0].content == "Response"
