@@ -107,6 +107,9 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
 
     for item in output:
         if not isinstance(item, dict):
+            logger.debug(
+                f"[convert_output] Skipping non-dict item: type={type(item).__name__}"
+            )
             continue
 
         item_type = item.get("type")
@@ -172,6 +175,11 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
                 output_text = str(output_content) if output_content else ""
 
             lc_messages.append(ToolMessage(content=output_text, tool_call_id=call_id))
+
+        else:
+            logger.warning(
+                f"[convert_output] Unknown item type '{item_type}' in output array"
+            )
 
     return lc_messages
 
