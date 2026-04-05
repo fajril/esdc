@@ -32,7 +32,7 @@ from esdc.server.tool_formatter import (
 logger = logging.getLogger("esdc.server.agent")
 
 
-def convert_messages_to_langchain(messages: list) -> list:
+def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
     """Convert OpenAI-compatible messages to LangChain messages.
 
     Handles both standard Chat Completions format and OpenWebUI format
@@ -48,7 +48,7 @@ def convert_messages_to_langchain(messages: list) -> list:
     This needs to be converted to LangChain's format of AIMessage (with tool_calls)
     followed by ToolMessage objects.
     """
-    lc_messages = []
+    lc_messages: list[Any] = []
 
     for msg in messages:
         if isinstance(msg, dict):
@@ -93,7 +93,7 @@ def convert_messages_to_langchain(messages: list) -> list:
     return lc_messages
 
 
-def _convert_output_to_langchain_messages(output: list) -> list:
+def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
     """Convert OpenWebUI output array to LangChain messages.
 
     The output array can contain:
@@ -103,7 +103,7 @@ def _convert_output_to_langchain_messages(output: list) -> list:
 
     Returns a list of LangChain messages preserving order and context.
     """
-    lc_messages = []
+    lc_messages: list[Any] = []
 
     for item in output:
         if not isinstance(item, dict):
