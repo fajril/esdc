@@ -59,7 +59,7 @@ def convert_responses_input_to_langchain(
     Returns:
         List of LangChain messages
     """
-    messages = []
+    messages: list[Any] = []
 
     # Add system message if instructions provided
     if instructions:
