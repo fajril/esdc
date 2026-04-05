@@ -33,6 +33,7 @@ from langchain_core.runnables import RunnableConfig
 from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
+from esdc.server.cache import get_parsed_json
 from esdc.server.content_accumulator import ContentAccumulator, format_tool_section
 from esdc.server.message_utils import extract_ai_message_from_event, extract_content_str
 from esdc.server.responses_wrapper import extract_tool_messages_from_event
@@ -163,10 +164,7 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
             name = item.get("name", "")
             args_str = item.get("arguments", "{}")
 
-            try:
-                args = json.loads(args_str) if args_str else {}
-            except json.JSONDecodeError:
-                args = {}
+            args = get_parsed_json(args_str)
 
             lc_messages.append(
                 AIMessage(

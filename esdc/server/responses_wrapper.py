@@ -26,6 +26,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
+from esdc.server.cache import get_parsed_json
 from esdc.server.message_utils import extract_ai_message_from_event, extract_content_str
 from esdc.server.responses_events import (
     create_content_part_added_event,
@@ -191,11 +192,7 @@ def convert_responses_input_to_langchain(
                 else getattr(item, "arguments", "{}")
             )
 
-            # Parse arguments
-            try:
-                args = json.loads(args_str) if args_str else {}
-            except json.JSONDecodeError:
-                args = {}
+            args = get_parsed_json(args_str)
 
             logger.debug(
                 f"[convert_responses_input] Item {idx}: function_call, "
