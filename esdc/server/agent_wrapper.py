@@ -141,16 +141,16 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
             content_parts = item.get("content", [])
 
             # Extract text from content parts
-            text_parts = []
+            text_parts_str = []
             for part in content_parts:
                 if isinstance(part, dict):
                     ptype = part.get("type", "")
                     if ptype in ("output_text", "input_text", "text"):
-                        text_parts.append(part.get("text", ""))
+                        text_parts_str.append(part.get("text", ""))
                 elif isinstance(part, str):
-                    text_parts.append(part)
+                    text_parts_str.append(part)
 
-            text = "\n".join(text_parts) if text_parts else ""
+            text = "\n".join(text_parts_str) if text_parts_str else ""
 
             if role == "assistant":
                 lc_messages.append(AIMessage(content=text))
@@ -178,6 +178,7 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
             output_content = item.get("output", "")
 
             if isinstance(output_content, list):
+                # Extract text from parts
                 text_parts = []
                 for part in output_content:
                     if isinstance(part, dict):
@@ -527,6 +528,9 @@ async def generate_response(
     Returns:
         OpenAI-compatible response dictionary
     """
+    # Generate UUID for this response
+    response_uuid = uuid.uuid4().hex[:12]
+
     try:
         # Create LLM and agent
         provider_config = Config.get_provider_config()
@@ -620,7 +624,7 @@ async def generate_response(
             )
 
             return {
-                "id": f"chatcmpl-{stream_uuid}",
+                "id": f"chatcmpl-{response_uuid}",
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": model,

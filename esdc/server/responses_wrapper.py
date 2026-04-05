@@ -216,11 +216,12 @@ def convert_responses_input_to_langchain(
             if isinstance(output, str):
                 output_content = output
             elif isinstance(output, list):
-                # Extract text from content parts array
+                # Extract text from content parts
                 text_parts = []
-                for part in output:
+                output_list: list[Any] = output
+                for part in output_list:
                     if isinstance(part, dict):
-                        ptype = part.get("type")
+                        ptype = part.get("type", "")
                         if ptype in ("input_text", "output_text", "text"):
                             text_parts.append(part.get("text", ""))
                     elif isinstance(part, str):
