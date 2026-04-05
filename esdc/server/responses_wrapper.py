@@ -785,7 +785,25 @@ async def generate_responses_sync(
         # First: all function_calls
         for ai_msg in all_ai_messages:
             if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                for tc in ai_msg.tool_calls:
+                logger.debug(
+                    f"[RESPONSES {response_id}] SYNC tool_calls type: "
+                    f"{type(ai_msg.tool_calls)}, count: {len(ai_msg.tool_calls)}"
+                )
+                for tc_idx, tc in enumerate(ai_msg.tool_calls):
+                    # DIAGNOSTIC: Log type and value of each tool_call
+                    logger.debug(
+                        f"[RESPONSES {response_id}] SYNC tool_call[{tc_idx}] "
+                        f"type: {type(tc).__name__}, "
+                        f"value: {repr(tc)[:200]}"
+                    )
+                    # If it's not a dict, skip and log warning
+                    if not isinstance(tc, dict):
+                        logger.warning(
+                            f"[RESPONSES {response_id}] SYNC SKIPPING malformed "
+                            f"tool_call[{tc_idx}] - expected dict, got "
+                            f"{type(tc).__name__}: {repr(tc)[:100]}"
+                        )
+                        continue
                     tc_name = tc.get("name", "")
                     tc_id = tc.get("id", "")
                     logger.debug(
