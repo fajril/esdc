@@ -334,7 +334,13 @@ class Config:
         # Backward compatibility: fall back to old chat.log_level for base level
         if not logging_config:
             old_level = config.get("chat", {}).get("log_level", "INFO")
-            logging_config = {"level": old_level}
+            # When migrating from old config, use old_level for all components
+            logging_config = {
+                "level": old_level,
+                "server": {"level": old_level},
+                "agent": {"level": old_level},
+                "chat": {"level": old_level},
+            }
 
         # Apply environment variable override (applies to all components)
         if env_level:
