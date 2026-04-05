@@ -17,31 +17,50 @@ log_dir = Path.home() / ".esdc" / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "esdc_chat.log"
 
-# Get log level from env var (priority) or default to WARNING
-log_level_str = os.environ.get("ESDC_LOG_LEVEL", "WARNING").upper()
+# Import Config for logging configuration
+# Note: This is safe because configs.py doesn't import from chat/
+from esdc.configs import Config
+
+# Get logging configuration
+log_config = Config.get_logging_config()
+chat_level_str = log_config.get("chat", {}).get("level", "WARNING").upper()
+file_config = log_config.get("file", {})
 
 # Configure esdc.chat logger
 logger = logging.getLogger("esdc.chat")
 
-if log_level_str == "0":
+if chat_level_str == "0":
     # Disable logging completely
     logging.disable(logging.CRITICAL)
 else:
     # Parse log level
-    log_level = getattr(logging, log_level_str, logging.INFO)
+    chat_level = getattr(logging, chat_level_str, logging.WARNING)
 
-    # Rotating file handler: 10MB max, 5 backups
+    # Rotating file handler: from config or defaults
+    max_size = 10 * 1024 * 1024  # Default 10MB
+    backup_count = 5  # Default 5 backups
+    if file_config.get("max_size"):
+        # Parse size string like '10MB'
+        size_str = file_config["max_size"].upper().strip()
+        for suffix, multiplier in [("KB", 1024), ("MB", 1024**2), ("GB", 1024**3)]:
+            if size_str.endswith(suffix):
+                max_size = int(size_str[: -len(suffix)]) * multiplier
+                break
+
+    if file_config.get("backup_count"):
+        backup_count = file_config["backup_count"]
+
     file_handler = RotatingFileHandler(
         log_file,
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=5,
+        maxBytes=max_size,
+        backupCount=backup_count,
     )
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
         logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
     )
 
-    logger.setLevel(log_level)
+    logger.setLevel(chat_level)
     logger.addHandler(file_handler)
     logger.propagate = False  # Critical: prevent logs from propagating to root logger
 
