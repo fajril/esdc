@@ -332,6 +332,42 @@ class TestEdgeCases:
         assert len(lc_messages) == 1
         assert lc_messages[0].tool_calls[0]["args"] == {}
 
+    def test_missing_call_id_in_function_call(self) -> None:
+        """Test function_call with missing call_id defaults to empty."""
+        messages = [
+            {
+                "role": "assistant",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "get_data",
+                        "arguments": "{}",
+                    }
+                ],
+            }
+        ]
+        lc_messages = convert_messages_to_langchain(messages)
+        assert len(lc_messages) == 1
+        assert lc_messages[0].tool_calls[0]["id"] == ""
+
+    def test_non_dict_item_in_output(self) -> None:
+        """Test output array with non-dict item is skipped."""
+        messages = [
+            {
+                "role": "assistant",
+                "output": [
+                    "string_item",
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Valid"}],
+                    },
+                ],
+            }
+        ]
+        lc_messages = convert_messages_to_langchain(messages)
+        assert len(lc_messages) == 1
+        assert "Valid" in lc_messages[0].content
+
 
 class TestPydanticModelInput:
     """Tests for Pydantic model inputs."""
