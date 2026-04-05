@@ -141,10 +141,41 @@ def convert_responses_input_to_langchain(
 
         elif item_type == "function_call":
             # Function call from previous assistant turn
-            # This is part of conversation history but LangGraph doesn't need it
-            # Just log and skip
+            # Create AIMessage with tool_calls for LangGraph
+            # Note: OpenWebUI may use 'id' or 'call_id' interchangeably
+            call_id = ""
+            if isinstance(item, dict):
+                call_id = item.get("call_id") or item.get("id", "")
+            else:
+                call_id = getattr(item, "call_id", None) or getattr(item, "id", "")
+
+            name = (
+                item.get("name", "")
+                if isinstance(item, dict)
+                else getattr(item, "name", "")
+            )
+            args_str = (
+                item.get("arguments", "{}")
+                if isinstance(item, dict)
+                else getattr(item, "arguments", "{}")
+            )
+
+            # Parse arguments
+            try:
+                args = json.loads(args_str) if args_str else {}
+            except json.JSONDecodeError:
+                args = {}
+
             logger.debug(
-                f"[convert_responses_input] Item {idx}: function_call, skipping"
+                f"[convert_responses_input] Item {idx}: function_call, "
+                f"call_id={call_id}, name={name}"
+            )
+
+            messages.append(
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": name, "args": args, "id": call_id}],
+                )
             )
 
         elif item_type == "function_call_output":

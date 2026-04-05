@@ -1,5 +1,7 @@
 """Tests for Responses API input handling with discriminated unions."""
 
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
 from esdc.server.responses_models import (
     ResponseInputFunctionCallItem,
     ResponseInputFunctionCallOutputItem,
@@ -77,8 +79,8 @@ class TestMessageItems:
 class TestFunctionCallItems:
     """Tests for function_call input items."""
 
-    def test_function_call_item_skipped(self) -> None:
-        """Test that function_call items are skipped gracefully."""
+    def test_function_call_item_creates_ai_message(self) -> None:
+        """Test that function_call items create AIMessage with tool_calls."""
         item = ResponseInputItem(
             type="function_call",
             id="fc_123",
@@ -86,7 +88,12 @@ class TestFunctionCallItems:
             arguments='{"param": "value"}',
         )
         messages = convert_responses_input_to_langchain([item])
-        assert len(messages) == 0
+        assert len(messages) == 1
+        assert isinstance(messages[0], AIMessage)
+        assert messages[0].content == ""
+        assert len(messages[0].tool_calls) == 1
+        assert messages[0].tool_calls[0]["name"] == "get_data"
+        assert messages[0].tool_calls[0]["args"] == {"param": "value"}
 
     def test_new_function_call_item_model(self) -> None:
         """Test new ResponseInputFunctionCallItem model."""
@@ -97,7 +104,10 @@ class TestFunctionCallItems:
             arguments='{"entity_type": "national"}',
         )
         messages = convert_responses_input_to_langchain([item])
-        assert len(messages) == 0
+        assert len(messages) == 1
+        assert isinstance(messages[0], AIMessage)
+        assert messages[0].tool_calls[0]["name"] == "query_reserves"
+        assert messages[0].tool_calls[0]["args"] == {"entity_type": "national"}
 
 
 class TestFunctionCallOutputItems:
@@ -175,7 +185,15 @@ class TestRealOpenWebUIConversation:
         ]
 
         messages = convert_responses_input_to_langchain(conversation)
-        assert len(messages) == 4
+        # Now function_call creates AIMessage with tool_calls
+        # 1 HumanMessage + 1 AIMessage(tool_call) + 1 ToolMessage + 1 AIMessage + 1 HumanMessage = 5
+        assert len(messages) == 5
+        assert isinstance(messages[0], HumanMessage)
+        assert isinstance(messages[1], AIMessage)
+        assert len(messages[1].tool_calls) == 1
+        assert isinstance(messages[2], ToolMessage)
+        assert isinstance(messages[3], AIMessage)
+        assert isinstance(messages[4], HumanMessage)
 
     def test_conversation_with_system_instructions(self) -> None:
         """Test conversation with system instructions."""
