@@ -206,10 +206,21 @@ def create_openai_chunk(
     content: str = "",
     model: str = "esdc-agent",
     finish_reason: str | None = None,
+    chunk_id: str | None = None,
 ) -> dict:
-    """Create OpenAI-compatible streaming chunk."""
+    """Create OpenAI-compatible streaming chunk.
+
+    Args:
+        content: Content for this chunk
+        model: Model ID
+        finish_reason: Finish reason (stop, tool_calls, etc.)
+        chunk_id: Optional chunk ID (generated if not provided)
+
+    Returns:
+        OpenAI-compatible chunk dict
+    """
     return {
-        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "id": chunk_id or f"chatcmpl-{uuid.uuid4().hex[:12]}",
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": model,
@@ -245,8 +256,19 @@ async def generate_streaming_response(
     Yields:
         OpenAI-compatible streaming chunks as SSE formatted strings
     """
+    # Generate one base UUID per stream to avoid per-chunk UUID overhead
+    stream_uuid = uuid.uuid4().hex[:12]
     if not request_id:
-        request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        request_id = f"chatcmpl-{stream_uuid}"
+
+    # Chunk ID counter for efficient streaming
+    chunk_counter = 0
+
+    def next_chunk_id() -> str:
+        """Generate next chunk ID without UUID overhead."""
+        nonlocal chunk_counter
+        chunk_counter += 1
+        return f"chatcmpl-{stream_uuid}-{chunk_counter:04d}"
 
     # DEBUG: Counters for tracking execution paths
     event_counter = 0
@@ -272,6 +294,7 @@ async def generate_streaming_response(
                     content="Error: No provider configured.",
                     model=model,
                     finish_reason="stop",
+                    chunk_id=next_chunk_id(),
                 )
             )
             return
@@ -371,7 +394,9 @@ async def generate_streaming_response(
                     for chunk in chunk_text(content_str):
                         yield_counter += 1
                         yield json.dumps(
-                            create_openai_chunk(content=chunk, model=model)
+                            create_openai_chunk(
+                                content=chunk, model=model, chunk_id=next_chunk_id()
+                            )
                         )
 
                 # Emit tool calls after content
@@ -425,7 +450,9 @@ async def generate_streaming_response(
                         for chunk in chunk_text(tool_section):
                             yield_counter += 1
                             yield json.dumps(
-                                create_openai_chunk(content=chunk, model=model)
+                                create_openai_chunk(
+                                    content=chunk, model=model, chunk_id=next_chunk_id()
+                                )
                             )
 
             else:
@@ -435,7 +462,9 @@ async def generate_streaming_response(
                     for chunk in chunk_text(content_str):
                         yield_counter += 1
                         yield json.dumps(
-                            create_openai_chunk(content=chunk, model=model)
+                            create_openai_chunk(
+                                content=chunk, model=model, chunk_id=next_chunk_id()
+                            )
                         )
 
         # Send final chunk
@@ -457,6 +486,7 @@ async def generate_streaming_response(
                 content="",
                 model=model,
                 finish_reason="stop",
+                chunk_id=next_chunk_id(),
             )
             yield_counter += 1
             logger.debug(
@@ -474,6 +504,7 @@ async def generate_streaming_response(
             content=f"Error: {str(e)}",
             model=model,
             finish_reason="stop",
+            chunk_id=next_chunk_id(),
         )
         yield_counter += 1
         yield json.dumps(error_chunk)
@@ -589,7 +620,7 @@ async def generate_response(
             )
 
             return {
-                "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                "id": f"chatcmpl-{stream_uuid}",
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": model,
