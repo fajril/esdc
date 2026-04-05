@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "esdc"
 version = "0.4.0"
 description = "Agentic chat interface for Indonesian oil & gas reserves database (ESDC)"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.15"
 authors = [
   { name = "Fajril Ambia", email = "fajril@ambia.id" },
 ]
