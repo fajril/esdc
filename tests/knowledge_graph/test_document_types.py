@@ -65,3 +65,42 @@ def test_detect_sk_document():
 
     assert result["doc_type"] == "SK"
     assert "ketetapan" in result["sections"]
+
+
+def test_detect_with_llm_fallback_disabled():
+    """Test that LLM fallback can be disabled."""
+    from unittest.mock import MagicMock
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value.content = '{"doc_type": "MoM", "confidence": 0.7}'
+
+    detector = DocumentTypeDetector(llm=mock_llm)
+
+    content = "Some random content with no keywords"
+    result = detector.detect(content, filename="unknown.md", use_llm_fallback=False)
+
+    assert result["doc_type"] == "TECHNICAL_REPORT"
+    assert result["confidence"] == 0.3
+
+
+def test_detect_uses_llm_for_low_confidence():
+    """Test that LLM is used when keyword confidence is low."""
+    from unittest.mock import MagicMock
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value.content = """
+    {
+        "doc_type": "MoM",
+        "confidence": 0.85,
+        "is_timeless": false,
+        "sections": {"title": {"text": "Test", "confidence": 0.9}}
+    }
+    """
+
+    detector = DocumentTypeDetector(llm=mock_llm)
+
+    content = "Some random content with no keywords"
+    result = detector.detect(content, filename="unknown.md")
+
+    assert result["doc_type"] == "MoM"
+    assert result["confidence"] == 0.85

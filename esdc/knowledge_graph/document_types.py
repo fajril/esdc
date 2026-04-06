@@ -1,5 +1,9 @@
 """Document type detection for ESDC knowledge graph."""
 
+from typing import Any
+
+from langchain_core.language_models.chat_models import BaseChatModel
+
 DOCUMENT_SCHEMAS = {
     "DEFINITION": {
         "sections": ["title", "definition", "scope", "term", "concept", "reference"],
@@ -64,18 +68,92 @@ DOCUMENT_SCHEMAS = {
 }
 
 
-from typing import Any
+DOCUMENT_SCHEMAS = {
+    "DEFINITION": {
+        "sections": ["title", "definition", "scope", "term", "concept", "reference"],
+        "priority": "title",
+        "is_timeless": True,
+        "keywords": ["definition", "glossary", "PRMS", "Petroleum Resources"],
+    },
+    "MoM": {
+        "sections": [
+            "title",
+            "agenda",
+            "attendees",
+            "discussion",
+            "kesimpulan",
+            "tindak_lanjut",
+        ],
+        "priority": "title",
+        "is_timeless": False,
+        "keywords": ["minutes of meeting", "notulen", "kesimpulan rapat", "MoM"],
+    },
+    "SK": {
+        "sections": ["title", "ketetapan", "dasar_hukum", "menetapkan", "kewenangan"],
+        "priority": "title",
+        "is_timeless": False,
+        "keywords": ["surat keputusan", "menetapkan", "SK Menteri", "keputusan"],
+    },
+    "POD": {
+        "sections": [
+            "title",
+            "executive_summary",
+            "development_plan",
+            "economics",
+            "timeline",
+        ],
+        "priority": "title",
+        "is_timeless": False,
+        "keywords": [
+            "plan of development",
+            "POD",
+            "pengembangan",
+            "plan of development",
+        ],
+    },
+    "PERATURAN": {
+        "sections": ["title", "pasal", "bab", "ketentuan", "sanksi"],
+        "priority": "title",
+        "is_timeless": False,
+        "keywords": ["peraturan", "pasal", "undang-undang", "permen"],
+    },
+    "TECHNICAL_REPORT": {
+        "sections": [
+            "title",
+            "executive_summary",
+            "findings",
+            "recommendations",
+            "appendix",
+        ],
+        "priority": "title",
+        "is_timeless": False,
+        "keywords": ["feasibility", "technical report", "study", "laporan"],
+    },
+}
 
 
 class DocumentTypeDetector:
     """Detects document type from content and filename."""
 
-    def detect(self, content: str, filename: str) -> dict[str, Any]:
+    def __init__(self, llm: BaseChatModel | None = None):
+        """Initialize the detector.
+
+        Args:
+            llm: Optional LangChain chat model for LLM-based extraction.
+                 If provided, will be used as fallback when keyword
+                 matching yields low confidence.
+        """
+        self.llm = llm
+
+    def detect(
+        self, content: str, filename: str, *, use_llm_fallback: bool = True
+    ) -> dict[str, Any]:
         """Detect document type from content and filename.
 
         Args:
             content: Document content
             filename: Document filename
+            use_llm_fallback: Whether to use LLM for low confidence results
 
         Returns:
             Dictionary with:
@@ -83,6 +161,42 @@ class DocumentTypeDetector:
             - confidence: Confidence score (0-1)
             - sections: List of detected sections
             - is_timeless: Whether document is timeless
+        """
+        keyword_result = self._detect_by_keywords(content, filename)
+
+        if keyword_result["confidence"] >= 0.5 or not use_llm_fallback:
+            return keyword_result
+
+        if self.llm is None:
+            return keyword_result
+
+        try:
+            from esdc.knowledge_graph.llm_extraction import LLMExtractor
+
+            extractor = LLMExtractor(llm=self.llm)
+            llm_result = extractor.extract_structure(content, filename)
+
+            if llm_result["confidence"] > keyword_result["confidence"]:
+                return {
+                    "doc_type": llm_result["doc_type"],
+                    "confidence": llm_result["confidence"],
+                    "sections": list(llm_result["sections"].keys()),
+                    "is_timeless": llm_result["is_timeless"],
+                }
+        except (ValueError, KeyError):
+            pass
+
+        return keyword_result
+
+    def _detect_by_keywords(self, content: str, filename: str) -> dict[str, Any]:
+        """Detect document type using keyword matching.
+
+        Args:
+            content: Document content
+            filename: Document filename
+
+        Returns:
+            Dictionary with detection results
         """
         content_lower = content.lower()
         filename_lower = filename.lower()
