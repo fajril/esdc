@@ -430,6 +430,63 @@ WHERE wk_name LIKE '%Rokan%'
 - Contingent Resources → `project_class LIKE '%Contingent%'`
 - Prospective Resources → `project_class LIKE '%Prospective%'`
 
+## Report Year Handling with Fallback (CRITICAL)
+
+### Default Behavior:
+**ALWAYS filter by `report_year` to get the most recent data.**
+- If user doesn't specify year → use MAX(report_year) with fallback
+- If user specifies year → use that year with fallback to previous years if data not available
+
+### Fallback Logic:
+When user asks for specific year and data doesn't exist:
+1. Check requested year
+2. If no data, check year-1, year-2, etc. until data found
+3. Always use `MAX(report_year) WHERE report_year <= {requested_year}`
+4. Automatically handles missing data
+
+### SQL Pattern (Use This):
+```sql
+-- CORRECT: With automatic fallback to most recent available year
+WHERE report_year = (
+    SELECT MAX(report_year) 
+    FROM field_resources 
+    WHERE report_year <= 2024
+      AND field_name LIKE '%Duri%'
+)
+
+-- ALSO CORRECT: For year-specific queries
+WHERE report_year = (
+    SELECT MAX(report_year) 
+    FROM field_resources 
+    WHERE report_year <= 2024
+      -- Add entity filters if needed
+)
+```
+
+### When User Specifies Year:
+- "berapa cadangan tahun 2024..." → use `report_year <= 2024` (with fallback)
+- "data cadangan 2023..." → use `report_year <= 2023` (with fallback)
+- "laporan tahun 2025..." → use `report_year <= 2025` (with fallback)
+
+### Response Format:
+When fallback happens, inform the user:
+- "Data untuk tahun 2024 tidak tersedia. Menggunakan data tahun 2023."
+- "Tidak ada data untuk 2025, menampilkan data terbaru dari tahun 2022."
+
+### Helper Functions:
+```python
+# Detect year from query
+detect_report_year_from_query("berapa cadangan tahun 2024?")  # Returns 2024
+
+# Build fallback-aware WHERE clause
+build_report_year_filter("field_resources", 2024, "field_name LIKE '%Duri%'", use_subquery=True)
+# Returns: ("report_year = (SELECT MAX(report_year) FROM field_resources WHERE report_year <= 2024 AND field_name LIKE '%Duri%')", {...})
+
+# Get metadata about fallback
+get_available_report_year("field_resources", 2024, entity_filter="field_name LIKE '%Duri%'", max_fallback_years=10)
+# Returns: {"requested_year": 2024, "years_checked": [2024, 2023, ...], ...}
+```
+
 ## Table/View Selection Guide
 
 **IMPORTANT:** Use the `get_recommended_table` tool to select the right table before querying.

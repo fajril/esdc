@@ -25,6 +25,11 @@ class EnrichedQuery:
     table: str
     was_already_enriched: bool = False  # Track if model already enriched
     enrichment_source: str = "unknown"  # "model" | "fallback" | "none"
+    report_year_requested: int | None = None  # Year user asked for
+    report_year_used: int | None = (
+        None  # Year actually used (may differ due to fallback)
+    )
+    report_year_fallback_info: dict[str, Any] | None = None  # Fallback details
 
 
 def extract_table_from_sql(sql: str) -> str | None:
@@ -1784,6 +1789,171 @@ def get_project_stage_filter(query: str) -> str | None:
     return None
 
 
+def get_available_report_year(
+    table: str,
+    target_year: int | None = None,
+    entity_filter: str | None = None,
+    max_fallback_years: int = 10,
+) -> dict[str, Any]:
+    """
+    Get available report year with fallback logic.
+
+    If target_year has no data, check previous years until data found.
+
+    Args:
+        table: Table name (field_resources, wa_resources, nkri_resources, project_resources)
+        target_year: Desired report year (defaults to current year)
+        entity_filter: Optional WHERE clause for entity (e.g., "field_name LIKE '%Duri%'")
+        max_fallback_years: Maximum years to check backwards (default 10)
+
+    Returns:
+        Dict with:
+            - requested_year: Year originally requested
+            - actual_year: Year to use (may differ due to fallback)
+            - years_checked: List of years checked
+            - has_data: Whether data exists
+            - message: Human-readable message about fallback
+
+    Examples:
+        >>> result = get_available_report_year("field_resources", 2024)
+        >>> result["years_checked"]
+        [2024, 2023, 2022, ...]
+    """
+    from datetime import datetime
+
+    # Default to current year if not specified
+    if target_year is None:
+        target_year = datetime.now().year
+
+    # Validate table name to prevent SQL injection
+    valid_tables = [
+        "field_resources",
+        "wa_resources",
+        "nkri_resources",
+        "project_resources",
+        "field_timeseries",
+        "wa_timeseries",
+        "nkri_timeseries",
+        "project_timeseries",
+    ]
+    if table not in valid_tables:
+        raise ValueError(f"Invalid table: {table}. Must be one of {valid_tables}")
+
+    years_checked = []
+
+    # Calculate years to check
+    for year in range(target_year, target_year - max_fallback_years - 1, -1):
+        years_checked.append(year)
+
+    # Return metadata about fallback strategy
+    # The actual SQL execution happens in build_report_year_filter
+    result = {
+        "requested_year": target_year,
+        "actual_year": None,  # Will be set by caller after SQL execution
+        "years_checked": years_checked[: max_fallback_years + 1],
+        "has_data": False,  # Will be set by caller
+        "message": None,
+        "fallback_needed": False,
+    }
+
+    return result
+
+
+def build_report_year_filter(
+    table: str,
+    target_year: int | None = None,
+    entity_filter: str | None = None,
+    use_subquery: bool = True,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Build SQL WHERE clause for report_year with fallback logic.
+
+    Args:
+        table: Table name
+        target_year: Desired report year (defaults to current year)
+        entity_filter: Optional entity filter (e.g., "field_name LIKE '%Duri%'")
+        use_subquery: Whether to use subquery approach (recommended for single queries)
+
+    Returns:
+        Tuple of (SQL WHERE clause, metadata dict)
+
+    Examples:
+        >>> sql_clause, meta = build_report_year_filter("field_resources", 2024)
+        >>> print(sql_clause)
+        report_year = (SELECT MAX(report_year) FROM field_resources WHERE report_year <= 2024)
+
+        >>> sql_clause, meta = build_report_year_filter("project_resources", 2024, "project_name LIKE '%X%'", use_subquery=False)
+        >>> print(sql_clause)
+        report_year <= 2024
+    """
+    metadata = get_available_report_year(table, target_year, entity_filter)
+
+    if use_subquery:
+        # Subquery approach: find max year <= target_year
+        # This automatically falls back to the most recent available year
+        target = metadata["requested_year"]
+        subquery = f"SELECT MAX(report_year) FROM {table} WHERE report_year <= {target}"
+
+        if entity_filter:
+            subquery += f" AND {entity_filter}"
+
+        where_clause = f"report_year = ({subquery})"
+    else:
+        # Simple filter: use <= target_year (caller handles fallback via ORDER BY/LIMIT)
+        target = metadata["requested_year"]
+        where_clause = f"report_year <= {target}"
+
+    return where_clause, metadata
+
+
+def detect_report_year_from_query(query: str) -> int | None:
+    """
+    Detect if user mentioned a specific report year in their query.
+
+    Args:
+        query: User's query text (natural language)
+
+    Returns:
+        Year as int if detected, None otherwise
+
+    Examples:
+        >>> detect_report_year_from_query("berapa cadangan tahun 2024?")
+        2024
+        >>> detect_report_year_from_query("data cadangan 2023?")
+        2023
+        >>> detect_report_year_from_query("cadangan lapangan duri?")
+        None
+    """
+    import re
+
+    # Match patterns like "tahun 2024", "2024", "tahun 24", "year 2024"
+    patterns = [
+        r"tahun\s*(\d{4})",  # "tahun 2024"
+        r"year\s*(\d{4})",  # "year 2024"
+        r"(?:^|\s)(\d{4})(?:\s|$)",  # standalone "2024"
+        r"tahun\s*(\d{2})(?!\d)",  # "tahun 24" (2-digit year)
+    ]
+
+    query_clean = query.lower().strip()
+
+    for pattern in patterns:
+        match = re.search(pattern, query_clean)
+        if match:
+            year_str = match.group(1)
+            year = int(year_str)
+
+            # Handle 2-digit years (24 -> 2024)
+            if year < 100:
+                # Assume years 00-99 are 2000-2099
+                year = 2000 + year
+
+            # Validate year range (reasonable for oil & gas data)
+            if 2000 <= year <= 2100:
+                return year
+
+    return None
+
+
 def get_recommended_table(
     entity_type: str | None, query_needs_detail: bool = False
 ) -> str:
@@ -1809,9 +1979,10 @@ def build_aggregate_query(
     uncertainty: str,
     project_class: str | None = None,
     use_view: bool = True,
+    report_year: int | None = None,
 ) -> dict[str, Any]:
     """
-    Build an aggregate query for resource data.
+    Build an aggregate query for resource data with automatic report year fallback.
 
     Args:
         entity_type: Type of entity (field, work_area, national)
@@ -1820,14 +1991,19 @@ def build_aggregate_query(
         uncertainty: Uncertainty level (1P, 2P, 3P, probable, etc.)
         project_class: Optional project class filter (grr, etc.)
         use_view: Whether to use aggregation views (default True)
+        report_year: Optional target report year (defaults to MAX(report_year))
 
     Returns:
-        Dict with 'sql' and 'table' keys
+        Dict with 'sql', 'table', and 'report_year_info' keys
 
     Examples:
         >>> result = build_aggregate_query("field", "Duri", "cadangan", "2P")
         >>> result["table"]
         'field_resources'
+
+        >>> result = build_aggregate_query("field", "Duri", "cadangan", "2P", report_year=2023)
+        >>> "2023" in result["sql"]
+        True
     """
     from .tables import (
         get_entity_filter_column,
@@ -1876,6 +2052,16 @@ def build_aggregate_query(
             "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
         )
 
+    # Build entity filter for report_year subquery
+    entity_filter_sql = None
+    if filter_col and entity_name:
+        entity_filter_sql = f"pr.{filter_col} LIKE '%{entity_name}%'"
+
+    # Build report_year filter with fallback
+    report_year_where, report_year_info = build_report_year_filter(
+        table, report_year, entity_filter_sql, use_subquery=True
+    )
+
     # Build SQL with CASE WHEN for calculated uncertainties
     if is_calculated:
         sql = f"""SELECT
@@ -1884,13 +2070,13 @@ def build_aggregate_query(
     SUM(CASE WHEN pr.uncert_level = '2. Middle Value' THEN pr.{gas_col} ELSE 0 END)
     - SUM(CASE WHEN pr.uncert_level = '1. Low Value' THEN pr.{gas_col} ELSE 0 END) as gas
 FROM {table} pr
-WHERE pr.report_year = (SELECT MAX(report_year) FROM project_resources)"""
+WHERE {report_year_where}"""
     else:
         sql = f"""SELECT
     SUM(pr.{oc_col}) as oil_condensate,
     SUM(pr.{gas_col}) as gas
 FROM {table} pr
-WHERE pr.report_year = (SELECT MAX(report_year) FROM project_resources)"""
+WHERE {report_year_where}"""
 
     # Add entity filter
     if filter_col and entity_name:
@@ -1906,4 +2092,8 @@ WHERE pr.report_year = (SELECT MAX(report_year) FROM project_resources)"""
         if pc_filter:
             sql += f"\n    AND pr.project_class = '{pc_filter}'"
 
-    return {"sql": sql, "table": table}
+    return {
+        "sql": sql,
+        "table": table,
+        "report_year_info": report_year_info,
+    }

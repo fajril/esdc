@@ -30,12 +30,13 @@ from .concepts import DOMAIN_CONCEPTS
 # =============================================================================
 from .functions import (
     build_aggregate_query,
+    build_report_year_filter,
     build_sql_pattern,
     build_timeseries_query,
     calculate_eol_year,
     calculate_peak_production_year,
     convert_volume_units,
-    # New volume helpers
+    detect_report_year_from_query,
     detect_substance_from_query,
     detect_volume_type_from_query,
     enrich_sql_query,
@@ -44,6 +45,7 @@ from .functions import (
     format_response_value,
     format_timeseries_response,
     get_aggregation_table_info,
+    get_available_report_year,
     get_columns_for_concept,
     get_columns_for_substance,
     get_forecast_vs_historical_guide,
@@ -206,4 +208,8 @@ __all__ = [
     "detect_volume_type_from_query",
     "should_use_risked_columns",
     "get_project_stage_filter",
+    # Functions - Report Year Fallback (New)
+    "get_available_report_year",
+    "build_report_year_filter",
+    "detect_report_year_from_query",
 ]
