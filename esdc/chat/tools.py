@@ -29,10 +29,20 @@ def get_db_connection(db_path: str | None = None) -> sqlite3.Connection:
     Caller is responsible for closing the connection.
     For context manager usage, wrap with 'with get_db_connection() as conn:'
     """
+    from pathlib import Path
+
     if not db_path:
         from esdc.configs import Config
 
         db_path = str(Config.get_chat_db_path())
+
+    path_obj = Path(db_path)
+    if not path_obj.exists():
+        raise FileNotFoundError(
+            f"Database file not found: {db_path}\n"
+            f"Please run 'esdc fetch' to download the database, "
+            f"or check your configuration in ~/.esdc/config.yaml"
+        )
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -81,7 +91,6 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
             if not rows:
                 return "Query executed successfully. No results returned."
 
-            # Limit results to prevent context window overflow
             MAX_ROWS = 50
             total_rows = len(rows)
             if len(rows) > MAX_ROWS:
@@ -106,6 +115,8 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
         else:
             return "Query executed successfully. No results to display."
 
+    except FileNotFoundError as e:
+        return str(e)
     except sqlite3.Error as e:
         return f"SQL Error: {str(e)}"
     except Exception as e:
@@ -168,6 +179,10 @@ def get_schema(
 
             return result
 
+    except FileNotFoundError as e:
+        return str(e)
+    except sqlite3.Error as e:
+        return f"SQL Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
     finally:
@@ -214,6 +229,10 @@ def list_tables() -> str:
         conn.close()
         return result
 
+    except FileNotFoundError as e:
+        return str(e)
+    except sqlite3.Error as e:
+        return f"SQL Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
 
