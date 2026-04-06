@@ -52,6 +52,7 @@ from rich.progress import DownloadColumn, Progress, TransferSpeedColumn
 from tabulate import tabulate
 
 from esdc.chat.app import ESDCChatApp
+from esdc.commands.ingest import ingest_app
 from esdc.commands.provider import provider_app
 from esdc.configs import Config
 from esdc.dbmanager import load_data_to_db, run_query
@@ -64,6 +65,7 @@ TABLES: tuple[TableName, TableName] = (
 
 app = typer.Typer(no_args_is_help=False)
 app.add_typer(provider_app, name="provider")
+app.add_typer(ingest_app, name="ingest")
 
 
 @app.callback()
