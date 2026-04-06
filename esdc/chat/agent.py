@@ -13,6 +13,10 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 
 # Local
 from esdc.chat.context_manager import manage_context_node
+from esdc.chat.document_tools import (
+    get_entity_document_context,
+    search_documents,
+)
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.tools import (
     execute_sql,
@@ -107,6 +111,8 @@ def create_agent(
             get_recommended_table,
             resolve_uncertainty_level,
             search_problem_cluster,
+            search_documents,
+            get_entity_document_context,
         ]
 
     tools_by_name = {tool.name: tool for tool in tools}
