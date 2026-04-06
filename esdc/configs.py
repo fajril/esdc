@@ -422,3 +422,9 @@ class Config:
         """Check if chat configuration exists."""
         config = cls._load_config() or {}
         return "providers" in config and len(config.get("providers", {})) > 0
+
+    @classmethod
+    def get_ladybug_db_path(cls) -> Path:
+        """Get LadybugDB path."""
+        db_dir = cls.get_db_dir()
+        return db_dir.parent / "ladybug" / "documents.lbug"
