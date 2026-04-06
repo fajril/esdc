@@ -69,7 +69,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         "grr": {
             "db_value": "1. Reserves & GRR",
             "columns": ["rec_*"],
-            "description": "Government Recoverable Resources - reserves plus sales potential",
+            "description": "Government of Indonesia Recoverable Resources - total recoverable resources for government share, including reserves and sales potential",
         },
         "contingent": {
             "db_value": "2. Contingent Resources",
@@ -85,7 +85,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
             "db_value": "1. Reserves & GRR",
             "columns": ["rec_*", "res_*"],
             "calculation": "rec_* - res_*",
-            "description": "The difference between GRR and reserves",
+            "description": "Sales Potential - resources that could be produced if commercial constraints are resolved (GRR - Reserves)",
         },
     },
     "forecast_types": {

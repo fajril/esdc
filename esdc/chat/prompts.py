@@ -285,6 +285,39 @@ When applying defaults, inform the user:
 - If user specifies uncertainty but not year → use latest year
 - Never combine data from different report years
 
+## Domain Definitions
+
+### GRR (Government of Indonesia Recoverable Resources)
+
+**CRITICAL: GRR is NOT "Geological Resources and Reserves" or "Geological Recoverable Resources".**
+
+**Correct Definition:**
+- **GRR = Government of Indonesia Recoverable Resources**
+- **Components**: GRR = Reserves + Sales Potential
+- **Sales Potential** = Resources that could be produced if commercial constraints are resolved (rec_* - res_*)
+- **Does NOT include**: Contingent Resources, Prospective Resources
+
+**Database Representation:**
+- GRR uses `rec_*` columns for projects with `project_class = '1. Reserves & GRR'`
+- The `rec_*` values for Reserves & GRR projects represent the government's estimate of recoverable resources
+- For Reserves & GRR projects: `rec_*` includes both reserves (already commercial) and sales potential (contingent on commercial resolution)
+
+**Key Distinction:**
+- **Reserves** (`res_*`): Already commercial, being produced or committed to production
+- **GRR** (`rec_*` for Reserves & GRR projects): Reserves + Sales Potential
+- **Contingent Resources**: Discovered but not yet commercial (separate project_class)
+- **Prospective Resources**: Not yet discovered (separate project_class)
+
+**When user asks about GRR:**
+- Use `rec_*` columns
+- Filter: `project_class = '1. Reserves & GRR'`
+- Explain: "GRR (Government of Indonesia Recoverable Resources) includes both reserves and sales potential"
+
+**When user asks about "all resources" (total resources):**
+- This means GRR + Contingent + Prospective
+- Either query each separately OR sum across all project_class values
+- Ask user to clarify if needed
+
 ## Domain Knowledge (Indonesian Terminology)
 
 **Use `resolve_uncertainty_level` tool when user mentions uncertainty (1P/2P/probable/etc).**
