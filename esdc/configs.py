@@ -390,8 +390,8 @@ class Config:
         config = cls._load_config() or {}
         db_config = config.get("database", {})
         if db_path := db_config.get("path"):
-            return Path(db_path).expanduser()
-        return cls.get_db_dir() / f"{cls.APP_NAME}.db"
+            return Path(db_path).expanduser().resolve()
+        return (cls.get_db_dir() / f"{cls.APP_NAME}.db").resolve()
 
     @classmethod
     def set_chat_db_path(cls, path: Path) -> None:
