@@ -14,6 +14,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Priority: Environment variable `ESDC_TOOL_FORMAT` > config.yaml > default
   - Controls tool output format (native OpenAI format vs markdown)
 
+## [0.5.0] - 2025-04-06
+
+### Added
+
+- **IRIS Rebranding**: System renamed from "esdc-agent" to "IRIS" (Intelligent Reservoir Inference System)
+  - Updated model identity, server responses, and UI branding
+  - Model name hidden from users - shows only "IRIS"
+  - Professional/formal tone in all responses
+
+- **Intelligent Domain Knowledge System**:
+  - Column selection rules: Combined columns (res_oc/res_an) by default
+  - Specific columns when user mentions substance ("minyak"/"oil"/"gas")
+  - Helper functions: `get_volume_columns()`, `detect_substance_from_query()`, `detect_volume_type_from_query()`, `should_use_risked_columns()`, `get_project_stage_filter()`
+  - Report year fallback with automatic year detection: `detect_report_year_from_query()`, `get_available_report_year()`, `build_report_year_filter()`
+
+- **Domain Definitions**:
+  - GRR (Government of Indonesia Recoverable Resources) definition added to system prompt
+  - ESDC (Elektronik Sumber Daya dan Cadangan) definition added to system prompt
+  - Sales Potential definition (GRR - Reserves)
+  - Clarified: GRR = Reserves + Sales Potential, NOT geological resources
+
+### Fixed
+
+- **Potensi Definition**: Corrected to mean ALL classified resources (rec_* columns), not just Prospective Resources
+  - `rec_*` columns for all project_class values
+  - `rec_*_risked` columns only for Prospective Resources
+  - For Reserves & GRR and Contingent Resources: rec_* = rec_*_risked (same values)
+
+- **Database Path Resolution**: Added absolute path resolution with `.resolve()` and file existence check
+  - Helpful error messages for missing database file
+  - FileNotFoundError with guidance on running 'esdc fetch'
+
+- **KeyError in System Prompt**: Escaped curly braces in system prompt to prevent format string errors
+
+### Changed
+
+- **Version**: Bumped to 0.5.0 in pyproject.toml
+- **Documentation**: Updated README.md for IRIS branding
+
+### Tests
+
+- Added 52 tests for volume column detection and selection
+- Added 27 tests for report year fallback functionality
+- Total: 199 tests passing (172 existing + 79 new)
+
 ## [0.4.1] - 2025-04-03
 
 ### Added
