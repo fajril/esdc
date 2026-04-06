@@ -35,6 +35,9 @@ from .functions import (
     calculate_eol_year,
     calculate_peak_production_year,
     convert_volume_units,
+    # New volume helpers
+    detect_substance_from_query,
+    detect_volume_type_from_query,
     enrich_sql_query,
     extract_selected_columns,
     extract_table_from_sql,
@@ -46,6 +49,7 @@ from .functions import (
     get_forecast_vs_historical_guide,
     get_onstream_year,
     get_project_class_filter,
+    get_project_stage_filter,
     get_recommended_table,
     get_resources_columns,
     get_timeseries_columns,
@@ -54,12 +58,9 @@ from .functions import (
     is_already_enriched,
     is_forecast_data,
     requires_classification_context,
+    resolve_concept,
     should_include_remarks,
-    # New volume helpers
-    detect_substance_from_query,
-    detect_volume_type_from_query,
     should_use_risked_columns,
-    get_project_stage_filter,
 )
 
 # =============================================================================

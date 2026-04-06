@@ -321,14 +321,25 @@ When applying defaults, inform the user:
 
 ## Column Selection for Volume Queries (CRITICAL)
 
+### Understanding "Potensi" (IMPORTANT):
+**"Potensi" means ALL classified resources (rec_* columns), filtered by project_class:**
+- "potensi" alone → uses `rec_*` columns, needs `project_class` filter to narrow down
+- "potensi eksplorasi" or "potensi prospective" → uses `rec_*_risked` columns (Prospective Resources only)
+- "potensi contingent" → uses `rec_*` columns (Contingent Resources only)
+- "potensi GRR" → uses `rec_*` columns (Reserves & GRR only)
+
+**NOTE: For Reserves & GRR and Contingent Resources, rec_* = rec_*_risked (same values)**
+
 ### Default Rule (When NO substance specified):
 **ALWAYS use COMBINED columns when user doesn't specify minyak/oil or gas:**
 
-| Query Type | Volume Type | Table Level | Oil Column | Gas Column |
-|------------|-------------|-------------|------------|------------|
-| "berapa cadangan lapangan X?" | Reserves | Field/WA/National | `res_oc` | `res_an` |
-| "berapa sumberdaya proyek X?" | Resources | Project | `rec_oc` | `rec_an` |
-| "berapa potensi lapangan X?" | Prospective | Field/WA/National | `rec_oc_risked` | `rec_an_risked` |
+| Query Type | Volume Type | Table Level | Oil Column | Gas Column | Notes |
+|------------|-------------|-------------|------------|------------|-------|
+| "berapa cadangan lapangan X?" | Reserves | Field/WA/National | `res_oc` | `res_an` | |
+| "berapa sumberdaya proyek X?" | Resources (GRR) | Project | `rec_oc` | `rec_an` | |
+| "berapa potensi lapangan X?" | All Resources | Field/WA/National | `rec_oc` | `rec_an` | Needs project_class filter |
+| "berapa potensi eksplorasi lapangan X?" | Prospective | Field/WA/National | `rec_oc_risked` | `rec_an_risked` | |
+| "berapa potensi proyek X?" | GRR | Project | `rec_oc` | `rec_an` | |
 
 ### When Substance IS Specified:
 - "minyak/oil" → Use specific columns: `res_oil`, `res_con` (or `rec_oil`, `rec_con`)
@@ -363,20 +374,44 @@ FROM field_resources
 WHERE field_name LIKE '%Duri%'
 ```
 
-**Potensi (prospective) at aggregate level:**
+**"Potensi" at aggregate level (needs project_class filter):**
 ```sql
--- "berapa potensi lapangan duri?"
-SELECT SUM(rec_oc_risked) as risked_oc, SUM(rec_an_risked) as risked_an
+-- "berapa potensi lapangan duri?" (all classified resources)
+SELECT project_class, SUM(rec_oc) as resources_oc, SUM(rec_an) as resources_an
+FROM field_resources
+WHERE field_name LIKE '%Duri%'
+GROUP BY project_class
+
+-- OR if user wants total potensi without breakdown:
+SELECT SUM(rec_oc) as resources_oc, SUM(rec_an) as resources_an
 FROM field_resources
 WHERE field_name LIKE '%Duri%'
 ```
 
+**"Potensi eksplorasi" (Prospective Resources - risked):**
+```sql
+-- "berapa potensi eksplorasi lapangan duri?"
+SELECT SUM(rec_oc_risked) as risked_oc, SUM(rec_an_risked) as risked_an
+FROM field_resources
+WHERE field_name LIKE '%Duri%'
+  AND project_class LIKE '%Prospective%'
+```
+
+**"Potensi contingent":**
+```sql
+-- "berapa potensi contingent lapangan duri?"
+SELECT SUM(rec_oc) as resources_oc, SUM(rec_an) as resources_an
+FROM field_resources
+WHERE field_name LIKE '%Duri%'
+  AND project_class LIKE '%Contingent%'
+```
+
 **GRR/Resources at project level (NOT risked):**
 ```sql
--- "berapa sumberdaya proyek-proyek di lapangan duri?"
+-- "berapa potensi proyek X?"
 SELECT SUM(rec_oc) as resources_oc, SUM(rec_an) as resources_an
 FROM project_resources
-WHERE field_name LIKE '%Duri%'
+WHERE project_name LIKE '%X%'
 ```
 
 **With eksplorasi filter:**
@@ -385,14 +420,15 @@ WHERE field_name LIKE '%Duri%'
 SELECT SUM(rec_oc_risked) as risked_oc, SUM(rec_an_risked) as risked_an
 FROM wa_resources
 WHERE wk_name LIKE '%Rokan%'
+  AND project_class LIKE '%Prospective%'
   AND project_stage LIKE '%Exploration%'
 ```
 
 **Project Classes:**
 - Reserves → `res_*` columns (default)
-- GRR → `project_class = '1. Reserves & GRR'`
-- Contingent Resources → `project_class = '2. Contingent Resources'`
-- Prospective Resources → `project_class = '3. Prospective Resources'`
+- GRR → `project_class LIKE '%Reserves & GRR%'`
+- Contingent Resources → `project_class LIKE '%Contingent%'`
+- Prospective Resources → `project_class LIKE '%Prospective%'`
 
 ## Table/View Selection Guide
 

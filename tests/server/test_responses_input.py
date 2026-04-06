@@ -6,7 +6,6 @@ from esdc.server.responses_models import (
     ResponseInputFunctionCallItem,
     ResponseInputFunctionCallOutputItem,
     ResponseInputItem,
-    ResponseInputMessageItem,
 )
 from esdc.server.responses_wrapper import convert_responses_input_to_langchain
 

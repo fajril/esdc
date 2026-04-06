@@ -481,7 +481,6 @@ class ContextPanel(Vertical):
         )
 
         # 2. Session Info (collapsible, expanded by default)
-        import os
 
         self._current_directory = os.getcwd()
         thread_display = (
@@ -517,8 +516,6 @@ class ContextPanel(Vertical):
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""
-        import os
-
         self._current_directory = os.getcwd()
 
         logger.debug(
@@ -563,7 +560,6 @@ class ContextPanel(Vertical):
         self._session_thread_id = thread_id
 
         # Get current directory
-        import os
 
         self._current_directory = os.getcwd()
 

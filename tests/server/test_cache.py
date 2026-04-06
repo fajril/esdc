@@ -72,8 +72,6 @@ class TestGetParsedJson:
 
     def test_parse_with_cache(self):
         """Test that parsing is cached."""
-        import json
-
         json_str = '{"key": "value"}'
 
         # First call - parses

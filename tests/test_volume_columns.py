@@ -1,7 +1,5 @@
 """Tests for volume column detection functions."""
 
-import pytest
-
 from esdc.chat.domain_knowledge import (
     detect_substance_from_query,
     detect_volume_type_from_query,
@@ -38,23 +36,41 @@ class TestGetVolumeColumns:
         assert oc == "rec_oc"
         assert an == "rec_an"
 
-    def test_potensi_risked(self):
-        """Potensi should use risked columns."""
+    def test_potensi_not_risked(self):
+        """Potensi (general resources) should use rec_* columns, not risked."""
         oc, an = get_volume_columns("potensi")
+        assert oc == "rec_oc"
+        assert an == "rec_an"
+
+    def test_potensi_minyak_not_risked(self):
+        """Potensi minyak should use non-risked oil columns."""
+        oc, an = get_volume_columns("potensi", substance="minyak")
+        assert oc == "rec_oil"
+        assert an == "rec_con"
+
+    def test_potensi_gas_not_risked(self):
+        """Potensi gas should use non-risked gas columns."""
+        oc, an = get_volume_columns("potensi", substance="gas")
+        assert oc == "rec_ga"
+        assert an == "rec_gn"
+
+    def test_prospective_risked(self):
+        """Prospective Resources should use risked columns."""
+        oc, an = get_volume_columns("prospective")
         assert oc == "rec_oc_risked"
         assert an == "rec_an_risked"
 
-    def test_potensi_minyak_risked(self):
-        """Potensi minyak should use risked oil columns."""
-        oc, an = get_volume_columns("potensi", substance="minyak")
+    def test_prospective_minyak_risked(self):
+        """Prospective minyak should use risked oil columns."""
+        oc, an = get_volume_columns("prospective", substance="minyak")
         assert oc == "rec_oil_risked"
         assert an == "rec_con_risked"
 
-    def test_potensi_gas_risked(self):
-        """Potensi gas should use risked gas columns."""
-        oc, an = get_volume_columns("potensi", substance="gas")
-        assert oc == "rec_ga_risked"
-        assert an == "rec_gn_risked"
+    def test_contingent_not_risked(self):
+        """Contingent Resources should use rec_* columns (not risked)."""
+        oc, an = get_volume_columns("contingent")
+        assert oc == "rec_oc"
+        assert an == "rec_an"
 
     def test_explicit_risked_flag(self):
         """is_risked parameter should force risked columns."""
@@ -114,9 +130,36 @@ class TestDetectVolumeTypeFromQuery:
         )
 
     def test_detect_potensi(self):
-        """Should detect potensi."""
+        """Should detect potensi (general resources)."""
         assert (
             detect_volume_type_from_query("berapa potensi lapangan duri?") == "potensi"
+        )
+
+    def test_detect_potensi_eksplorasi_as_prospective(self):
+        """Potensi eksplorasi should be detected as prospective."""
+        assert (
+            detect_volume_type_from_query("berapa potensi eksplorasi lapangan duri?")
+            == "prospective"
+        )
+
+    def test_detect_potensi_prospective(self):
+        """Potensi prospective should be detected as prospective."""
+        assert (
+            detect_volume_type_from_query("berapa potensi prospective?")
+            == "prospective"
+        )
+
+    def test_detect_potensi_contingent(self):
+        """Potensi contingent should be detected as contingent."""
+        assert (
+            detect_volume_type_from_query("berapa potensi contingent?") == "contingent"
+        )
+
+    def test_detect_contingent(self):
+        """Should detect contingent."""
+        assert (
+            detect_volume_type_from_query("berapa contingent resources?")
+            == "contingent"
         )
 
     def test_detect_potensi_proyek(self):
@@ -135,9 +178,11 @@ class TestDetectVolumeTypeFromQuery:
             == "sumber_daya"
         )
 
-    def test_detect_eksplorasi_as_potensi(self):
-        """Eksplorasi should be treated as potensi."""
-        assert detect_volume_type_from_query("berapa potensi eksplorasi?") == "potensi"
+    def test_detect_prospective_eksplorasi(self):
+        """Eksplorasi with potensi should be prospective."""
+        assert (
+            detect_volume_type_from_query("berapa potensi eksplorasi?") == "prospective"
+        )
 
     def test_default_to_cadangan(self):
         """Should default to cadangan if no type detected."""
@@ -147,21 +192,39 @@ class TestDetectVolumeTypeFromQuery:
 class TestShouldUseRiskedColumns:
     """Tests for should_use_risked_columns function."""
 
-    def test_potensi_field_resources(self):
-        """Potensi at field level should use risked columns."""
-        assert should_use_risked_columns("potensi lapangan duri?", "field_resources")
+    def test_potensi_field_resources_not_risked(self):
+        """Potensi (general) at field level should NOT use risked columns."""
+        assert not should_use_risked_columns(
+            "potensi lapangan duri?", "field_resources"
+        )
 
-    def test_potensi_wa_resources(self):
-        """Potensi at WA level should use risked columns."""
-        assert should_use_risked_columns("potensi wilayah kerja rokan?", "wa_resources")
+    def test_prospective_field_resources_risked(self):
+        """Prospective at field level should use risked columns."""
+        assert should_use_risked_columns(
+            "potensi eksplorasi lapangan duri?", "field_resources"
+        )
 
-    def test_potensi_nkri_resources(self):
-        """Potensi at national level should use risked columns."""
-        assert should_use_risked_columns("potensi nasional?", "nkri_resources")
+    def test_prospective_wa_resources(self):
+        """Prospective at WA level should use risked columns."""
+        assert should_use_risked_columns(
+            "potensi prospective wilayah kerja rokan?", "wa_resources"
+        )
 
-    def test_potensi_project_resources(self):
-        """Potensi at project level should NOT use risked columns."""
+    def test_prospective_nkri_resources(self):
+        """Prospective at national level should use risked columns."""
+        assert should_use_risked_columns(
+            "potensi eksplorasi nasional?", "nkri_resources"
+        )
+
+    def test_potensi_project_resources_not_risked(self):
+        """Potensi proyek should NOT use risked columns."""
         assert not should_use_risked_columns("potensi proyek X?", "project_resources")
+
+    def test_prospective_project_resources_not_risked(self):
+        """Prospective at project level should NOT use risked (no risked columns exist)."""
+        assert not should_use_risked_columns(
+            "potensi eksplorasi proyek X?", "project_resources"
+        )
 
     def test_cadangan_no_risked(self):
         """Cadangan should never use risked columns."""
@@ -173,6 +236,12 @@ class TestShouldUseRiskedColumns:
         """Sumberdaya should not use risked columns."""
         assert not should_use_risked_columns(
             "sumberdaya proyek X?", "project_resources"
+        )
+
+    def test_contingent_no_risked(self):
+        """Contingent should not use risked columns."""
+        assert not should_use_risked_columns(
+            "potensi contingent lapangan duri?", "field_resources"
         )
 
 
@@ -226,7 +295,7 @@ class TestIntegration:
         assert an == "res_an"
 
     def test_scenario_2_potensi_lapangan(self):
-        """Test 2: Berapa potensi lapangan duri?"""
+        """Test 2: Berapa potensi lapangan duri? (should use rec_*, NOT risked)."""
         query = "berapa potensi lapangan duri?"
 
         volume_type = detect_volume_type_from_query(query)
@@ -237,7 +306,23 @@ class TestIntegration:
 
         assert volume_type == "potensi"
         assert substance is None
-        assert is_risked
+        assert not is_risked  # Potensi uses rec_*, not risked
+        assert oc == "rec_oc"
+        assert an == "rec_an"
+
+    def test_scenario_2b_potensi_eksplorasi_lapangan(self):
+        """Test 2b: Berapa potensi eksplorasi lapangan duri? (should use risked)."""
+        query = "berapa potensi eksplorasi lapangan duri?"
+
+        volume_type = detect_volume_type_from_query(query)
+        substance = detect_substance_from_query(query)
+        is_risked = should_use_risked_columns(query, "field_resources")
+
+        oc, an = get_volume_columns(volume_type, is_risked, substance)
+
+        assert volume_type == "prospective"
+        assert substance is None
+        assert is_risked  # Prospective uses risked
         assert oc == "rec_oc_risked"
         assert an == "rec_an_risked"
 
@@ -290,7 +375,7 @@ class TestIntegration:
         assert an == "res_gn"
 
     def test_scenario_6_eksplorasi_wa(self):
-        """Test 6: Berapa potensi eksplorasi wilayah kerja rokan?"""
+        """Test 6: Berapa potensi eksplorasi wilayah kerja rokan? (prospective)."""
         query = "berapa potensi eksplorasi wilayah kerja rokan?"
 
         volume_type = detect_volume_type_from_query(query)
@@ -300,15 +385,15 @@ class TestIntegration:
 
         oc, an = get_volume_columns(volume_type, is_risked, substance)
 
-        assert volume_type == "potensi"
+        assert volume_type == "prospective"  # Changed from potensi
         assert substance is None
-        assert is_risked
+        assert is_risked  # Prospective uses risked
         assert stage == "Exploration"
         assert oc == "rec_oc_risked"
         assert an == "rec_an_risked"
 
     def test_scenario_7_eksplorasi_field(self):
-        """Test 7: Berapa potensi eksplorasi di lapangan duri?"""
+        """Test 7: Berapa potensi eksplorasi di lapangan duri? (prospective)."""
         query = "berapa potensi eksplorasi di lapangan duri?"
 
         volume_type = detect_volume_type_from_query(query)
@@ -318,9 +403,41 @@ class TestIntegration:
 
         oc, an = get_volume_columns(volume_type, is_risked, substance)
 
-        assert volume_type == "potensi"
+        assert volume_type == "prospective"  # Changed from potensi
         assert substance is None
-        assert is_risked
+        assert is_risked  # Prospective uses risked
         assert stage == "Exploration"
         assert oc == "rec_oc_risked"
         assert an == "rec_an_risked"
+
+    def test_scenario_8_potensi_contingent(self):
+        """Test 8: Berapa potensi contingent lapangan duri?"""
+        query = "berapa potensi contingent lapangan duri?"
+
+        volume_type = detect_volume_type_from_query(query)
+        substance = detect_substance_from_query(query)
+        is_risked = should_use_risked_columns(query, "field_resources")
+
+        oc, an = get_volume_columns(volume_type, is_risked, substance)
+
+        assert volume_type == "contingent"
+        assert substance is None
+        assert not is_risked  # Contingent uses rec_*, not risked
+        assert oc == "rec_oc"
+        assert an == "rec_an"
+
+    def test_scenario_9_potensi_grr(self):
+        """Test 9: Berapa potensi GRR lapangan duri?"""
+        query = "berapa potensi GRR lapangan duri?"
+
+        volume_type = detect_volume_type_from_query(query)
+        substance = detect_substance_from_query(query)
+        is_risked = should_use_risked_columns(query, "field_resources")
+
+        oc, an = get_volume_columns(volume_type, is_risked, substance)
+
+        assert volume_type == "sumber_daya"  # GRR detected as sumber_daya
+        assert substance is None
+        assert not is_risked
+        assert oc == "rec_oc"
+        assert an == "rec_an"
