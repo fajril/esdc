@@ -1,24 +1,35 @@
-# ESDC (Elektronik Sumber Daya dan Cadangan)
+# IRIS - Intelligent Reservoir Inference System
 
-A data management system for Indonesian oil & gas reserves data from ESDC (https://esdc.skkmigas.go.id).
+**IRIS** (Intelligent Reservoir Inference System) is an AI-powered data analyst for Indonesian oil & gas reserves and resources, built on top of ESDC (Elektronik Sumber Daya dan Cadangan) data from [SKK Migas](https://esdc.skkmigas.go.id).
 
 ## Features
 
-### Chat TUI
-Interactive terminal-based chat interface to query oil & gas reserves data using natural language.
+### Natural Language Interface
+Ask questions about Indonesian oil & gas data in English or Bahasa Indonesia.
 
-- **Natural Language Queries**: Ask questions about reserves, production, and fields
+- **Intelligent Column Selection**: Automatically uses combined columns (res_oc/res_an) unless user specifies a substance
+- **Volume Type Detection**: Distinguishes between reserves (cadangan), resources (sumberdaya), and prospective resources (potensi)
+- **Report Year Fallback**: Automatically finds most recent data if requested year unavailable
 - **Real-time Streaming**: AI responses stream in real-time
-- **Context Panel**: Shows current model, provider, token usage, and conversation thread
-- **Collapsible Sections**: Toggle session info, context usage, and tool status
-- **Provider Support**: Works with Ollama models (kimi-k2.5:cloud, etc.)
+- **Context Panel**: Shows session info, token usage, and tool status
+
+### Supported Query Types
+
+| Query Type | Example |
+|------------|---------|
+| Field-level reserves | "Berapa cadangan lapangan Duri?" |
+| Work area totals | "Potensi wilayah kerja Rokan?" |
+| National statistics | "Total cadangan minyak Indonesia?" |
+| Specific substance | "Cadangan minyak lapangan Duri?" |
+| Year-specific | "Cadangan lapangan Duri tahun 2024?" |
+| Prospective resources | "Potensi eksplorasi lapangan Duri?" |
 
 ### Data Management CLI
-Command-line interface for fetching and managing ESDC data.
+Fetch and manage ESDC data from the command line.
 
-- **Fetch Data**: Download data from ESDC API (CSV, JSON, ZIP formats)
-- **Load Data**: Import data into SQLite database
-- **Query Data**: Display and filter data with various options
+- **Fetch Data**: Download from ESDC API (CSV, JSON, ZIP formats)
+- **Load Data**: Import into SQLite database
+- **Query Data**: Display with filters
 
 ## Installation
 
@@ -28,21 +39,25 @@ git clone https://github.com/fajril/esdc.git
 cd esdc
 
 # Install with uv
-uv add -e .
+uv sync
+
+# Or install editable
+uv pip install -e .
 ```
 
 ## Quick Start
 
-### Chat TUI
+### Chat Interface
 
 ```bash
 # Start interactive chat
 esdc chat
 
 # Example queries:
-# "What are the top 10 oil reserves in 2023?"
-# "Show all fields in North Sumatra basin"
-# "Compare gas reserves between 2020 and 2023"
+# "Berapa cadangan lapangan Duri?"
+# "Top 5 lapangan minyak terbesar di Indonesia?"
+# "Potensi eksplorasi wilayah kerja Rokan tahun 2024?"
+# "Cadangan gas di lapangan Duri?"
 ```
 
 ### Data CLI
@@ -68,9 +83,9 @@ Configuration is stored in `~/.esdc/`:
 └── esdc.db        # SQLite database
 ```
 
-### Chat TUI Configuration
+### Provider Configuration
 
-The chat TUI uses the default provider from `config.yaml`:
+Configure your AI provider in `~/.esdc/config.yaml`:
 
 ```yaml
 default_provider: ollama
@@ -96,18 +111,45 @@ export ESDC_PASS="your_password"
 | `ESDC_URL` | API URL (default: https://esdc.skkmigas.go.id/) |
 | `ESDC_DB_FILE` | Database file path |
 
+## Domain Knowledge
+
+### Volume Types and Columns
+
+| Query Term | Volume Type | Column Prefix | Risked? |
+|------------|-------------|---------------|---------|
+| cadangan | Reserves | res_* | No |
+| sumberdaya/grr | Resources | rec_* | No |
+| potensi | All classified | rec_* | Varies |
+| potensi eksplorasi | Prospective | rec_*_risked | Yes |
+| potensi contingent | Contingent | rec_* | No |
+
+### Column Naming
+
+- **Combined columns** (default): `res_oc`, `res_an`, `rec_oc`, `rec_an`
+- **Specific substance**: `res_oil`, `res_con` (minyak) or `res_ga`, `res_gn` (gas)
+
+### Report Year Fallback
+
+IRIS automatically handles missing data years:
+- If year 2024 requested but unavailable → falls back to 2023, 2022, etc.
+- SQL uses `MAX(report_year) WHERE report_year <= {requested_year}`
+
 ## Architecture
 
 ```
 esdc/
-├── chat/                    # Chat TUI application
+├── chat/                    # Chat interface
 │   ├── app.py              # Textual TUI app
-│   ├── agent.py            # LangGraph agent with tools
-│   ├── tools.py            # SQL execution & schema tools
-│   ├── prompts.py          # System prompt template
-│   └── schema_loader.py    # Database schema loader
+│   ├── agent.py            # LangGraph agent
+│   ├── tools.py            # SQL execution tools
+│   ├── prompts.py          # System prompt
+│   ├── domain_knowledge/   # Volume/column logic
+│   │   ├── functions.py    # Helper functions
+│   │   ├── synonyms.py     # Indonesian/English terms
+│   │   └── tables.py       # Entity→Table mapping
+│   └── schema_loader.py    # Database schema
 ├── commands/                # CLI commands
-├── configs.py               # Configuration management
+├── configs.py               # Configuration
 └── db/                      # Database operations
 ```
 
@@ -115,11 +157,16 @@ esdc/
 
 - **Knowledge Base**: `docs/reference/` - Architecture and conventions
 - **Database Schema**: `docs/reference/schema/esdc-database-schema.md`
-- **Active Work**: `docs/active/` - Current development
-- **Completed Work**: `docs/completed/` - Archived plans
 - **For AI Agents**: See `AGENTS.md`
 
 ## CLI Commands
+
+### `chat`
+Start interactive chat with IRIS.
+
+```bash
+esdc chat
+```
 
 ### `fetch`
 Download data from ESDC API.
@@ -163,6 +210,19 @@ Arguments:
 - **SQLite** - Local database
 - **Typer** - CLI framework
 
+## Version History
+
+### v0.5.0 (Current)
+- **IRIS rebranding**: Model renamed from "esdc-agent" to "iris"
+- **Intelligent column selection**: Combined columns by default, specific when user mentions substance
+- **Correct "potensi" handling**: All classified resources, with risked columns for prospective only
+- **Report year fallback**: Automatic fallback to most recent available year
+- **Anti-reveal instructions**: IRIS maintains identity without revealing underlying model
+
+### v0.4.0
+- Initial column selection improvement
+- Domain knowledge helpers
+
 ## Development
 
 ```bash
@@ -174,6 +234,10 @@ esdc chat
 
 # Format code
 ruff check --fix esdc/
+ruff format esdc/
+
+# Type check
+basedpyright esdc/
 ```
 
 ## License
