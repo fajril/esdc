@@ -32,23 +32,25 @@ def parse_size(size_str: str) -> int:
     return int(size_str)
 
 
-def setup_server_logging(config: dict[str, Any]) -> logging.Logger:
+def setup_server_logging(config: dict[str, Any] | None = None) -> logging.Logger:
     """Setup logging for ESDC server.
 
     Args:
-        config: Logging configuration from Config.get_logging_config()
+        config: Optional logging configuration. If None, uses Config.get_logging_config().
 
     Returns:
         Logger instance
     """
     from esdc.configs import Config
 
-    server_config = config.get("server", {})
+    if config is None:
+        config = Config.get_logging_config()
+
     global_level = config.get("level", "INFO")
 
-    # Get log directory
-    log_dir = Config.get_config_dir() / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    # Get file configuration
+    file_config = config.get("file", {})
+    log_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 
     # Create logger
     logger = logging.getLogger("esdc.server")
@@ -58,11 +60,9 @@ def setup_server_logging(config: dict[str, Any]) -> logging.Logger:
     logger.handlers.clear()
 
     # File handler
-    file_config = server_config.get("file", {})
-    log_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-
-    if file_config.get("enabled", True):
-        log_path = file_config.get("path", "logs/esdc_server.log")
+    file_enabled = file_config.get("enabled", True)
+    if file_enabled:
+        log_path = file_config.get("path", "logs/esdc.log")
         log_file = Config.get_config_dir() / log_path
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -74,29 +74,26 @@ def setup_server_logging(config: dict[str, Any]) -> logging.Logger:
             maxBytes=max_size,
             backupCount=backup_count,
         )
-        file_handler.setLevel(
-            getattr(logging, server_config.get("level", "INFO").upper(), logging.INFO)
-        )
+        file_handler.setLevel(getattr(logging, global_level.upper(), logging.INFO))
         file_handler.setFormatter(logging.Formatter(log_format))
         logger.addHandler(file_handler)
 
     # Console handler
-    console_config = server_config.get("console", {})
-    if console_config.get("enabled", True):
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(
-            getattr(logging, server_config.get("level", "INFO").upper(), logging.INFO)
-        )
-        console_handler.setFormatter(logging.Formatter(log_format))
-        logger.addHandler(console_handler)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, global_level.upper(), logging.INFO))
+    console_handler.setFormatter(logging.Formatter(log_format))
+    logger.addHandler(console_handler)
 
     # Suppress verbose library logs
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("markdown_it").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-    # Set agent logger to DEBUG for detailed streaming logs
-    logging.getLogger("esdc.server.agent").setLevel(logging.DEBUG)
+    # Set component-specific log levels from config
+    agent_level = config.get("agent", {}).get("level", global_level)
+    logging.getLogger("esdc.server.agent").setLevel(
+        getattr(logging, agent_level.upper(), logging.DEBUG)
+    )
 
     logger.info("ESDC Server logging initialized")
 
