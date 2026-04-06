@@ -7,7 +7,6 @@ from typing import Annotated
 # Third-party
 from langchain.tools import tool
 
-
 # Maximum rows to return to prevent context window overflow
 MAX_QUERY_ROWS = 50
 
@@ -40,7 +39,7 @@ def get_db_connection(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-@tool
+@tool("SQL Executor")
 async def execute_sql(
     query: Annotated[
         str, "A valid SQL SELECT query to execute against the ESDC database."
@@ -116,7 +115,7 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
             conn.close()
 
 
-@tool
+@tool("Schema Inspector")
 def get_schema(
     table_name: Annotated[
         str | None,
@@ -176,7 +175,7 @@ def get_schema(
             conn.close()
 
 
-@tool
+@tool("Table Lister")
 def list_tables() -> str:
     """List all available tables and views in the ESDC database.
 
@@ -219,7 +218,7 @@ def list_tables() -> str:
         return f"Error: {str(e)}"
 
 
-@tool
+@tool("Model Checker")
 def list_available_models(provider_type: str = "ollama") -> str:
     """List available models for a given provider type.
 
@@ -248,7 +247,7 @@ def list_available_models(provider_type: str = "ollama") -> str:
         return f"Error: {str(e)}"
 
 
-@tool
+@tool("Table Selector")
 def get_recommended_table(
     entity_type: Annotated[
         str,
@@ -272,13 +271,13 @@ def get_recommended_table(
     - Call this BEFORE writing SQL queries to select the optimal table
     - Use for field-level, work area-level, or national-level aggregate queries
 
-    RETURNS:
+    Returns:
     JSON string with:
     - table: Recommended table name
     - explanation: Why this table is recommended
     - hierarchy: The aggregation level of this table
 
-    EXAMPLES:
+    Examples:
     - Field totals: entity_type='field' → {'table': 'field_resources', ...}
     - Work area summary: entity_type='work_area' → {'table': 'wa_resources', ...}
     - National statistics: entity_type='national' → {'table': 'nkri_resources', ...}
@@ -341,7 +340,7 @@ def get_recommended_table(
         )
 
 
-@tool
+@tool("Uncertainty Resolver")
 def resolve_uncertainty_level(
     level: Annotated[
         str,
@@ -369,7 +368,7 @@ def resolve_uncertainty_level(
     - Use the returned SQL fragment in WHERE clauses or CASE statements
     - Check 'warnings' field for validation errors
 
-    RETURNS:
+    Returns:
     JSON string with:
     - db_value: Filter value for uncert_level column (or None for calculated)
     - type: 'direct' or 'calculated'
@@ -378,14 +377,14 @@ def resolve_uncertainty_level(
     - warnings: List of validation warnings
     - filter_column: Column to filter (always 'uncert_level')
 
-    EXAMPLES:
+    Examples:
     - resolve_uncertainty_level('2P', 'reserves') → direct value '2. Middle Value'
     - resolve_uncertainty_level('probable', 'reserves') → calculated, returns CASE template
     - resolve_uncertainty_level('probable', 'resources') → ERROR, reserves only
     """
     import json
 
-    from esdc.chat.domain_knowledge import get_uncertainty_spec, get_uncertainty_filter
+    from esdc.chat.domain_knowledge import get_uncertainty_filter, get_uncertainty_spec
 
     try:
         spec = get_uncertainty_spec(level, volume_type=volume_type)
@@ -446,7 +445,7 @@ def resolve_uncertainty_level(
         )
 
 
-@tool
+@tool("Timeseries Column Guide")
 def get_timeseries_columns(
     data_type: Annotated[
         str,
@@ -497,7 +496,7 @@ def get_timeseries_columns(
     - rate_oc = 1000 MSTB/Y means 1000 barrels per year production rate
     These are completely different measurements!
 
-    RETURNS:
+    Returns:
     JSON string with:
     - column: The column name to use (e.g., "tpf_oc")
     - description: Human-readable description
@@ -509,7 +508,7 @@ def get_timeseries_columns(
     - incorrect_alternatives: Columns NOT to use (commonly confused)
     - examples: Example SQL queries
 
-    EXAMPLES:
+    Examples:
     - get_timeseries_columns("forecast", "tpf", "oc") → tpf_oc for forecast volumes
     - get_timeseries_columns("forecast", "slf", "an") → slf_an for sales forecast gas
     - get_timeseries_columns("historical", substance="oc") → cprd_grs_oc for cumulative
@@ -544,7 +543,7 @@ def get_timeseries_columns(
         )
 
 
-@tool
+@tool("Resources Column Guide")
 def get_resources_columns(
     volume_type: Annotated[
         str,
@@ -586,7 +585,7 @@ def get_resources_columns(
     - rec_* = Resources (all recoverable, "sumber daya")
     - These are completely different! res_oc ≠ rec_oc
 
-    RETURNS:
+    Returns:
     JSON string with:
     - column: The column name to use (e.g., "res_oc" or "rec_oc")
     - description: Human-readable description
@@ -597,7 +596,7 @@ def get_resources_columns(
     - incorrect_alternatives: Columns NOT to use
     - examples: Example SQL queries
 
-    EXAMPLES:
+    Examples:
     - get_resources_columns("reserves", "oc") → res_oc for reserves
     - get_resources_columns("resources", "an") → rec_an for resources
     - get_resources_columns("risked", "oil") → rec_oil_risked for risked prospective
@@ -629,7 +628,7 @@ def get_resources_columns(
         )
 
 
-@tool
+@tool("Problem Cluster Search")
 def search_problem_cluster(
     query: Annotated[
         str,
@@ -648,7 +647,7 @@ def search_problem_cluster(
     This tool searches the official problem cluster taxonomy with 20 categories
     covering Technical, Economics, Legal, and Social/Environment issues.
 
-    RETURNS:
+    Returns:
     JSON string with:
     - clusters: List of matching problem clusters (max 3)
     - explanation: Full formatted explanation of the top result
@@ -658,7 +657,7 @@ def search_problem_cluster(
     - definition: Full Indonesian definition
     - examples: List of example scenarios
 
-    EXAMPLES:
+    Examples:
     - search_problem_cluster("subsurface") → Subsurface Uncertainty (1.1.1)
     - search_problem_cluster("uneconomic") → Uneconomic (2.2)
     - search_problem_cluster("1.1.1") → Exact code match for Subsurface Uncertainty
@@ -667,8 +666,8 @@ def search_problem_cluster(
     import json
 
     from esdc.chat.domain_knowledge import (
-        search_problem_clusters,
         get_cluster_explanation,
+        search_problem_clusters,
     )
 
     try:

@@ -1,8 +1,6 @@
 """Domain concepts definitions for ESDC chat agent."""
 
-from typing import Dict
-
-DOMAIN_CONCEPTS: Dict[str, Dict] = {
+DOMAIN_CONCEPTS: dict[str, dict] = {
     "uncertainty_levels": {
         "1P": {
             "db_value": "1. Low Value",

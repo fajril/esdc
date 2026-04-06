@@ -13,12 +13,13 @@ class Message(BaseModel):
     name: str | None = None
     tool_calls: list[dict] | None = None
     tool_call_id: str | None = None
+    output: list[dict] | None = None
 
 
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible chat completion request model."""
 
-    model: str = Field(default="esdc-agent", description="Model ID to use")
+    model: str = Field(default="iris", description="Model ID to use")
     messages: list[Message] = Field(..., description="Conversation messages")
     stream: bool = Field(default=False, description="Whether to stream the response")
     temperature: float | None = Field(default=0.7, ge=0, le=2)
@@ -78,7 +79,7 @@ class ModelInfo(BaseModel):
     id: str
     object: Literal["model"] = "model"
     created: int
-    owned_by: str = "esdc"
+    owned_by: str = "IRIS"
 
 
 class ModelList(BaseModel):

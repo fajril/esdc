@@ -1,30 +1,31 @@
 """Tests for domain_knowledge module."""
 
 import pytest
+
 from esdc.chat.domain_knowledge import (
+    AGGREGATION_LEVELS,
+    COLUMN_METADATA,
     DOMAIN_CONCEPTS,
     SYNONYMS,
-    COLUMN_METADATA,
+    TABLE_HIERARCHY,
     UNCERTAINTY_MAP,
     UncertaintySpec,
-    TABLE_HIERARCHY,
-    AGGREGATION_LEVELS,
-    resolve_concept,
+    build_aggregate_query,
+    build_sql_pattern,
+    build_uncertainty_sql,
+    can_use_view_for_calculation,
+    format_response_value,
+    get_aggregation_table_info,
+    get_column_group,
+    get_columns_for_substance,
+    get_entity_filter_column,
+    get_project_class_filter,
+    get_recommended_table,
+    get_table_for_query,
     get_uncertainty_filter,
     get_uncertainty_spec,
-    build_uncertainty_sql,
-    get_project_class_filter,
     get_volume_columns,
-    get_columns_for_substance,
-    get_column_group,
-    format_response_value,
-    build_sql_pattern,
-    get_table_for_query,
-    can_use_view_for_calculation,
-    get_entity_filter_column,
-    build_aggregate_query,
-    get_aggregation_table_info,
-    get_recommended_table,
+    resolve_concept,
 )
 
 
@@ -58,8 +59,12 @@ class TestDomainConcepts:
     def test_uncertainty_db_values(self):
         """Test that uncertainty levels map to correct DB values."""
         assert DOMAIN_CONCEPTS["uncertainty_levels"]["1P"]["db_value"] == "1. Low Value"
-        assert DOMAIN_CONCEPTS["uncertainty_levels"]["2P"]["db_value"] == "2. Middle Value"
-        assert DOMAIN_CONCEPTS["uncertainty_levels"]["3P"]["db_value"] == "3. High Value"
+        assert (
+            DOMAIN_CONCEPTS["uncertainty_levels"]["2P"]["db_value"] == "2. Middle Value"
+        )
+        assert (
+            DOMAIN_CONCEPTS["uncertainty_levels"]["3P"]["db_value"] == "3. High Value"
+        )
 
 
 class TestSynonyms:
@@ -301,6 +306,72 @@ class TestGetUncertaintySpec:
         assert spec is None
 
 
+class TestDBValueSynonyms:
+    """Tests for DB_VALUE_SYNONYMS direct value mappings."""
+
+    def test_db_value_synonyms_exist(self):
+        """Test DB_VALUE_SYNONYMS is defined and populated."""
+        from esdc.chat.domain_knowledge import DB_VALUE_SYNONYMS
+
+        assert DB_VALUE_SYNONYMS is not None
+        assert "low_value" in DB_VALUE_SYNONYMS
+        assert "middle_value" in DB_VALUE_SYNONYMS
+        assert "high_value" in DB_VALUE_SYNONYMS
+
+    def test_db_value_synonyms_have_correct_values(self):
+        """Test DB_VALUE_SYNONYMS map to correct database values."""
+        from esdc.chat.domain_knowledge import DB_VALUE_SYNONYMS
+
+        assert DB_VALUE_SYNONYMS["low_value"] == "1. Low Value"
+        assert DB_VALUE_SYNONYMS["middle_value"] == "2. Middle Value"
+        assert DB_VALUE_SYNONYMS["high_value"] == "3. High Value"
+
+    def test_get_uncertainty_filter_with_synonyms(self):
+        """Test get_uncertainty_filter resolves synonyms correctly."""
+        # Direct database value synonyms
+        assert get_uncertainty_filter("low_value") == "1. Low Value"
+        assert get_uncertainty_filter("middle_value") == "2. Middle Value"
+        assert get_uncertainty_filter("high_value") == "3. High Value"
+        # Case insensitive
+        assert get_uncertainty_filter("LOW_VALUE") == "1. Low Value"
+        assert get_uncertainty_filter("Middle_Value") == "2. Middle Value"
+
+    def test_get_uncertainty_spec_with_synonyms(self):
+        """Test get_uncertainty_spec returns correct spec for synonyms."""
+        # Low value
+        spec = get_uncertainty_spec("low_value")
+        assert spec is not None
+        assert spec.type == "direct"
+        assert spec.db_value == "1. Low Value"
+        assert spec.is_cumulative is False
+
+        # Middle value
+        spec = get_uncertainty_spec("middle_value")
+        assert spec is not None
+        assert spec.type == "direct"
+        assert spec.db_value == "2. Middle Value"
+        assert spec.is_cumulative is True
+
+        # High value
+        spec = get_uncertainty_spec("high_value")
+        assert spec is not None
+        assert spec.type == "direct"
+        assert spec.db_value == "3. High Value"
+        assert spec.is_cumulative is True
+
+    def test_synonyms_not_reserves_only(self):
+        """Test that direct value synonyms are not reserves_only."""
+        spec = get_uncertainty_spec("low_value")
+        assert spec is not None
+        assert spec.reserves_only is False
+        spec = get_uncertainty_spec("middle_value")
+        assert spec is not None
+        assert spec.reserves_only is False
+        spec = get_uncertainty_spec("high_value")
+        assert spec is not None
+        assert spec.reserves_only is False
+
+
 class TestBuildUncertaintySql:
     """Tests for build_uncertainty_sql function."""
 
@@ -348,7 +419,10 @@ class TestGetProjectClassFilter:
     def test_contingent_filter(self):
         """Test Contingent project class filter."""
         assert get_project_class_filter("contingent") == "2. Contingent Resources"
-        assert get_project_class_filter("Contingent Resources") == "2. Contingent Resources"
+        assert (
+            get_project_class_filter("Contingent Resources")
+            == "2. Contingent Resources"
+        )
 
     def test_prospective_filter(self):
         """Test Prospective project class filter."""
@@ -511,8 +585,12 @@ class TestGetTableForQuery:
     def test_get_table_require_detail(self):
         """Test getting project_resources when detail required."""
         assert get_table_for_query("field", require_detail=True) == "project_resources"
-        assert get_table_for_query("work_area", require_detail=True) == "project_resources"
-        assert get_table_for_query("national", require_detail=True) == "project_resources"
+        assert (
+            get_table_for_query("work_area", require_detail=True) == "project_resources"
+        )
+        assert (
+            get_table_for_query("national", require_detail=True) == "project_resources"
+        )
 
     def test_get_table_unknown_entity(self):
         """Test getting table for unknown entity."""
@@ -589,13 +667,17 @@ class TestBuildAggregateQuery:
 
     def test_build_query_with_project_class(self):
         """Test building query with GRR project class."""
-        result = build_aggregate_query("field", "Duri", "sumber_daya", "2P", project_class="grr")
+        result = build_aggregate_query(
+            "field", "Duri", "sumber_daya", "2P", project_class="grr"
+        )
         assert result["table"] == "field_resources"
         assert "1. Reserves & GRR" in result["sql"]
 
     def test_build_query_use_view_false(self):
         """Test building query with use_view=False returns project_resources."""
-        result = build_aggregate_query("field", "Duri", "cadangan", "2P", use_view=False)
+        result = build_aggregate_query(
+            "field", "Duri", "cadangan", "2P", use_view=False
+        )
         assert result["table"] == "project_resources"
 
 
@@ -648,8 +730,14 @@ class TestGetRecommendedTable:
 
     def test_recommended_table_with_detail_needed(self):
         """Test recommended table when detail is needed."""
-        assert get_recommended_table("field", query_needs_detail=True) == "project_resources"
-        assert get_recommended_table("work_area", query_needs_detail=True) == "project_resources"
+        assert (
+            get_recommended_table("field", query_needs_detail=True)
+            == "project_resources"
+        )
+        assert (
+            get_recommended_table("work_area", query_needs_detail=True)
+            == "project_resources"
+        )
 
     def test_recommended_table_unknown(self):
         """Test recommended table for unknown entity."""

@@ -12,26 +12,37 @@ def should_use_native_format(headers: dict[str, str], stream: bool) -> bool:
     """Determine whether to use native tool calling format.
 
     Priority:
-    1. Environment variable override
-    2. Auto-detect based on headers
+    1. Environment variable ESDC_TOOL_FORMAT (highest priority)
+    2. Config file tool_format setting
+    3. Auto-detect based on headers (lowest priority)
 
-    Environment variable ESDC_TOOL_FORMAT:
-    - "auto" (default): Auto-detect based on headers
+    Valid values for both env var and config:
     - "native": Force native format
     - "markdown": Force markdown format
+    - "auto": Auto-detect based on headers
     """
-    force_format = os.getenv("ESDC_TOOL_FORMAT", "auto").lower()
-
-    if force_format == "native":
+    # Priority 1: Environment variable
+    env_format = os.getenv("ESDC_TOOL_FORMAT", "").lower()
+    if env_format == "native":
         return True
-    elif force_format == "markdown":
+    elif env_format == "markdown":
         return False
-    else:  # auto
-        return detect_native_format(headers, stream)
+
+    # Priority 2: Config file (import here to avoid circular import)
+    from esdc.configs import Config
+
+    config_format = Config.get_tool_format()
+    if config_format == "native":
+        return True
+    elif config_format == "markdown":
+        return False
+
+    # Priority 3: Auto-detect
+    return detect_native_format(headers, stream)
 
 
 def create_tool_call_chunk(
-    tool_calls: list[dict[str, Any]], model: str = "esdc-agent"
+    tool_calls: list[dict[str, Any]], model: str = "iris"
 ) -> dict[str, Any]:
     """Create OpenAI-compatible streaming chunk with tool calls.
 
@@ -123,7 +134,50 @@ def detect_native_format(headers: dict[str, str], stream: bool) -> bool:
     return False
 
 
-def create_final_chunk(model: str = "esdc-agent") -> dict[str, Any]:
+def create_tool_role_chunk(
+    tool_call_id: str,
+    content: str,
+    model: str = "iris",
+    max_content_length: int = 1000,
+) -> dict[str, Any]:
+    """Create OpenAI-compatible streaming chunk for tool role message.
+
+    This is sent after tool execution to satisfy OpenWebUI's expectation
+    that tool_calls should be followed by tool role messages.
+
+    Args:
+        tool_call_id: ID of the tool call this result corresponds to
+        content: Tool execution result (will be truncated if too long)
+        model: Model identifier
+        max_content_length: Maximum content length before truncation
+
+    Returns:
+        OpenAI-compatible chat.completion.chunk dict with tool role
+    """
+    # Truncate content if too long to avoid huge payloads
+    if len(content) > max_content_length:
+        content = content[:max_content_length] + "... [truncated]"
+
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": content,
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+
+def create_final_chunk(model: str = "iris") -> dict[str, Any]:
     """Create final SSE chunk indicating completion.
 
     Args:

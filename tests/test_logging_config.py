@@ -1,8 +1,8 @@
 """Test logging configuration loading from config.yaml."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from pathlib import Path
 import yaml
 
 from esdc.configs import Config

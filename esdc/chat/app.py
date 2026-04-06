@@ -5,10 +5,11 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any
 
 # Configure logging FIRST - before any other imports that might use logging
 # Log location: ~/.esdc/logs/
@@ -16,31 +17,50 @@ log_dir = Path.home() / ".esdc" / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "esdc_chat.log"
 
-# Get log level from env var (priority) or default to WARNING
-log_level_str = os.environ.get("ESDC_LOG_LEVEL", "WARNING").upper()
+# Import Config for logging configuration
+# Note: This is safe because configs.py doesn't import from chat/
+from esdc.configs import Config
+
+# Get logging configuration
+log_config = Config.get_logging_config()
+chat_level_str = log_config.get("chat", {}).get("level", "WARNING").upper()
+file_config = log_config.get("file", {})
 
 # Configure esdc.chat logger
 logger = logging.getLogger("esdc.chat")
 
-if log_level_str == "0":
+if chat_level_str == "0":
     # Disable logging completely
     logging.disable(logging.CRITICAL)
 else:
     # Parse log level
-    log_level = getattr(logging, log_level_str, logging.INFO)
+    chat_level = getattr(logging, chat_level_str, logging.WARNING)
 
-    # Rotating file handler: 10MB max, 5 backups
+    # Rotating file handler: from config or defaults
+    max_size = 10 * 1024 * 1024  # Default 10MB
+    backup_count = 5  # Default 5 backups
+    if file_config.get("max_size"):
+        # Parse size string like '10MB'
+        size_str = file_config["max_size"].upper().strip()
+        for suffix, multiplier in [("KB", 1024), ("MB", 1024**2), ("GB", 1024**3)]:
+            if size_str.endswith(suffix):
+                max_size = int(size_str[: -len(suffix)]) * multiplier
+                break
+
+    if file_config.get("backup_count"):
+        backup_count = file_config["backup_count"]
+
     file_handler = RotatingFileHandler(
         log_file,
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=5,
+        maxBytes=max_size,
+        backupCount=backup_count,
     )
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
         logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
     )
 
-    logger.setLevel(log_level)
+    logger.setLevel(chat_level)
     logger.addHandler(file_handler)
     logger.propagate = False  # Critical: prevent logs from propagating to root logger
 
@@ -54,13 +74,18 @@ logging.getLogger("markdown_it").setLevel(logging.WARNING)
 from langchain_core.language_models import BaseChatModel  # noqa: E402
 from langchain_core.runnables import Runnable  # noqa: E402
 from langgraph.checkpoint.base import BaseCheckpointSaver  # noqa: E402
+from textual import events  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer  # noqa: E402
-from textual.widget import Widget  # noqa: E402
-from textual.widgets import Static, Markdown, Collapsible, TextArea  # noqa: E402
-from textual import events  # noqa: E402
+from textual.containers import (  # noqa: E402
+    Container,
+    Horizontal,
+    ScrollableContainer,
+    Vertical,
+)
 from textual.message import Message  # noqa: E402
+from textual.widget import Widget  # noqa: E402
+from textual.widgets import Collapsible, Markdown, Static, TextArea  # noqa: E402
 
 MAX_MESSAGE_HISTORY = 100
 MAX_QUERY_HISTORY = 5
@@ -456,13 +481,14 @@ class ContextPanel(Vertical):
         )
 
         # 2. Session Info (collapsible, expanded by default)
-        import os
 
         self._current_directory = os.getcwd()
         thread_display = (
             str(self._session_thread_id)[:8] if self._session_thread_id else "N/A"
         )
-        session_content = f"Provider: {self._provider_name}\nModel: {self._model_name}\nThread: {thread_display}...\nDir: {self._current_directory}"
+        session_content = (
+            f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"
+        )
 
         with ContextSection(
             "Session Info",
@@ -492,8 +518,6 @@ class ContextPanel(Vertical):
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""
-        import os
-
         self._current_directory = os.getcwd()
 
         logger.debug(
@@ -538,7 +562,6 @@ class ContextPanel(Vertical):
         self._session_thread_id = thread_id
 
         # Get current directory
-        import os
 
         self._current_directory = os.getcwd()
 
@@ -547,7 +570,7 @@ class ContextPanel(Vertical):
             session_content = self.query_one("#session-content", Static)
             thread_display = str(thread_id)[:8] if thread_id else "N/A"
             session_content.update(
-                f"Provider: {provider}\nModel: {model}\nThread: {thread_display}...\nDir: {self._current_directory}"
+                f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"
             )
         except Exception:
             pass
@@ -612,9 +635,7 @@ class ChatMessage(Markdown):
     """
 
     def __init__(self, role: str, content: str):
-        if role == "user":
-            formatted = content
-        elif role == "ai":
+        if role == "user" or role == "ai":
             formatted = content
         else:
             formatted = f"**[{role.upper()}]** {content}"
@@ -624,7 +645,7 @@ class ChatMessage(Markdown):
 
 
 class StatusBar(Static):
-    """Status line showing current provider, model, and token count."""
+    """Status line showing IRIS and token count."""
 
     DEFAULT_CSS = """
     StatusBar {
@@ -661,7 +682,7 @@ class StatusBar(Static):
         thread_id: str = "",
     ) -> None:
         """Update status bar display."""
-        parts = [f"{provider_name} | {model_name}"]
+        parts = ["IRIS"]
 
         if context_length > 0 and token_count > 0:
             percentage = int((token_count / context_length) * 100)
@@ -1331,10 +1352,10 @@ class ESDCChatApp(App):
 
     def _init_agent(self) -> None:
         """Initialize the LLM and agent."""
-        from esdc.configs import Config
-        from esdc.providers import create_llm_from_config
         from esdc.chat.agent import create_agent
         from esdc.chat.memory import create_checkpointer, create_thread_id
+        from esdc.configs import Config
+        from esdc.providers import create_llm_from_config
 
         provider_config = Config.get_provider_config()
         if not provider_config:
@@ -1530,11 +1551,17 @@ class ESDCChatApp(App):
             # Tool-specific status messages
             TOOL_STATUS_MAP = {
                 "execute_sql": "⏳ Executing SQL query...",
+                "SQL Executor": "🛠️ Using SQL Executor...",
                 "get_schema": "⏳ Getting table schema...",
+                "Schema Inspector": "🛠️ Using Schema Inspector...",
                 "list_tables": "⏳ Listing available tables...",
+                "Table Lister": "🛠️ Using Table Lister...",
                 "get_recommended_table": "⏳ Finding recommended table...",
+                "Table Selector": "🛠️ Using Table Selector...",
                 "resolve_uncertainty_level": "⏳ Resolving uncertainty level...",
+                "Uncertainty Resolver": "🛠️ Using Uncertainty Resolver...",
                 "search_problem_cluster": "⏳ Searching problem cluster definitions...",
+                "Problem Cluster Search": "🛠️ Using Problem Cluster Search...",
             }
 
             sql_query = ""
@@ -1563,7 +1590,7 @@ class ESDCChatApp(App):
             # Add indicator to message
             if self._streaming_message:
                 indicator_text = f"\n\n{status_msg}"
-                if sql_query and tool_name == "execute_sql":
+                if sql_query and tool_name in ("execute_sql", "SQL Executor"):
                     indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
 
                 self._accumulated_content += indicator_text
@@ -1594,11 +1621,17 @@ class ESDCChatApp(App):
             # Tool-specific completion messages
             TOOL_COMPLETED_MAP = {
                 "execute_sql": "✅ SQL query completed",
+                "SQL Executor": "✅ SQL Executor completed",
                 "get_schema": "✅ Schema retrieved",
+                "Schema Inspector": "✅ Schema Inspector completed",
                 "list_tables": "✅ Tables listed",
+                "Table Lister": "✅ Table Lister completed",
                 "get_recommended_table": "✅ Recommended table found",
+                "Table Selector": "✅ Table Selector completed",
                 "resolve_uncertainty_level": "✅ Uncertainty level resolved",
+                "Uncertainty Resolver": "✅ Uncertainty Resolver completed",
                 "search_problem_cluster": "✅ Problem cluster definition found",
+                "Problem Cluster Search": "✅ Problem Cluster Search completed",
             }
 
             # Update tool status
@@ -1699,11 +1732,11 @@ class ESDCChatApp(App):
                 result = chunk.get("result", "")
                 sql = chunk.get("sql", "")
                 yield {"type": "tool_result", "result": result, "sql": sql}
-            elif chunk["type"] == "token_usage":
-                yield chunk
-            elif chunk["type"] == "messages_state":
-                yield chunk
-            elif chunk["type"] == "context_metadata":
+            elif (
+                chunk["type"] == "token_usage"
+                or chunk["type"] == "messages_state"
+                or chunk["type"] == "context_metadata"
+            ):
                 yield chunk
 
     def display_message(self, role: str, content: str) -> None:

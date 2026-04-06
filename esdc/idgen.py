@@ -19,8 +19,8 @@ Dependencies:
 
 from __future__ import annotations
 
-from itertools import cycle
 from collections.abc import Iterable, Iterator, Sequence
+from itertools import cycle
 
 _HEX_DIGITS = "0123456789ABCDEF"
 _SUFFIX_RANGE = range(10_000)
@@ -29,7 +29,6 @@ _ZONE_RANGE = range(1_000)
 
 def _iter_suffix_candidates() -> Iterator[str]:
     """Yield valid four-digit suffix candidates with unique decimal digits."""
-
     for value in _SUFFIX_RANGE:
         candidate = f"{value:04d}"
         if len(set(candidate)) == 4:
@@ -38,7 +37,6 @@ def _iter_suffix_candidates() -> Iterator[str]:
 
 def _iter_zone_candidates() -> Iterator[str]:
     """Yield valid three-digit zone suffix candidates with unique digits."""
-
     for value in _ZONE_RANGE:
         candidate = f"{value:03d}"
         if len(set(candidate)) == 3:
@@ -58,7 +56,6 @@ def _normalize_grid_token(token: str) -> str:
         ValueError: If the token is empty, malformed, or contains
             non-hexadecimal characters.
     """
-
     raw = token.strip().upper()
     if not raw:
         raise ValueError("grid token cannot be empty")
@@ -94,7 +91,6 @@ def _normalize_field_id(field_id: str) -> str:
     Raises:
         ValueError: Propagated from validation failures.
     """
-
     raw = field_id.strip().upper().replace("-", "")
     _ = _parse_field_id(raw)
     return raw
@@ -112,7 +108,6 @@ def _parse_field_id(field_id: str) -> tuple[str, str]:
     Raises:
         ValueError: If the ID structure, digits, or checksum are invalid.
     """
-
     raw = field_id.strip().upper().replace("-", "")
     if len(raw) != 8 or not raw.startswith("F"):
         raise ValueError(f"invalid field ID format: {field_id!r}")
@@ -150,7 +145,6 @@ def _parse_project_id(project_id: str) -> tuple[str, int]:
     Raises:
         ValueError: If the format, sequence digits, or range are invalid.
     """
-
     raw = project_id.strip().upper().replace("-", "")
     if len(raw) != 10 or not raw.startswith("P"):
         raise ValueError(f"invalid project ID format: {project_id!r}")
@@ -182,7 +176,6 @@ def _parse_zone_id(zone_id: str) -> tuple[str, str]:
     Raises:
         ValueError: If the format, suffix digits, or checksum are invalid.
     """
-
     raw = zone_id.strip().upper().replace("-", "")
     if len(raw) != 12 or not raw.startswith("Z"):
         raise ValueError(f"invalid zone ID format: {zone_id!r}")
@@ -219,7 +212,6 @@ def _luhn_mod16(payload_hex: str) -> str:
     Raises:
         ValueError: If the payload contains non-hexadecimal characters.
     """
-
     total = 0
     double = True
 
@@ -252,7 +244,6 @@ def _next_available_suffix(used_suffixes: set[str]) -> str:
     Raises:
         ValueError: If no suffixes remain.
     """
-
     for candidate in _iter_suffix_candidates():
         if candidate not in used_suffixes:
             used_suffixes.add(candidate)
@@ -272,7 +263,6 @@ def _next_project_sequence(used_sequences: set[int]) -> str:
     Raises:
         ValueError: If all sequence numbers for the field are exhausted.
     """
-
     for number in range(1, 100):
         if number not in used_sequences:
             used_sequences.add(number)
@@ -292,7 +282,6 @@ def _next_zone_suffix(used_suffixes: set[str]) -> str:
     Raises:
         ValueError: If all zone suffixes are used.
     """
-
     for candidate in _iter_zone_candidates():
         if candidate not in used_suffixes:
             used_suffixes.add(candidate)
@@ -311,7 +300,6 @@ def _collect_existing_grids(
     Returns:
         Ordered list of grids encountered and mapping of grid to used suffixes.
     """
-
     grid_order: list[str] = []
     grid_suffixes: dict[str, set[str]] = {}
 
@@ -344,7 +332,6 @@ def _resolve_ordered_grids(
     Raises:
         ValueError: If no grid information is available.
     """
-
     ordered: list[str] = []
     seen: set[str] = set()
 
@@ -381,7 +368,6 @@ def _collect_existing_projects(
     Returns:
         Dictionary mapping field payloads to sets of allocated sequences.
     """
-
     existing: dict[str, set[int]] = {}
     for project_id in project_ids:
         field_payload, sequence_number = _parse_project_id(project_id)
@@ -398,7 +384,6 @@ def _collect_existing_zones(zone_ids: Iterable[str]) -> dict[str, set[str]]:
     Returns:
         Dictionary mapping field payloads to sets of allocated zone suffixes.
     """
-
     existing: dict[str, set[str]] = {}
     for zone_id in zone_ids:
         field_payload, zone_suffix = _parse_zone_id(zone_id)
@@ -424,7 +409,6 @@ def gen_field_id(
     Raises:
         ValueError: If `total_id` is below one or grid data is unavailable.
     """
-
     if total_id < 1:
         raise ValueError("total_id must be at least 1")
 
@@ -463,7 +447,6 @@ def gen_project_id(
     Raises:
         ValueError: If `total_id` is below one or inputs are invalid.
     """
-
     if total_id < 1:
         raise ValueError("total_id must be at least 1")
 
@@ -500,7 +483,6 @@ def gen_zone_id(
     Raises:
         ValueError: If `total_id` is below one or inputs are invalid.
     """
-
     if total_id < 1:
         raise ValueError("total_id must be at least 1")
 
@@ -530,7 +512,6 @@ def verify_field_id(field_id: str) -> bool:
         True when the field ID conforms to structure, uniqueness, and
         checksum rules; otherwise False.
     """
-
     try:
         _ = _parse_field_id(field_id)
     except ValueError:
@@ -548,7 +529,6 @@ def verify_zone_id(zone_id: str) -> bool:
         True when the zone ID conforms to structure, uniqueness, and
         checksum rules; otherwise False.
     """
-
     try:
         _ = _parse_zone_id(zone_id)
     except ValueError:

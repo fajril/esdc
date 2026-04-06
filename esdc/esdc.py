@@ -31,31 +31,31 @@ Usage:
 Run the module from the command line to access the available commands and options.
 """
 
-import os
+import csv
+import gzip
 import io
+import json
+import logging
+import os
+from collections.abc import Iterable
+from contextlib import closing
 from datetime import date
 from pathlib import Path
-import csv
-import json
-import gzip
-from contextlib import closing
-import logging
-from collections.abc import Iterable
-
-import requests
-import typer
 from typing import Annotated
-import rich
-from rich.progress import Progress, TransferSpeedColumn, DownloadColumn
-from rich.logging import RichHandler
+
 import pandas as pd
+import requests
+import rich
+import typer
+from rich.logging import RichHandler
+from rich.progress import DownloadColumn, Progress, TransferSpeedColumn
 from tabulate import tabulate
 
-from esdc.selection import TableName, ApiVer, FileType
-from esdc.configs import Config
-from esdc.dbmanager import run_query, load_data_to_db
-from esdc.commands.provider import provider_app
 from esdc.chat.app import ESDCChatApp
+from esdc.commands.provider import provider_app
+from esdc.configs import Config
+from esdc.dbmanager import load_data_to_db, run_query
+from esdc.selection import ApiVer, FileType, TableName
 
 TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
@@ -97,7 +97,9 @@ def main(verbose: int = 0):
             logger.setLevel(logging.INFO)
         else:
             logger.setLevel(logging.WARNING)
-        logger.info("Log level set to %s", logging.getLevelName(logger.getEffectiveLevel()))
+        logger.info(
+            "Log level set to %s", logging.getLevelName(logger.getEffectiveLevel())
+        )
 
 
 # ... (previous imports remain unchanged)
@@ -129,20 +131,25 @@ def fetch(
     Returns:
         None
     """
-
     username, password = Config.get_credentials()
 
     if filetype == "csv":
-        load_esdc_data(filetype=FileType.CSV, to_file=save, username=username, password=password)
+        load_esdc_data(
+            filetype=FileType.CSV, to_file=save, username=username, password=password
+        )
     elif filetype == "json":
-        load_esdc_data(filetype=FileType.JSON, to_file=save, username=username, password=password)
+        load_esdc_data(
+            filetype=FileType.JSON, to_file=save, username=username, password=password
+        )
     else:
         logging.warning("File type %s is not available.", filetype)
 
 
 @app.command()
 def reload(
-    filetype: Annotated[str | None, typer.Option(help="Options: csv, json, zip")] = "csv",
+    filetype: Annotated[
+        str | None, typer.Option(help="Options: csv, json, zip")
+    ] = "csv",
 ) -> None:
     """
     Reload data from binary files and save it to a file.
@@ -167,7 +174,9 @@ def reload(
             elif filetype == "json":
                 _load_file_as_json(filename, table.value)
             else:
-                logging.debug("failed to load %s. Unknown %s format", filename, filetype)
+                logging.debug(
+                    "failed to load %s. Unknown %s format", filename, filetype
+                )
         else:
             logging.warning("File %s is not found.", filename)
 
@@ -177,7 +186,9 @@ def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
     where: Annotated[str | None, typer.Option(help="Column to search.")] = None,
     search: Annotated[str | None, typer.Option(help="Filter value")] = "",
-    year: Annotated[int | None, typer.Option(min=2019, help="Filter year value")] = None,
+    year: Annotated[
+        int | None, typer.Option(min=2019, help="Filter year value")
+    ] = None,
     output: Annotated[int, typer.Option(help="Detail of output.")] = 0,
     save: bool = typer.Option(
         False,
@@ -235,7 +246,9 @@ def show(
         # Save the result to a Excel file if requested
         if save:
             today = date.today().strftime("%Y%m%d")
-            df.to_excel(f"view_{table}_{today}.xlsx", index=False, sheet_name="resources report")
+            df.to_excel(
+                f"view_{table}_{today}.xlsx", index=False, sheet_name="resources report"
+            )
     else:
         logging.warning("Unable to show data. The query is none.")
 
@@ -264,11 +277,11 @@ def load_esdc_data(
     password : str
         The password for authenticating with the ESDC API.
 
-    Returns
+    Returns:
     -------
     None
 
-    Raises
+    Raises:
     ------
     Exception
         Raises an exception if the download fails or if the data format is unsupported.
@@ -322,12 +335,12 @@ def esdc_url_builder(
     file_type : FileType, optional
         The file type to request. Defaults to FileType.CSV.
 
-    Returns
+    Returns:
     -------
     str
         The constructed ESDC URL.
 
-    Notes
+    Notes:
     -----
     The URL is constructed by concatenating the base ESDC URL, API version,
     table name, verbosity level, and file type.
@@ -382,12 +395,12 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
     url : str
         The URL of the file to download.
 
-    Returns
+    Returns:
     -------
     bytes | None
         The content of the downloaded file as bytes, or None if the download failed.
 
-    Raises
+    Raises:
     ------
     requests.exceptions.RequestException
         If there is a request error while downloading the file.
@@ -403,39 +416,43 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
         if response.status_code == 200:
             file_size = int(response.headers.get("Content-Length", 0))
             logging.debug("File size is %s bytes", file_size)
-            logging.debug("Encoding format: %s", response.headers.get("Content-Encoding"))
+            logging.debug(
+                "Encoding format: %s", response.headers.get("Content-Encoding")
+            )
 
-            with closing(io.BytesIO()) as f:
-                with Progress(
+            with (
+                closing(io.BytesIO()) as f,
+                Progress(
                     *Progress.get_default_columns(),
                     TransferSpeedColumn(),
                     DownloadColumn(binary_units=True),
-                ) as progress:
-                    task_id = progress.add_task(
-                        f"[cyan]Downloading {round(file_size / 1e6)} MB...",
-                        total=file_size,
-                        unit="B",
-                        transfer=True,
-                        speed_unit="B/s",
-                    )
-                    if response.headers.get("Content-Encoding") == "gzip":
-                        with gzip.GzipFile(fileobj=response.raw, mode="rb") as gz:
-                            while True:
-                                chunk = gz.read(size=8192)
-                                if not chunk:
-                                    break
-                                _ = f.write(chunk)
-                                _ = progress.update(task_id, advance=len(chunk))
-                    else:
-                        for chunk in response.iter_content(chunk_size=8192):
+                ) as progress,
+            ):
+                task_id = progress.add_task(
+                    f"[cyan]Downloading {round(file_size / 1e6)} MB...",
+                    total=file_size,
+                    unit="B",
+                    transfer=True,
+                    speed_unit="B/s",
+                )
+                if response.headers.get("Content-Encoding") == "gzip":
+                    with gzip.GzipFile(fileobj=response.raw, mode="rb") as gz:
+                        while True:
+                            chunk = gz.read(size=8192)
+                            if not chunk:
+                                break
                             _ = f.write(chunk)
                             _ = progress.update(task_id, advance=len(chunk))
+                else:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        _ = f.write(chunk)
+                        _ = progress.update(task_id, advance=len(chunk))
 
-                    logging.info(
-                        "File downloaded successfully to memory (Size: %s bytes)",
-                        f.tell(),
-                    )
-                    return f.getvalue()
+                logging.info(
+                    "File downloaded successfully to memory (Size: %s bytes)",
+                    f.tell(),
+                )
+                return f.getvalue()
 
         logging.warning("File download failed. Status code: %s", response.status_code)
         return None
@@ -469,7 +486,7 @@ def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
     csv.register_dialect("esdc", _EsdcDialect)
 
     if isinstance(file, str):
-        with open(file, "r", newline="", encoding="utf-8") as csvfile:
+        with open(file, newline="", encoding="utf-8") as csvfile:
             reader = csv.reader(csvfile, dialect="esdc")
     else:
         reader = csv.reader(file, dialect="esdc")
@@ -541,8 +558,12 @@ def serve(
     from esdc.server.app import run_server
 
     if web:
-        rich.print(f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]")
-        rich.print(f"[dim]API documentation available at http://{host}:{port}/docs[/dim]")
+        rich.print(
+            f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]"
+        )
+        rich.print(
+            f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
+        )
         run_server(host=host, port=port, log_level=log_level)
 
 

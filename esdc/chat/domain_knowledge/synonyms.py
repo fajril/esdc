@@ -1,8 +1,6 @@
 """Synonym mappings for Indonesian/English terminology."""
 
-from typing import Dict
-
-SYNONYMS: Dict[str, str] = {
+SYNONYMS: dict[str, str] = {
     "cadangan": "cadangan",
     "reserves": "cadangan",
     "reserve": "cadangan",
@@ -119,4 +117,15 @@ SYNONYMS: Dict[str, str] = {
     "time-series": "timeseries",
     "profil produksi": "timeseries",
     "production profile": "timeseries",
+    # Uncertainty level synonyms (direct database value shortcuts)
+    "low": "low_value",
+    "rendah": "low_value",
+    "minimum": "low_value",
+    "mid": "middle_value",
+    "sedang": "middle_value",
+    "medium": "middle_value",
+    "best": "middle_value",
+    "high": "high_value",
+    "tinggi": "high_value",
+    "maksimum": "high_value",
 }

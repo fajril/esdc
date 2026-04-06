@@ -1,8 +1,9 @@
 import os
-import yaml
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 # Note: frozen=True was removed to allow method-based configuration updates
@@ -40,7 +41,7 @@ class Config:
 
         config_file = cls.get_config_file()
         if config_file.exists():
-            with open(config_file, "r") as f:
+            with open(config_file) as f:
                 cls._config_cache = yaml.safe_load(f) or {}
                 return cls._config_cache
         cls._config_cache = {}
@@ -59,6 +60,19 @@ class Config:
             default_config = {
                 "api_url": cls.BASE_API_URL_V2,
                 "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
+                "tool_format": "native",  # native, markdown, or auto
+                "logging": {
+                    "level": "INFO",
+                    "file": {
+                        "enabled": True,
+                        "path": "logs/esdc.log",
+                        "max_size": "10MB",
+                        "backup_count": 5,
+                    },
+                    "server": {"level": "INFO"},
+                    "agent": {"level": "DEBUG"},
+                    "chat": {"level": "WARNING"},
+                },
             }
             with open(config_file, "w") as f:
                 yaml.dump(default_config, f, default_flow_style=False)
@@ -75,6 +89,31 @@ class Config:
             return config["api_url"]
 
         return cls.BASE_API_URL_V2
+
+    @classmethod
+    def get_tool_format(cls) -> str:
+        """Get tool format with priority: env var > config.yaml > default.
+
+        Environment variable ESDC_TOOL_FORMAT overrides config file.
+        Valid values: "native", "markdown", "auto"
+
+        Returns:
+            Tool format string (native, markdown, or auto)
+        """
+        # Priority 1: Environment variable
+        env_format = os.environ.get("ESDC_TOOL_FORMAT", "").lower()
+        if env_format in ("native", "markdown", "auto"):
+            return env_format
+
+        # Priority 2: Config file
+        config = cls._load_config()
+        if config and "tool_format" in config:
+            config_format = config["tool_format"].lower()
+            if config_format in ("native", "markdown", "auto"):
+                return config_format
+
+        # Priority 3: Default
+        return "native"
 
     @classmethod
     def get_credentials(cls) -> tuple[str, str]:
@@ -259,6 +298,83 @@ class Config:
         config = cls._load_config() or {}
         chat_config = config.get("chat", {})
         return chat_config.get("log_level", "INFO")
+
+    @classmethod
+    def get_logging_config(cls) -> dict[str, Any]:
+        """Get logging configuration from config file.
+
+        Priority:
+        1. ESDC_LOG_LEVEL environment variable (applies to all components)
+        2. config.yaml: logging.* structure
+        3. config.yaml: chat.log_level (backward compatibility)
+        4. Default values
+
+        Returns:
+            Logging configuration dict with structure:
+            {
+                "level": "INFO",
+                "file": {"enabled": True, "path": "logs/esdc.log", "max_size": "10MB", "backup_count": 5},
+                "server": {"level": "INFO"},
+                "agent": {"level": "DEBUG"},
+                "chat": {"level": "WARNING"}
+            }
+        """
+        config = cls._load_config() or {}
+
+        # Check environment variable first (overrides everything)
+        env_level = os.environ.get("ESDC_LOG_LEVEL")
+        if env_level:
+            env_level = env_level.upper()
+            if env_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "0"):
+                env_level = "INFO"
+
+        # Try new logging structure
+        logging_config = config.get("logging", {})
+
+        # Backward compatibility: fall back to old chat.log_level for base level
+        if not logging_config:
+            old_level = config.get("chat", {}).get("log_level", "INFO")
+            # When migrating from old config, use old_level for all components
+            logging_config = {
+                "level": old_level,
+                "server": {"level": old_level},
+                "agent": {"level": old_level},
+                "chat": {"level": old_level},
+            }
+
+        # Apply environment variable override (applies to all components)
+        if env_level:
+            logging_config["level"] = env_level
+
+        # Get global level from config
+        global_level = logging_config.get("level", "INFO")
+
+        # Get component levels with defaults
+        # Priority: component level > env override > global level > component default
+        server_level = logging_config.get("server", {}).get("level")
+        agent_level = logging_config.get("agent", {}).get("level")
+        chat_level = logging_config.get("chat", {}).get("level")
+
+        # Apply env override to components if set
+        if env_level:
+            server_level = env_level
+            agent_level = env_level
+            chat_level = env_level
+
+        result = {
+            "level": global_level,
+            "file": {
+                "enabled": logging_config.get("file", {}).get("enabled", True),
+                "path": logging_config.get("file", {}).get("path", "logs/esdc.log"),
+                "max_size": logging_config.get("file", {}).get("max_size", "10MB"),
+                "backup_count": logging_config.get("file", {}).get("backup_count", 5),
+            },
+            "server": {"level": server_level if server_level else "INFO"},
+            "agent": {"level": agent_level if agent_level else "DEBUG"},
+            "chat": {"level": chat_level if chat_level else "WARNING"},
+        }
+
+        return result
 
     @classmethod
     def get_provider_base_url(cls) -> str:

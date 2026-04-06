@@ -1,6 +1,6 @@
-import sqlite3
 import logging
 import re
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -22,11 +22,11 @@ def load_data_to_db(
     table_name : str
         The name of the table to load the data into.
 
-    Returns
+    Returns:
     -------
     None
 
-    Raises
+    Raises:
     ------
     sqlite3.Error
         If there is an error while connecting
@@ -103,7 +103,6 @@ def run_query(
     - If the database file does not exist, an error message is logged and None is returned.
     - If the query fails, an error message is logged and None is returned.
     """
-
     output = min(output, 4)
 
     sql_script_map = {
@@ -177,5 +176,5 @@ def run_query(
 
 def _load_sql_script(script_file: str) -> str:
     file = Path(__file__).parent / "sql" / script_file
-    with open(file, "r", encoding="utf-8") as f:
+    with open(file, encoding="utf-8") as f:
         return f.read()

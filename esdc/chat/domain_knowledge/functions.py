@@ -1,12 +1,427 @@
 """Functions for domain knowledge mapping and SQL building."""
 
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from dataclasses import dataclass
+from typing import Any
 
 from .concepts import DOMAIN_CONCEPTS
 from .synonyms import SYNONYMS
 
+# =============================================================================
+# SQL Query Enrichment
+# =============================================================================
 
-def resolve_concept(term: str) -> Optional[Dict]:
+
+@dataclass
+class EnrichedQuery:
+    """Represents an enriched SQL query with context columns."""
+
+    original_sql: str
+    enriched_sql: str
+    added_columns: list[str]
+    group_by_columns: list[str]
+    remarks_column: str | None
+    classification_columns: list[str]
+    table: str
+    was_already_enriched: bool = False  # Track if model already enriched
+    enrichment_source: str = "unknown"  # "model" | "fallback" | "none"
+    report_year_requested: int | None = None  # Year user asked for
+    report_year_used: int | None = (
+        None  # Year actually used (may differ due to fallback)
+    )
+    report_year_fallback_info: dict[str, Any] | None = None  # Fallback details
+
+
+def extract_table_from_sql(sql: str) -> str | None:
+    """
+    Extract table name from SQL query.
+
+    Args:
+        sql: SQL query string
+
+    Returns:
+        Table name, or None if not found
+
+    Examples:
+        >>> extract_table_from_sql("SELECT * FROM field_resources WHERE ...")
+        'field_resources'
+        >>> extract_table_from_sql("SELECT SUM(rec_oc) FROM wa_resources")
+        'wa_resources'
+    """
+    # Match FROM clause - handle aliases like "FROM table AS t" or "FROM table t"
+    from_pattern = re.compile(
+        r"FROM\s+(\w+)",
+        re.IGNORECASE,
+    )
+    match = from_pattern.search(sql)
+    return match.group(1) if match else None
+
+
+def extract_selected_columns(sql: str) -> list[str]:
+    """
+    Extract column names from SELECT clause.
+
+    Args:
+        sql: SQL query string
+
+    Returns:
+        List of column names (without aliases)
+
+    Examples:
+        >>> extract_selected_columns("SELECT rec_oc, rec_an FROM ...")
+        ['rec_oc', 'rec_an']
+        >>> extract_selected_columns("SELECT SUM(rec_oc) as total FROM ...")
+        ['rec_oc']
+    """
+    # Match SELECT clause until FROM
+    select_pattern = re.compile(
+        r"SELECT\s+(.+?)\s+FROM",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = select_pattern.search(sql)
+    if not match:
+        return []
+
+    select_clause = match.group(1)
+
+    # Split by comma and clean up
+    columns = []
+    for col in select_clause.split(","):
+        col = col.strip()
+        # Remove SUM(), MAX(), etc.
+        col = re.sub(r"\w+\s*\(\s*(\w+)\s*\)", r"\1", col)
+        # Remove table prefix (e.g., "pr.rec_oc" -> "rec_oc")
+        col = re.sub(r"\w+\.(\w+)", r"\1", col)
+        # Remove alias (e.g., "rec_oc as total" -> "rec_oc")
+        col = re.sub(r"\s+(?:as|AS)\s+\w+", "", col)
+        col = col.strip()
+        if col and col != "*":
+            columns.append(col)
+
+    return columns
+
+
+def requires_classification_context(columns: list[str]) -> bool:
+    """
+    Check if any column requires classification context.
+
+    Args:
+        columns: List of selected column names
+
+    Returns:
+        True if any column requires classification (rec_*)
+
+    Examples:
+        >>> requires_classification_context(["rec_oc", "res_oc"])
+        True
+        >>> requires_classification_context(["res_oc", "tpf_oc"])
+        False
+    """
+    return any(col.lower().startswith("rec_") for col in columns)
+
+
+def is_already_enriched(sql: str) -> tuple[bool, str]:
+    """
+    Check if model already included context columns in the query.
+
+    This function acts as a detector for the hybrid enrichment approach:
+    - If model followed system prompt rules → returns (True, "model")
+    - If model forgot → returns (False, "needs_fallback")
+
+    Args:
+        sql: SQL query string
+
+    Returns:
+        Tuple of (is_enriched, source_reason)
+        - is_enriched: True if query has context columns
+        - source_reason: "model", "needs_fallback", or "no_classification_needed"
+
+    Examples:
+        >>> is_already_enriched("SELECT field_remarks, SUM(rec_oc) FROM field_resources")
+        (True, "model")
+        >>> is_already_enriched("SELECT SUM(rec_oc) FROM field_resources")
+        (False, "needs_fallback")
+        >>> is_already_enriched("SELECT res_oc FROM field_resources")
+        (True, "no_classification_needed")
+    """
+    sql_lower = sql.lower()
+
+    # Check for remarks columns
+    has_remarks = bool(re.search(r"\b\w+_remarks\b", sql, re.IGNORECASE))
+
+    # Check for classification columns
+    has_project_class = "project_class" in sql_lower
+    has_project_stage = "project_stage" in sql_lower
+    has_classification = has_project_class and has_project_stage
+
+    # Extract columns to check if classification is needed
+    selected_cols = extract_selected_columns(sql)
+    needs_classification = any(col.lower().startswith("rec_") for col in selected_cols)
+
+    if needs_classification:
+        # For rec_* queries, need both remarks AND classification
+        if has_remarks and has_classification:
+            return True, "model"
+        else:
+            return False, "needs_fallback"
+    else:
+        # For non-rec queries, remarks is recommended but not required
+        # Return True with appropriate source to indicate no action needed
+        if has_remarks:
+            return True, "model"
+        else:
+            # Non-rec queries don't strictly need classification
+            # but remarks are still valuable for context
+            return False, "optional_remarks_only"
+
+
+def enrich_sql_query(
+    sql: str,
+    table: str | None = None,
+) -> EnrichedQuery:
+    """
+    Enrich SQL query with context columns (Hybrid: Model-guided + Code fallback).
+
+    PRIMARY APPROACH:
+    Model is instructed via system prompt to include context columns.
+    This function detects if model already enriched the query.
+
+    FALLBACK:
+    If model forgot, this function automatically adds:
+    1. *_remarks column for context (if available)
+    2. project_class and project_stage for rec_* queries
+    3. GROUP BY clause when classification columns are added
+
+    Args:
+        sql: Original SQL query (from model)
+        table: Table name (auto-detected if not provided)
+
+    Returns:
+        EnrichedQuery with metadata about enrichment source
+
+    Examples:
+        >>> # Model already enriched → no changes
+        >>> result = enrich_sql_query("SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources")
+        >>> result.was_already_enriched
+        True
+        >>> result.enrichment_source
+        "model"
+
+        >>> # Model forgot → fallback enrichment
+        >>> result = enrich_sql_query("SELECT SUM(rec_oc) FROM field_resources")
+        >>> "project_class" in result.enriched_sql
+        True
+        >>> result.enrichment_source
+        "fallback"
+    """
+    from .tables import (
+        get_classification_context_columns,
+        get_remarks_column,
+        is_aggregate_view,
+        is_detail_table,
+    )
+
+    # Check if model already enriched the query
+    is_enriched, source = is_already_enriched(sql)
+
+    if is_enriched and source == "model":
+        # Model did its job! Return query unchanged with metadata
+        detected_table = table or extract_table_from_sql(sql) or ""
+        return EnrichedQuery(
+            original_sql=sql,
+            enriched_sql=sql,
+            added_columns=[],
+            group_by_columns=[],
+            remarks_column=None,
+            classification_columns=[],
+            table=detected_table,
+            was_already_enriched=True,
+            enrichment_source="model",
+        )
+
+    # Auto-detect table if not provided
+    if table is None:
+        table = extract_table_from_sql(sql) or ""
+
+    # SKIP enrichment for aggregate views (data already pre-aggregated)
+    if is_aggregate_view(table):
+        return EnrichedQuery(
+            original_sql=sql,
+            enriched_sql=sql,
+            added_columns=[],
+            group_by_columns=[],
+            remarks_column=None,
+            classification_columns=[],
+            table=table,
+            was_already_enriched=False,
+            enrichment_source="skipped_aggregate_view",
+        )
+
+    if not table:
+        # Cannot enrich without table information
+        return EnrichedQuery(
+            original_sql=sql,
+            enriched_sql=sql,
+            added_columns=[],
+            group_by_columns=[],
+            remarks_column=None,
+            classification_columns=[],
+            table="",
+            was_already_enriched=False,
+            enrichment_source="none",
+        )
+
+    # SKIP enrichment for non-detail tables
+    if not is_detail_table(table):
+        return EnrichedQuery(
+            original_sql=sql,
+            enriched_sql=sql,
+            added_columns=[],
+            group_by_columns=[],
+            remarks_column=None,
+            classification_columns=[],
+            table=table,
+            was_already_enriched=False,
+            enrichment_source="skipped_non_detail",
+        )
+
+    # Extract selected columns
+    selected_columns = extract_selected_columns(sql)
+
+    # Determine what to add
+    added_columns = []
+    classification_columns = []
+    group_by_columns = []
+
+    # Check if classification context is needed
+    if requires_classification_context(selected_columns):
+        classification_columns = get_classification_context_columns()
+        added_columns.extend(classification_columns)
+        group_by_columns.extend(classification_columns)
+
+    # Check if remarks column is available
+    remarks_col = get_remarks_column(table)
+    if remarks_col:
+        added_columns.append(remarks_col)
+        group_by_columns.append(remarks_col)
+
+    # Build enriched SQL
+    enriched_sql = _build_enriched_sql(
+        original_sql=sql,
+        added_columns=added_columns,
+        group_by_columns=group_by_columns if group_by_columns else None,
+    )
+
+    return EnrichedQuery(
+        original_sql=sql,
+        enriched_sql=enriched_sql,
+        added_columns=added_columns,
+        group_by_columns=group_by_columns,
+        remarks_column=remarks_col,
+        classification_columns=classification_columns,
+        table=table,
+        was_already_enriched=False,
+        enrichment_source="fallback" if added_columns else "none",
+    )
+
+
+def _build_enriched_sql(
+    original_sql: str,
+    added_columns: list[str],
+    group_by_columns: list[str] | None,
+) -> str:
+    """
+    Build enriched SQL by injecting context columns.
+
+    Args:
+        original_sql: Original SQL query
+        added_columns: Columns to add to SELECT
+        group_by_columns: Columns for GROUP BY (if any)
+
+    Returns:
+        Enriched SQL query
+    """
+    if not added_columns:
+        return original_sql
+
+    # Find the SELECT clause and insert new columns
+    select_match = re.search(
+        r"(SELECT\s+)(.+?)(\s+FROM)", original_sql, re.IGNORECASE | re.DOTALL
+    )
+    if not select_match:
+        return original_sql
+
+    select_keyword = select_match.group(1)
+    existing_select = select_match.group(2)
+    from_clause = select_match.group(3)
+
+    # Build new SELECT clause
+    # Add table prefix "pr." for consistency
+    new_columns = ", ".join([f"pr.{col}" for col in added_columns])
+
+    # Check if existing select has aggregation
+    has_aggregation = bool(
+        re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", existing_select, re.IGNORECASE)
+    )
+
+    if has_aggregation:
+        # Add classification columns before aggregation
+        enriched_select = f"{new_columns}, {existing_select}"
+    else:
+        # Just append new columns
+        enriched_select = f"{existing_select}, {new_columns}"
+
+    # Replace SELECT clause
+    enriched_sql = (
+        original_sql[: select_match.start()]
+        + select_keyword
+        + enriched_select
+        + from_clause
+        + original_sql[select_match.end() :]
+    )
+
+    # Add GROUP BY if needed
+    if group_by_columns and has_aggregation:
+        # Check if already has GROUP BY
+        if not re.search(r"\bGROUP\s+BY\b", enriched_sql, re.IGNORECASE):
+            group_by_sql = ", ".join([f"pr.{col}" for col in group_by_columns])
+            enriched_sql += f"\nGROUP BY {group_by_sql}"
+
+    return enriched_sql
+
+
+def should_include_remarks(remarks_value: str | None) -> bool:
+    """
+    Determine if remarks should be shown to user based on content.
+
+    Remarks are only shown if they contain meaningful information.
+
+    Args:
+        remarks_value: The remarks column value
+
+    Returns:
+        True if remarks should be displayed to user
+
+    Examples:
+        >>> should_include_remarks("Field under development planning")
+        True
+        >>> should_include_remarks("")
+        False
+        >>> should_include_remarks(None)
+        False
+    """
+    if not remarks_value:
+        return False
+
+    # Skip generic/empty values
+    meaningless_values = ["", "-", "null", "none", "n/a", "na"]
+    if remarks_value.lower().strip() in meaningless_values:
+        return False
+
+    return True
+
+
+def resolve_concept(term: str) -> dict | None:
     """
     Resolve a term to its domain concept.
 
@@ -49,8 +464,8 @@ def resolve_concept(term: str) -> Optional[Dict]:
 
 
 def get_columns_for_concept(
-    concept_type: str, concept_name: str, substance: Optional[str] = None
-) -> List[str]:
+    concept_type: str, concept_name: str, substance: str | None = None
+) -> list[str]:
     """
     Get the database columns for a domain concept.
 
@@ -75,10 +490,10 @@ def get_columns_for_concept(
 
 def build_sql_pattern(
     concept: str,
-    location_filter: Optional[str] = None,
-    uncertainty: Optional[str] = None,
-    project_class: Optional[str] = None,
-) -> Dict[str, str]:
+    location_filter: str | None = None,
+    uncertainty: str | None = None,
+    project_class: str | None = None,
+) -> dict[str, str]:
     """
     Build SQL query patterns for common queries.
 
@@ -123,16 +538,20 @@ def build_sql_pattern(
             if project_class.lower() in ["grr", "reserves_grr"]:
                 base_query += "\n        AND pr.project_class = '1. Reserves & GRR'"
             elif project_class.lower() in ["contingent"]:
-                base_query += "\n        AND pr.project_class = '2. Contingent Resources'"
+                base_query += (
+                    "\n        AND pr.project_class = '2. Contingent Resources'"
+                )
             elif project_class.lower() in ["prospective"]:
-                base_query += "\n        AND pr.project_class = '3. Prospective Resources'"
+                base_query += (
+                    "\n        AND pr.project_class = '3. Prospective Resources'"
+                )
 
         patterns["base"] = base_query
 
     return patterns
 
 
-def get_project_class_filter(project_class: str) -> Optional[str]:
+def get_project_class_filter(project_class: str) -> str | None:
     """
     Get the database filter value for a project class.
 
@@ -156,10 +575,10 @@ def get_project_class_filter(project_class: str) -> Optional[str]:
         "prospek": "3. Prospective Resources",
     }
 
-    return mapping.get(project_class, None)
+    return mapping.get(project_class)
 
 
-def get_columns_for_substance(substance: str) -> List[str]:
+def get_columns_for_substance(substance: str) -> list[str]:
     """
     Get column suffixes for a substance type.
 
@@ -184,7 +603,7 @@ def get_columns_for_substance(substance: str) -> List[str]:
     return mapping.get(substance, [])
 
 
-def format_response_value(value: Optional[float], unit: str) -> str:
+def format_response_value(value: float | None, unit: str) -> str:
     """
     Format a numeric value with units for display.
 
@@ -209,10 +628,10 @@ def format_response_value(value: Optional[float], unit: str) -> str:
 
 def calculate_peak_production_year(
     table: str,
-    entity_name: Optional[str] = None,
+    entity_name: str | None = None,
     substance: str = "oc",
     forecast_type: str = "tpf",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Calculate the year with peak production from a timeseries table.
 
@@ -253,10 +672,10 @@ def calculate_peak_production_year(
 
 def calculate_eol_year(
     table: str,
-    entity_name: Optional[str] = None,
+    entity_name: str | None = None,
     substance: str = "oc",
     forecast_type: str = "tpf",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Calculate the End of Life (EOL) year from a timeseries table.
 
@@ -282,9 +701,9 @@ def calculate_eol_year(
 
 def get_onstream_year(
     table: str,
-    entity_name: Optional[str] = None,
+    entity_name: str | None = None,
     substance: str = "oc",
-) -> Dict[str, Optional[str]]:
+) -> dict[str, str | None]:
     """
     Get the onstream (start production) year.
 
@@ -311,7 +730,9 @@ def get_onstream_year(
     }
 
 
-def convert_volume_units(volume: float, from_unit: str, to_unit: str, year: int = 2024) -> float:
+def convert_volume_units(
+    volume: float, from_unit: str, to_unit: str, year: int = 2024
+) -> float:
     """
     Convert volume units for timeseries data.
 
@@ -348,12 +769,12 @@ def convert_volume_units(volume: float, from_unit: str, to_unit: str, year: int 
 
 def build_timeseries_query(
     table: str = "field_timeseries",
-    entity_name: Optional[str] = None,
-    year: Optional[int] = None,
-    year_range: Optional[Tuple[int, int]] = None,
+    entity_name: str | None = None,
+    year: int | None = None,
+    year_range: tuple[int, int] | None = None,
     substance: str = "oc",
     include_daily: bool = False,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Build SQL query for timeseries data with optional unit conversion.
 
@@ -375,7 +796,9 @@ def build_timeseries_query(
     # Import here to avoid circular import
     from .tables import get_entity_filter_column
 
-    entity_col = get_entity_filter_column("field" if "field" in table else "work_area", table)
+    entity_col = get_entity_filter_column(
+        "field" if "field" in table else "work_area", table
+    )
     forecast_col = f"tpf_{substance}"
 
     # Determine units
@@ -415,9 +838,9 @@ def build_timeseries_query(
 
 
 def format_timeseries_response(
-    value: Optional[float],
+    value: float | None,
     unit: str,
-    year: Optional[int] = None,
+    year: int | None = None,
     include_daily: bool = False,
 ) -> str:
     """
@@ -451,7 +874,7 @@ def get_timeseries_columns(
     data_type: str = "forecast",
     forecast_type: str = "tpf",
     substance: str = "oc",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get the correct column names for timeseries queries.
     """
@@ -573,7 +996,9 @@ def get_timeseries_columns(
             "SELECT year, tpf_oc FROM field_timeseries WHERE field_name LIKE '%Duri%' ORDER BY tpf_oc DESC LIMIT 1",
         ]
     elif category == "historical":
-        examples = ["SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"]
+        examples = [
+            "SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"
+        ]
     elif category == "rate":
         examples = [
             "SELECT year, rate_oc FROM project_timeseries WHERE project_name LIKE '%Duri%' AND year = 2024"
@@ -598,7 +1023,7 @@ def get_timeseries_columns(
 def get_resources_columns(
     volume_type: str = "reserves",
     substance: str = "oc",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get the correct column names for static resource tables.
     """
@@ -648,7 +1073,9 @@ def get_resources_columns(
 
     is_gas = substance in ["ga", "gn", "an"]
     unit = "BSCF" if is_gas else "MSTB"
-    unit_description = "Billion Standard Cubic Feet" if is_gas else "Thousand Stock Tank Barrels"
+    unit_description = (
+        "Billion Standard Cubic Feet" if is_gas else "Thousand Stock Tank Barrels"
+    )
 
     substance_desc = substance_descriptions.get(substance, substance)
     description = f"{volume_desc} for {substance_desc}"
@@ -688,7 +1115,7 @@ def get_resources_columns(
     }
 
 
-def get_aggregation_table_info() -> Dict[str, Dict]:
+def get_aggregation_table_info() -> dict[str, dict]:
     """
     Get information about all tables/views in the aggregation hierarchy.
 
@@ -846,7 +1273,7 @@ def get_aggregation_table_info() -> Dict[str, Dict]:
     }
 
 
-def get_use_case_sql_pattern(use_case: str) -> Dict[str, Any]:
+def get_use_case_sql_pattern(use_case: str) -> dict[str, Any]:
     """
     Get SQL patterns for common timeseries use cases.
 
@@ -959,7 +1386,7 @@ ORDER BY year;
     return patterns[use_case]
 
 
-def get_forecast_vs_historical_guide() -> Dict[str, Any]:
+def get_forecast_vs_historical_guide() -> dict[str, Any]:
     """
     Get guidance on distinguishing forecast vs historical data.
 
@@ -1072,7 +1499,7 @@ def get_forecast_vs_historical_guide() -> Dict[str, Any]:
 
 
 def is_forecast_data(
-    year: int, hist_year: Optional[int] = None, report_year: Optional[int] = None
+    year: int, hist_year: int | None = None, report_year: int | None = None
 ) -> bool:
     """
     Determine if a given year represents forecast data.
@@ -1098,13 +1525,22 @@ def is_forecast_data(
     return False
 
 
-def get_volume_columns(volume_type: str, is_risked: bool = False) -> Tuple[str, str]:
-    """
-    Get the column names for oil/condensate and gas volumes.
+def get_volume_columns(
+    volume_type: str, is_risked: bool = False, substance: str | None = None
+) -> tuple[str, str]:
+    """Get the column names for oil/condensate and gas volumes.
+
+    Volume types and their column mappings:
+    - cadangan/reserves → res_* (res_oc, res_an)
+    - sumber_daya/grr/resources → rec_* (rec_oc, rec_an)
+    - potensi → rec_* (all classified resources)
+    - prospective → rec_*_risked (prospective resources only)
+    - contingent → rec_* (contingent resources)
 
     Args:
-        volume_type: Type of volume (cadangan, sumber_daya, grr)
-        is_risked: Whether to return risked column names (for resources only)
+        volume_type: Type of volume (cadangan, sumber_daya, grr, potensi, prospective, contingent)
+        is_risked: Whether to return risked columns (only for prospective)
+        substance: Specific substance if mentioned ("minyak", "oil", "gas", or None for combined)
 
     Returns:
         Tuple of (oil_condensate_column, gas_column)
@@ -1112,28 +1548,415 @@ def get_volume_columns(volume_type: str, is_risked: bool = False) -> Tuple[str, 
     Examples:
         >>> get_volume_columns("cadangan")
         ('res_oc', 'res_an')
+        >>> get_volume_columns("cadangan", substance="minyak")
+        ('res_oil', 'res_con')
         >>> get_volume_columns("sumber_daya")
         ('rec_oc', 'rec_an')
-        >>> get_volume_columns("sumber_daya", is_risked=True)
+        >>> get_volume_columns("potensi")  # All classified resources
+        ('rec_oc', 'rec_an')
+        >>> get_volume_columns("prospective")  # Prospective only - risked
         ('rec_oc_risked', 'rec_an_risked')
+        >>> get_volume_columns("contingent")  # Contingent - not risked
+        ('rec_oc', 'rec_an')
     """
     volume_type = volume_type.lower().strip()
 
-    # Map volume types to prefixes
-    if volume_type == "cadangan":
+    # Normalize volume type
+    if volume_type in ("cadangan", "reserves", "reservoar"):
         prefix = "res"
-    elif volume_type in ("sumber_daya", "grr"):
+    elif volume_type in ("sumber_daya", "sumberdaya", "grr", "resources"):
         prefix = "rec"
+    elif volume_type == "potensi":
+        prefix = "rec"
+        # Don't force is_risked - potensi can be any classification
+    elif volume_type == "prospective":
+        prefix = "rec"
+        is_risked = True  # Force risked for prospective resources
+    elif volume_type == "contingent":
+        prefix = "rec"
+        # Don't force risked - contingent uses regular rec_*
     else:
         raise ValueError(f"Unknown volume type: {volume_type}")
 
     # Handle risked suffix
     suffix = "_risked" if is_risked and prefix == "rec" else ""
 
+    # Handle substance-specific columns
+    if substance:
+        substance = substance.lower().strip()
+        if substance in ("minyak", "oil", "crude", "petroleum"):
+            return (f"{prefix}_oil{suffix}", f"{prefix}_con{suffix}")
+        elif substance in ("gas", "asso", "non-asso", "associated", "non-associated"):
+            return (f"{prefix}_ga{suffix}", f"{prefix}_gn{suffix}")
+
+    # Default: combined columns
     return (f"{prefix}_oc{suffix}", f"{prefix}_an{suffix}")
 
 
-def get_recommended_table(entity_type: Optional[str], query_needs_detail: bool = False) -> str:
+def detect_substance_from_query(query: str) -> str | None:
+    """Detect if user mentioned a specific substance in their query.
+
+    Args:
+        query: User's query text (natural language)
+
+    Returns:
+        "oil" if minyak/oil mentioned, "gas" if gas mentioned, None if neither
+
+    Examples:
+        >>> detect_substance_from_query("berapa cadangan minyak lapangan duri?")
+        'oil'
+        >>> detect_substance_from_query("berapa cadangan gas lapangan duri?")
+        'gas'
+        >>> detect_substance_from_query("berapa cadangan lapangan duri?")
+        None
+    """
+    query_lower = query.lower()
+
+    # Oil indicators
+    oil_terms = [
+        "minyak",
+        "oil",
+        "crude",
+        "petroleum",
+        "mentah",
+        "kondensat",
+        "condensate",
+    ]
+    if any(term in query_lower for term in oil_terms):
+        return "oil"
+
+    # Gas indicators
+    gas_terms = [
+        "gas",
+        "asso",
+        "non-asso",
+        "associated",
+        "non-associated",
+        "bscfd",
+        "mmscfd",
+    ]
+    if any(term in query_lower for term in gas_terms):
+        return "gas"
+
+    return None
+
+
+def detect_volume_type_from_query(query: str) -> str:
+    """Detect volume type (cadangan/sumberdaya/potensi/prospective) from query.
+
+    Distinguishes between:
+    - "potensi" → uses rec_* columns (all classified resources)
+    - "prospective" or "potensi eksplorasi" → uses rec_*_risked columns
+    - "contingent" → uses rec_* columns with Contingent filter
+
+    Args:
+        query: User's query text (natural language)
+
+    Returns:
+        Volume type: "cadangan", "sumber_daya", "potensi", "prospective", or "contingent"
+
+    Examples:
+        >>> detect_volume_type_from_query("berapa cadangan lapangan duri?")
+        'cadangan'
+        >>> detect_volume_type_from_query("berapa potensi lapangan duri?")
+        'potensi'
+        >>> detect_volume_type_from_query("berapa potensi eksplorasi lapangan duri?")
+        'prospective'
+        >>> detect_volume_type_from_query("potensi prospective di wa X?")
+        'prospective'
+        >>> detect_volume_type_from_query("berapa potensi proyek X?")
+        'sumber_daya'
+    """
+    query_lower = query.lower()
+
+    # Special case: "potensi proyek" or "proyek-proyek" → regular resources (GRR)
+    if any(
+        term in query_lower for term in ["potensi proyek", "proyek-proyek", "proyek di"]
+    ):
+        return "sumber_daya"
+
+    # Check for prospective resources explicitly
+    # "potensi eksplorasi", "potensi prospective", "potensi prospek"
+    prospective_indicators = [
+        "potensi eksplorasi",
+        "potensi prospective",
+        "potensi prospek",
+        "potensi prospektif",
+    ]
+    if any(term in query_lower for term in prospective_indicators):
+        return "prospective"
+
+    # Check for contingent resources explicitly
+    if any(
+        term in query_lower
+        for term in ["potensi contingent", "potensi kontingen", "contingent"]
+    ):
+        return "contingent"
+
+    # Check for reserves & GRR explicitly
+    if any(term in query_lower for term in ["potensi grr", "potensi reserves", "grr"]):
+        return "sumber_daya"
+
+    # General "potensi" without classification → needs project_class filter
+    if any(term in query_lower for term in ["potensi", "prospek"]):
+        return "potensi"
+
+    # Check for reserves (cadangan)
+    if any(term in query_lower for term in ["cadangan", "reserves", "reservoar"]):
+        return "cadangan"
+
+    # Check for resources (sumberdaya)
+    if any(term in query_lower for term in ["sumber daya", "sumberdaya", "resources"]):
+        return "sumber_daya"
+
+    # Default to cadangan
+    return "cadangan"
+
+
+def should_use_risked_columns(query: str, table: str) -> bool:
+    """Determine if risked columns should be used based on query and table.
+
+    Risked columns (rec_oc_risked, rec_an_risked) are used ONLY for:
+    - Prospective Resources (explicitly: "potensi eksplorasi", "potensi prospective")
+    - At aggregate level (field_resources, wa_resources, nkri_resources)
+
+    NOT for:
+    - General "potensi" queries (these use rec_* with project_class filter)
+    - Contingent Resources (they use rec_*, where risked = unrisked)
+    - Reserves & GRR (they use rec_*, where risked = unrisked)
+    - Project level queries (project_resources has no risked columns)
+
+    Args:
+        query: User's query text
+        table: Target table name
+
+    Returns:
+        True if risked columns should be used
+
+    Examples:
+        >>> should_use_risked_columns("potensi eksplorasi lapangan duri?", "field_resources")
+        True
+        >>> should_use_risked_columns("potensi lapangan duri?", "field_resources")
+        False  # General potensi uses rec_*, not risked
+        >>> should_use_risked_columns("potensi proyek X?", "project_resources")
+        False
+        >>> should_use_risked_columns("cadangan lapangan duri?", "field_resources")
+        False
+    """
+    volume_type = detect_volume_type_from_query(query)
+
+    # Only prospective queries use risked columns
+    if volume_type != "prospective":
+        return False
+
+    # Only at aggregate level (not project level)
+    aggregate_tables = [
+        "field_resources",
+        "wa_resources",
+        "nkri_resources",
+        "field_timeseries",
+        "wa_timeseries",
+        "nkri_timeseries",
+    ]
+    return table in aggregate_tables
+
+
+def get_project_stage_filter(query: str) -> str | None:
+    """Get project_stage SQL filter if eksplorasi/eksploitasi mentioned.
+
+    Args:
+        query: User's query text
+
+    Returns:
+        "Exploration" or "Exploitation" or None
+
+    Examples:
+        >>> get_project_stage_filter("berapa potensi eksplorasi lapangan duri?")
+        'Exploration'
+        >>> get_project_stage_filter("berapa cadangan lapangan duri?")
+        None
+    """
+    query_lower = query.lower()
+
+    if any(term in query_lower for term in ["eksplorasi", "exploration", "explorasi"]):
+        return "Exploration"
+    elif any(
+        term in query_lower
+        for term in ["eksploitasi", "exploitation", "pengembangan", "development"]
+    ):
+        return "Exploitation"
+
+    return None
+
+
+def get_available_report_year(
+    table: str,
+    target_year: int | None = None,
+    entity_filter: str | None = None,
+    max_fallback_years: int = 10,
+) -> dict[str, Any]:
+    """
+    Get available report year with fallback logic.
+
+    If target_year has no data, check previous years until data found.
+
+    Args:
+        table: Table name (field_resources, wa_resources, nkri_resources, project_resources)
+        target_year: Desired report year (defaults to current year)
+        entity_filter: Optional WHERE clause for entity (e.g., "field_name LIKE '%Duri%'")
+        max_fallback_years: Maximum years to check backwards (default 10)
+
+    Returns:
+        Dict with:
+            - requested_year: Year originally requested
+            - actual_year: Year to use (may differ due to fallback)
+            - years_checked: List of years checked
+            - has_data: Whether data exists
+            - message: Human-readable message about fallback
+
+    Examples:
+        >>> result = get_available_report_year("field_resources", 2024)
+        >>> result["years_checked"]
+        [2024, 2023, 2022, ...]
+    """
+    from datetime import datetime
+
+    # Default to current year if not specified
+    if target_year is None:
+        target_year = datetime.now().year
+
+    # Validate table name to prevent SQL injection
+    valid_tables = [
+        "field_resources",
+        "wa_resources",
+        "nkri_resources",
+        "project_resources",
+        "field_timeseries",
+        "wa_timeseries",
+        "nkri_timeseries",
+        "project_timeseries",
+    ]
+    if table not in valid_tables:
+        raise ValueError(f"Invalid table: {table}. Must be one of {valid_tables}")
+
+    years_checked = []
+
+    # Calculate years to check
+    for year in range(target_year, target_year - max_fallback_years - 1, -1):
+        years_checked.append(year)
+
+    # Return metadata about fallback strategy
+    # The actual SQL execution happens in build_report_year_filter
+    result = {
+        "requested_year": target_year,
+        "actual_year": None,  # Will be set by caller after SQL execution
+        "years_checked": years_checked[: max_fallback_years + 1],
+        "has_data": False,  # Will be set by caller
+        "message": None,
+        "fallback_needed": False,
+    }
+
+    return result
+
+
+def build_report_year_filter(
+    table: str,
+    target_year: int | None = None,
+    entity_filter: str | None = None,
+    use_subquery: bool = True,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Build SQL WHERE clause for report_year with fallback logic.
+
+    Args:
+        table: Table name
+        target_year: Desired report year (defaults to current year)
+        entity_filter: Optional entity filter (e.g., "field_name LIKE '%Duri%'")
+        use_subquery: Whether to use subquery approach (recommended for single queries)
+
+    Returns:
+        Tuple of (SQL WHERE clause, metadata dict)
+
+    Examples:
+        >>> sql_clause, meta = build_report_year_filter("field_resources", 2024)
+        >>> print(sql_clause)
+        report_year = (SELECT MAX(report_year) FROM field_resources WHERE report_year <= 2024)
+
+        >>> sql_clause, meta = build_report_year_filter("project_resources", 2024, "project_name LIKE '%X%'", use_subquery=False)
+        >>> print(sql_clause)
+        report_year <= 2024
+    """
+    metadata = get_available_report_year(table, target_year, entity_filter)
+
+    if use_subquery:
+        # Subquery approach: find max year <= target_year
+        # This automatically falls back to the most recent available year
+        target = metadata["requested_year"]
+        subquery = f"SELECT MAX(report_year) FROM {table} WHERE report_year <= {target}"
+
+        if entity_filter:
+            subquery += f" AND {entity_filter}"
+
+        where_clause = f"report_year = ({subquery})"
+    else:
+        # Simple filter: use <= target_year (caller handles fallback via ORDER BY/LIMIT)
+        target = metadata["requested_year"]
+        where_clause = f"report_year <= {target}"
+
+    return where_clause, metadata
+
+
+def detect_report_year_from_query(query: str) -> int | None:
+    """
+    Detect if user mentioned a specific report year in their query.
+
+    Args:
+        query: User's query text (natural language)
+
+    Returns:
+        Year as int if detected, None otherwise
+
+    Examples:
+        >>> detect_report_year_from_query("berapa cadangan tahun 2024?")
+        2024
+        >>> detect_report_year_from_query("data cadangan 2023?")
+        2023
+        >>> detect_report_year_from_query("cadangan lapangan duri?")
+        None
+    """
+    import re
+
+    # Match patterns like "tahun 2024", "2024", "tahun 24", "year 2024"
+    patterns = [
+        r"tahun\s*(\d{4})",  # "tahun 2024"
+        r"year\s*(\d{4})",  # "year 2024"
+        r"(?:^|\s)(\d{4})(?:\s|$)",  # standalone "2024"
+        r"tahun\s*(\d{2})(?!\d)",  # "tahun 24" (2-digit year)
+    ]
+
+    query_clean = query.lower().strip()
+
+    for pattern in patterns:
+        match = re.search(pattern, query_clean)
+        if match:
+            year_str = match.group(1)
+            year = int(year_str)
+
+            # Handle 2-digit years (24 -> 2024)
+            if year < 100:
+                # Assume years 00-99 are 2000-2099
+                year = 2000 + year
+
+            # Validate year range (reasonable for oil & gas data)
+            if 2000 <= year <= 2100:
+                return year
+
+    return None
+
+
+def get_recommended_table(
+    entity_type: str | None, query_needs_detail: bool = False
+) -> str:
     """
     Get the recommended table for a query.
 
@@ -1151,14 +1974,15 @@ def get_recommended_table(entity_type: Optional[str], query_needs_detail: bool =
 
 def build_aggregate_query(
     entity_type: str,
-    entity_name: Optional[str],
+    entity_name: str | None,
     volume_type: str,
     uncertainty: str,
-    project_class: Optional[str] = None,
+    project_class: str | None = None,
     use_view: bool = True,
-) -> Dict[str, Any]:
+    report_year: int | None = None,
+) -> dict[str, Any]:
     """
-    Build an aggregate query for resource data.
+    Build an aggregate query for resource data with automatic report year fallback.
 
     Args:
         entity_type: Type of entity (field, work_area, national)
@@ -1167,14 +1991,19 @@ def build_aggregate_query(
         uncertainty: Uncertainty level (1P, 2P, 3P, probable, etc.)
         project_class: Optional project class filter (grr, etc.)
         use_view: Whether to use aggregation views (default True)
+        report_year: Optional target report year (defaults to MAX(report_year))
 
     Returns:
-        Dict with 'sql' and 'table' keys
+        Dict with 'sql', 'table', and 'report_year_info' keys
 
     Examples:
         >>> result = build_aggregate_query("field", "Duri", "cadangan", "2P")
         >>> result["table"]
         'field_resources'
+
+        >>> result = build_aggregate_query("field", "Duri", "cadangan", "2P", report_year=2023)
+        >>> "2023" in result["sql"]
+        True
     """
     from .tables import (
         get_entity_filter_column,
@@ -1211,13 +2040,27 @@ def build_aggregate_query(
         uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value')"
     elif uncertainty.upper() == "3P":
         # 3P = 1P + 2P + 3P
-        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+        uncert_filter = (
+            "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+        )
     elif uncertainty.upper() == "1C":
         uncert_filter = "pr.uncert_level = '1. Low Value'"
     elif uncertainty.upper() == "2C":
         uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value')"
     elif uncertainty.upper() == "3C":
-        uncert_filter = "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+        uncert_filter = (
+            "pr.uncert_level IN ('1. Low Value', '2. Middle Value', '3. High Value')"
+        )
+
+    # Build entity filter for report_year subquery
+    entity_filter_sql = None
+    if filter_col and entity_name:
+        entity_filter_sql = f"pr.{filter_col} LIKE '%{entity_name}%'"
+
+    # Build report_year filter with fallback
+    report_year_where, report_year_info = build_report_year_filter(
+        table, report_year, entity_filter_sql, use_subquery=True
+    )
 
     # Build SQL with CASE WHEN for calculated uncertainties
     if is_calculated:
@@ -1227,13 +2070,13 @@ def build_aggregate_query(
     SUM(CASE WHEN pr.uncert_level = '2. Middle Value' THEN pr.{gas_col} ELSE 0 END)
     - SUM(CASE WHEN pr.uncert_level = '1. Low Value' THEN pr.{gas_col} ELSE 0 END) as gas
 FROM {table} pr
-WHERE pr.report_year = (SELECT MAX(report_year) FROM project_resources)"""
+WHERE {report_year_where}"""
     else:
         sql = f"""SELECT
     SUM(pr.{oc_col}) as oil_condensate,
     SUM(pr.{gas_col}) as gas
 FROM {table} pr
-WHERE pr.report_year = (SELECT MAX(report_year) FROM project_resources)"""
+WHERE {report_year_where}"""
 
     # Add entity filter
     if filter_col and entity_name:
@@ -1249,4 +2092,8 @@ WHERE pr.report_year = (SELECT MAX(report_year) FROM project_resources)"""
         if pc_filter:
             sql += f"\n    AND pr.project_class = '{pc_filter}'"
 
-    return {"sql": sql, "table": table}
+    return {
+        "sql": sql,
+        "table": table,
+        "report_year_info": report_year_info,
+    }

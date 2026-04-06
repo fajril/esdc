@@ -1,10 +1,10 @@
 """Integration tests for fetch command."""
 
 import sqlite3
+
 from typer.testing import CliRunner
 
 from esdc.esdc import app
-
 from tests.integration.constants import PROJECT_RESOURCES_URL, PROJECT_TIMESERIES_URL
 
 runner = CliRunner()

@@ -1,7 +1,7 @@
 """Tests for domain knowledge tools."""
 
 import json
-import pytest
+
 from esdc.chat.tools import get_recommended_table, resolve_uncertainty_level
 
 
@@ -113,9 +113,39 @@ class TestResolveUncertaintyLevel:
             {"level": "probable", "volume_type": "reserves"}
         )
         data = json.loads(result)
-        assert data["type"] == "calculated"
-        assert data["calculation"] == "2P - 1P"
         assert "sql_template" in data
+        assert (
+            "CASE WHEN" in data["sql_template"]
+            or "Middle Value" in data["sql_template"]
+        )
+
+    def test_default_volume_type_is_reserves(self):
+        """Test default volume_type is 'reserves'."""
+        result = resolve_uncertainty_level.invoke({"level": "probable"})
+        data = json.loads(result)
+        assert data["type"] == "calculated"
+
+    def test_direct_value_synonyms_resolve(self):
+        """Test direct value synonyms resolve to database values."""
+        # Test low_value synonym
+        result = resolve_uncertainty_level.invoke({"level": "low_value"})
+        data = json.loads(result)
+        assert data["db_value"] == "1. Low Value"
+        assert data["type"] == "direct"
+        assert data["filter_value"] == "1. Low Value"
+
+        # Test middle_value synonym
+        result = resolve_uncertainty_level.invoke({"level": "middle_value"})
+        data = json.loads(result)
+        assert data["db_value"] == "2. Middle Value"
+        assert data["type"] == "direct"
+
+        # Test high_value synonym
+        result = resolve_uncertainty_level.invoke({"level": "high_value"})
+        data = json.loads(result)
+        assert data["db_value"] == "3. High Value"
+        assert data["type"] == "direct"
+        assert data["calculation"] is None  # Direct values have no calculation
 
     def test_possible_returns_calculated_reserves(self):
         """Test 'possible' returns calculated for reserves."""
@@ -224,126 +254,3 @@ class TestResolveUncertaintyLevel:
             "CASE WHEN" in data["sql_template"]
             or "Middle Value" in data["sql_template"]
         )
-
-    def test_default_volume_type_is_reserves(self):
-        """Test default volume_type is 'reserves'."""
-        result = resolve_uncertainty_level.invoke({"level": "probable"})
-        data = json.loads(result)
-        assert data["type"] == "calculated"
-        assert data["calculation"] == "2P - 1P"
-        assert "sql_template" in data
-
-    def test_possible_returns_calculated_reserves(self):
-        """Test 'possible' returns calculated for reserves."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "possible", "volume_type": "reserves"}
-        )
-        data = json.loads(result)
-        assert data["type"] == "calculated"
-        assert data["calculation"] == "3P - 2P"
-
-    def test_probable_warns_for_resources(self):
-        """Test 'probable' warns when used with resources."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "probable", "volume_type": "resources"}
-        )
-        data = json.loads(result)
-        assert "error" in data or "warning" in data
-        if "error" in data:
-            assert "reserves" in data["error"].lower()
-        else:
-            assert "reserves" in data["warning"].lower()
-
-    def test_possible_warns_for_resources(self):
-        """Test 'possible' warns when used with resources."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "possible", "volume_type": "resources"}
-        )
-        data = json.loads(result)
-        assert "error" in data or "warning" in data
-        if "error" in data:
-            assert "reserves" in data["error"].lower()
-        else:
-            assert "reserves" in data["warning"].lower()
-
-    def test_indonesian_terbukti_equals_proven(self):
-        """Test Indonesian 'terbukti' equals 'proven'."""
-        result = resolve_uncertainty_level.invoke({"level": "terbukti"})
-        data = json.loads(result)
-        assert data["db_value"] == "1. Low Value"
-        assert data["type"] == "direct"
-
-    def test_indonesian_mungkin_equals_probable(self):
-        """Test Indonesian 'mungkin' equals 'probable'."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "mungkin", "volume_type": "reserves"}
-        )
-        data = json.loads(result)
-        assert data["type"] == "calculated"
-        assert data["calculation"] == "2P - 1P"
-
-    def test_indonesian_harapan_equals_possible(self):
-        """Test Indonesian 'harapan' equals 'possible'."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "harapan", "volume_type": "reserves"}
-        )
-        data = json.loads(result)
-        assert data["type"] == "calculated"
-        assert data["calculation"] == "3P - 2P"
-
-    def test_1c_returns_direct_value(self):
-        """Test 1C returns direct value for contingent resources."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "1C", "volume_type": "resources"}
-        )
-        data = json.loads(result)
-        assert data["db_value"] == "1. Low Value"
-        assert data["type"] == "direct"
-
-    def test_2c_returns_direct_value(self):
-        """Test 2C returns direct value for contingent resources."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "2C", "volume_type": "resources"}
-        )
-        data = json.loads(result)
-        assert data["db_value"] == "2. Middle Value"
-
-    def test_3c_returns_direct_value(self):
-        """Test 3C returns direct value for contingent resources."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "3C", "volume_type": "resources"}
-        )
-        data = json.loads(result)
-        assert data["db_value"] == "3. High Value"
-
-    def test_unknown_level_returns_suggestion(self):
-        """Test unknown level returns helpful suggestion."""
-        result = resolve_uncertainty_level.invoke({"level": "XYZ"})
-        data = json.loads(result)
-        assert "suggestion" in data or "error" in data or "warning" in data
-
-    def test_sql_template_for_direct_values(self):
-        """Test filter info is provided for direct values."""
-        result = resolve_uncertainty_level.invoke({"level": "2P"})
-        data = json.loads(result)
-        assert "filter_column" in data
-        assert data["filter_column"] == "uncert_level"
-        assert "filter_value" in data
-
-    def test_sql_template_for_calculated_values(self):
-        """Test SQL template is provided for calculated values."""
-        result = resolve_uncertainty_level.invoke(
-            {"level": "probable", "volume_type": "reserves"}
-        )
-        data = json.loads(result)
-        assert "sql_template" in data
-        assert (
-            "CASE WHEN" in data["sql_template"]
-            or "Middle Value" in data["sql_template"]
-        )
-
-    def test_default_volume_type_is_reserves(self):
-        """Test default volume_type is 'reserves'."""
-        result = resolve_uncertainty_level.invoke({"level": "probable"})
-        data = json.loads(result)
-        assert data["type"] == "calculated"

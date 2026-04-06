@@ -1,12 +1,11 @@
 """Table and view hierarchy definitions."""
 
-from typing import Dict, List, Optional, Tuple
 
 # =============================================================================
 # Table/View Hierarchy
 # =============================================================================
 
-TABLE_HIERARCHY: Dict[str, str] = {
+TABLE_HIERARCHY: dict[str, str] = {
     "project": "project_resources",
     "field": "field_resources",
     "lapangan": "field_resources",
@@ -39,7 +38,7 @@ TABLE_HIERARCHY: Dict[str, str] = {
     "nasional_forecast": "nkri_timeseries",
 }
 
-AGGREGATION_LEVELS: List[Tuple[str, str, int]] = [
+AGGREGATION_LEVELS: list[tuple[str, str, int]] = [
     ("project_resources", "project", 1),
     ("field_resources", "field", 2),
     ("wa_resources", "work_area", 3),
@@ -51,10 +50,162 @@ AGGREGATION_LEVELS: List[Tuple[str, str, int]] = [
     ("nkri_timeseries", "nkri_timeseries", 3),
 ]
 
+# =============================================================================
+# Context Enrichment Metadata
+# =============================================================================
+
+# Mapping table to their respective remarks columns
+# Used for auto-including context information in queries
+TABLE_REMARKS_COLUMNS: dict[str, str | None] = {
+    "project_resources": "project_remarks",
+    "field_resources": "field_remarks",
+    "wa_resources": "wa_remarks",
+    "nkri_resources": None,  # No remarks at national level
+    "project_timeseries": "project_remarks",
+    "field_timeseries": "field_remarks",
+    "wa_timeseries": "wa_remarks",
+    "nkri_timeseries": None,  # No remarks at national level
+}
+
+# Columns that require classification context when queried
+# These columns must include project_class and project_stage for proper aggregation
+REQUIRES_CLASSIFICATION_PREFIXES: tuple[str, ...] = (
+    "rec_",  # Resources columns require classification
+    "rec_",  # Risked resources also require classification
+)
+
+# Context columns that must be included for proper data interpretation
+CLASSIFICATION_CONTEXT_COLUMNS: list[str] = ["project_class", "project_stage"]
+
+# =============================================================================
+# Table Categories for Enrichment
+# =============================================================================
+
+# Tables that need enrichment (detail level) - enrichment adds GROUP BY
+DETAIL_TABLES: set[str] = {
+    "project_resources",
+    "project_timeseries",
+}
+
+# Tables that are pre-aggregated (skip enrichment) - data already grouped
+AGGREGATE_VIEWS: set[str] = {
+    "field_resources",
+    "wa_resources",
+    "nkri_resources",
+    "field_timeseries",
+    "wa_timeseries",
+    "nkri_timeseries",
+}
+
+
+def get_remarks_column(table: str) -> str | None:
+    """
+    Get the remarks column name for a given table.
+
+    Args:
+        table: Table name (e.g., "field_resources", "project_timeseries")
+
+    Returns:
+        Remarks column name, or None if table has no remarks column
+
+    Examples:
+        >>> get_remarks_column("field_resources")
+        'field_remarks'
+        >>> get_remarks_column("nkri_resources")
+        None
+    """
+    return TABLE_REMARKS_COLUMNS.get(table)
+
+
+def requires_classification_columns(column: str) -> bool:
+    """
+    Check if a column requires classification context (project_class, project_stage).
+
+    Resources columns (rec_*) require classification to prevent incorrect aggregation
+    across different project classes (Reserves vs Contingent vs Prospective).
+
+    Args:
+        column: Column name to check
+
+    Returns:
+        True if column requires classification context
+
+    Examples:
+        >>> requires_classification_columns("rec_oc")
+        True
+        >>> requires_classification_columns("res_oc")
+        False
+        >>> requires_classification_columns("tpf_oc")
+        False
+    """
+    column_lower = column.lower()
+    return column_lower.startswith("rec_")
+
+
+def get_classification_context_columns() -> list[str]:
+    """
+    Get the list of classification context columns.
+
+    These columns should be included when querying resources data to enable
+    proper aggregation by project class and stage.
+
+    Returns:
+        List of classification context column names
+
+    Examples:
+        >>> get_classification_context_columns()
+        ['project_class', 'project_stage']
+    """
+    return CLASSIFICATION_CONTEXT_COLUMNS.copy()
+
+
+def is_detail_table(table: str) -> bool:
+    """
+    Check if table is detail level (needs enrichment with GROUP BY).
+
+    Detail tables contain raw project-level data that needs aggregation
+    when querying across multiple projects.
+
+    Args:
+        table: Table name to check
+
+    Returns:
+        True if table is detail level and needs enrichment
+
+    Examples:
+        >>> is_detail_table("project_resources")
+        True
+        >>> is_detail_table("field_resources")
+        False
+    """
+    return table in DETAIL_TABLES
+
+
+def is_aggregate_view(table: str) -> bool:
+    """
+    Check if table is pre-aggregated view (skip enrichment, no GROUP BY needed).
+
+    Aggregate views already contain summarized data grouped by entity
+    (field, work_area, or national level).
+
+    Args:
+        table: Table name to check
+
+    Returns:
+        True if table is pre-aggregated view
+
+    Examples:
+        >>> is_aggregate_view("field_resources")
+        True
+        >>> is_aggregate_view("project_resources")
+        False
+    """
+    return table in AGGREGATE_VIEWS
+
 
 def get_table_for_query(
-    entity_type: Optional[str] = None,
-    entity_name: Optional[str] = None,
+    entity_type: str | None = None,
+    entity_name: str | None = None,
     require_detail: bool = False,
     timeseries_detail: bool = False,
     prefer_aggregation: bool = True,
@@ -161,7 +312,7 @@ def can_use_view_for_calculation(uncertainty: str, table: str) -> bool:
     return True
 
 
-def get_entity_filter_column(entity_type: str, table: str) -> Optional[str]:
+def get_entity_filter_column(entity_type: str, table: str) -> str | None:
     """
     Get the column name to filter by for a given entity type.
 

@@ -1,7 +1,7 @@
 # tests/test_context_manager.py
 
-import pytest
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
 from esdc.chat.context_manager import ContextManager, manage_context_node
 
 
@@ -309,6 +309,7 @@ class TestLargeContext:
         -> ContextManager(max_tokens=X)
         """
         from unittest.mock import Mock
+
         from esdc.chat.agent import create_agent
 
         mock_llm = Mock()

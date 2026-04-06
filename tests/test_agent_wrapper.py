@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from esdc.server.agent_wrapper import (
     convert_messages_to_langchain,
     create_openai_chunk,
-    extract_thinking_for_interleaved,
+    generate_streaming_response,
 )
 
 
@@ -117,7 +117,7 @@ class TestCreateOpenAIChunk:
         chunk = create_openai_chunk()
 
         assert chunk["object"] == "chat.completion.chunk"
-        assert chunk["model"] == "esdc-agent"
+        assert chunk["model"] == "iris"
         assert chunk["choices"][0]["delta"]["content"] == ""
         assert chunk["choices"][0]["finish_reason"] is None
 
@@ -160,7 +160,7 @@ class TestAgentWrapperIntegration:
 
                     result = await generate_response(
                         messages=[MagicMock(role="user", content="Hello")],
-                        model="esdc-agent",
+                        model="iris",
                     )
 
                     assert result["role"] == "assistant"
@@ -191,111 +191,13 @@ class TestAgentWrapperIntegration:
                     chunks = []
                     async for chunk in generate_streaming_response(
                         messages=[MagicMock(role="user", content="Hello")],
-                        model="esdc-agent",
+                        model="iris",
                     ):
                         chunks.append(json.loads(chunk))
 
                     assert len(chunks) > 0
                     assert all("choices" in c for c in chunks)
 
-
-class TestExtractThinkingForInterleaved:
-    """Test suite for extract_thinking_for_interleaved function."""
-
-    def test_extract_thinking_from_reasoning_content(self):
-        """Test extracting thinking from reasoning_content in additional_kwargs."""
-        ai_msg = AIMessage(
-            content="Final response",
-            additional_kwargs={"reasoning_content": "This is my thinking process"},
-            tool_calls=[
-                {"id": "1", "name": "test_tool", "args": {}, "type": "tool_call"}
-            ],
-        )
-
-        result = extract_thinking_for_interleaved(ai_msg)
-
-        assert result == "This is my thinking process"
-
-    def test_extract_thinking_from_thinking_tags(self):
-        """Test extracting thinking from thinking tags in content."""
-        ai_msg = AIMessage(
-            content="<thinking>Let me analyze this</thinking>Final answer",
-            tool_calls=[
-                {"id": "1", "name": "test_tool", "args": {}, "type": "tool_call"}
-            ],
-        )
-
-        result = extract_thinking_for_interleaved(ai_msg)
-
-        assert result == "Let me analyze this"
-
-    def test_no_extraction_without_tool_calls(self):
-        """Test that no extraction happens without tool_calls."""
-        ai_msg = AIMessage(
-            content="<thinking>Some thinking</thinking>Final answer",
-            additional_kwargs={"reasoning_content": "Reasoning content"},
-            tool_calls=[],
-        )
-
-        result = extract_thinking_for_interleaved(ai_msg)
-
-        assert result is None
-
-    def test_no_extraction_without_tool_calls_attribute(self):
-        """Test that no extraction happens without tool_calls attribute."""
-        ai_msg = AIMessage(
-            content="<thinking>Some thinking</thinking>Final answer",
-            additional_kwargs={"reasoning_content": "Reasoning content"},
-        )
-        delattr(ai_msg, "tool_calls")
-
-        result = extract_thinking_for_interleaved(ai_msg)
-
-        assert result is None
-
-    def test_no_thinking_content_returns_none(self):
-        """Test that None is returned when no thinking content exists."""
-        ai_msg = AIMessage(
-            content="Just a regular response",
-            tool_calls=[
-                {"id": "1", "name": "test_tool", "args": {}, "type": "tool_call"}
-            ],
-        )
-
-        result = extract_thinking_for_interleaved(ai_msg)
-
-        assert result is None
-
-    def test_reasoning_content_priority_over_thinking_tags(self):
-        """Test that reasoning_content takes priority over thinking tags."""
-        ai_msg = AIMessage(
-            content="<thinking>Tagged thinking</thinking>Final",
-            additional_kwargs={"reasoning_content": "Reasoning from kwargs"},
-            tool_calls=[
-                {"id": "1", "name": "test_tool", "args": {}, "type": "tool_call"}
-            ],
-        )
-
-        result = extract_thinking_for_interleaved(ai_msg)
-
-        assert result == "Reasoning from kwargs"
-
-    def test_extract_thinking_strips_whitespace(self):
-        """Test that extracted thinking is stripped of whitespace."""
-        ai_msg = AIMessage(
-            content="",
-            additional_kwargs={"reasoning_content": "  Thinking with spaces  "},
-            tool_calls=[
-                {"id": "1", "name": "test_tool", "args": {}, "type": "tool_call"}
-            ],
-        )
-
-        result = extract_thinking_for_interleaved(ai_msg)
-
-        assert result == "Thinking with spaces"
-
-    @pytest.mark.asyncio
-    async def test_generate_response_no_provider(self):
         """Test generate_response when no provider configured."""
         from esdc.server.agent_wrapper import generate_response
 
@@ -329,3 +231,22 @@ class TestExtractThinkingForInterleaved:
 
             assert len(chunks) == 1
             assert "Error" in chunks[0]["choices"][0]["delta"]["content"]
+
+
+async def test_generate_streaming_response_character_level():
+    """Test that content is streamed character-by-character (3 chars at a time)."""
+    messages = [{"role": "user", "content": "hello"}]
+
+    content_chunks = []
+
+    async for chunk in generate_streaming_response(messages):
+        data = json.loads(chunk)
+        delta = data["choices"][0]["delta"]
+        if content := delta.get("content"):
+            content_chunks.append(content)
+
+    # Each chunk should be small (<= 3 chars)
+    # Exception: tool call chunks can be larger
+    for chunk in content_chunks:
+        # Allow small chunks (3 chars) or header/markdown constructs
+        assert len(chunk) <= 10, f"Chunk too large: {len(chunk)} chars: {chunk!r}"

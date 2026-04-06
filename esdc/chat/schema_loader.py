@@ -41,7 +41,7 @@ class SchemaLoader:
 - project_stage TEXT: Project stage (Exploration, Exploitation)
 - project_class TEXT: Project classification (Reserves & GRR, Contingent Resources, Prospective Resources)
 - project_level TEXT: Project maturity level
-- uncert_level TEXT: Uncertainty level (Low, Mid, High)
+- uncert_level TEXT: Uncertainty level (1. Low Value, 2. Middle Value, 3. High Value)
 - rec_oil REAL: Resources oil (MSTB)
 - rec_con REAL: Resources condensate (MSTB)
 - rec_ga REAL: Resources associated gas (BSCF)

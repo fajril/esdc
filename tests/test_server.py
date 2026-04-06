@@ -1,12 +1,10 @@
 """Tests for ESDC server API."""
 
 # Standard library
-import json
 
 # Third-party
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
 
 # Local
 from esdc.server.app import create_app
@@ -31,8 +29,8 @@ class TestServerEndpoints:
         data = response.json()
         assert data["object"] == "list"
         assert len(data["data"]) == 1
-        assert data["data"][0]["id"] == "esdc-agent"
-        assert data["data"][0]["owned_by"] == "esdc"
+        assert data["data"][0]["id"] == "iris"
+        assert data["data"][0]["owned_by"] == "IRIS"
 
     def test_docs_endpoint(self, client):
         """Test API documentation endpoint."""
@@ -100,7 +98,7 @@ class TestChatCompletionsValidation:
         response = client.post(
             "/v1/chat/completions",
             json={
-                "model": "esdc-agent",
+                "model": "iris",
             },
         )
 
@@ -122,12 +120,12 @@ class TestServerModels:
         from esdc.server.models import ChatCompletionRequest
 
         request = ChatCompletionRequest(
-            model="esdc-agent",
+            model="iris",
             messages=[Message(role="user", content="Hello")],
             stream=False,
         )
 
-        assert request.model == "esdc-agent"
+        assert request.model == "iris"
         assert len(request.messages) == 1
         assert request.stream is False
 
@@ -138,7 +136,7 @@ class TestServerModels:
         response = ChatCompletionResponse(
             id="chatcmpl-test123",
             created=1234567890,
-            model="esdc-agent",
+            model="iris",
             choices=[
                 Choice(
                     message=Message(role="assistant", content="Hello"),
@@ -148,6 +146,6 @@ class TestServerModels:
         )
 
         assert response.id == "chatcmpl-test123"
-        assert response.model == "esdc-agent"
+        assert response.model == "iris"
         assert len(response.choices) == 1
         assert response.choices[0].message.content == "Hello"
