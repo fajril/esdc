@@ -54,8 +54,12 @@ from .functions import (
     is_already_enriched,
     is_forecast_data,
     requires_classification_context,
-    resolve_concept,
     should_include_remarks,
+    # New volume helpers
+    detect_substance_from_query,
+    detect_volume_type_from_query,
+    should_use_risked_columns,
+    get_project_stage_filter,
 )
 
 # =============================================================================
@@ -196,4 +200,9 @@ __all__ = [
     "is_already_enriched",
     "requires_classification_context",
     "should_include_remarks",
+    # Functions - Volume Column Helpers (New)
+    "detect_substance_from_query",
+    "detect_volume_type_from_query",
+    "should_use_risked_columns",
+    "get_project_stage_filter",
 ]

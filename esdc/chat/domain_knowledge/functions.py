@@ -1520,39 +1520,219 @@ def is_forecast_data(
     return False
 
 
-def get_volume_columns(volume_type: str, is_risked: bool = False) -> tuple[str, str]:
-    """
-    Get the column names for oil/condensate and gas volumes.
+def get_volume_columns(
+    volume_type: str, is_risked: bool = False, substance: str | None = None
+) -> tuple[str, str]:
+    """Get the column names for oil/condensate and gas volumes.
 
     Args:
-        volume_type: Type of volume (cadangan, sumber_daya, grr)
-        is_risked: Whether to return risked column names (for resources only)
+        volume_type: Type of volume (cadangan, sumber_daya, grr, potensi)
+        is_risked: Whether to return risked column names (for prospective only)
+        substance: Specific substance if mentioned ("minyak", "oil", "gas", or None for combined)
 
     Returns:
         Tuple of (oil_condensate_column, gas_column)
 
     Examples:
-        >>> get_volume_columns("cadangan")
+        >>> get_volume_columns("cadangan")  # No substance - combined columns
         ('res_oc', 'res_an')
-        >>> get_volume_columns("sumber_daya")
+        >>> get_volume_columns("cadangan", substance="minyak")  # Oil specified
+        ('res_oil', 'res_con')
+        >>> get_volume_columns("sumber_daya")  # Resources - combined
         ('rec_oc', 'rec_an')
+        >>> get_volume_columns("potensi")  # Prospective - risked
+        ('rec_oc_risked', 'rec_an_risked')
         >>> get_volume_columns("sumber_daya", is_risked=True)
         ('rec_oc_risked', 'rec_an_risked')
     """
     volume_type = volume_type.lower().strip()
 
-    # Map volume types to prefixes
-    if volume_type == "cadangan":
+    # Normalize volume type
+    if volume_type in ("cadangan", "reserves", "reservoar"):
         prefix = "res"
-    elif volume_type in ("sumber_daya", "grr"):
+    elif volume_type in ("sumber_daya", "sumberdaya", "grr", "resources"):
         prefix = "rec"
+    elif volume_type in ("potensi", "prospek", "prospective", "prospek"):
+        prefix = "rec"
+        is_risked = True  # Force risked for prospective
     else:
         raise ValueError(f"Unknown volume type: {volume_type}")
 
     # Handle risked suffix
     suffix = "_risked" if is_risked and prefix == "rec" else ""
 
+    # Handle substance-specific columns
+    if substance:
+        substance = substance.lower().strip()
+        if substance in ("minyak", "oil", "crude", "petroleum"):
+            return (f"{prefix}_oil{suffix}", f"{prefix}_con{suffix}")
+        elif substance in ("gas", "asso", "non-asso", "associated", "non-associated"):
+            return (f"{prefix}_ga{suffix}", f"{prefix}_gn{suffix}")
+
+    # Default: combined columns
     return (f"{prefix}_oc{suffix}", f"{prefix}_an{suffix}")
+
+
+def detect_substance_from_query(query: str) -> str | None:
+    """Detect if user mentioned a specific substance in their query.
+
+    Args:
+        query: User's query text (natural language)
+
+    Returns:
+        "oil" if minyak/oil mentioned, "gas" if gas mentioned, None if neither
+
+    Examples:
+        >>> detect_substance_from_query("berapa cadangan minyak lapangan duri?")
+        'oil'
+        >>> detect_substance_from_query("berapa cadangan gas lapangan duri?")
+        'gas'
+        >>> detect_substance_from_query("berapa cadangan lapangan duri?")
+        None
+    """
+    query_lower = query.lower()
+
+    # Oil indicators
+    oil_terms = [
+        "minyak",
+        "oil",
+        "crude",
+        "petroleum",
+        "mentah",
+        "kondensat",
+        "condensate",
+    ]
+    if any(term in query_lower for term in oil_terms):
+        return "oil"
+
+    # Gas indicators
+    gas_terms = [
+        "gas",
+        "asso",
+        "non-asso",
+        "associated",
+        "non-associated",
+        "bscfd",
+        "mmscfd",
+    ]
+    if any(term in query_lower for term in gas_terms):
+        return "gas"
+
+    return None
+
+
+def detect_volume_type_from_query(query: str) -> str:
+    """Detect volume type (cadangan/sumberdaya/potensi) from query.
+
+    Args:
+        query: User's query text (natural language)
+
+    Returns:
+        Volume type: "cadangan", "sumber_daya", or "potensi"
+
+    Examples:
+        >>> detect_volume_type_from_query("berapa cadangan lapangan duri?")
+        'cadangan'
+        >>> detect_volume_type_from_query("berapa potensi lapangan duri?")
+        'potensi'
+        >>> detect_volume_type_from_query("berapa sumberdaya proyek X?")
+        'sumber_daya'
+    """
+    query_lower = query.lower()
+
+    # Check for prospective resources (potensi/eksplorasi)
+    # Special case: "potensi proyek" or "proyek-proyek" → regular resources (GRR)
+    if any(
+        term in query_lower for term in ["potensi proyek", "proyek-proyek", "proyek di"]
+    ):
+        return "sumber_daya"  # GRR at project level, NOT prospective
+
+    # Check for prospective (potensi/eksplorasi)
+    prospective_terms = ["potensi", "prospek", "eksplorasi", "exploration", "prospek"]
+    if any(term in query_lower for term in prospective_terms):
+        return "potensi"
+
+    # Check for reserves (cadangan)
+    if any(term in query_lower for term in ["cadangan", "reserves", "reservoar"]):
+        return "cadangan"
+
+    # Check for resources (sumberdaya)
+    if any(
+        term in query_lower
+        for term in ["sumber daya", "sumberdaya", "resources", "grr"]
+    ):
+        return "sumber_daya"
+
+    # Default to cadangan
+    return "cadangan"
+
+
+def should_use_risked_columns(query: str, table: str) -> bool:
+    """Determine if risked columns should be used based on query and table.
+
+    Risked columns (rec_oc_risked, rec_an_risked) are used when:
+    1. Query is about prospective resources (potensi/eksplorasi)
+    2. Table is at aggregate level (field_resources, wa_resources, nkri_resources)
+
+    Args:
+        query: User's query text
+        table: Target table name
+
+    Returns:
+        True if risked columns should be used
+
+    Examples:
+        >>> should_use_risked_columns("potensi lapangan duri?", "field_resources")
+        True
+        >>> should_use_risked_columns("potensi proyek X?", "project_resources")
+        False
+        >>> should_use_risked_columns("cadangan lapangan duri?", "field_resources")
+        False
+    """
+    volume_type = detect_volume_type_from_query(query)
+
+    # Only prospective queries use risked columns
+    if volume_type != "potensi":
+        return False
+
+    # Only at aggregate level (not project level)
+    aggregate_tables = [
+        "field_resources",
+        "wa_resources",
+        "nkri_resources",
+        "field_timeseries",
+        "wa_timeseries",
+        "nkri_timeseries",
+    ]
+    return table in aggregate_tables
+
+
+def get_project_stage_filter(query: str) -> str | None:
+    """Get project_stage SQL filter if eksplorasi/eksploitasi mentioned.
+
+    Args:
+        query: User's query text
+
+    Returns:
+        "Exploration" or "Exploitation" or None
+
+    Examples:
+        >>> get_project_stage_filter("berapa potensi eksplorasi lapangan duri?")
+        'Exploration'
+        >>> get_project_stage_filter("berapa cadangan lapangan duri?")
+        None
+    """
+    query_lower = query.lower()
+
+    if any(term in query_lower for term in ["eksplorasi", "exploration", "explorasi"]):
+        return "Exploration"
+    elif any(
+        term in query_lower
+        for term in ["eksploitasi", "exploitation", "pengembangan", "development"]
+    ):
+        return "Exploitation"
+
+    return None
 
 
 def get_recommended_table(
