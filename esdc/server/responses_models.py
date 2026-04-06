@@ -1,6 +1,6 @@
 """Responses API models with discriminated unions and flexible input handling."""
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Discriminator, Field, field_validator
 
@@ -116,11 +116,7 @@ class ResponseInputFunctionCallOutputItem(BaseModel):
 
 # Discriminated union type for input items
 ResponseInputItemUnion = Annotated[
-    Union[
-        ResponseInputMessageItem,
-        ResponseInputFunctionCallItem,
-        ResponseInputFunctionCallOutputItem,
-    ],
+    ResponseInputMessageItem | ResponseInputFunctionCallItem | ResponseInputFunctionCallOutputItem,
     Discriminator(_get_input_item_type),
 ]
 

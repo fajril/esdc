@@ -1,4 +1,6 @@
 # Standard library
+import hashlib
+import json
 import logging
 import time
 import uuid
@@ -67,12 +69,35 @@ async def chat_completions(
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
 
+    # Calculate message hash for deduplication detection
+    messages_hash = hashlib.md5(
+        json.dumps([m.model_dump() for m in request.messages], sort_keys=True).encode()
+    ).hexdigest()[:8]
+
     # Log request details
     conv_id = getattr(request, "conversation_id", "none")
     msg_count = len(request.messages) if request.messages else 0
+
+    # Safe access to messages
+    first_msg_preview = "empty"
+    last_msg_preview = "empty"
+    if request.messages and len(request.messages) > 0:
+        first_msg_preview = (
+            request.messages[0].content[:30].replace("\n", " ") + "..."
+            if request.messages[0].content
+            else "empty"
+        )
+        last_msg_preview = (
+            request.messages[-1].content[:30].replace("\n", " ") + "..."
+            if request.messages[-1].content
+            else "empty"
+        )
+
     logger.info(
-        f"[REQUEST {request_id}] START - conv={conv_id}, "
-        f"stream={request.stream}, messages={msg_count}"
+        f"[REQUEST {request_id}] START - conv={conv_id}, stream={request.stream}, "
+        f"messages={msg_count}, hash={messages_hash}, "
+        f"first='{first_msg_preview}', last='{last_msg_preview}', "
+        f"time={time.time():.3f}"
     )
 
     # Detect format preference from headers
@@ -85,6 +110,7 @@ async def chat_completions(
             # Return streaming response
             async def generate_stream() -> AsyncGenerator[str, None]:
                 """Generate SSE stream."""
+                yield_counter = 0
                 logger.debug(f"[REQUEST {request_id}] Starting streaming response")
                 try:
                     async for chunk in generate_streaming_response(
@@ -92,14 +118,17 @@ async def chat_completions(
                         model=request.model,
                         temperature=request.temperature or 0.7,
                         use_native_format=use_native,
+                        request_id=request_id,
                     ):
                         # Format as SSE data
+                        yield_counter += 1
                         yield f"data: {chunk}\n\n"
 
                     # Send final [DONE] marker
                     yield "data: [DONE]\n\n"
                     logger.info(
-                        f"[REQUEST {request_id}] Streaming completed successfully"
+                        f"[REQUEST {request_id}] Streaming completed successfully - "
+                        f"total_yields={yield_counter}"
                     )
 
                 except Exception as e:

@@ -13,6 +13,7 @@ class Message(BaseModel):
     name: str | None = None
     tool_calls: list[dict] | None = None
     tool_call_id: str | None = None
+    output: list[dict] | None = None
 
 
 class ChatCompletionRequest(BaseModel):

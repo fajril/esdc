@@ -134,6 +134,49 @@ def detect_native_format(headers: dict[str, str], stream: bool) -> bool:
     return False
 
 
+def create_tool_role_chunk(
+    tool_call_id: str,
+    content: str,
+    model: str = "esdc-agent",
+    max_content_length: int = 1000,
+) -> dict[str, Any]:
+    """Create OpenAI-compatible streaming chunk for tool role message.
+
+    This is sent after tool execution to satisfy OpenWebUI's expectation
+    that tool_calls should be followed by tool role messages.
+
+    Args:
+        tool_call_id: ID of the tool call this result corresponds to
+        content: Tool execution result (will be truncated if too long)
+        model: Model identifier
+        max_content_length: Maximum content length before truncation
+
+    Returns:
+        OpenAI-compatible chat.completion.chunk dict with tool role
+    """
+    # Truncate content if too long to avoid huge payloads
+    if len(content) > max_content_length:
+        content = content[:max_content_length] + "... [truncated]"
+
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": content,
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+
 def create_final_chunk(model: str = "esdc-agent") -> dict[str, Any]:
     """Create final SSE chunk indicating completion.
 
