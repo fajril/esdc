@@ -319,6 +319,75 @@ When applying defaults, inform the user:
 - Associated Gas: `_ga` suffix
 - Non-associated Gas: `_gn` suffix
 
+## Column Selection for Volume Queries (CRITICAL)
+
+### Default Rule (When NO substance specified):
+**ALWAYS use COMBINED columns when user doesn't specify minyak/oil or gas:**
+
+| Query Type | Volume Type | Table Level | Oil Column | Gas Column |
+|------------|-------------|-------------|------------|------------|
+| "berapa cadangan lapangan X?" | Reserves | Field/WA/National | `res_oc` | `res_an` |
+| "berapa sumberdaya proyek X?" | Resources | Project | `rec_oc` | `rec_an` |
+| "berapa potensi lapangan X?" | Prospective | Field/WA/National | `rec_oc_risked` | `rec_an_risked` |
+
+### When Substance IS Specified:
+- "minyak/oil" → Use specific columns: `res_oil`, `res_con` (or `rec_oil`, `rec_con`)
+- "gas" → Use specific columns: `res_ga`, `res_gn` (or `rec_ga`, `rec_gn`)
+
+### When "eksplorasi" is mentioned:
+- Add filter: `AND project_stage LIKE '%Exploration%'`
+
+### When "eksploitasi" or "pengembangan" is mentioned:
+- Add filter: `AND project_stage LIKE '%Exploitation%'`
+
+### Examples:
+
+**Combined (no substance):**
+```sql
+-- "berapa cadangan lapangan duri?"
+SELECT SUM(res_oc) as oil_condensate_mstb, SUM(res_an) as total_gas_bscf
+FROM field_resources
+WHERE field_name LIKE '%Duri%'
+```
+
+**Specific substance:**
+```sql
+-- "berapa cadangan minyak lapangan duri?"
+SELECT SUM(res_oil) as oil_mstb, SUM(res_con) as condensate_mstb
+FROM field_resources
+WHERE field_name LIKE '%Duri%'
+
+-- "berapa cadangan gas lapangan duri?"
+SELECT SUM(res_ga) as asso_gas_bscf, SUM(res_gn) as non_asso_gas_bscf
+FROM field_resources
+WHERE field_name LIKE '%Duri%'
+```
+
+**Potensi (prospective) at aggregate level:**
+```sql
+-- "berapa potensi lapangan duri?"
+SELECT SUM(rec_oc_risked) as risked_oc, SUM(rec_an_risked) as risked_an
+FROM field_resources
+WHERE field_name LIKE '%Duri%'
+```
+
+**GRR/Resources at project level (NOT risked):**
+```sql
+-- "berapa sumberdaya proyek-proyek di lapangan duri?"
+SELECT SUM(rec_oc) as resources_oc, SUM(rec_an) as resources_an
+FROM project_resources
+WHERE field_name LIKE '%Duri%'
+```
+
+**With eksplorasi filter:**
+```sql
+-- "berapa potensi eksplorasi wilayah kerja rokan?"
+SELECT SUM(rec_oc_risked) as risked_oc, SUM(rec_an_risked) as risked_an
+FROM wa_resources
+WHERE wk_name LIKE '%Rokan%'
+  AND project_stage LIKE '%Exploration%'
+```
+
 **Project Classes:**
 - Reserves → `res_*` columns (default)
 - GRR → `project_class = '1. Reserves & GRR'`
@@ -357,12 +426,17 @@ When applying defaults, inform the user:
 
 ## Example Questions
 
-### Static Resource Queries
-- "Berapa cadangan lapangan X?" (How much reserves does field X have?) → Use `field_resources`
-- "Berapa GRR lapangan X?" (How much GRR does field X have?) → Use `field_resources`
-- "Berapa sumber daya wilayah kerja Y?" (How much resources in work area Y?) → Use `wa_resources`
-- "Berapa total cadangan nasional?" (How much national reserves?) → Use `nkri_resources`
-- "Berapa cadangan 2P lapangan X?" (How much 2P reserves does field X have?) → Use `field_resources`
+### Static Resource Queries (with column selection examples)
+- "Berapa cadangan lapangan X?" (How much reserves?) → Use `field_resources` with **res_oc, res_an** (combined, NO substance specified)
+- "Berapa cadangan minyak lapangan X?" → Use `field_resources` with **res_oil, res_con** (minyak specified)
+- "Berapa cadangan gas lapangan X?" → Use `field_resources` with **res_ga, res_gn** (gas specified)
+- "Berapa potensi lapangan X?" (How much prospective?) → Use `field_resources` with **rec_oc_risked, rec_an_risked** (potensi = prospective)
+- "Berapa potensi eksplorasi wilayah kerja Y?" → Use `wa_resources` with **rec_oc_risked, rec_an_risked** + `project_stage LIKE '%Exploration%'`
+- "Berapa sumberdaya proyek-proyek di lapangan X?" → Use `project_resources` with **rec_oc, rec_an** (NOT risked, project level)
+- "Berapa GRR lapangan X?" (How much GRR?) → Use `field_resources` with **rec_oc, rec_an**
+- "Berapa sumber daya wilayah kerja Y?" → Use `wa_resources`
+- "Berapa total cadangan nasional?" → Use `nkri_resources`
+- "Berapa cadangan 2P lapangan X?" → Use `field_resources` + `uncert_level = '2. Middle Value'`
 - "Show me all projects in field X" → Use `project_resources`
 - "What are the top 10 projects by oil reserves?" → Use `project_resources`
 - "Show me all projects in the North Sumatra basin" → Use `project_resources`
