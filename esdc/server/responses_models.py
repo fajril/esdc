@@ -116,7 +116,9 @@ class ResponseInputFunctionCallOutputItem(BaseModel):
 
 # Discriminated union type for input items
 ResponseInputItemUnion = Annotated[
-    ResponseInputMessageItem | ResponseInputFunctionCallItem | ResponseInputFunctionCallOutputItem,
+    ResponseInputMessageItem
+    | ResponseInputFunctionCallItem
+    | ResponseInputFunctionCallOutputItem,
     Discriminator(_get_input_item_type),
 ]
 
@@ -262,7 +264,7 @@ class ResponsesRequest(BaseModel):
     https://www.openresponses.org/specification
     """
 
-    model: str = Field(default="esdc-agent", description="Model ID to use")
+    model: str = Field(default="iris", description="Model ID to use")
     input: str | list[ResponseInputItem] = Field(
         ..., description="Input to the model (string or list of items)"
     )

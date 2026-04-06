@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esdc"
-version = "0.4.0"
-description = "Agentic chat interface for Indonesian oil & gas reserves database (ESDC)"
+version = "0.5.0"
+description = "IRIS - Intelligent Reservoir Inference System for Indonesian oil & gas reserves database"
 requires-python = ">=3.10,<3.15"
 authors = [
   { name = "Fajril Ambia", email = "fajril@ambia.id" },

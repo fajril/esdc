@@ -42,7 +42,7 @@ def should_use_native_format(headers: dict[str, str], stream: bool) -> bool:
 
 
 def create_tool_call_chunk(
-    tool_calls: list[dict[str, Any]], model: str = "esdc-agent"
+    tool_calls: list[dict[str, Any]], model: str = "iris"
 ) -> dict[str, Any]:
     """Create OpenAI-compatible streaming chunk with tool calls.
 
@@ -137,7 +137,7 @@ def detect_native_format(headers: dict[str, str], stream: bool) -> bool:
 def create_tool_role_chunk(
     tool_call_id: str,
     content: str,
-    model: str = "esdc-agent",
+    model: str = "iris",
     max_content_length: int = 1000,
 ) -> dict[str, Any]:
     """Create OpenAI-compatible streaming chunk for tool role message.
@@ -177,7 +177,7 @@ def create_tool_role_chunk(
     }
 
 
-def create_final_chunk(model: str = "esdc-agent") -> dict[str, Any]:
+def create_final_chunk(model: str = "iris") -> dict[str, Any]:
     """Create final SSE chunk indicating completion.
 
     Args:

@@ -486,7 +486,9 @@ class ContextPanel(Vertical):
         thread_display = (
             str(self._session_thread_id)[:8] if self._session_thread_id else "N/A"
         )
-        session_content = f"Provider: {self._provider_name}\nModel: {self._model_name}\nThread: {thread_display}...\nDir: {self._current_directory}"
+        session_content = (
+            f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"
+        )
 
         with ContextSection(
             "Session Info",
@@ -568,7 +570,7 @@ class ContextPanel(Vertical):
             session_content = self.query_one("#session-content", Static)
             thread_display = str(thread_id)[:8] if thread_id else "N/A"
             session_content.update(
-                f"Provider: {provider}\nModel: {model}\nThread: {thread_display}...\nDir: {self._current_directory}"
+                f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"
             )
         except Exception:
             pass
@@ -643,7 +645,7 @@ class ChatMessage(Markdown):
 
 
 class StatusBar(Static):
-    """Status line showing current provider, model, and token count."""
+    """Status line showing IRIS and token count."""
 
     DEFAULT_CSS = """
     StatusBar {
@@ -680,7 +682,7 @@ class StatusBar(Static):
         thread_id: str = "",
     ) -> None:
         """Update status bar display."""
-        parts = [f"{provider_name} | {model_name}"]
+        parts = ["IRIS"]
 
         if context_length > 0 and token_count > 0:
             percentage = int((token_count / context_length) * 100)

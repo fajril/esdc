@@ -117,7 +117,7 @@ class TestCreateOpenAIChunk:
         chunk = create_openai_chunk()
 
         assert chunk["object"] == "chat.completion.chunk"
-        assert chunk["model"] == "esdc-agent"
+        assert chunk["model"] == "iris"
         assert chunk["choices"][0]["delta"]["content"] == ""
         assert chunk["choices"][0]["finish_reason"] is None
 
@@ -160,7 +160,7 @@ class TestAgentWrapperIntegration:
 
                     result = await generate_response(
                         messages=[MagicMock(role="user", content="Hello")],
-                        model="esdc-agent",
+                        model="iris",
                     )
 
                     assert result["role"] == "assistant"
@@ -191,7 +191,7 @@ class TestAgentWrapperIntegration:
                     chunks = []
                     async for chunk in generate_streaming_response(
                         messages=[MagicMock(role="user", content="Hello")],
-                        model="esdc-agent",
+                        model="iris",
                     ):
                         chunks.append(json.loads(chunk))
 

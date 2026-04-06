@@ -36,7 +36,7 @@ class TestResponsesModels:
         """Test request with simple string input."""
         request = ResponsesRequest(input="Hello, world!")
         assert request.input == "Hello, world!"
-        assert request.model == "esdc-agent"
+        assert request.model == "iris"
         assert request.stream is True
         assert request.instructions is None
 
@@ -191,7 +191,7 @@ class TestResponsesEvents:
 
     def test_create_response_created_event(self):
         """Test response.created event."""
-        event = create_response_created_event("resp_123", "esdc-agent")
+        event = create_response_created_event("resp_123", "iris")
         assert event["type"] == "response.created"
         assert event["sequence_number"] == 1
         assert event["response"]["id"] == "resp_123"
@@ -203,7 +203,7 @@ class TestResponsesEvents:
         event = create_response_completed_event(
             sequence_number=10,
             response_id="resp_123",
-            model="esdc-agent",
+            model="iris",
             output=[{"type": "message", "content": "Hello"}],
         )
         assert event["type"] == "response.completed"
@@ -441,7 +441,7 @@ class TestEventLifecycle:
         item_id = generate_item_id("msg")
 
         # 1. response.created (sequence_number = 1)
-        created = create_response_created_event("resp_123", "esdc-agent", seq.next())
+        created = create_response_created_event("resp_123", "iris", seq.next())
         assert created["sequence_number"] == 1
 
         # 2. output_item.added (sequence_number = 2)

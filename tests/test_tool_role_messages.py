@@ -38,7 +38,7 @@ class TestCreateToolRoleChunk:
         chunk = create_tool_role_chunk(
             tool_call_id="call_456",
             content="Query returned 42 rows",
-            model="esdc-agent",
+            model="iris",
         )
 
         delta = chunk["choices"][0]["delta"]

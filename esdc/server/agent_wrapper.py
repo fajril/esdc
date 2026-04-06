@@ -205,7 +205,7 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
 
 def create_openai_chunk(
     content: str = "",
-    model: str = "esdc-agent",
+    model: str = "iris",
     finish_reason: str | None = None,
     chunk_id: str | None = None,
 ) -> dict:
@@ -237,7 +237,7 @@ def create_openai_chunk(
 
 async def generate_streaming_response(
     messages: list,
-    model: str = "esdc-agent",
+    model: str = "iris",
     temperature: float = 0.7,
     use_native_format: bool = True,
     request_id: str | None = None,
@@ -513,7 +513,7 @@ async def generate_streaming_response(
 
 async def generate_response(
     messages: list,
-    model: str = "esdc-agent",
+    model: str = "iris",
     temperature: float = 0.7,
     use_native_format: bool = True,
 ) -> dict[str, Any]:

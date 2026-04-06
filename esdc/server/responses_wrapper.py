@@ -290,7 +290,7 @@ def generate_item_id(prefix: str = "msg") -> str:
 
 async def generate_responses_stream(
     input_messages: str | list[ResponseInputItem],
-    model: str = "esdc-agent",
+    model: str = "iris",
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     temperature: float = 0.7,
@@ -730,7 +730,7 @@ async def generate_responses_stream(
 
 async def generate_responses_sync(
     input_messages: str | list[ResponseInputItem],
-    model: str = "esdc-agent",
+    model: str = "iris",
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     temperature: float = 0.7,

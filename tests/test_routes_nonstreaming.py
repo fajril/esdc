@@ -17,7 +17,7 @@ def test_nonstreaming_native_format():
     response = client.post(
         "/v1/chat/completions",
         json={
-            "model": "esdc-agent",
+            "model": "iris",
             "messages": [{"role": "user", "content": "Hello"}],
             "stream": False,
         },
@@ -35,7 +35,7 @@ def test_nonstreaming_response_structure():
     response = client.post(
         "/v1/chat/completions",
         json={
-            "model": "esdc-agent",
+            "model": "iris",
             "messages": [{"role": "user", "content": "Hello"}],
             "stream": False,
         },

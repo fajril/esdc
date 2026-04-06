@@ -41,9 +41,9 @@ async def list_models() -> ModelList:
     return ModelList(
         data=[
             ModelInfo(
-                id="esdc-agent",
+                id="iris",
                 created=int(time.time()),
-                owned_by="esdc",
+                owned_by="IRIS",
             )
         ]
     )
