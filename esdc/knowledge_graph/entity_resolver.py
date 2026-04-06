@@ -13,7 +13,8 @@ class EntityResolver:
         """Initialize resolver with optional database connection.
 
         Args:
-            db_connection: Optional database connection. If None, creates own connection.
+            db_connection: Optional database connection.
+                If None, creates own connection.
         """
         self._owns_connection = db_connection is None
         if db_connection is not None:
