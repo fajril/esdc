@@ -74,11 +74,37 @@ def ingest_file(
 
                 entities = analysis.get("entities", [])
                 if entities:
-                    typer.echo(f"\n  Entities found ({len(entities)}):")
-                    for entity in entities[:10]:
-                        typer.echo(f"    - {entity.get('name')} ({entity.get('type')})")
-                    if len(entities) > 10:
-                        typer.echo(f"    ... and {len(entities) - 10} more")
+                    # Group by source
+                    matched_entities = [
+                        e
+                        for e in entities
+                        if e.get("source") in ["esdc_db", "external"]
+                    ]
+                    unknown_entities = [
+                        e for e in entities if e.get("source") == "unknown"
+                    ]
+
+                    if matched_entities:
+                        typer.echo(f"\n  Entities matched ({len(matched_entities)}):")
+                        for entity in matched_entities[:10]:
+                            similarity = entity.get("similarity", 0.0)
+                            confidence = entity.get("confidence", similarity)
+                            source = entity.get("source", "unknown")
+                            typer.echo(
+                                f"    ✅ {entity.get('name')} "
+                                f"({entity.get('type')}) "
+                                f"- sim: {similarity:.2f} "
+                                f"conf: {confidence:.2f} [{source}]"
+                            )
+                        if len(matched_entities) > 10:
+                            typer.echo(f"    ... and {len(matched_entities) - 10} more")
+
+                    if unknown_entities:
+                        typer.echo(f"\n  Unknown entities ({len(unknown_entities)}):")
+                        for entity in unknown_entities[:5]:
+                            typer.echo(f"    ⚠️  {entity.get('name')} (unknown)")
+                        if len(unknown_entities) > 5:
+                            typer.echo(f"    ... and {len(unknown_entities) - 5} more")
 
                 sections = analysis.get("sections", [])
                 if sections:

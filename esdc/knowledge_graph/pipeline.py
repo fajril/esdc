@@ -1,11 +1,19 @@
 import hashlib
+import logging
 from pathlib import Path
 from typing import Any
 
+from esdc.configs import Config
 from esdc.knowledge_graph.chunking import DocumentChunker
 from esdc.knowledge_graph.document_types import DocumentTypeDetector
+from esdc.knowledge_graph.embeddings import EmbeddingGenerator
 from esdc.knowledge_graph.entity_resolver import EntityResolver
+from esdc.knowledge_graph.hybrid_extractor import HybridEntityExtractor
 from esdc.knowledge_graph.llm_extraction import LLMExtractor
+from esdc.knowledge_graph.master_entities import MasterEntityLoader
+from esdc.knowledge_graph.semantic_matcher import SemanticEntityMatcher
+
+logger = logging.getLogger(__name__)
 
 
 class IngestionPipeline:
@@ -18,6 +26,7 @@ class IngestionPipeline:
         detector: DocumentTypeDetector | None = None,
         resolver: EntityResolver | None = None,
         chunker: DocumentChunker | None = None,
+        use_hybrid_extraction: bool = True,
     ):
         """Initialize the pipeline with optional dependencies.
 
@@ -27,12 +36,33 @@ class IngestionPipeline:
             detector: DocumentTypeDetector instance
             resolver: EntityResolver instance
             chunker: DocumentChunker instance
+            use_hybrid_extraction: Use hybrid semantic+LLM entity extraction
         """
         self.db = db
         self.llm = llm
         self.detector = detector or DocumentTypeDetector(llm=llm)
         self.resolver = resolver or EntityResolver(db_connection=db)
         self.chunker = chunker or DocumentChunker()
+        self.use_hybrid_extraction = use_hybrid_extraction
+
+        # Initialize hybrid extraction components
+        if use_hybrid_extraction:
+            self.embedding_gen = EmbeddingGenerator()
+            self.entity_loader = MasterEntityLoader(db_connection=db)
+            self.semantic_matcher = SemanticEntityMatcher(
+                embedding_generator=self.embedding_gen,
+                threshold=Config.get_entity_match_threshold(),
+            )
+            self.hybrid_extractor = HybridEntityExtractor(
+                semantic_matcher=self.semantic_matcher,
+                llm=llm,
+                top_k=20,
+            )
+        else:
+            self.embedding_gen = None
+            self.entity_loader = None
+            self.semantic_matcher = None
+            self.hybrid_extractor = None
 
     def ingest(
         self,
@@ -65,7 +95,7 @@ class IngestionPipeline:
                 content, file_path.name, doc_type_override=doc_type_override
             )
 
-            entities = self._extract_entities(structure)
+            entities = self._extract_entities(content, structure)
 
             if analyze_only:
                 return {
@@ -173,15 +203,49 @@ class IngestionPipeline:
 
         return result
 
-    def _extract_entities(self, structure: dict[str, Any]) -> list[dict[str, Any]]:
-        """Extract entities from document structure.
+    def _extract_entities(
+        self, content: str, structure: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Extract entities from document.
+
+        Uses hybrid extraction (semantic + LLM) if enabled, otherwise falls back
+        to structure-based extraction.
 
         Args:
+            content: Full document content
             structure: Document structure dictionary
 
         Returns:
             List of resolved entities
         """
+        if self.use_hybrid_extraction and self.entity_loader and self.hybrid_extractor:
+            try:
+                # Load master entities with embeddings (cached)
+                master_entities, master_embeddings = (
+                    self.entity_loader.load_all_with_embeddings()
+                )
+
+                logger.info(
+                    f"Loaded {sum(len(v) for v in master_entities.values())} "
+                    "master entities"
+                )
+
+                # Hybrid extraction: semantic + LLM verification
+                entities = self.hybrid_extractor.extract(
+                    document_text=content,
+                    master_entities=master_entities,
+                    master_embeddings=master_embeddings,
+                )
+
+                logger.info(f"Extracted {len(entities)} entities via hybrid method")
+                return entities
+
+            except Exception as e:
+                logger.error(
+                    f"Hybrid extraction failed: {e}, falling back to structure-based"
+                )
+
+        # Fallback: structure-based entity extraction
         entities = []
 
         text_entities = structure.get("entities", [])
