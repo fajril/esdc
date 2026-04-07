@@ -428,3 +428,15 @@ class Config:
         """Get LadybugDB path."""
         db_dir = cls.get_db_dir()
         return db_dir.parent / "ladybug" / "documents.lbug"
+
+    @classmethod
+    def get_entity_match_threshold(cls) -> float:
+        """Get entity matching threshold from config.
+
+        Returns:
+            Similarity threshold for semantic matching (default: 0.7)
+        """
+        config = cls._load_config()
+        if config and "entity_match_threshold" in config:
+            return float(config["entity_match_threshold"])
+        return 0.7
