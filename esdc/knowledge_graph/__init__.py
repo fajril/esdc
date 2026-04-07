@@ -1,5 +1,5 @@
 """Knowledge graph package for document ingestion."""
 
-from .db import LadybugDB
+from .graph_db import LadybugDB
 
 __all__ = ["LadybugDB"]
