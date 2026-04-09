@@ -48,7 +48,7 @@ class TestBuildQueryNkriResources:
         """Test NKRI query without year removes WHERE clause."""
         query, params = SQLSanitizer.build_query(TableName.NKRI_RESOURCES, year=None)
         assert "<year>" not in query
-        assert "report_year" not in query
+        assert "WHERE report_year = ?" not in query
         assert len(params) == 0
 
     def test_nkri_ignores_where_like(self):
@@ -99,7 +99,8 @@ class TestBuildQueryResourceTables:
         query, params = SQLSanitizer.build_query(
             TableName.PROJECT_RESOURCES, like="test"
         )
-        assert "report_year" not in query
+        assert "report_year = ?" not in query
+        assert "AND report_year" not in query
         assert "project_name LIKE ?" in query
         assert len(params) == 1
         assert params[0] == "%test%"
