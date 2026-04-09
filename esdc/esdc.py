@@ -112,33 +112,37 @@ def fetch(
         "--save/--no-save",
         help="Save fetched data to ~/.esdc/ directory.",
     ),
+    no_reload: bool = typer.Option(
+        False,
+        "--no-reload",
+        help="Only download data, skip loading into database (implies --save).",
+    ),
 ) -> None:
-    """
-    Fetch data from ESDC and save it to a file.
+    """Fetch data from ESDC and optionally load into the database.
 
-    This function fetches data from the ESDC API and saves it to a file
-    based on the specified file type. If the file type is not supported,
-    a warning will be logged.
-
-    Parameters:
-        filetype:
-            The type of file to save the data to. Options are "csv" or "json".
-            Defaults to "json".
-        save:
-            Indicates whether to save the data to a file. Defaults to False.
-
-    Returns:
-        None
+    By default, downloads data and loads it into the database.
+    Use --no-reload to download and save data without loading into the database.
     """
     username, password = Config.get_credentials()
 
+    should_save = save or no_reload
+    should_reload = not no_reload
+
     if filetype == "csv":
         load_esdc_data(
-            filetype=FileType.CSV, to_file=save, username=username, password=password
+            filetype=FileType.CSV,
+            to_file=should_save,
+            reload=should_reload,
+            username=username,
+            password=password,
         )
     elif filetype == "json":
         load_esdc_data(
-            filetype=FileType.JSON, to_file=save, username=username, password=password
+            filetype=FileType.JSON,
+            to_file=should_save,
+            reload=should_reload,
+            username=username,
+            password=password,
         )
     else:
         logging.warning("File type %s is not available.", filetype)
@@ -260,35 +264,25 @@ def show(
 def load_esdc_data(
     filetype: FileType = FileType.CSV,
     to_file: bool = True,
+    reload: bool = True,
     username: str = "",
     password: str = "",
 ) -> None:
-    """
-    Downloads and loads data from the ESDC API into the local database.
-
-    This function downloads data from a specified URL and loads it into the ESDC database.
-    If the corresponding file already exists, it can skip downloading and loading the data
-    if the `to_file` parameter is set to `False`.
+    """Download data from the ESDC API and optionally load into the database.
 
     Parameters
     ----------
     filetype : FileType
-        The file type for the downloaded data. Currently, supports "csv" and "json".
+        The file type for the downloaded data. Currently supports "csv" and "json".
     to_file : bool
         Whether to save the downloaded data to a file. Defaults to True.
+    reload : bool
+        Whether to load the downloaded data into the database. Defaults to True.
+        When False, data is only downloaded and saved (not loaded).
     username : str
         The username for authenticating with the ESDC API.
     password : str
         The password for authenticating with the ESDC API.
-
-    Returns:
-    -------
-    None
-
-    Raises:
-    ------
-    Exception
-        Raises an exception if the download fails or if the data format is unsupported.
     """
     for table in TABLES:
         logging.info("Downloading %s table.", table.value)
@@ -304,10 +298,12 @@ def load_esdc_data(
             with open(save_path, "wb") as f:
                 _ = f.write(data)
 
+        if not reload:
+            logging.info("Skipping database load for %s (--no-reload).", table.value)
+            continue
+
         if filetype == FileType.CSV:
             decoded_data = data.decode("utf-8").splitlines()
-            # read_csv is used to handle remarks column that might
-            # have commas in the string.
             content, header = _read_csv(decoded_data)
             load_data_to_db(content, header, table.value)
         elif filetype == FileType.JSON:
