@@ -10,6 +10,32 @@ from esdc.db_security import SQLSanitizer, _load_sql_script
 from esdc.selection import TableName
 
 
+def _is_sqlite_database(db_path: Path) -> bool:
+    """Check if a database file is in SQLite format."""
+    if not db_path.exists():
+        return False
+    try:
+        with open(db_path, "rb") as f:
+            header = f.read(16)
+        return header[:6] == b"SQLite"
+    except OSError:
+        return False
+
+
+def _ensure_duckdb_database(db_path: Path) -> None:
+    """Remove old SQLite database if it exists.
+
+    DuckDB cannot open SQLite-format database files. The user needs
+    to re-fetch data to rebuild in DuckDB format.
+    """
+    if _is_sqlite_database(db_path):
+        logging.warning(
+            "Found SQLite-format database. Removing it for DuckDB migration. "
+            "Data will be rebuilt on fetch."
+        )
+        db_path.unlink()
+
+
 def load_data_to_db(
     content: list[list[str]], header: list[str], table_name: str
 ) -> None:
@@ -29,6 +55,7 @@ def load_data_to_db(
         "project_timeseries": "create_table_project_timeseries.sql",
     }
     logging.info("Connecting to the database.")
+    _ensure_duckdb_database(Config.get_db_file())
     if not Config.get_db_dir().exists():
         Config.get_db_dir().mkdir(parents=True, exist_ok=True)
         logging.info("Database does not exist. Creating new database.")
@@ -107,7 +134,14 @@ def run_query(
         Database file does not exist. Try to run this command first:
 
             esdc fetch --save
-            """
+        """
+        )
+        return None
+
+    if _is_sqlite_database(Config.get_db_file()):
+        logging.error(
+            "Database is in SQLite format. "
+            "Run 'esdc fetch --save' to rebuild in DuckDB format."
         )
         return None
 

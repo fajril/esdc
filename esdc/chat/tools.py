@@ -63,6 +63,14 @@ def get_db_connection(db_path: str | None = None) -> duckdb.DuckDBPyConnection:
             f"or check your configuration in ~/.esdc/config.yaml"
         )
 
+    if path_obj.exists():
+        with open(path_obj, "rb") as f:
+            if f.read(6) == b"SQLite":
+                raise RuntimeError(
+                    f"Database at {db_path} is in SQLite format. "
+                    f"Run 'esdc fetch --save' to rebuild in DuckDB format."
+                )
+
     conn = duckdb.connect(str(db_path), read_only=True)
     return conn
 
