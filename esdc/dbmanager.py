@@ -1,37 +1,28 @@
 import logging
-import re
-import sqlite3
+import shutil
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 
 from esdc.configs import Config
+from esdc.db_security import SQLSanitizer, _load_sql_script
 from esdc.selection import TableName
 
 
 def load_data_to_db(
     content: list[list[str]], header: list[str], table_name: str
 ) -> None:
-    """
-    Load data into the ESDC database.
+    """Load data into the ESDC database.
 
-    Parameters
-    ----------
-    content : str
-        The data to load into the database as a string.
-    table_name : str
-        The name of the table to load the data into.
-
-    Returns:
-    -------
-    None
+    Args:
+        content: The data rows to load into the database.
+        header: Column names for the data.
+        table_name: The name of the table to load the data into.
 
     Raises:
-    ------
-    sqlite3.Error
-        If there is an error while connecting
-        to the database or executing a query.
-
+        duckdb.Error: If there is an error connecting to the database
+            or executing a query.
     """
     create_table_query = {
         "project_resources": "create_table_project_resources.sql",
@@ -42,36 +33,39 @@ def load_data_to_db(
         Config.get_db_dir().mkdir(parents=True, exist_ok=True)
         logging.info("Database does not exist. Creating new database.")
         logging.debug("Database location: %s", Config.get_db_dir())
-    with sqlite3.connect(Config.get_db_file()) as conn:
-        cursor = conn.cursor()
+    conn = duckdb.connect(str(Config.get_db_file()))
+    try:
         logging.debug("creating table %s in database", table_name)
-        _ = cursor.executescript(_load_sql_script(create_table_query[table_name]))
+        _execute_sql_script(conn, create_table_query[table_name])
         column_names = ", ".join(["?" for _ in header])
         insert_stmt = (
             f"INSERT INTO {table_name} ({', '.join(header)}) VALUES ({column_names})"
         )
         logging.debug("Inserting table data %s into the database.", table_name)
         try:
-            _ = cursor.executemany(insert_stmt, content)
-        except sqlite3.Error as e:
+            conn.executemany(insert_stmt, content)
+        except duckdb.Error as e:
             logging.debug("insert statement: %s", insert_stmt)
-            raise sqlite3.Error(str(e)) from e
+            raise duckdb.Error(str(e)) from e
 
         logging.debug("Creating uuid column for table %s", table_name)
         uuid_query = _load_sql_script("create_column_uuid.sql")
-        _ = cursor.executescript(uuid_query.replace("{table_name}", table_name))
+        _execute_sql_script(conn, uuid_query.replace("{table_name}", table_name))
 
         if table_name == "project_resources":
             logging.debug("Creating table view for field, working area, nkri.")
-            _ = cursor.executescript(_load_sql_script("create_esdc_view.sql"))
+            _execute_sql_script(conn, "create_esdc_view.sql")
 
         if table_name == "project_timeseries":
             logging.debug("Creating timeseries views for field, wa, nkri.")
-            _ = cursor.executescript(_load_sql_script("create_timeseries_views.sql"))
-        _ = cursor.execute("VACUUM;")
-        conn.commit()
+            _execute_sql_script(conn, "create_timeseries_views.sql")
 
+        conn.execute("CHECKPOINT")
         logging.info("Table %s is loaded into database.", table_name)
+    finally:
+        conn.close()
+
+    invalidate_sql_cache()
 
 
 def run_query(
@@ -82,99 +76,73 @@ def run_query(
     output: int = 0,
     columns: str | list[str] = "",
 ) -> pd.DataFrame | None:
-    """
-    Execute a query on the specified table in the database.
+    """Execute a parameterized query on the specified table in the database.
 
     Args:
-    - table (TableName): The table to query.
-    - where (str, optional): The value for the WHERE clause. Defaults to None.
-    - like (str, optional): The value for the LIKE clause. Defaults to None.
-    - year (int, optional): The year to filter by. Defaults to None.
-    - output (int, optional): The output format. Defaults to 0. refer to view sql file.
-    - columns (str or list of str, optional): The columns to select. Defaults to "".
+        table: The table to query.
+        where: The column name for the WHERE clause. Defaults to None.
+        like: The value for the LIKE clause. Defaults to None.
+        year: The year to filter by. Defaults to None.
+        output: The output format. Defaults to 0.
+        columns: The columns to select. Defaults to "".
 
     Returns:
-    - pd.DataFrame or None: The query results as a pandas DataFrame, or None if the query fails.
-
-    Notes:
-    - The query is loaded from a SQL script file based on the table name.
-    - The query is modified to include the specified columns, if any.
-    - The query is executed on the database file located at the path specified in the Config.
-    - If the database file does not exist, an error message is logged and None is returned.
-    - If the query fails, an error message is logged and None is returned.
+        The query results as a pandas DataFrame, or None if the query fails.
     """
-    output = min(output, 4)
-
-    sql_script_map = {
-        TableName.PROJECT_RESOURCES: "view_project_resources.sql",
-        TableName.FIELD_RESOURCES: "view_field_resources.sql",
-        TableName.WA_RESOURCES: "view_wa_resources.sql",
-        TableName.NKRI_RESOURCES: "view_nkri_resources.sql",
-    }
-    queries = _load_sql_script(sql_script_map[table])
-
-    # Extract the query from the SQL script
-    query = queries.split(";")[max(0, output - 1)].strip()
-
-    # Modify the query based on the provided columns
-    if columns:
-        logging.debug("selected columns: %s", columns)
-        pattern = r".*?(?=FROM)"
-        query_match = re.search(pattern, query)
-        if query_match is None:
-            raise ValueError(f"Could not parse query: {query}")
-        query = query[query_match.end() :]
-        select_query = "SELECT " + ", ".join(col for col in columns) + " "
-        logging.debug("query: %s", select_query)
-        query = select_query + query
-
-    # Replace placeholders with actual values
-    if table == TableName.NKRI_RESOURCES:
-        if year is None:
-            query = query.replace("WHERE report_year = <year>", "")
-        else:
-            query = query.replace("<year>", str(year))
-    else:
-        where_clause = {
-            TableName.PROJECT_RESOURCES: "project_name",
-            TableName.FIELD_RESOURCES: "field_name",
-        }.get(table, "wk_name")
-        query = query.replace("<where>", where if where is not None else where_clause)
-        query = query.replace("<like>", like if like is not None else "")
-
-        query = (
-            query.replace("AND report_year = <year>", "")
-            if year is None
-            else query.replace("<year>", str(year))
-        )
-
-        query = query.replace("<like>", "" if like is None else like)
-        query = query.replace(
-            "AND report_year = <year>",
-            "" if year is None else query.replace("<year>", str(year)),
-        )
-
-    # Execute the query
     if not Config.get_db_file().exists():
         logging.error(
             """
         Database file does not exist. Try to run this command first:
-        
+
             esdc fetch --save
-        """
+            """
         )
         return None
+
     try:
-        with sqlite3.connect(Config.get_db_file()) as conn:
-            df = pd.read_sql_query(query, conn)
-    except sqlite3.OperationalError as e:
+        query, params = SQLSanitizer.build_query(
+            table, where=where, like=like, year=year, output=output, columns=columns
+        )
+        conn = duckdb.connect(str(Config.get_db_file()), read_only=True)
+        try:
+            df = conn.execute(query, params).fetchdf()
+        finally:
+            conn.close()
+    except duckdb.Error as e:
         logging.error("Cannot query data. Message: %s", e)
         return None
 
     return df
 
 
-def _load_sql_script(script_file: str) -> str:
-    file = Path(__file__).parent / "sql" / script_file
-    with open(file, encoding="utf-8") as f:
-        return f.read()
+def _execute_sql_script(conn: duckdb.DuckDBPyConnection, script: str | Path) -> None:
+    """Execute a SQL script that may contain multiple statements.
+
+    Splits on ';' and executes each non-empty statement.
+
+    Args:
+        conn: Active duckdb connection.
+        script: Either a SQL script filename (in esdc/sql/) or
+            raw SQL content to execute directly.
+    """
+    if isinstance(script, Path) or (
+        isinstance(script, str)
+        and not script.strip().startswith(
+            ("CREATE", "DROP", "ALTER", "SELECT", "INSERT", "UPDATE", "DELETE")
+        )
+    ):
+        sql_content = _load_sql_script(str(script))
+    else:
+        sql_content = script
+
+    statements = [s.strip() for s in sql_content.split(";") if s.strip()]
+    for stmt in statements:
+        conn.execute(stmt)
+
+
+def invalidate_sql_cache() -> None:
+    """Clear the SQL results cache directory."""
+    cache_dir = Config.get_cache_dir() / "sql_results"
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+        logging.info("SQL cache invalidated: %s", cache_dir)
