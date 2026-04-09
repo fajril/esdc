@@ -56,7 +56,7 @@ class TestBuildQueryNkriResources:
         query, params = SQLSanitizer.build_query(
             TableName.NKRI_RESOURCES, where="project_name", like="test", year=2024
         )
-        assert "LIKE" not in query
+        assert "ILIKE" not in query
         assert "project_name" not in query
         assert 2024 in params
 
@@ -65,22 +65,22 @@ class TestBuildQueryResourceTables:
     """Tests for build_query with project/field/WA resources."""
 
     def test_project_with_like_and_year(self):
-        """Test project resources with LIKE and year filters."""
+        """Test project resources with ILIKE and year filters."""
         query, params = SQLSanitizer.build_query(
             TableName.PROJECT_RESOURCES, like="abc", year=2024
         )
-        assert "project_name LIKE ?" in query
+        assert "project_name ILIKE ?" in query
         assert "report_year = ?" in query
         assert len(params) == 2
         assert params[0] == "%abc%"
         assert params[1] == 2024
 
     def test_field_with_like_and_year(self):
-        """Test field resources with LIKE and year filters."""
+        """Test field resources with ILIKE and year filters."""
         query, params = SQLSanitizer.build_query(
             TableName.FIELD_RESOURCES, like="field1", year=2023
         )
-        assert "field_name LIKE ?" in query
+        assert "field_name ILIKE ?" in query
         assert "report_year = ?" in query
         assert len(params) == 2
         assert params[0] == "%field1%"
@@ -91,37 +91,37 @@ class TestBuildQueryResourceTables:
         query, params = SQLSanitizer.build_query(
             TableName.WA_RESOURCES, where="custom_col", like="test", year=2024
         )
-        assert "custom_col LIKE ?" in query
+        assert "custom_col ILIKE ?" in query
         assert len(params) == 2
 
     def test_like_only_no_year(self):
-        """Test query with LIKE but no year removes year clause."""
+        """Test query with ILIKE but no year removes year clause."""
         query, params = SQLSanitizer.build_query(
             TableName.PROJECT_RESOURCES, like="test"
         )
         assert "report_year = ?" not in query
         assert "AND report_year" not in query
-        assert "project_name LIKE ?" in query
+        assert "project_name ILIKE ?" in query
         assert len(params) == 1
         assert params[0] == "%test%"
 
     def test_year_only_no_like(self):
-        """Test query with year but no LIKE."""
+        """Test query with year but no ILIKE."""
         query, params = SQLSanitizer.build_query(TableName.PROJECT_RESOURCES, year=2024)
         assert "report_year = ?" in query
-        assert "LIKE" not in query
+        assert "ILIKE" not in query
         assert "<where>" not in query
         assert len(params) == 1
         assert params[0] == 2024
 
     def test_no_filters(self):
-        """Test query with no LIKE and no year removes entire WHERE clause."""
+        """Test query with no ILIKE and no year removes entire WHERE clause."""
         query, params = SQLSanitizer.build_query(TableName.PROJECT_RESOURCES)
         assert "WHERE" not in query.upper() or "FROM" in query.upper()
         assert len(params) == 0
 
     def test_like_special_chars_escaped(self):
-        """Test that LIKE special characters are escaped in params."""
+        """Test that ILIKE special characters are escaped in params."""
         query, params = SQLSanitizer.build_query(
             TableName.FIELD_RESOURCES, like="field_name%", year=2024
         )

@@ -277,7 +277,7 @@ def build_view_query(
         table: The table/view to query.
         output: Output detail level (0=ALL, 1-3=specific columns, 4+=ALL).
         where: Column name for WHERE LIKE clause (overrides default).
-        like: Value for LIKE pattern matching (substring search).
+        like: Value for ILIKE pattern matching (case-insensitive substring search).
         year: Year filter value.
         columns: Specific columns to select instead of default.
 
@@ -302,7 +302,7 @@ def build_view_query(
 
     if like is not None and view_def.default_where_column is not None:
         where_col = where or view_def.default_where_column
-        conditions.append(f"{where_col} LIKE ?")
+        conditions.append(f"{where_col} ILIKE ?")
         params.append(_escape_like(like))
 
     if year is not None:
