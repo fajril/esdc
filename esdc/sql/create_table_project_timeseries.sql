@@ -1,8 +1,12 @@
 -- Drop the table if it already exists
 DROP TABLE IF EXISTS project_timeseries;
+DROP SEQUENCE IF EXISTS seq_project_timeseries;
+
+-- Create sequence for auto-increment id
+CREATE SEQUENCE seq_project_timeseries START 1;
 
 CREATE TABLE IF NOT EXISTS project_timeseries (
-    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    id INTEGER PRIMARY KEY DEFAULT nextval('seq_project_timeseries'),
     report_date TEXT,
     report_year INTEGER,
     is_offshore INTEGER,
