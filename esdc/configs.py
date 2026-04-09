@@ -61,6 +61,7 @@ class Config:
                 "api_url": cls.BASE_API_URL_V2,
                 "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
                 "tool_format": "native",  # native, markdown, or auto
+                "cache": {"sql_ttl": 604800},
                 "logging": {
                     "level": "INFO",
                     "file": {
@@ -401,6 +402,46 @@ class Config:
             config["database"] = {}
         config["database"]["path"] = str(path)
         cls._save_config(config)
+
+    @classmethod
+    def get_sql_cache_ttl(cls) -> int:
+        """Get SQL cache TTL in seconds.
+
+        Priority:
+        1. ESDC_SQL_CACHE_TTL environment variable
+        2. config.yaml: cache.sql_ttl
+        3. 604800 (1 week default)
+        """
+        env_ttl = os.environ.get("ESDC_SQL_CACHE_TTL")
+        if env_ttl:
+            try:
+                return int(env_ttl)
+            except ValueError:
+                pass
+
+        config = cls._load_config() or {}
+        cache_config = config.get("cache", {})
+        return cache_config.get("sql_ttl", 604800)
+
+    @classmethod
+    def get_cache_dir(cls) -> Path:
+        """Return the cache directory path.
+
+        Priority:
+        1. ESDC_CACHE_DIR environment variable
+        2. config.yaml: cache.path
+        3. ~/.esdc/cache (default)
+        """
+        custom_path = os.environ.get("ESDC_CACHE_DIR")
+        if custom_path:
+            return Path(custom_path)
+
+        config = cls._load_config() or {}
+        cache_config = config.get("cache", {})
+        if cache_path := cache_config.get("path"):
+            return Path(cache_path).expanduser()
+
+        return cls.get_config_dir() / "cache"
 
     @classmethod
     def get_provider_config_by_name(cls, name: str) -> dict[str, Any] | None:
