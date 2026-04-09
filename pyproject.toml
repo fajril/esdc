@@ -25,6 +25,9 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pyyaml>=6.0",
     "textual>=0.52.0",
+    # Database
+    "duckdb>=0.10.0",
+    "diskcache>=5.6.0",
     # LangChain ecosystem
     "langchain>=0.3.0",
     "langchain-core>=0.3.0",
