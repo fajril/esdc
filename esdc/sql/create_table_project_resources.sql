@@ -3,7 +3,7 @@ DROP TABLE IF EXISTS project_resources;
 
 -- Create the table if it does not exist
 CREATE TABLE IF NOT EXISTS project_resources (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
 	report_date TEXT,
 	report_year INTEGER,
 	report_status TEXT,

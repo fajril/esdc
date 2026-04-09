@@ -1,5 +1,5 @@
 ALTER TABLE project_resources
-ADD COLUMN is_discovered INT;
+ADD COLUMN IF NOT EXISTS is_discovered INT;
 
 UPDATE project_resources
 SET is_discovered = 

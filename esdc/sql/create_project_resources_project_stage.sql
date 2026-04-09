@@ -1,5 +1,5 @@
 ALTER TABLE project_resources
-ADD COLUMN project_stage VARCHAR(15);
+ADD COLUMN IF NOT EXISTS project_stage VARCHAR(15);
 
 UPDATE project_resources
 SET project_stage = 

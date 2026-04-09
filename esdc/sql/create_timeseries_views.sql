@@ -130,13 +130,7 @@ SELECT
     SUM(rate_an) as rate_an,
     
     -- UUID generation
-    (
-        lower(hex(randomblob(4))) || '-' ||
-        lower(hex(randomblob(2))) || '-' ||
-        '4' || substr(hex(randomblob(2)), 2) || '-' ||
-        substr('89ab', 1 + (abs(random()) % 4), 1) || substr(hex(randomblob(2)), 2) || '-' ||
-        lower(hex(randomblob(6)))
-    ) as uuid
+    gen_random_uuid() as uuid
 FROM project_timeseries
 GROUP BY report_year, wk_id, field_id, project_class, project_level, year
 ORDER BY report_year DESC, wk_name, field_name, year;
@@ -258,13 +252,7 @@ SELECT
     SUM(rate_an) as rate_an,
     
     -- UUID generation
-    (
-        lower(hex(randomblob(4))) || '-' ||
-        lower(hex(randomblob(2))) || '-' ||
-        '4' || substr(hex(randomblob(2)), 2) || '-' ||
-        substr('89ab', 1 + (abs(random()) % 4), 1) || substr(hex(randomblob(2)), 2) || '-' ||
-        lower(hex(randomblob(6)))
-    ) as uuid
+    gen_random_uuid() as uuid
 FROM field_timeseries
 GROUP BY report_year, wk_id, project_class, project_level, year
 ORDER BY report_year DESC, wk_name, year;
@@ -373,13 +361,7 @@ SELECT
     SUM(rate_an) as rate_an,
     
     -- UUID generation
-    (
-        lower(hex(randomblob(4))) || '-' ||
-        lower(hex(randomblob(2))) || '-' ||
-        '4' || substr(hex(randomblob(2)), 2) || '-' ||
-        substr('89ab', 1 + (abs(random()) % 4), 1) || substr(hex(randomblob(2)), 2) || '-' ||
-        lower(hex(randomblob(6)))
-    ) as uuid
+    gen_random_uuid() as uuid
 FROM wa_timeseries
 GROUP BY report_year, project_class, project_level, year
 ORDER BY report_year DESC, year;
