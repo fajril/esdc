@@ -1,14 +1,33 @@
 # Standard library
 import asyncio
+import hashlib
 import re
-import sqlite3
 from typing import Annotated
 
 # Third-party
+import diskcache
+import duckdb
 from langchain.tools import tool
 
 # Maximum rows to return to prevent context window overflow
 MAX_QUERY_ROWS = 50
+
+_sql_cache: diskcache.Cache | None = None
+
+
+def _get_cache() -> diskcache.Cache:
+    global _sql_cache
+    if _sql_cache is None:
+        from esdc.configs import Config
+
+        cache_dir = Config.get_cache_dir() / "sql_results"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        _sql_cache = diskcache.Cache(str(cache_dir))
+    return _sql_cache
+
+
+def _get_cache_key(sql: str) -> str:
+    return hashlib.sha256(sql.encode()).hexdigest()
 
 
 def _validate_table_name(name: str | None) -> str | None:
@@ -23,7 +42,7 @@ def _validate_table_name(name: str | None) -> str | None:
     return None
 
 
-def get_db_connection(db_path: str | None = None) -> sqlite3.Connection:
+def get_db_connection(db_path: str | None = None) -> duckdb.DuckDBPyConnection:
     """Get a database connection.
 
     Caller is responsible for closing the connection.
@@ -44,8 +63,7 @@ def get_db_connection(db_path: str | None = None) -> sqlite3.Connection:
             f"or check your configuration in ~/.esdc/config.yaml"
         )
 
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
+    conn = duckdb.connect(str(db_path), read_only=True)
     return conn
 
 
@@ -72,29 +90,34 @@ async def execute_sql(
 
 def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
     """Synchronous SQL execution (runs in thread pool to avoid blocking)."""
+    from esdc.configs import Config
+
     query = query.strip()
 
     if not query.lower().startswith("select"):
         return "Error: Only SELECT queries are allowed. Attempted to execute: " + query
 
+    cache = _get_cache()
+    cache_key = _get_cache_key(query)
+    if cache_key in cache:
+        return str(cache[cache_key])
+
     conn = None
     try:
         conn = get_db_connection(db_path)
-        cursor = conn.cursor()
+        result = conn.execute(query)
 
-        cursor.execute(query)
-
-        if cursor.description:
-            columns = [description[0] for description in cursor.description]
-            rows = cursor.fetchall()
+        if result.description:
+            columns = [description[0] for description in result.description]
+            rows = result.fetchall()
 
             if not rows:
                 return "Query executed successfully. No results returned."
 
-            MAX_ROWS = 50
+            max_rows = 50
             total_rows = len(rows)
-            if len(rows) > MAX_ROWS:
-                rows = rows[:MAX_ROWS]
+            if len(rows) > max_rows:
+                rows = rows[:max_rows]
                 truncated = True
             else:
                 truncated = False
@@ -106,18 +129,21 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
             header = " | ".join(columns)
             separator = "-" * len(header)
 
-            result = f"{header}\n{separator}\n" + "\n".join(row_strings)
+            formatted_result = f"{header}\n{separator}\n" + "\n".join(row_strings)
             if truncated:
-                result += f"\n\n... ({total_rows - MAX_ROWS} more rows not shown)"
-            result += f"\n\n({total_rows} rows returned)"
+                formatted_result += (
+                    f"\n\n... ({total_rows - max_rows} more rows not shown)"
+                )
+            formatted_result += f"\n\n({total_rows} rows returned)"
 
-            return result
+            cache.set(cache_key, formatted_result, expire=Config.get_sql_cache_ttl())
+            return formatted_result
         else:
             return "Query executed successfully. No results to display."
 
     except FileNotFoundError as e:
         return str(e)
-    except sqlite3.Error as e:
+    except duckdb.Error as e:
         return f"SQL Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
@@ -144,44 +170,45 @@ def get_schema(
     conn = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
 
         if safe_table_name:
-            cursor.execute(f"PRAGMA table_info({safe_table_name})")
-            columns = cursor.fetchall()
+            result = conn.execute(f"DESCRIBE {safe_table_name}")
+            columns = result.fetchall()
 
             if not columns:
                 return f"Table '{table_name}' not found."
 
-            result = f"Schema for '{table_name}':\n"
-            result += "Column | Type | Nullable | Default\n"
-            result += "-" * 50 + "\n"
+            output = f"Schema for '{table_name}':\n"
+            output += "Column | Type | Nullable | Default\n"
+            output += "-" * 50 + "\n"
 
             for col in columns:
-                result += (
-                    f"{col[1]} | {col[2]} | {'No' if col[3] else 'Yes'} | {col[4]}\n"
-                )
+                nullable = "Yes" if col[2] == "YES" else "No"
+                default_val = col[4] if col[4] is not None else ""
+                output += f"{col[0]} | {col[1]} | {nullable} | {default_val}\n"
 
-            return result
+            return output
         else:
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            result = conn.execute(
+                "SELECT table_name as name "
+                "FROM information_schema.tables "
+                "WHERE table_schema = 'main'"
             )
-            tables = cursor.fetchall()
+            tables = result.fetchall()
 
-            result = "Available tables:\n"
+            output = "Available tables:\n"
             for table in tables:
-                table_name = table[0]
-                cursor.execute(f"PRAGMA table_info({table_name})")
-                columns = cursor.fetchall()
-                col_names = ", ".join(col[1] for col in columns)
-                result += f"- {table_name}: {col_names}\n"
+                tbl_name = table[0]
+                tbl_result = conn.execute(f"DESCRIBE {tbl_name}")
+                tbl_columns = tbl_result.fetchall()
+                col_names = ", ".join(col[0] for col in tbl_columns)
+                output += f"- {tbl_name}: {col_names}\n"
 
-            return result
+            return output
 
     except FileNotFoundError as e:
         return str(e)
-    except sqlite3.Error as e:
+    except duckdb.Error as e:
         return f"SQL Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
@@ -198,40 +225,43 @@ def list_tables() -> str:
     """
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name"
+        result = conn.execute(
+            "SELECT table_name as name, table_type as type "
+            "FROM information_schema.tables "
+            "WHERE table_schema = 'main' "
+            "ORDER BY table_type, table_name"
         )
-        items = cursor.fetchall()
+        items = result.fetchall()
 
         if not items:
             conn.close()
             return "No tables or views found in the database."
 
-        result = "Available tables and views:\n\n"
+        output = "Available tables and views:\n\n"
 
-        tables = [item for item in items if item[1] == "table"]
-        views = [item for item in items if item[1] == "view"]
+        tables = [item for item in items if item[1] == "BASE TABLE"]
+        views = [item for item in items if item[1] == "VIEW"]
 
         if tables:
-            result += "Tables:\n"
+            output += "Tables:\n"
             for table in tables:
-                cursor.execute(f"SELECT COUNT(*) FROM {table[0]}")
-                count = cursor.fetchone()[0]
-                result += f"  - {table[0]} ({count} rows)\n"
+                count_result = conn.execute(f"SELECT COUNT(*) FROM {table[0]}")
+                count_row = count_result.fetchone()
+                count = count_row[0] if count_row else 0
+                output += f"  - {table[0]} ({count} rows)\n"
 
         if views:
-            result += "\nViews:\n"
+            output += "\nViews:\n"
             for view in views:
-                result += f"  - {view[0]}\n"
+                output += f"  - {view[0]}\n"
 
         conn.close()
-        return result
+        return output
 
     except FileNotFoundError as e:
         return str(e)
-    except sqlite3.Error as e:
+    except duckdb.Error as e:
         return f"SQL Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
