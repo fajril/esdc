@@ -429,13 +429,22 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
                     DownloadColumn(binary_units=True),
                 ) as progress,
             ):
-                task_id = progress.add_task(
-                    f"[cyan]Downloading {round(file_size / 1e6)} MB...",
-                    total=file_size,
-                    unit="B",
-                    transfer=True,
-                    speed_unit="B/s",
-                )
+                if file_size > 0:
+                    task_id = progress.add_task(
+                        f"[cyan]Downloading {round(file_size / 1e6)} MB...",
+                        total=file_size,
+                        unit="B",
+                        transfer=True,
+                        speed_unit="B/s",
+                    )
+                else:
+                    task_id = progress.add_task(
+                        "[cyan]Downloading...",
+                        total=None,
+                        unit="B",
+                        transfer=True,
+                        speed_unit="B/s",
+                    )
                 if response.headers.get("Content-Encoding") == "gzip":
                     with gzip.GzipFile(fileobj=response.raw, mode="rb") as gz:
                         while True:
