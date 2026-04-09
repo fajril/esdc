@@ -49,10 +49,22 @@ def load_data_to_db(
             raise duckdb.Error(str(e)) from e
 
         logging.debug("Creating uuid column for table %s", table_name)
-        uuid_query = _load_sql_script("create_column_uuid.sql")
-        _execute_sql_script(conn, uuid_query.replace("{table_name}", table_name))
+        _execute_sql_script(
+            conn,
+            "create_column_uuid.sql",
+            replacements={"{table_name}": table_name},
+        )
 
         if table_name == "project_resources":
+            logging.debug("Creating project_uuid column.")
+            _execute_sql_script(conn, "create_project_resources_uuid.sql")
+
+            logging.debug("Creating is_discovered column.")
+            _execute_sql_script(conn, "create_project_resources_is_discovered.sql")
+
+            logging.debug("Creating project_stage column.")
+            _execute_sql_script(conn, "create_project_resources_project_stage.sql")
+
             logging.debug("Creating table view for field, working area, nkri.")
             _execute_sql_script(conn, "create_esdc_view.sql")
 
@@ -115,7 +127,11 @@ def run_query(
     return df
 
 
-def _execute_sql_script(conn: duckdb.DuckDBPyConnection, script: str | Path) -> None:
+def _execute_sql_script(
+    conn: duckdb.DuckDBPyConnection,
+    script: str | Path,
+    replacements: dict[str, str] | None = None,
+) -> None:
     """Execute a SQL script that may contain multiple statements.
 
     Splits on ';' and executes each non-empty statement.
@@ -124,16 +140,19 @@ def _execute_sql_script(conn: duckdb.DuckDBPyConnection, script: str | Path) -> 
         conn: Active duckdb connection.
         script: Either a SQL script filename (in esdc/sql/) or
             raw SQL content to execute directly.
+        replacements: Optional dict of template replacements.
+            e.g. {"{table_name}": "project_resources"}
     """
-    if isinstance(script, Path) or (
-        isinstance(script, str)
-        and not script.strip().startswith(
-            ("CREATE", "DROP", "ALTER", "SELECT", "INSERT", "UPDATE", "DELETE")
-        )
+    if isinstance(script, Path) or not script.strip().startswith(
+        ("-", "C", "D", "A", "S", "I", "U")
     ):
         sql_content = _load_sql_script(str(script))
     else:
         sql_content = script
+
+    if replacements:
+        for placeholder, value in replacements.items():
+            sql_content = sql_content.replace(placeholder, value)
 
     statements = [s.strip() for s in sql_content.split(";") if s.strip()]
     for stmt in statements:
