@@ -2,7 +2,7 @@
 DROP TABLE IF EXISTS project_timeseries;
 
 CREATE TABLE IF NOT EXISTS project_timeseries (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     report_date TEXT,
     report_year INTEGER,
     is_offshore INTEGER,
