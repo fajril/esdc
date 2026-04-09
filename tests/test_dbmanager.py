@@ -69,7 +69,7 @@ class TestRunQuery:
         mock_conn.execute.return_value.fetchdf.return_value = mock_df
         mocker.patch("duckdb.connect", return_value=mock_conn)
 
-        result = run_query(TableName.PROJECT_RESOURCES, year=2024)
+        result = run_query(TableName.PROJECT_RESOURCES, years=[2024])
         assert result is not None
 
     def test_run_query_with_columns(self, tmp_path, mocker):

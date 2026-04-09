@@ -187,53 +187,58 @@ def show(
     where: Annotated[str | None, typer.Option(help="Column to search.")] = None,
     search: Annotated[str | None, typer.Option(help="Filter value")] = "",
     year: Annotated[
-        int | None, typer.Option(min=2019, help="Filter year value")
+        list[int] | None,
+        typer.Option(min=2019, help="Filter year value. Can specify multiple."),
     ] = None,
-    output: Annotated[int, typer.Option(help="Detail of output.")] = 0,
+    detail: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Detail level: reserves, resources, resources_risked, inplace, cumprod, rate, all. "
+            "Can specify multiple. Defaults to resources.",
+        ),
+    ] = None,
     save: bool = typer.Option(
         False,
         "--save/--no-save",
-        help="Specify whether to save the shown data to a file.",
+        help="Save output to Excel file in current directory.",
     ),
-    columns: Annotated[str, typer.Option(help="select column")] = "",
+    columns: Annotated[
+        str, typer.Option(help="Select specific columns (space-separated)")
+    ] = "",
 ):
-    """
-    Show data from a specific table.
+    """Show data from a specific table.
 
     Args:
-        table (str): The name of the table to show data from.
-        where (str, optional): The column to search. Defaults to None.
-        search (str, optional): A search keyword to apply to the selected column in where clause.
-            Defaults to "".
-        year (int, optional): A filter year value to apply to the data. Defaults to None.
-        output (int, optional): The level of detail to show in the output. Defaults to 0.
-        save (bool, optional): Whether to save the output data to a file. Defaults to False.
-        columns (str, optional): A space-separated list of column(s) to select. Defaults to "".
+        table: The name of the table to show data from.
+        where: The column to search. Defaults to None.
+        search: A search keyword to apply to the selected column.
+        year: Filter year value(s). Can specify multiple: --year 2024 --year 2025.
+        detail: Detail level(s) to show. Defaults to 'resources'.
+            Options: reserves, resources, resources_risked, inplace, cumprod, rate, all.
+        save: Whether to save the output data to an Excel file.
+        columns: A space-separated list of column(s) to select.
 
     Returns:
         None
-
-    Notes:
-        This function runs a query on the specified table with the provided filters
-        and displays the result.
-        The output is formatted to display float values with two decimal places.
-        If the save option is True, the output data will be saved to a CSV file.
     """
     if columns.strip():
         columns_splitted: list[str] | str = columns.split(" ")
     else:
         columns_splitted = ""
+
+    years_list = year if year else None
+    details_list = detail if detail else None
+
     df = run_query(
         table=TableName(table),
         where=where,
         like=search,
-        year=year,
-        output=output,
+        years=years_list,
+        details=details_list,
         columns=columns_splitted,
     )
     if df is not None:
         pd.options.display.float_format = "{:,.2f}".format
-        # Convert DataFrame to list of dicts for type compatibility with tabulate
         formatted_df = df.map(lambda x: f"{x:<,.2f}" if isinstance(x, float) else x)
         formatted_table = tabulate(
             formatted_df.to_dict("records"),
@@ -243,11 +248,11 @@ def show(
             stralign="right",
         )
         rich.print(formatted_table)
-        # Save the result to a Excel file if requested
         if save:
             today = date.today().strftime("%Y%m%d")
-            save_path = Config.get_db_dir() / f"view_{table}_{today}.xlsx"
-            df.to_excel(str(save_path), index=False, sheet_name="resources report")
+            df.to_excel(
+                f"view_{table}_{today}.xlsx", index=False, sheet_name="resources report"
+            )
     else:
         logging.warning("Unable to show data. The query is none.")
 

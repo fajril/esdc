@@ -28,11 +28,16 @@ class SQLSanitizer:
         table: TableName,
         where: str | None = None,
         like: str | None = None,
-        year: int | None = None,
-        output: int = 0,
+        years: list[int] | None = None,
+        details: list[str] | None = None,
         columns: str | list[str] = "",
     ) -> tuple[str, list[str | int]]:
         """Build a parameterized query for the specified view."""
         return _build_view_query(
-            table, output=output, where=where, like=like, year=year, columns=columns
+            table,
+            details=details,
+            where=where,
+            like=like,
+            years=years,
+            columns=columns,
         )

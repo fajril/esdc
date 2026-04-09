@@ -111,8 +111,8 @@ def run_query(
     table: TableName,
     where: str | None = None,
     like: str | None = None,
-    year: int | None = None,
-    output: int = 0,
+    years: list[int] | None = None,
+    details: list[str] | None = None,
     columns: str | list[str] = "",
 ) -> pd.DataFrame | None:
     """Execute a parameterized query on the specified table in the database.
@@ -120,9 +120,10 @@ def run_query(
     Args:
         table: The table to query.
         where: The column name for the WHERE clause. Defaults to None.
-        like: The value for the LIKE clause. Defaults to None.
-        year: The year to filter by. Defaults to None.
-        output: The output format. Defaults to 0.
+        like: The value for the ILIKE clause. Defaults to None.
+        years: The years to filter by. Defaults to None.
+        details: Detail levels to show (reserves, resources,
+            inplace, cumprod, rate, all).
         columns: The columns to select. Defaults to "".
 
     Returns:
@@ -147,7 +148,7 @@ def run_query(
 
     try:
         query, params = SQLSanitizer.build_query(
-            table, where=where, like=like, year=year, output=output, columns=columns
+            table, where=where, like=like, years=years, details=details, columns=columns
         )
         conn = duckdb.connect(str(Config.get_db_file()), read_only=True)
         try:
