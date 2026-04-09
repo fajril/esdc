@@ -187,7 +187,7 @@ class TestLoadSqlScript:
 
     def test_load_existing_script(self):
         """Test loading an existing SQL script."""
-        script = _load_sql_script("view_project_resources.sql")
+        script = _load_sql_script("create_esdc_view.sql")
         assert "SELECT" in script.upper()
 
     def test_nonexistent_script_raises(self):

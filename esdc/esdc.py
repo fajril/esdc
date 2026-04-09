@@ -40,7 +40,6 @@ import os
 from collections.abc import Iterable
 from contextlib import closing
 from datetime import date
-from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
@@ -111,7 +110,7 @@ def fetch(
     save: bool = typer.Option(
         False,
         "--save/--no-save",
-        help="Specify whether to save the fetched data to a file.",
+        help="Save fetched data to ~/.esdc/ directory.",
     ),
 ) -> None:
     """
@@ -166,13 +165,14 @@ def reload(
         If the filetype is not supported, a debug message will be printed.
         If a file is not found, a warning message will be printed.
     """
+    db_dir = Config.get_db_dir()
     for table in TABLES:
-        filename = f"{table.value}.{filetype}"
-        if Path(filename).exists():
+        filename = db_dir / f"{table.value}.{filetype}"
+        if filename.exists():
             if filetype == "csv":
-                _load_file_as_csv(filename, table.value)
+                _load_file_as_csv(str(filename), table.value)
             elif filetype == "json":
-                _load_file_as_json(filename, table.value)
+                _load_file_as_json(str(filename), table.value)
             else:
                 logging.debug(
                     "failed to load %s. Unknown %s format", filename, filetype
@@ -246,9 +246,8 @@ def show(
         # Save the result to a Excel file if requested
         if save:
             today = date.today().strftime("%Y%m%d")
-            df.to_excel(
-                f"view_{table}_{today}.xlsx", index=False, sheet_name="resources report"
-            )
+            save_path = Config.get_db_dir() / f"view_{table}_{today}.xlsx"
+            df.to_excel(str(save_path), index=False, sheet_name="resources report")
     else:
         logging.warning("Unable to show data. The query is none.")
 
@@ -295,8 +294,9 @@ def load_esdc_data(
             logging.warning("Failed to download %s data.", table.value)
             break
         if to_file:
-            logging.debug("Save data as %s.%s", table.value, filetype.value)
-            with open(table.value + "." + filetype.value, "wb") as f:
+            save_path = Config.get_db_dir() / f"{table.value}.{filetype.value}"
+            logging.debug("Save data as %s", save_path)
+            with open(save_path, "wb") as f:
                 _ = f.write(data)
 
         if filetype == FileType.CSV:

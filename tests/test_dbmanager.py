@@ -22,7 +22,7 @@ class TestLoadSqlScript:
 
     def test_load_sql_script_view(self):
         """Test loading a view SQL script."""
-        script = _load_sql_script("view_project_resources.sql")
+        script = _load_sql_script("create_esdc_view.sql")
         assert script is not None
         assert "SELECT" in script.upper()
 
