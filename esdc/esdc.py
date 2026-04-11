@@ -274,6 +274,12 @@ def _generate_embeddings() -> None:
     resolver = SemanticResolver(db_path=db_path)
 
     try:
+        # Drop existing embeddings table if it exists to ensure fresh start
+        logger.debug("Dropping existing embeddings table if present")
+        conn = resolver._get_connection()
+        conn.execute("DROP TABLE IF EXISTS project_embeddings")
+        conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
+
         # Build table
         logger.debug("Creating embeddings table in DuckDB")
         console.print("Creating embeddings table...")
@@ -287,7 +293,7 @@ def _generate_embeddings() -> None:
             console.print("[yellow]No documents found to generate embeddings[/yellow]")
             return
 
-        batch_size = 100
+        batch_size = Config.get_embedding_batch_size()
         total_batches = (total_docs + batch_size - 1) // batch_size
 
         logger.info(

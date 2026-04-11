@@ -82,6 +82,7 @@ SYNONYMS: dict[str, str] = {
     "projection": "forecast",
     "produksi kedepan": "forecast",
     "future production": "forecast",
+    "profil produksi": "forecast",
     "ramalan": "forecast",
     "puncak produksi": "peak_production",
     "peak production": "peak_production",

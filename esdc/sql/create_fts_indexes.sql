@@ -38,6 +38,7 @@ PRAGMA create_fts_index(
     'basin128',
     'operator_name',
     'project_remarks',
+    'vol_remarks',
     lower=1,
     strip_accents=1,
     overwrite=1

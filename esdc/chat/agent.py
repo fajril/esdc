@@ -15,6 +15,10 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 # Local
 from esdc.chat.context_manager import manage_context_node
 from esdc.chat.prompts import get_system_prompt
+from esdc.chat.query_classifier import (
+    QueryClassifier,
+    format_classification_for_prompt,
+)
 from esdc.chat.tools import (
     execute_cypher,
     execute_sql,
@@ -283,14 +287,52 @@ def create_agent(
             logger.warning("entity_resolution: failed - %s", e)
             return {"messages": []}
 
+    def query_classification_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
+        """Classify query and inject strategy into system prompt."""
+        messages = state["messages"]
+        if not messages:
+            return {"messages": []}
+
+        # Find last human message
+        last_human = None
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage) and msg.content:
+                last_human = msg.content
+                break
+
+        if not last_human:
+            return {"messages": []}
+
+        try:
+            classifier = QueryClassifier()
+            classification = classifier.classify(last_human)
+
+            strategy_text = format_classification_for_prompt(classification)
+
+            strategy_msg = SystemMessage(content=strategy_text)
+            logger.info(
+                "query_classification: type=%s confidence=%.2f query='%s...'",
+                classification.query_type.name,
+                classification.confidence,
+                last_human[:50],
+            )
+            return {"messages": [cast(AnyMessage, strategy_msg)]}
+
+        except Exception as e:
+            logger.warning("query_classification: failed - %s", e)
+            return {"messages": []}
+
+    # Build graph with query classification
     graph = (
         StateGraph(MessagesState)
         .add_node("manage_context", manage_context_with_length)
+        .add_node("query_classification", query_classification_node)
         .add_node("entity_resolution", entity_resolution_node)
         .add_node("agent", agent_node)
         .add_node("tools", tool_node)
         .add_edge(START, "manage_context")
-        .add_edge("manage_context", "entity_resolution")
+        .add_edge("manage_context", "query_classification")
+        .add_edge("query_classification", "entity_resolution")
         .add_edge("entity_resolution", "agent")
         .add_conditional_edges(
             "agent",

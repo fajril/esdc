@@ -75,6 +75,9 @@ class Config:
                     "agent": {"level": "DEBUG"},
                     "chat": {"level": "WARNING"},
                 },
+                "semantic_search": {
+                    "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)
+                },
             }
             with open(config_file, "w") as f:
                 yaml.dump(default_config, f, default_flow_style=False)
@@ -486,3 +489,28 @@ class Config:
         """Check if chat configuration exists."""
         config = cls._load_config() or {}
         return "providers" in config and len(config.get("providers", {})) > 0
+
+    @classmethod
+    def get_embedding_batch_size(cls) -> int:
+        """Get embedding batch size from config.
+
+        Priority:
+        1. ESDC_EMBEDDING_BATCH_SIZE environment variable
+        2. config.yaml: semantic_search.embedding_batch_size
+        3. 100 (default)
+
+        Returns:
+            Batch size for embedding generation (number of documents per batch)
+        """
+        env_batch_size = os.environ.get("ESDC_EMBEDDING_BATCH_SIZE")
+        if env_batch_size:
+            try:
+                size = int(env_batch_size)
+                if size > 0:
+                    return size
+            except ValueError:
+                pass
+
+        config = cls._load_config() or {}
+        semantic_config = config.get("semantic_search", {})
+        return semantic_config.get("embedding_batch_size", 100)

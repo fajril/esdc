@@ -56,6 +56,8 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 "province",
                 "basin128",
                 "operator_name",
+                "project_remarks",
+                "vol_remarks",
             ],
         },
         {
@@ -68,6 +70,8 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 "province",
                 "basin128",
                 "operator_name",
+                "project_remarks",
+                "vol_remarks",
             ],
         },
     ]
