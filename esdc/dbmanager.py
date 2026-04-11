@@ -36,6 +36,127 @@ def _ensure_duckdb_database(db_path: Path) -> None:
         db_path.unlink()
 
 
+def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
+    """Create Full-Text Search indexes for fast text matching."""
+    try:
+        conn.execute("INSTALL fts")
+        conn.execute("LOAD fts")
+    except duckdb.Error:
+        logging.warning("FTS extension not available, skipping FTS index creation")
+        return
+
+    fts_configs = [
+        {
+            "table": "project_resources",
+            "id_col": "uuid",
+            "index_cols": [
+                "project_name",
+                "field_name",
+                "wk_name",
+                "province",
+                "basin128",
+                "operator_name",
+            ],
+        },
+        {
+            "table": "project_timeseries",
+            "id_col": "uuid",
+            "index_cols": [
+                "project_name",
+                "field_name",
+                "wk_name",
+                "province",
+                "basin128",
+                "operator_name",
+            ],
+        },
+    ]
+
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+
+    for config in fts_configs:
+        table_name = config["table"]
+        if table_name not in existing_tables:
+            logging.debug(
+                "Skipping FTS index for %s (table not yet loaded)", table_name
+            )
+            continue
+
+        id_col = config["id_col"]
+        cols_str = ", ".join(f"'{c}'" for c in config["index_cols"])
+        try:
+            conn.execute(
+                f"PRAGMA create_fts_index('{table_name}', '{id_col}', "
+                f"{cols_str}, lower=1, strip_accents=1, overwrite=1)"
+            )
+            logging.debug("FTS index created for %s", table_name)
+        except duckdb.Error as e:
+            logging.warning("Failed to create FTS index for %s: %s", table_name, e)
+
+    btree_indexes = [
+        (
+            "idx_project_resources_report_year",
+            "project_resources",
+            "report_year DESC",
+        ),
+        (
+            "idx_project_resources_agg",
+            "project_resources",
+            "report_year, wk_id, field_id, project_class, project_level",
+        ),
+        (
+            "idx_project_timeseries_report_year",
+            "project_timeseries",
+            "report_year DESC",
+        ),
+        (
+            "idx_project_timeseries_agg",
+            "project_timeseries",
+            "report_year, wk_id, field_id, project_class, project_level, year",
+        ),
+    ]
+
+    for idx_name, table_name, columns in btree_indexes:
+        if table_name not in existing_tables:
+            continue
+        try:
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name}({columns})"
+            )
+            logging.debug("B-tree index created: %s", idx_name)
+        except duckdb.Error as e:
+            logging.warning("Failed to create B-tree index %s: %s", idx_name, e)
+
+
+def reindex_fts() -> None:
+    """Rebuild FTS and B-tree indexes on existing database tables.
+
+    Connects to the existing DuckDB database and creates/recreates
+    Full-Text Search indexes and B-tree indexes without reloading data.
+    """
+    db_path = Config.get_db_file()
+    if not db_path.exists():
+        logging.error("Database not found at %s. Run 'esdc fetch' first.", db_path)
+        return
+
+    logging.info("Rebuilding FTS indexes on %s", db_path)
+    conn = duckdb.connect(str(db_path))
+    try:
+        _create_fts_indexes(conn)
+        conn.execute("CHECKPOINT")
+        logging.info("FTS indexes rebuilt successfully.")
+    except duckdb.Error as e:
+        logging.error("Failed to rebuild FTS indexes: %s", e)
+    finally:
+        conn.close()
+
+
 def load_data_to_db(
     content: list[list[str]], header: list[str], table_name: str
 ) -> None:
@@ -98,6 +219,10 @@ def load_data_to_db(
         if table_name == "project_timeseries":
             logging.debug("Creating timeseries views for field, wa, nkri.")
             _execute_sql_script(conn, "create_timeseries_views.sql")
+
+        if table_name in ("project_resources", "project_timeseries"):
+            logging.debug("Creating FTS indexes for text search.")
+            _create_fts_indexes(conn)
 
         conn.execute("CHECKPOINT")
         logging.info("Table %s is loaded into database.", table_name)

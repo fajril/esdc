@@ -37,6 +37,7 @@ import io
 import json
 import logging
 import os
+import warnings
 from collections.abc import Iterable
 from contextlib import closing
 from datetime import date
@@ -153,22 +154,30 @@ def reload(
     filetype: Annotated[
         str | None, typer.Option(help="Options: csv, json, zip")
     ] = "csv",
+    reindex_only: Annotated[
+        bool,
+        typer.Option(
+            "--reindex-only",
+            help="Rebuild FTS/B-tree indexes only, without reloading data.",
+        ),
+    ] = False,
 ) -> None:
     """
     Reload data from binary files and save it to a file.
 
     Args:
-        filetype (str, optional): The type of file to save the data to. Defaults to "csv".
+        filetype: The type of file to save the data to. Defaults to "csv".
+        reindex_only: If True, only rebuild FTS and B-tree indexes without reloading data.
 
     Returns:
         None
-
-    Notes:
-        This function reloads data from binary files and saves it
-        to a file based on the provided filetype.
-        If the filetype is not supported, a debug message will be printed.
-        If a file is not found, a warning message will be printed.
     """
+    if reindex_only:
+        from esdc.dbmanager import reindex_fts
+
+        reindex_fts()
+        return
+
     db_dir = Config.get_db_dir()
     for table in TABLES:
         filename = db_dir / f"{table.value}.{filetype}"
@@ -410,8 +419,20 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
     try:
         logging.info("requesting data to server...")
         logging.debug(url)
+        verify_ssl = Config.get_verify_ssl()
+        if not verify_ssl:
+            warnings.warn(
+                "SSL certificate verification is disabled. "
+                "Set api.verify_ssl: true in config.yaml or ESDC_VERIFY_SSL=true "
+                "to enable certificate verification.",
+                stacklevel=2,
+            )
+            from urllib3.exceptions import InsecureRequestWarning
+
+            warnings.filterwarnings("ignore", category=InsecureRequestWarning)
+
         response = requests.get(
-            url, auth=(username, password), stream=True, timeout=300, verify=False
+            url, auth=(username, password), stream=True, timeout=300, verify=verify_ssl
         )
 
         if response.status_code == 200:
@@ -575,6 +596,36 @@ def serve(
             f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
         )
         run_server(host=host, port=port, log_level=log_level)
+
+
+@app.command(name="load-kg")
+def load_kg() -> None:
+    """Build the knowledge graph from the ESDC database.
+
+    Creates a LadybugDB graph database with nodes and relationships
+    for fields, working areas, projects, operators, and reports.
+    Uses zero-copy ATTACH to DuckDB for data loading.
+    """
+    from esdc.knowledge_graph.ladybug_manager import LadybugDBManager
+
+    db_file = Config.get_db_file()
+    if not db_file.exists():
+        rich.print("[red]Database not found. Run 'esdc fetch --save' first.[/red]")
+        return
+
+    rich.print("[bold cyan]Building knowledge graph...[/bold cyan]")
+    manager = LadybugDBManager()
+    if manager.build_graph(db_file):
+        schema_info = manager.get_schema_info()
+        table_count = len(schema_info.get("tables", []))
+        rich.print(
+            f"[green]Knowledge graph built successfully![/green] ({table_count} tables)"
+        )
+    else:
+        rich.print(
+            "[red]Failed to build knowledge graph. Check logs for details.[/red]"
+        )
+    manager.close()
 
 
 if __name__ == "__main__":

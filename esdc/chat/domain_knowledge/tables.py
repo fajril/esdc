@@ -60,11 +60,22 @@ TABLE_REMARKS_COLUMNS: dict[str, str | None] = {
     "project_resources": "project_remarks",
     "field_resources": "field_remarks",
     "wa_resources": "wa_remarks",
-    "nkri_resources": None,  # No remarks at national level
+    "nkri_resources": None,
     "project_timeseries": "project_remarks",
     "field_timeseries": "field_remarks",
     "wa_timeseries": "wa_remarks",
-    "nkri_timeseries": None,  # No remarks at national level
+    "nkri_timeseries": None,
+}
+
+TABLE_VOL_REMARKS_COLUMNS: dict[str, str | None] = {
+    "project_resources": "vol_remarks",
+    "field_resources": "field_vol_remarks",
+    "wa_resources": "wa_vol_remarks",
+    "nkri_resources": None,
+    "project_timeseries": "vol_remarks",
+    "field_timeseries": "field_vol_remarks",
+    "wa_timeseries": "wa_vol_remarks",
+    "nkri_timeseries": None,
 }
 
 # Columns that require classification context when queried
@@ -306,10 +317,7 @@ def can_use_view_for_calculation(uncertainty: str, table: str) -> bool:
         "nkri_timeseries",
     ]
 
-    if table not in valid_tables:
-        return False
-
-    return True
+    return table in valid_tables
 
 
 def get_entity_filter_column(entity_type: str, table: str) -> str | None:

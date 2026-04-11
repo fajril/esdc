@@ -1,7 +1,6 @@
 """Integration tests for fetch command."""
 
-import sqlite3
-
+import duckdb
 from typer.testing import CliRunner
 
 from esdc.esdc import app
@@ -72,9 +71,8 @@ class TestFetchJsonToDatabase:
         db_file = isolated_config / ".esdc" / "esdc.db"
         assert db_file.exists()
 
-        conn = sqlite3.connect(db_file)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM project_resources")
+        conn = duckdb.connect(str(db_file))
+        cursor = conn.execute("SELECT COUNT(*) FROM project_resources")
         count = cursor.fetchone()[0]
         conn.close()
 
@@ -104,9 +102,8 @@ class TestFetchCsvToDatabase:
         db_file = isolated_config / ".esdc" / "esdc.db"
         assert db_file.exists()
 
-        conn = sqlite3.connect(db_file)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM project_resources")
+        conn = duckdb.connect(str(db_file))
+        cursor = conn.execute("SELECT COUNT(*) FROM project_resources")
         count = cursor.fetchone()[0]
         conn.close()
 

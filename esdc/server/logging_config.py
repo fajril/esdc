@@ -95,6 +95,15 @@ def setup_server_logging(config: dict[str, Any] | None = None) -> logging.Logger
         getattr(logging, agent_level.upper(), logging.DEBUG)
     )
 
+    tools_level = config.get("tools", {}).get("level", global_level)
+    tools_logger = logging.getLogger("esdc.chat.tools")
+    tools_logger.setLevel(getattr(logging, tools_level.upper(), logging.DEBUG))
+    tools_logger.propagate = True
+
+    # Also set FTS/tools logging
+    for handler in logger.handlers:
+        tools_logger.addHandler(handler)
+
     logger.info("ESDC Server logging initialized")
 
     return logger

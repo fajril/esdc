@@ -72,7 +72,7 @@ def seeded_database(isolated_config):
 
     Returns the tmp_path so tests can reference the database file.
     """
-    import sqlite3
+    import duckdb
 
     from esdc.configs import Config
 
@@ -83,11 +83,14 @@ def seeded_database(isolated_config):
     if not db_dir.exists():
         db_dir.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(db_file) as conn:
-        cursor = conn.cursor()
-        cursor.executescript("""
+    conn = duckdb.connect(str(db_file))
+    try:
+        conn.execute("""
+            CREATE SEQUENCE IF NOT EXISTS project_resources_id_seq START 1;
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS project_resources (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER DEFAULT nextval('project_resources_id_seq'),
                 report_date TEXT,
                 report_year INTEGER,
                 report_status TEXT,
@@ -106,8 +109,7 @@ def seeded_database(isolated_config):
                 prj_igip REAL
             );
         """)
-
-        cursor.executemany(
+        conn.executemany(
             "INSERT INTO project_resources (report_date, report_year, report_status, project_name, project_stage, project_class, project_level, uncert_level, wk_name, field_name, rec_oc_risked, rec_an_risked, res_oc, res_an, prj_ioip, prj_igip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
@@ -166,6 +168,7 @@ def seeded_database(isolated_config):
                 ),
             ],
         )
-        conn.commit()
+    finally:
+        conn.close()
 
     return isolated_config

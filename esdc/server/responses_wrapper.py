@@ -386,6 +386,8 @@ async def generate_responses_stream(
         f"[RESPONSES {response_id}] START - "
         f"input_type={input_type}, messages={len(lc_messages)}"
     )
+    logger.debug(f"[TIMING] {response_id} stream_start")
+    first_ai_response = True
 
     try:
         # Stream agent events
@@ -403,6 +405,9 @@ async def generate_responses_stream(
                 logger.debug(
                     f"[RESPONSES {response_id}] EVENT #{event_counter} "
                     f"Found {len(tool_messages)} tool result(s)"
+                )
+                logger.debug(
+                    f"[TIMING] {response_id} tool_result | event=#{event_counter} count={len(tool_messages)}"
                 )
                 # Emit function_call_output items for each tool result
                 for i, tool_msg in enumerate(tool_messages):
@@ -470,6 +475,12 @@ async def generate_responses_stream(
                     f"No AIMessage extracted, skipping"
                 )
                 continue
+
+            if first_ai_response:
+                logger.debug(
+                    f"[TIMING] {response_id} first_ai_response | event=#{event_counter}"
+                )
+                first_ai_response = False
 
             # DEBUG: Log AIMessage details
             msg_id = getattr(ai_msg, "id", "no-id")
@@ -711,6 +722,9 @@ async def generate_responses_stream(
             f"events={event_counter}, output_items={len(output_items)}, "
             f"items=[{', '.join(output_summary)}], final_seq={completed_seq}"
         )
+        logger.debug(
+            f"[TIMING] {response_id} stream_complete | events={event_counter} items={len(output_items)}"
+        )
         yield format_sse_event(
             create_response_completed_event(
                 completed_seq, response_id, model, output_items
@@ -805,6 +819,7 @@ async def generate_responses_sync(
         f"[RESPONSES {response_id}] SYNC START - "
         f"input_type={input_type}, messages={len(lc_messages)}"
     )
+    logger.debug(f"[TIMING] {response_id} sync_start")
 
     try:
         # Collect all messages from agent
@@ -825,6 +840,9 @@ async def generate_responses_sync(
                 logger.debug(
                     f"[RESPONSES {response_id}] SYNC EVENT #{event_counter} "
                     f"Found {len(tool_messages)} tool result(s)"
+                )
+                logger.debug(
+                    f"[TIMING] {response_id} sync_tool_result | event=#{event_counter} count={len(tool_messages)}"
                 )
                 for i, tool_msg in enumerate(tool_messages):
                     call_id = tool_msg.get("tool_call_id", "")
@@ -938,6 +956,9 @@ async def generate_responses_sync(
             f"[RESPONSES {response_id}] SYNC COMPLETED - "
             f"events={event_counter}, output_items={len(output_items)}, "
             f"items=[{', '.join(output_summary)}]"
+        )
+        logger.debug(
+            f"[TIMING] {response_id} sync_complete | events={event_counter} items={len(output_items)}"
         )
         return create_non_streaming_response(response_id, model, output_items)
 

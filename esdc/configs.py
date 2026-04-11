@@ -59,6 +59,7 @@ class Config:
         if not config_file.exists():
             default_config = {
                 "api_url": cls.BASE_API_URL_V2,
+                "api": {"verify_ssl": True},
                 "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
                 "tool_format": "native",  # native, markdown, or auto
                 "cache": {"sql_ttl": 604800},
@@ -457,6 +458,28 @@ class Config:
             config["providers"] = {}
         config["providers"][name] = config_data
         cls._save_config(config)
+
+    @classmethod
+    def get_verify_ssl(cls) -> bool:
+        """Get SSL certificate verification setting.
+
+        Priority:
+        1. ESDC_VERIFY_SSL environment variable ('true'/'1' = True, 'false'/'0' = False)
+        2. config.yaml: api.verify_ssl
+        3. True (verify SSL by default)
+
+        Returns:
+            True to verify SSL certificates, False to skip verification
+        """
+        env_val = os.environ.get("ESDC_VERIFY_SSL", "").lower()
+        if env_val in ("true", "1", "yes"):
+            return True
+        if env_val in ("false", "0", "no"):
+            return False
+
+        config = cls._load_config() or {}
+        api_config = config.get("api", {})
+        return api_config.get("verify_ssl", True)
 
     @classmethod
     def has_chat_config(cls) -> bool:

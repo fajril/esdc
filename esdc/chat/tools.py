@@ -1,6 +1,7 @@
 # Standard library
 import asyncio
 import hashlib
+import logging
 import re
 from typing import Annotated
 
@@ -9,10 +10,110 @@ import diskcache
 import duckdb
 from langchain.tools import tool
 
+logger = logging.getLogger(__name__)
+
 # Maximum rows to return to prevent context window overflow
 MAX_QUERY_ROWS = 50
 
 _sql_cache: diskcache.Cache | None = None
+
+_FTS_TABLES: dict[str, str] = {
+    "project_resources": "fts_main_project_resources",
+    "project_timeseries": "fts_main_project_timeseries",
+}
+
+_VIEW_TO_BASE: dict[str, tuple[str, str]] = {
+    "field_resources": ("project_resources", "field_id"),
+    "wa_resources": ("project_resources", "wk_id"),
+    "field_timeseries": ("project_timeseries", "field_id"),
+    "wa_timeseries": ("project_timeseries", "wk_id"),
+}
+
+_FTS_COLUMNS: set[str] = {
+    "project_name",
+    "field_name",
+    "wk_name",
+    "province",
+    "basin128",
+    "operator_name",
+    "project_remarks",
+    "vol_remarks",
+}
+
+_ILIKE_PATTERN = re.compile(
+    r"(\w+)\s+ILIKE\s+'%([^']+)%'",
+    re.IGNORECASE,
+)
+
+
+def _rewrite_with_fts(query: str) -> str:
+    """Rewrite ILIKE '%keyword%' patterns to use FTS match_bm25() where possible.
+
+    Strategy:
+    - For base tables (project_resources, project_timeseries):
+      Add `fts_main_{table}.match_bm25(uuid, 'keyword') IS NOT NULL` condition
+    - For views (field_resources, wa_resources, etc.):
+      Add subquery filter against the base table's FTS index
+    - Always keep the original ILIKE as a secondary filter
+    """
+    ilike_matches = _ILIKE_PATTERN.findall(query)
+    if not ilike_matches:
+        return query
+
+    fts_eligible = [
+        (col, keyword) for col, keyword in ilike_matches if col in _FTS_COLUMNS
+    ]
+    if not fts_eligible:
+        return query
+
+    from_table_match = re.search(r"\bFROM\s+(\w+)", query, re.IGNORECASE)
+    if not from_table_match:
+        return query
+
+    table_name = from_table_match.group(1).lower()
+
+    if table_name in _FTS_TABLES:
+        fts_name = _FTS_TABLES[table_name]
+        keywords = " ".join(kw for _, kw in fts_eligible)
+        escape_kw = keywords.replace("'", "''")
+        fts_condition = f"{fts_name}.match_bm25(uuid, '{escape_kw}') IS NOT NULL"
+        where_match = re.search(r"\bWHERE\b", query, re.IGNORECASE)
+        if where_match:
+            insert_pos = where_match.end()
+            query = query[:insert_pos] + f" {fts_condition} AND" + query[insert_pos:]
+        else:
+            query += f" WHERE {fts_condition}"
+        logger.debug(
+            "[FTS] rewrite_base | table=%s keywords='%s'",
+            table_name,
+            keywords,
+        )
+
+    elif table_name in _VIEW_TO_BASE:
+        base_table, join_col = _VIEW_TO_BASE[table_name]
+        fts_name = _FTS_TABLES[base_table]
+        keywords = " ".join(kw for _, kw in fts_eligible)
+        escape_kw = keywords.replace("'", "''")
+        fts_subquery = (
+            f"SELECT {join_col} FROM {base_table} "
+            f"WHERE {fts_name}.match_bm25(uuid, '{escape_kw}') IS NOT NULL"
+        )
+        fts_condition = f"{join_col} IN ({fts_subquery})"
+        where_match = re.search(r"\bWHERE\b", query, re.IGNORECASE)
+        if where_match:
+            insert_pos = where_match.end()
+            query = query[:insert_pos] + f" {fts_condition} AND" + query[insert_pos:]
+        else:
+            query += f" WHERE {fts_condition}"
+        logger.debug(
+            "[FTS] rewrite_view | view=%s base=%s join=%s keywords='%s'",
+            table_name,
+            base_table,
+            join_col,
+            keywords,
+        )
+
+    return query
 
 
 def _get_cache() -> diskcache.Cache:
@@ -98,8 +199,6 @@ async def execute_sql(
 
 def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
     """Synchronous SQL execution (runs in thread pool to avoid blocking)."""
-    from esdc.configs import Config
-
     query = query.strip()
 
     if not query.lower().startswith("select"):
@@ -108,16 +207,43 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
     cache = _get_cache()
     cache_key = _get_cache_key(query)
     if cache_key in cache:
+        logger.debug("[SQL] cache_hit | query=%s", query[:80])
         return str(cache[cache_key])
+
+    logger.debug("[SQL] cache_miss | query=%s", query[:80])
+
+    original_query = query
+    rewritten = _rewrite_with_fts(query)
+    if rewritten != query:
+        logger.debug("[FTS] query_rewritten | original=%s", query[:80])
+        logger.debug("[FTS] query_rewritten | rewritten=%s", rewritten[:80])
+        query = rewritten
 
     conn = None
     try:
         conn = get_db_connection(db_path)
-        result = conn.execute(query)
+        logger.debug("[SQL] connection_established")
+
+        try:
+            result = conn.execute(query)
+            logger.debug("[SQL] query_executed")
+        except duckdb.Error as e:
+            fts_failed = "match_bm25" in query or "fts_main_" in query
+            if fts_failed and query != original_query:
+                logger.debug(
+                    "[FTS] fts_query_failed | falling back to original | error=%s",
+                    e,
+                )
+                query = original_query
+                result = conn.execute(query)
+                logger.debug("[SQL] query_executed (fallback)")
+            else:
+                raise
 
         if result.description:
             columns = [description[0] for description in result.description]
             rows = result.fetchall()
+            logger.debug("[SQL] rows_fetched | count=%d", len(rows))
 
             if not rows:
                 return "Query executed successfully. No results returned."
@@ -144,16 +270,20 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
                 )
             formatted_result += f"\n\n({total_rows} rows returned)"
 
-            cache.set(cache_key, formatted_result, expire=Config.get_sql_cache_ttl())
+            cache.set(cache_key, formatted_result)
+            logger.debug("[SQL] result_formatted_and_cached | rows=%d", total_rows)
             return formatted_result
         else:
             return "Query executed successfully. No results to display."
 
     except FileNotFoundError as e:
+        logger.debug("[SQL] file_not_found | error=%s", e)
         return str(e)
     except duckdb.Error as e:
+        logger.debug("[SQL] duckdb_error | error=%s", e)
         return f"SQL Error: {str(e)}"
     except Exception as e:
+        logger.debug("[SQL] unexpected_error | error=%s", e)
         return f"Error: {str(e)}"
     finally:
         if conn:
@@ -779,3 +909,261 @@ def search_problem_cluster(
                 "query": query,
             }
         )
+
+
+@tool("Knowledge Traversal")
+def knowledge_traversal(
+    query: Annotated[
+        str,
+        "Natural language query to resolve entities and match patterns "
+        "against the knowledge graph. Examples: 'cadangan Duri 2024', "
+        "'profil produksi Abadi', 'top 5 lapangan di WK Rokan'.",
+    ],
+    return_multiple: Annotated[
+        bool,
+        "If True, return all matching entities instead of single best match. "
+        "Use when user asks for multiple matches "
+        "(e.g., 'lapangan yang ada kata duri apa saja').",
+    ] = False,
+) -> str:
+    """Resolve entities and match query patterns from the ESDC knowledge graph.
+
+    This tool traverses the knowledge graph to identify entities
+    (fields, working areas, operators, years, uncertainty levels) and match
+    query patterns from natural language. It returns structured context that
+    enables single-shot SQL generation, reducing multi-round tool calling
+    to 1-2 calls.
+
+    WHEN TO USE:
+    - Call this BEFORE writing SQL queries to resolve entity names
+    - When user mentions specific field names, working areas, operators, or years
+    - When user asks about reserves (cadangan), production (produksi), etc.
+    - When you need to determine the correct table/view and WHERE conditions
+
+    FALLBACK: If this tool returns status='failed' or status='ambiguous',
+    fall back to multi-round tool calling (get_schema,
+    get_recommended_table, resolve_uncertainty_level, etc.)
+
+    Returns:
+    JSON string with:
+    - status: "success", "ambiguous", or "failed"
+    - entities: List of resolved entities with type, id, name, confidence
+    - pattern: Best matching query pattern from graph schema
+    - suggested_table: Recommended table/view for the query
+    - where_conditions: Suggested WHERE clauses
+    - required_columns: Columns likely needed
+    - confidence: Overall confidence score (0.0-1.0)
+
+    Examples:
+    - knowledge_traversal("cadangan Duri 2024")
+      → Entity: Field=Duri, Year=2024, Pattern: cadangan, Table: field_resources
+    - knowledge_traversal("profil produksi Abadi")
+      → Entity: Field=Abadi, Pattern: profil_produksi, Table: field_timeseries
+    - knowledge_traversal("isu water cut di lapangan Duri")
+      → Entity: Field=Duri, Pattern: issues_remarks, Table: field_resources
+    """
+    import json
+
+    from esdc.knowledge_graph.resolver import KnowledgeTraversalResolver
+
+    try:
+        conn = get_db_connection()
+        try:
+            resolver = KnowledgeTraversalResolver(db=conn)
+            result = resolver.resolve(query=query, return_multiple=return_multiple)
+            result["query"] = query
+
+            if result.get("pattern") and result["pattern"].get("cypher_template"):
+                result["cypher_available"] = True
+            else:
+                result["cypher_available"] = False
+
+            return json.dumps(result, indent=2, ensure_ascii=False)
+        finally:
+            conn.close()
+
+    except FileNotFoundError as e:
+        return json.dumps(
+            {
+                "status": "failed",
+                "fallback": "multi_round",
+                "message": str(e),
+                "query": query,
+            }
+        )
+    except Exception as e:
+        logger.error("[KG] traversal_error | query=%s error=%s", query, e)
+        return json.dumps(
+            {
+                "status": "failed",
+                "fallback": "multi_round",
+                "message": f"Knowledge traversal error: {str(e)}",
+                "query": query,
+            }
+        )
+
+
+@tool("Cypher Executor")
+async def execute_cypher(
+    query: Annotated[
+        str,
+        "A valid Cypher query to execute against the ESDC knowledge graph. "
+        "Use this for graph traversal queries like finding nearby fields, "
+        "tracing relationships, or multi-hop entity resolution.",
+    ],
+) -> str:
+    """Execute a Cypher query against the ESDC knowledge graph.
+
+    Use this tool when knowledge_traversal indicates cypher_available=True
+    or when you need graph traversal (spatial proximity, relationships).
+
+    Supports parameterized queries using $param_name syntax.
+
+    Returns:
+    JSON string with:
+    - status: "success" or "error"
+    - results: List of result rows as dictionaries
+    - row_count: Number of rows returned
+
+    Examples:
+    - execute_cypher("MATCH (f:Field {field_name: 'Duri'}) RETURN f.field_name, f.field_lat")
+    - execute_cypher("MATCH (f1:Field)-[:LOCATED_NEAR]->(f2:Field) WHERE f1.field_name = 'Duri' AND f2.distance_km < 20 RETURN f2.field_name, f2.distance_km")
+    """
+    import json
+
+    try:
+        return await asyncio.get_event_loop().run_in_executor(
+            None, _execute_cypher_sync, query
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+def _execute_cypher_sync(query: str) -> str:
+    """Synchronous Cypher execution."""
+    import json
+
+    from esdc.knowledge_graph.ladybug_manager import LadybugDBManager
+
+    manager = LadybugDBManager()
+    if not manager.initialize():
+        return json.dumps(
+            {
+                "status": "error",
+                "message": "Knowledge graph not available. Run 'esdc load --kg' first.",
+            }
+        )
+
+    try:
+        results = manager.execute_cypher(query)
+        return json.dumps(
+            {
+                "status": "success",
+                "results": results,
+                "row_count": len(results),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)})
+    finally:
+        manager.close()
+
+
+@tool("Spatial Resolver")
+def resolve_spatial(
+    query_type: Annotated[
+        str,
+        "Type of spatial query: 'proximity' (fields near a field), "
+        "'working_area' (fields in a working area), 'distance' (between two fields), "
+        "or 'coordinates' (get field coordinates).",
+    ],
+    target: Annotated[
+        str,
+        "For proximity: field name to find nearby fields. "
+        "For working_area: working area name. "
+        "For distance: comma-separated 'field1, field2'. "
+        "For coordinates: field name.",
+    ],
+    radius_km: Annotated[
+        float,
+        "For proximity queries: search radius in kilometers (default: 20).",
+    ] = 20.0,
+    limit: Annotated[
+        int,
+        "Maximum number of results to return (default: 10).",
+    ] = 10,
+) -> str:
+    """Execute spatial queries using DuckDB's native spatial capabilities.
+
+    Use this tool for:
+    - Finding fields within a radius of another field
+    - Getting fields in a working area
+    - Calculating distance between fields
+    - Getting field coordinates
+
+    Returns:
+    JSON string with:
+    - status: "success", "no_results", "not_found", or "error"
+    - nearby_fields: List of fields with distances (for proximity queries)
+    - fields: List of fields (for working_area queries)
+    - distance_km: Distance value (for distance queries)
+    - latitude/longitude: Coordinates (for coordinate queries)
+
+    Examples:
+    - resolve_spatial("proximity", "Duri", 20) -> Fields within 20km of Duri
+    - resolve_spatial("working_area", "Rokan") -> All fields in Rokan working area
+    - resolve_spatial("distance", "Duri, Bekapai") -> Distance between Duri and Bekapai
+    - resolve_spatial("coordinates", "Duri") -> Lat/long of Duri field
+    """
+    import json
+
+    from esdc.knowledge_graph.spatial_resolver import SpatialResolver
+
+    resolver = SpatialResolver()
+
+    try:
+        if query_type == "proximity":
+            result = resolver.find_fields_near_field(
+                field_name=target, radius_km=radius_km, limit=limit
+            )
+        elif query_type == "working_area":
+            result = resolver.find_fields_in_working_area(wk_name=target, limit=limit)
+        elif query_type == "distance":
+            parts = [p.strip() for p in target.split(",")]
+            if len(parts) != 2:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": "Distance query requires 'field1, field2' format",
+                    }
+                )
+            result = resolver.calculate_distance(from_field=parts[0], to_field=parts[1])
+        elif query_type == "coordinates":
+            result = resolver.get_field_coordinates(field_name=target)
+        else:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": f"Unknown query_type: {query_type}. "
+                    "Use: proximity, working_area, distance, or coordinates",
+                }
+            )
+
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(
+            "[Spatial] query_failed | type=%s target=%s error=%s", query_type, target, e
+        )
+        return json.dumps(
+            {
+                "status": "error",
+                "message": str(e),
+                "query_type": query_type,
+                "target": target,
+            }
+        )
+    finally:
+        resolver.close()

@@ -60,7 +60,7 @@ class TestShowCommand:
         """Show with --columns should select specific fields."""
         result = runner.invoke(
             app,
-            ["show", "project_resources", "--columns", "project_name", "--output", "4"],
+            ["show", "project_resources", "--columns", "project_name"],
         )
 
         assert result.exit_code == 0
