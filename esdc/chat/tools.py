@@ -1193,9 +1193,10 @@ def semantic_search(
 
     Returns:
     JSON string with:
-    - status: "success", "no_results", "not_available", or "error"
+    - status: "success", "no_results", "not_available", "fallback_to_fts", or "error"
     - results: List of similar documents with similarity scores
     - count: Number of results
+    - message: Additional information (e.g., fallback explanation)
 
     Examples:
     - semantic_search("proyek dengan reservoir kompleks") -> Find projects with complex reservoir
@@ -1214,6 +1215,12 @@ def semantic_search(
             table_name=table_filter,
         )
 
+        # If embeddings not available, fallback to FTS search
+        if result.get("status") == "not_available":
+            logger.info("[Semantic] embeddings not available, falling back to FTS")
+            fallback_result = _search_remarks_via_fts(query, limit, table_filter)
+            return json.dumps(fallback_result, indent=2, ensure_ascii=False)
+
         return json.dumps(result, indent=2, ensure_ascii=False)
 
     except Exception as e:
@@ -1227,3 +1234,102 @@ def semantic_search(
         )
     finally:
         resolver.close()
+
+
+def _search_remarks_via_fts(
+    query: str,
+    limit: int = 10,
+    table_name: str | None = None,
+) -> dict:
+    """Fallback FTS search on project_remarks when embeddings unavailable.
+
+    Searches project_remarks using FTS match_bm25 for keyword-based results.
+    """
+    import duckdb
+
+    from esdc.configs import Config
+
+    target_table = table_name or "project_resources"
+    db_file = Config.get_db_file()
+
+    if not db_file.exists():
+        return {
+            "status": "error",
+            "message": "Database file not found. Run 'esdc fetch --save' first.",
+            "results": [],
+            "count": 0,
+        }
+
+    try:
+        # Use FTS to search project_remarks
+        escaped_query = query.replace("'", "''")
+        sql = f"""
+            SELECT
+                pr.uuid,
+                pr.field_name,
+                pr.project_name,
+                SUBSTRING(pr.project_remarks, 1, 300) as source_text,
+                fts_main_{target_table}.match_bm25(
+                    pr.uuid, '{escaped_query}'
+                ) as relevance_score
+            FROM {target_table} pr
+            JOIN fts_main_{target_table} ON fts_main_{target_table}.uuid = pr.uuid
+            WHERE fts_main_{target_table}.match_bm25(
+                pr.uuid, '{escaped_query}'
+            ) IS NOT NULL
+            ORDER BY relevance_score DESC
+            LIMIT {limit}
+        """
+
+        conn = duckdb.connect(str(db_file), read_only=True)
+        try:
+            df = conn.execute(sql).fetchdf()
+        finally:
+            conn.close()
+
+        if df is None or df.empty:
+            return {
+                "status": "no_results",
+                "message": "No matching documents found via FTS fallback.",
+                "results": [],
+                "count": 0,
+            }
+
+        # Convert to results format matching semantic search
+        results = []
+        for _, row in df.iterrows():
+            results.append(
+                {
+                    "uuid": row.get("uuid", ""),
+                    "field_name": row.get("field_name", ""),
+                    "project_name": row.get("project_name", ""),
+                    "source_text": row.get("source_text", "")[:200] + "..."
+                    if len(str(row.get("source_text", ""))) > 200
+                    else str(row.get("source_text", "")),
+                    "similarity": round(float(row.get("relevance_score", 0)), 4),
+                }
+            )
+
+        return {
+            "status": "fallback_to_fts",
+            "message": (
+                "Semantic search not available (embeddings not generated). "
+                "Using keyword-based FTS search as fallback. "
+                "Run 'esdc reload --embeddings-only' to enable semantic search."
+            ),
+            "count": len(results),
+            "results": results,
+        }
+
+    except Exception as e:
+        logger.error("[Semantic] FTS fallback failed | query=%s error=%s", query, e)
+        return {
+            "status": "not_available",
+            "message": (
+                "Semantic search not available and FTS fallback failed. "
+                f"Error: {e}. "
+                "Run 'esdc reload --embeddings-only' to enable semantic search."
+            ),
+            "results": [],
+            "count": 0,
+        }

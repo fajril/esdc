@@ -50,13 +50,13 @@ import typer
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import (
+    BarColumn,
     DownloadColumn,
     Progress,
-    TransferSpeedColumn,
-    BarColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
+    TransferSpeedColumn,
 )
 from tabulate import tabulate
 
@@ -238,8 +238,8 @@ def reload(
 def _generate_embeddings() -> None:
     """Generate semantic embeddings for project_remarks with progress bar."""
     from esdc.configs import Config
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
     from esdc.knowledge_graph.embedding_manager import EmbeddingManager
+    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
 
     logger = logging.getLogger(__name__)
 
@@ -279,15 +279,8 @@ def _generate_embeddings() -> None:
         console.print("Creating embeddings table...")
         resolver.build_embeddings_table()
 
-        # Count total documents first
-        import duckdb
-
-        conn = duckdb.connect(str(db_path), read_only=True)
-        total_result = conn.execute(
-            "SELECT COUNT(*) FROM project_resources WHERE project_remarks IS NOT NULL AND LENGTH(project_remarks) > 0"
-        ).fetchone()
-        total_docs = total_result[0] if total_result else 0
-        conn.close()
+        # Count total documents first (using resolver's connection)
+        total_docs = resolver.count_documents_with_remarks("project_resources")
 
         if total_docs == 0:
             logger.info("No documents with project_remarks found")

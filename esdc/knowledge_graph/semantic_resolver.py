@@ -88,6 +88,27 @@ class SemanticResolver:
             logger.error("[Semantic] failed to create table | error=%s", e)
             return False
 
+    def count_documents_with_remarks(
+        self,
+        table_name: str = "project_resources",
+    ) -> int:
+        """Count documents with non-empty project_remarks.
+
+        Args:
+            table_name: Source table name
+
+        Returns:
+            Number of documents with project_remarks
+        """
+        conn = self._get_connection()
+        result = conn.execute(f"""
+            SELECT COUNT(*)
+            FROM {table_name}
+            WHERE project_remarks IS NOT NULL
+                AND LENGTH(project_remarks) > 0
+        """).fetchone()
+        return result[0] if result else 0
+
     def generate_and_store_embeddings(
         self,
         table_name: str = "project_resources",
