@@ -47,9 +47,12 @@ import pandas as pd
 import requests
 import rich
 import typer
+from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import DownloadColumn, Progress, TransferSpeedColumn
 from tabulate import tabulate
+
+console = Console()
 
 from esdc.chat.app import ESDCChatApp
 from esdc.commands.provider import provider_app
@@ -230,10 +233,16 @@ def _generate_embeddings() -> None:
     from esdc.knowledge_graph.semantic_resolver import SemanticResolver
     from esdc.knowledge_graph.embedding_manager import EmbeddingManager
 
+    logger = logging.getLogger(__name__)
+
+    logger.info("Starting semantic embeddings generation process")
     console.print("[bold blue]Generating Semantic Embeddings[/bold blue]")
 
     db_path = Config.get_db_file()
     if not db_path.exists():
+        logger.warning(
+            f"Database not found at {db_path}, skipping embeddings generation"
+        )
         console.print(
             f"[yellow]Warning: Database not found at {db_path}, skipping embeddings[/yellow]"
         )
@@ -241,8 +250,10 @@ def _generate_embeddings() -> None:
 
     # Check if Ollama is available
     embedding_manager = EmbeddingManager()
+    logger.info(f"Initialized embedding manager with model: {embedding_manager.model}")
 
     if not embedding_manager.health_check():
+        logger.warning("Ollama not available, cannot generate embeddings")
         console.print(
             "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"
         )
@@ -251,14 +262,19 @@ def _generate_embeddings() -> None:
         )
         return
 
+    logger.info(f"Ollama is available, model {embedding_manager.model} is loaded")
     resolver = SemanticResolver(db_path=db_path)
 
     try:
         # Build table
+        logger.debug("Creating embeddings table in DuckDB")
         console.print("Creating embeddings table...")
         resolver.build_embeddings_table()
 
         # Generate embeddings
+        logger.info(
+            f"Starting embedding generation for project_resources with batch_size=100"
+        )
         console.print(f"Generating embeddings with {embedding_manager.model}...")
         result = resolver.generate_and_store_embeddings(
             table_name="project_resources",
@@ -266,6 +282,7 @@ def _generate_embeddings() -> None:
         )
 
         if result["status"] == "success":
+            logger.info(f"Successfully generated {result['count']} embeddings")
             console.print(
                 f"[green]Success![/green] Generated {result['count']} embeddings"
             )
@@ -273,11 +290,15 @@ def _generate_embeddings() -> None:
                 "[dim]Semantic search is now available via 'semantic_search' tool[/dim]"
             )
         else:
+            logger.warning(
+                f"Embedding generation completed with warning: {result.get('message')}"
+            )
             console.print(
                 f"[yellow]Warning: {result.get('message', 'Unknown error')}[/yellow]"
             )
 
     except Exception as e:
+        logger.error(f"Embedding generation failed: {e}", exc_info=True)
         console.print(f"[yellow]Warning: Embedding generation failed: {e}[/yellow]")
         console.print("[dim]Semantic search will not be available[/dim]")
     finally:
