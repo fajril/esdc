@@ -3,7 +3,7 @@ import asyncio
 import hashlib
 import logging
 import re
-from typing import Annotated
+from typing import Annotated, Any
 
 # Third-party
 import diskcache
@@ -1179,9 +1179,61 @@ def semantic_search(
         int,
         "Maximum number of results (default: 10).",
     ] = 10,
-    table_filter: Annotated[
+    report_year: Annotated[
+        int | None,
+        "Filter by report year (e.g., 2024). Optional.",
+    ] = None,
+    field_name: Annotated[
         str | None,
-        "Filter by specific table (e.g., 'project_resources'). Optional.",
+        "Filter by field name (ILIKE pattern, e.g., '%Duri%'). Optional.",
+    ] = None,
+    pod_name: Annotated[
+        str | None,
+        "Filter by POD name (ILIKE pattern, e.g., '%POD%'). Optional.",
+    ] = None,
+    wk_name: Annotated[
+        str | None,
+        "Filter by working area name (ILIKE pattern, e.g., '%Rokan%'). Optional.",
+    ] = None,
+    province: Annotated[
+        str | None,
+        "Filter by province (ILIKE pattern, e.g., '%Riau%'). Optional.",
+    ] = None,
+    basin128: Annotated[
+        str | None,
+        "Filter by basin (ILIKE pattern, e.g., '%Sumatera%'). Optional.",
+    ] = None,
+    project_class: Annotated[
+        str | None,
+        "Filter by project class (ILIKE pattern, e.g., '%Contigent%'). Optional.",
+    ] = None,
+    project_stage: Annotated[
+        str | None,
+        "Filter by project stage (ILIKE pattern, e.g., '%Exploration%'). Optional.",
+    ] = None,
+    project_level: Annotated[
+        str | None,
+        "Filter by project level (ILIKE pattern, e.g., '%E0%'). Optional.",
+    ] = None,
+    operator_name: Annotated[
+        str | None,
+        "Filter by operator name (ILIKE pattern, e.g., '%Pertamina%'). Optional.",
+    ] = None,
+    operator_group: Annotated[
+        str | None,
+        "Filter by operator group (ILIKE pattern, e.g., '%Pertamina Hulu%'). Optional.",
+    ] = None,
+    wk_subgroup: Annotated[
+        str | None,
+        "Filter by working area subgroup (ILIKE pattern, e.g., '%Upstream%'). Optional.",
+    ] = None,
+    wk_regionisasi_ngi: Annotated[
+        str | None,
+        "Filter by NGI region (ILIKE pattern, e.g., '%Sumatera%'). Optional.",
+    ] = None,
+    wk_area_perwakilan_skkmigas: Annotated[
+        str | None,
+        "Filter by SKK Migas region (ILIKE pattern, e.g., '%Duri%'). Optional.",
     ] = None,
 ) -> str:
     """Search for documents by semantic similarity to the query.
@@ -1190,17 +1242,20 @@ def semantic_search(
     - User asks about concepts, meanings, or topics (not exact keywords)
     - User queries like: "proyek dengan masalah X", "lapangan yang sulit"
     - FTS returns no results or insufficient results
+    - User wants to filter by year, field, working area, etc.
 
     Returns:
     JSON string with:
     - status: "success", "no_results", "not_available", "fallback_to_fts", or "error"
-    - results: List of similar documents with similarity scores
+    - results: List of similar documents with similarity scores and contextual columns
     - count: Number of results
     - message: Additional information (e.g., fallback explanation)
 
     Examples:
     - semantic_search("proyek dengan reservoir kompleks") -> Find projects with complex reservoir
     - semantic_search("masalah produksi", 5) -> Top 5 production issues
+    - semantic_search("tidak ekonomis", report_year=2024) -> Economic issues in 2024
+    - semantic_search("kendala teknis", field_name="%Duri%") -> Technical issues in Duri field
     """
     import json
 
@@ -1208,17 +1263,49 @@ def semantic_search(
 
     resolver = SemanticResolver()
 
+    # Build filters dict from optional parameters
+    filters: dict[str, Any] = {}
+    if report_year is not None:
+        filters["report_year"] = report_year
+    if field_name is not None:
+        filters["field_name"] = field_name
+    if pod_name is not None:
+        filters["pod_name"] = pod_name
+    if wk_name is not None:
+        filters["wk_name"] = wk_name
+    if province is not None:
+        filters["province"] = province
+    if basin128 is not None:
+        filters["basin128"] = basin128
+    if project_class is not None:
+        filters["project_class"] = project_class
+    if project_stage is not None:
+        filters["project_stage"] = project_stage
+    if project_level is not None:
+        filters["project_level"] = project_level
+    if operator_name is not None:
+        filters["operator_name"] = operator_name
+    if operator_group is not None:
+        filters["operator_group"] = operator_group
+    if wk_subgroup is not None:
+        filters["wk_subgroup"] = wk_subgroup
+    if wk_regionisasi_ngi is not None:
+        filters["wk_regionisasi_ngi"] = wk_regionisasi_ngi
+    if wk_area_perwakilan_skkmigas is not None:
+        filters["wk_area_perwakilan_skkmigas"] = wk_area_perwakilan_skkmigas
+
     try:
         result = resolver.search_by_text(
             query=query,
             limit=limit,
-            table_name=table_filter,
+            filters=filters if filters else None,
         )
 
         # If embeddings not available, fallback to FTS search
         if result.get("status") == "not_available":
             logger.info("[Semantic] embeddings not available, falling back to FTS")
-            fallback_result = _search_remarks_via_fts(query, limit, table_filter)
+            # For FTS fallback, we can't apply all filters, but we can try with basic ones
+            fallback_result = _search_remarks_via_fts(query, limit, "project_resources")
             return json.dumps(fallback_result, indent=2, ensure_ascii=False)
 
         return json.dumps(result, indent=2, ensure_ascii=False)
