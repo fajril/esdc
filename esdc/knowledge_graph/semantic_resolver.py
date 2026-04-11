@@ -62,6 +62,7 @@ class SemanticResolver:
 
         Creates table to store pre-computed embeddings for
         project_remarks with contextual columns for filtering.
+        Detects embedding dimension dynamically from the model.
 
         Returns:
             True if successful
@@ -91,8 +92,15 @@ class SemanticResolver:
                 # Table doesn't exist or other error, proceed normally
                 pass
 
+            # Detect embedding dimension by generating a test embedding
+            logger.info("[Semantic] detecting embedding dimension from model")
+            test_embedding = self._embedding_manager.generate_embedding("test")
+            embedding_dim = len(test_embedding)
+            logger.info(f"[Semantic] detected embedding dimension: {embedding_dim}")
+
             # Create table for embeddings with contextual columns
             # Primary key is (project_id, report_year) - one embedding per project per year
+            # embedding column uses fixed-size array FLOAT[N] required by HNSW index
             conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.EMBEDDING_TABLE} (
                     project_id VARCHAR NOT NULL,
@@ -113,12 +121,14 @@ class SemanticResolver:
                     wk_regionisasi_ngi VARCHAR,
                     wk_area_perwakilan_skkmigas VARCHAR,
                     project_remarks TEXT,
-                    embedding FLOAT[],
+                    embedding FLOAT[{embedding_dim}],
                     PRIMARY KEY (project_id, report_year)
                 )
             """)
 
-            logger.info("[Semantic] embeddings table created")
+            logger.info(
+                "[Semantic] embeddings table created with dimension %d", embedding_dim
+            )
             return True
 
         except Exception as e:
@@ -129,17 +139,20 @@ class SemanticResolver:
         self,
         table_name: str = "project_resources",
     ) -> int:
-        """Count documents with non-empty project_remarks.
+        """Count distinct documents with non-empty project_remarks.
+
+        Uses DISTINCT to match what generate_and_store_embeddings will actually
+        process (one embedding per project per year, deduplicated across uncert_levels).
 
         Args:
             table_name: Source table name
 
         Returns:
-            Number of documents with project_remarks
+            Number of distinct documents with project_remarks
         """
         conn = self._get_connection()
         result = conn.execute(f"""
-            SELECT COUNT(*)
+            SELECT COUNT(DISTINCT project_id || '-' || CAST(report_year AS VARCHAR))
             FROM {table_name}
             WHERE project_remarks IS NOT NULL
                 AND LENGTH(project_remarks) > 0
