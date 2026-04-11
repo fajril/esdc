@@ -232,7 +232,9 @@ class SemanticResolver:
                     "results": [],
                 }
 
-            # Build query
+            # Build query using manual cosine similarity calculation
+            # DuckDB's array_cosine_similarity requires fixed-size arrays
+            # We compute it manually: dot_product / (norm_a * norm_b)
             if table_name:
                 sql = f"""
                     SELECT 
@@ -240,13 +242,20 @@ class SemanticResolver:
                         field_name,
                         project_name,
                         source_text,
-                        array_cosine_similarity(embedding, ?::FLOAT[]) as similarity
+                        list_dot_product(embedding, ?::FLOAT[]) / 
+                        (sqrt(list_dot_product(embedding, embedding)) * sqrt(list_dot_product(?::FLOAT[], ?::FLOAT[]))) as similarity
                     FROM {self.EMBEDDING_TABLE}
                     WHERE table_name = ?
                     ORDER BY similarity DESC
                     LIMIT ?
                 """
-                params = [query_embedding, table_name, limit]
+                params = [
+                    query_embedding,
+                    query_embedding,
+                    query_embedding,
+                    table_name,
+                    limit,
+                ]
             else:
                 sql = f"""
                     SELECT 
@@ -254,12 +263,13 @@ class SemanticResolver:
                         field_name,
                         project_name,
                         source_text,
-                        array_cosine_similarity(embedding, ?::FLOAT[]) as similarity
+                        list_dot_product(embedding, ?::FLOAT[]) / 
+                        (sqrt(list_dot_product(embedding, embedding)) * sqrt(list_dot_product(?::FLOAT[], ?::FLOAT[]))) as similarity
                     FROM {self.EMBEDDING_TABLE}
                     ORDER BY similarity DESC
                     LIMIT ?
                 """
-                params = [query_embedding, limit]
+                params = [query_embedding, query_embedding, query_embedding, limit]
 
             result = conn.execute(sql, params).fetchall()
 

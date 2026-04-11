@@ -18,7 +18,7 @@ def test_search_by_text():
     with patch("esdc.knowledge_graph.semantic_resolver.EmbeddingManager") as MockEmb:
         # Mock embedding manager
         mock_emb = Mock()
-        mock_emb.generate_embedding.return_value = [0.1] * 4096
+        mock_emb.generate_embedding.return_value = [0.1] * 1024
         MockEmb.return_value = mock_emb
 
         resolver = SemanticResolver()

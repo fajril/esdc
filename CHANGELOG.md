@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Semantic Search**: Full semantic search implementation for project_remarks
+  - EmbeddingManager: Ollama-based embedding generation (default: qwen3-embedding:0.6b)
+  - SemanticResolver: DuckDB VSS with HNSW index for fast similarity search
+  - semantic_search tool: LLM-accessible tool for concept-based queries
+  - Integrated with esdc reload: automatic embedding generation on data reload
+  - Commands: esdc reload --no-embeddings, esdc reload --embeddings-only
+  - Configurable via embedding_model in ~/.esdc/config.yaml
+  - 37 tests for semantic search components
+
 - **Configuration**: Added `tool_format` config option to config.yaml
   - Supports "native" (default), "markdown", or "auto" values
   - Priority: Environment variable `ESDC_TOOL_FORMAT` > config.yaml > default
