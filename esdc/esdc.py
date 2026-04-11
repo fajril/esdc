@@ -49,7 +49,15 @@ import rich
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
-from rich.progress import DownloadColumn, Progress, TransferSpeedColumn
+from rich.progress import (
+    DownloadColumn,
+    Progress,
+    TransferSpeedColumn,
+    BarColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from tabulate import tabulate
 
 console = Console()
@@ -228,7 +236,7 @@ def reload(
 
 
 def _generate_embeddings() -> None:
-    """Generate semantic embeddings for project_remarks."""
+    """Generate semantic embeddings for project_remarks with progress bar."""
     from esdc.configs import Config
     from esdc.knowledge_graph.semantic_resolver import SemanticResolver
     from esdc.knowledge_graph.embedding_manager import EmbeddingManager
@@ -271,15 +279,55 @@ def _generate_embeddings() -> None:
         console.print("Creating embeddings table...")
         resolver.build_embeddings_table()
 
-        # Generate embeddings
+        # Count total documents first
+        import duckdb
+
+        conn = duckdb.connect(str(db_path), read_only=True)
+        total_result = conn.execute(
+            "SELECT COUNT(*) FROM project_resources WHERE project_remarks IS NOT NULL AND LENGTH(project_remarks) > 0"
+        ).fetchone()
+        total_docs = total_result[0] if total_result else 0
+        conn.close()
+
+        if total_docs == 0:
+            logger.info("No documents with project_remarks found")
+            console.print("[yellow]No documents found to generate embeddings[/yellow]")
+            return
+
+        batch_size = 100
+        total_batches = (total_docs + batch_size - 1) // batch_size
+
         logger.info(
-            f"Starting embedding generation for project_resources with batch_size=100"
+            f"Starting embedding generation: {total_docs} documents, {total_batches} batches, batch_size={batch_size}"
         )
-        console.print(f"Generating embeddings with {embedding_manager.model}...")
-        result = resolver.generate_and_store_embeddings(
-            table_name="project_resources",
-            batch_size=100,
-        )
+
+        # Create progress bar
+        with Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=40),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            "•",
+            TextColumn("[green]{task.completed}/{task.total} docs"),
+            "•",
+            TimeElapsedColumn(),
+            "•",
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                f"Processing with {embedding_manager.model}", total=total_docs
+            )
+
+            # Progress callback function
+            def update_progress(current: int, total: int) -> None:
+                progress.update(task, completed=current)
+
+            # Generate embeddings with progress tracking
+            result = resolver.generate_and_store_embeddings(
+                table_name="project_resources",
+                batch_size=batch_size,
+                progress_callback=update_progress,
+            )
 
         if result["status"] == "success":
             logger.info(f"Successfully generated {result['count']} embeddings")

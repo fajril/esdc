@@ -92,12 +92,14 @@ class SemanticResolver:
         self,
         table_name: str = "project_resources",
         batch_size: int = 100,
+        progress_callback: callable | None = None,
     ) -> dict[str, Any]:
         """Generate and store embeddings for all documents.
 
         Args:
             table_name: Source table name
             batch_size: Number of documents to process per batch
+            progress_callback: Optional callback function(progress: int, total: int)
 
         Returns:
             Dict with status and count
@@ -148,6 +150,10 @@ class SemanticResolver:
                     i // batch_size + 1,
                     (total + batch_size - 1) // batch_size,
                 )
+
+                # Call progress callback if provided
+                if progress_callback:
+                    progress_callback(min(i + batch_size, total), total)
 
             # Create HNSW index
             self._create_hnsw_index()
