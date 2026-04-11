@@ -1167,3 +1167,63 @@ def resolve_spatial(
         )
     finally:
         resolver.close()
+
+
+@tool("Semantic Search")
+def semantic_search(
+    query: Annotated[
+        str,
+        "Natural language query to search for semantically similar documents.",
+    ],
+    limit: Annotated[
+        int,
+        "Maximum number of results (default: 10).",
+    ] = 10,
+    table_filter: Annotated[
+        str | None,
+        "Filter by specific table (e.g., 'project_resources'). Optional.",
+    ] = None,
+) -> str:
+    """Search for documents by semantic similarity to the query.
+
+    Use this tool when:
+    - User asks about concepts, meanings, or topics (not exact keywords)
+    - User queries like: "proyek dengan masalah X", "lapangan yang sulit"
+    - FTS returns no results or insufficient results
+
+    Returns:
+    JSON string with:
+    - status: "success", "no_results", "not_available", or "error"
+    - results: List of similar documents with similarity scores
+    - count: Number of results
+
+    Examples:
+    - semantic_search("proyek dengan reservoir kompleks") -> Find projects with complex reservoir
+    - semantic_search("masalah produksi", 5) -> Top 5 production issues
+    """
+    import json
+
+    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+
+    resolver = SemanticResolver()
+
+    try:
+        result = resolver.search_by_text(
+            query=query,
+            limit=limit,
+            table_name=table_filter,
+        )
+
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error("[Semantic] tool failed | query=%s error=%s", query, e)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": str(e),
+                "query": query,
+            }
+        )
+    finally:
+        resolver.close()

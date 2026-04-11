@@ -27,6 +27,7 @@ from esdc.chat.tools import (
     resolve_spatial,
     resolve_uncertainty_level,
     search_problem_cluster,
+    semantic_search,
 )
 
 # Logger is configured by app.py (runs first)
@@ -109,6 +110,7 @@ def create_agent(
         tools = [
             knowledge_traversal,
             resolve_spatial,
+            semantic_search,
             execute_cypher,
             execute_sql,
             get_schema,

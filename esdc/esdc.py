@@ -161,23 +161,49 @@ def reload(
             help="Rebuild FTS/B-tree indexes only, without reloading data.",
         ),
     ] = False,
+    no_embeddings: Annotated[
+        bool,
+        typer.Option(
+            "--no-embeddings",
+            help="Skip semantic embeddings generation.",
+        ),
+    ] = False,
+    embeddings_only: Annotated[
+        bool,
+        typer.Option(
+            "--embeddings-only",
+            help="Only regenerate embeddings, skip data reload.",
+        ),
+    ] = False,
 ) -> None:
-    """
-    Reload data from binary files and save it to a file.
+    """Reload data from binary files and save it to a file.
+
+    By default, also generates semantic embeddings for project_remarks.
+    Use --no-embeddings to skip embedding generation.
+    Use --embeddings-only to only regenerate embeddings without reloading data.
 
     Args:
         filetype: The type of file to save the data to. Defaults to "csv".
         reindex_only: If True, only rebuild FTS and B-tree indexes without reloading data.
+        no_embeddings: If True, skip semantic embeddings generation.
+        embeddings_only: If True, only regenerate embeddings without reloading data.
 
     Returns:
         None
     """
+    # Handle embeddings-only mode
+    if embeddings_only:
+        _generate_embeddings()
+        return
+
+    # Handle reindex-only mode
     if reindex_only:
         from esdc.dbmanager import reindex_fts
 
         reindex_fts()
         return
 
+    # Normal reload
     db_dir = Config.get_db_dir()
     for table in TABLES:
         filename = db_dir / f"{table.value}.{filetype}"
@@ -192,6 +218,70 @@ def reload(
                 )
         else:
             logging.warning("File %s is not found.", filename)
+
+    # Generate embeddings after reload (unless disabled)
+    if not no_embeddings:
+        _generate_embeddings()
+
+
+def _generate_embeddings() -> None:
+    """Generate semantic embeddings for project_remarks."""
+    from esdc.configs import Config
+    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+    from esdc.knowledge_graph.embedding_manager import EmbeddingManager
+
+    console.print("[bold blue]Generating Semantic Embeddings[/bold blue]")
+
+    db_path = Config.get_db_file()
+    if not db_path.exists():
+        console.print(
+            f"[yellow]Warning: Database not found at {db_path}, skipping embeddings[/yellow]"
+        )
+        return
+
+    # Check if Ollama is available
+    embedding_manager = EmbeddingManager()
+
+    if not embedding_manager.health_check():
+        console.print(
+            "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"
+        )
+        console.print(
+            "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"
+        )
+        return
+
+    resolver = SemanticResolver(db_path=db_path)
+
+    try:
+        # Build table
+        console.print("Creating embeddings table...")
+        resolver.build_embeddings_table()
+
+        # Generate embeddings
+        console.print(f"Generating embeddings with {embedding_manager.model}...")
+        result = resolver.generate_and_store_embeddings(
+            table_name="project_resources",
+            batch_size=100,
+        )
+
+        if result["status"] == "success":
+            console.print(
+                f"[green]Success![/green] Generated {result['count']} embeddings"
+            )
+            console.print(
+                "[dim]Semantic search is now available via 'semantic_search' tool[/dim]"
+            )
+        else:
+            console.print(
+                f"[yellow]Warning: {result.get('message', 'Unknown error')}[/yellow]"
+            )
+
+    except Exception as e:
+        console.print(f"[yellow]Warning: Embedding generation failed: {e}[/yellow]")
+        console.print("[dim]Semantic search will not be available[/dim]")
+    finally:
+        resolver.close()
 
 
 @app.command()

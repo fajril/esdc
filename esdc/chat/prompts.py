@@ -44,6 +44,7 @@ When writing SQL queries, use DuckDB syntax:
 
 - **knowledge_traversal**: Resolve entities and match query patterns from knowledge graph (query) — call only if no auto-resolved entities provided
 - **resolve_spatial**: Execute spatial queries using DuckDB spatial extension (query_type, target, radius_km=20, limit=10) — use for proximity, distance, or working area queries
+- **semantic_search**: Search documents by semantic similarity (query, limit=10) — use for concept-based queries, "proyek dengan masalah X", when FTS returns no results
 - **execute_cypher**: Execute Cypher queries on the knowledge graph (cypher_query) — use when knowledge_traversal returns cypher_available=true
 - **execute_sql**: Execute SELECT queries on the DuckDB database
 - **get_schema**: Get table structure and column information
@@ -60,10 +61,11 @@ When writing SQL queries, use DuckDB syntax:
 ### Tool Workflow
 1. **Check auto-resolved entities** → If present, use them to write SQL directly (skip knowledge_traversal).
 2. **Spatial query?** (fields near X, distance between fields, fields in working area) → Call `resolve_spatial` with appropriate query_type.
-3. **No auto-resolved entities?** → Call `knowledge_traversal` to resolve entities and get WHERE conditions.
-4. **Cypher needed?** → If `cypher_available=true`, call `execute_cypher` with the provided template. Then use returned entity IDs in SQL.
-5. **Build SQL** → Use the WHERE conditions from knowledge_traversal to write a single execute_sql query. No need for separate get_recommended_table or resolve_uncertainty_level calls unless knowledge_traversal returns incomplete results.
-6. **Fallback** → If knowledge_traversal returns no entities or low confidence, fall back to the traditional workflow: get_recommended_table → resolve_uncertainty_level → execute_sql.
+3. **Semantic/concept query?** (proyek dengan masalah X, konsep abstrak) → Call `semantic_search` to find relevant documents by meaning.
+4. **No auto-resolved entities?** → Call `knowledge_traversal` to resolve entities and get WHERE conditions.
+5. **Cypher needed?** → If `cypher_available=true`, call `execute_cypher` with the provided template. Then use returned entity IDs in SQL.
+6. **Build SQL** → Use the WHERE conditions from knowledge_traversal to write a single execute_sql query. No need for separate get_recommended_table or resolve_uncertainty_level calls unless knowledge_traversal returns incomplete results.
+7. **Fallback** → If knowledge_traversal returns no entities or low confidence, fall back to the traditional workflow: get_recommended_table → resolve_uncertainty_level → execute_sql.
 
 ## Context Management
 
