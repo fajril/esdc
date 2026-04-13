@@ -6,6 +6,18 @@ from esdc.selection import TableName
 
 
 class DetailLevel(str, Enum):
+    """Detail level for view queries.
+
+    Determines which columns to include based on user's information needs:
+    - RESERVES: Reserve-related volume columns (res_oc, res_oil, res_an, etc.)
+    - RESOURCES: Resource-related volume columns (rec_oc, rec_oil, rec_an, etc.)
+    - RESOURCES_RISKED: Risked prospective resources
+    - INPLACE: In-place volume columns
+    - CUMPROD: Cumulative production columns
+    - RATE: Production rate columns
+    - ALL: All available columns
+    """
+
     RESERVES = "reserves"
     RESOURCES = "resources"
     RESOURCES_RISKED = "resources_risked"
@@ -20,10 +32,22 @@ VALID_DETAILS = {d.value for d in DetailLevel}
 
 @dataclass
 class ViewColumn:
+    """Column definition for a view.
+
+    Attributes:
+        name: Column name as exposed in the view
+        alias: Optional alias for display purposes
+    """
+
     name: str
     alias: str | None = None
 
     def to_sql(self) -> str:
+        """Generate SQL expression for this column.
+
+        Returns:
+            SQL column expression with optional alias
+        """
         if self.alias:
             return f"{self.name} AS '{self.alias}'"
         return self.name
@@ -31,6 +55,15 @@ class ViewColumn:
 
 @dataclass
 class ViewDefinition:
+    """Definition of a database view.
+
+    Attributes:
+        table_name: Source table for the view
+        default_where_column: Default column for WHERE conditions
+        mandatory_columns: Columns that must always be included
+        order_by: Columns to order by
+    """
+
     table_name: str
     default_where_column: str | None = None
     mandatory_columns: list[str] = field(default_factory=list)
