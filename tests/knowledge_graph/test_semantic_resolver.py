@@ -32,14 +32,31 @@ def test_search_by_text():
         mock_cursor1.fetchone.return_value = [1]  # Count > 0
 
         mock_cursor2 = Mock()
-        # Result needs 5 columns: uuid, field_name, project_name, source_text, similarity
+        # Result needs 18 columns matching semantic_resolver.py implementation:
+        # project_id, report_year, field_name, project_name, pod_name, wk_name,
+        # province, basin128, project_class, project_stage, project_level,
+        # operator_name, operator_group, wk_subgroup, wk_regionisasi_ngi,
+        # wk_area_perwakilan_skkmigas, project_remarks, similarity
         mock_cursor2.fetchall.return_value = [
             (
-                "uuid-1",
-                "Field name",
-                "Project name",
-                "This is project remarks text",
-                0.95,
+                "uuid-1",  # project_id
+                2024,  # report_year
+                "Field name",  # field_name
+                "Project name",  # project_name
+                "POD name",  # pod_name
+                "WK name",  # wk_name
+                "Province",  # province
+                "Basin128",  # basin128
+                "Class",  # project_class
+                "Stage",  # project_stage
+                "Level",  # project_level
+                "Operator",  # operator_name
+                "Group",  # operator_group
+                "Subgroup",  # wk_subgroup
+                "Region",  # wk_regionisasi_ngi
+                "Area",  # wk_area_perwakilan_skkmigas
+                "Project remarks text",  # project_remarks
+                0.95,  # similarity
             ),
         ]
 
@@ -50,7 +67,7 @@ def test_search_by_text():
 
         assert result["status"] == "success"
         assert len(result["results"]) == 1
-        assert result["results"][0]["uuid"] == "uuid-1"
+        assert result["results"][0]["project_id"] == "uuid-1"
 
 
 def test_search_by_embedding():
