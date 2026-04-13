@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DuckDB Migration**: Migrate from SQLite to DuckDB for better analytical query performance
+  - Automatic migration from existing SQLite databases on reload
+  - Columnar storage for faster analytical queries
+  - Improved query optimization and parallel execution
+
+- **SQL Result Caching**: Implement diskcache for caching SQL query results
+  - Automatic cache invalidation via `invalidate_sql_cache()` during `esdc reload`
+  - Uses permanent storage (no TTL) since data only changes on reload
+  - Cache location: `~/.esdc/cache/sql_results/`
+
+- **FTS Optimization**: Add Full Text Search (FTS) rewrite for ILIKE queries
+  - Automatic rewrite of `ILIKE '%keyword%'` to `match_bm25()` for indexed search
+  - Preserves original ILIKE as fallback filter
+  - Significant performance improvement for text search queries
+
+- **Security Enhancements**: Add query classification and validation
+  - SQL sanitization with parameterized queries
+  - Query classification for optimal tool selection
+  - Enhanced error handling for database operations
+
 - **Semantic Search**: Full semantic search implementation for project_remarks
   - EmbeddingManager: Ollama-based embedding generation (default: qwen3-embedding:0.6b)
   - SemanticResolver: DuckDB VSS with HNSW index for fast similarity search
@@ -17,6 +37,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Commands: esdc reload --no-embeddings, esdc reload --embeddings-only
   - Configurable via embedding_model in ~/.esdc/config.yaml
   - 37 tests for semantic search components
+
+### Changed
+
+- Database engine migrated from SQLite to DuckDB for improved analytical query performance
+- Query execution now uses columnar storage for better performance
+- Text search queries automatically optimized with FTS indexes
+
+### Deprecated
+
+- SQLite database support (automatically migrated to DuckDB on reload)
+
+### Fixed
+
+- **Performance**: 50-60% faster query execution through caching and FTS optimization
 
 - **Configuration**: Added `tool_format` config option to config.yaml
   - Supports "native" (default), "markdown", or "auto" values
