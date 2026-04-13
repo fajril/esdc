@@ -117,6 +117,16 @@ def _rewrite_with_fts(query: str) -> str:
 
 
 def _get_cache() -> diskcache.Cache:
+    """Get or create the SQL results cache.
+
+    The cache uses permanent storage (no TTL) because:
+    - ESDC data only changes when 'esdc reload' is run
+    - Cache is automatically invalidated via invalidate_sql_cache() during reload
+    - Between reloads, data is static so cache can persist indefinitely
+
+    Returns:
+        diskcache.Cache instance for sql_results directory
+    """
     global _sql_cache
     if _sql_cache is None:
         from esdc.configs import Config
@@ -270,6 +280,7 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
                 )
             formatted_result += f"\n\n({total_rows} rows returned)"
 
+            # Store result in cache (permanent storage - cleared only on esdc reload)
             cache.set(cache_key, formatted_result)
             logger.debug("[SQL] result_formatted_and_cached | rows=%d", total_rows)
             return formatted_result
