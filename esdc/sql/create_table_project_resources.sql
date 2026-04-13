@@ -1,9 +1,13 @@
 -- Drop the table if it already exists
 DROP TABLE IF EXISTS project_resources;
+DROP SEQUENCE IF EXISTS seq_project_resources;
+
+-- Create sequence for auto-increment id
+CREATE SEQUENCE seq_project_resources START 1;
 
 -- Create the table if it does not exist
 CREATE TABLE IF NOT EXISTS project_resources (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY DEFAULT nextval('seq_project_resources'),
 	report_date TEXT,
 	report_year INTEGER,
 	report_status TEXT,

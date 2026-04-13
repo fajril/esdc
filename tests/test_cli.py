@@ -80,10 +80,12 @@ class TestShowCommand:
             result = runner.invoke(app, ["show", "project_resources", "--year", "2024"])
             assert result.exit_code == 0
 
-    def test_show_with_output_level(self):
-        """Test show with output detail level."""
+    def test_show_with_detail_level(self):
+        """Test show with detail level."""
         with patch("esdc.esdc.run_query", return_value=MagicMock()):
-            result = runner.invoke(app, ["show", "project_resources", "--output", "1"])
+            result = runner.invoke(
+                app, ["show", "project_resources", "--detail", "reserves"]
+            )
             assert result.exit_code == 0
 
 

@@ -37,25 +37,26 @@ CREATE VIEW field_resources AS
 		SUM(fusion_isactive) as fusion_count,
 		MIN(onstream_year) as onstream_year,
 		MIN(onstream_actual) as onstream_actual,
-		IIF(COUNT(uuid) > 1, 
-			IIF(project_remarks = '' OR project_remarks ISNULL, 
-				'', 
-				GROUP_CONCAT(CONCAT(project_name, ': ', project_remarks), '\n')), 
-			project_remarks
-		) as field_remarks,
+		CASE WHEN COUNT(uuid) > 1 THEN 
+			CASE WHEN ANY_VALUE(project_remarks) = '' OR ANY_VALUE(project_remarks) IS NULL THEN 
+				'' 
+				ELSE STRING_AGG(project_name || ': ' || project_remarks, '\n')
+			END
+			ELSE ANY_VALUE(project_remarks)
+		END as field_remarks,
 		MAX(is_discovered) as is_discovered,
 		MIN(project_stage) as project_stage,
 		MIN(project_class) as project_class,
 		MIN(project_level) as project_level,
 		MIN(prod_stage) as prod_stage,
 		MIN(uncert_level) as uncert_level,
-		IIF(COUNT(uuid) > 1,
-			IIF(vol_remarks = '' OR vol_remarks ISNULL,
-				'',
-				GROUP_CONCAT(CONCAT(project_name, ': ', vol_remarks), '\n')
-			),
-			vol_remarks
-		) as field_vol_remarks,
+		CASE WHEN COUNT(uuid) > 1 THEN
+			CASE WHEN ANY_VALUE(vol_remarks) = '' OR ANY_VALUE(vol_remarks) IS NULL THEN
+				''
+				ELSE STRING_AGG(project_name || ': ' || vol_remarks, '\n')
+			END
+			ELSE ANY_VALUE(vol_remarks)
+		END as field_vol_remarks,
 		SUM(rec_oil) as rec_oil,
 		SUM(rec_con) as rec_con,
 		SUM(rec_ga) as rec_ga,
@@ -88,12 +89,12 @@ CREATE VIEW field_resources AS
 		SUM(eur_res_gn) as eur_res_gn,
 		SUM(eur_res_oc) as eur_res_oc,
 		SUM(eur_res_an) as eur_res_an,
-		IIF(SUM(prj_ioip) > 0, SUM(cprd_sls_oil) / SUM(prj_ioip), 0) as rf_oil,
-		IIF(SUM(prj_igip) > 0, SUM(cprd_sls_gn) / SUM(prj_igip), 0) as rf_gas,
-		IIF(SUM(prj_ioip) > 0, SUM(cprd_sls_oil + rec_oil) / SUM(prj_ioip), 0) as urf_rec_oil,
-		IIF(SUM(prj_igip) > 0, SUM(cprd_sls_gn + rec_gn) / SUM(prj_igip), 0) as urf_rec_gas,
-		IIF(SUM(prj_ioip) > 0, SUM(cprd_sls_oil + res_oil) / SUM(prj_ioip), 0) as urf_res_oil,
-		IIF(SUM(prj_igip) > 0, SUM(cprd_sls_gn + res_gn) / SUM(prj_igip), 0) as urf_res_gas,
+		CASE WHEN SUM(prj_ioip) > 0 THEN SUM(cprd_sls_oil) / SUM(prj_ioip) ELSE 0 END as rf_oil,
+		CASE WHEN SUM(prj_igip) > 0 THEN SUM(cprd_sls_gn) / SUM(prj_igip) ELSE 0 END as rf_gas,
+		CASE WHEN SUM(prj_ioip) > 0 THEN SUM(cprd_sls_oil + rec_oil) / SUM(prj_ioip) ELSE 0 END as urf_rec_oil,
+		CASE WHEN SUM(prj_igip) > 0 THEN SUM(cprd_sls_gn + rec_gn) / SUM(prj_igip) ELSE 0 END as urf_rec_gas,
+		CASE WHEN SUM(prj_ioip) > 0 THEN SUM(cprd_sls_oil + res_oil) / SUM(prj_ioip) ELSE 0 END as urf_res_oil,
+		CASE WHEN SUM(prj_igip) > 0 THEN SUM(cprd_sls_gn + res_gn) / SUM(prj_igip) ELSE 0 END as urf_res_gas,
 		SUM(rate_grs_oil) as rate_grs_oil,
 		SUM(rate_grs_con) as rate_grs_con,
 		SUM(rate_grs_ga) as rate_grs_ga,
@@ -149,13 +150,7 @@ CREATE VIEW field_resources AS
 		SUM(dcpy_uc_oc) as dcpy_uc_oc,
 		SUM(dcpy_uc_an) as dcpy_uc_an,
 		SUM(ghv_avg) as ghv_avg,
-		(
-			  lower(hex(randomblob(4))) || '-' ||
-			  lower(hex(randomblob(2))) || '-' ||
-			  '4' || substr(hex(randomblob(2)), 2) || '-' ||
-			  substr('89ab', 1 + (abs(random()) % 4), 1) || substr(hex(randomblob(2)), 2) || '-' ||
-			  lower(hex(randomblob(6)))
-		) as uuid
+		gen_random_uuid() as uuid
 	FROM project_resources pr
 	GROUP BY report_year, wk_id, field_id, project_stage, project_class, uncert_level
 	ORDER BY report_year DESC, wk_name, field_name, project_stage, project_class, uncert_level;
@@ -196,24 +191,25 @@ CREATE VIEW wa_resources AS
 		SUM(fusion_count) as fusion_count,
 		MIN(onstream_year) as onstream_year,
 		MIN(onstream_actual) as onstream_actual,
-		IIF(COUNT(uuid) > 1, 
-			IIF(field_remarks = '' OR field_remarks ISNULL, 
-				'', 
-				GROUP_CONCAT(CONCAT(field_name, ': ', field_remarks), '\n\n')), 
-			field_remarks
-		) as wa_remarks,
+		CASE WHEN COUNT(uuid) > 1 THEN 
+			CASE WHEN ANY_VALUE(field_remarks) = '' OR ANY_VALUE(field_remarks) IS NULL THEN 
+				'' 
+				ELSE STRING_AGG(field_name || ': ' || field_remarks, '\n\n')
+			END
+			ELSE ANY_VALUE(field_remarks)
+		END as wa_remarks,
 		MIN(project_stage) as project_stage,
 		MIN(project_class) as project_class,
 		MIN(project_level) as project_level,
 		MIN(prod_stage) as prod_stage,
 		MIN(uncert_level) as uncert_level,
-		IIF(COUNT(uuid) > 1,
-			IIF(field_vol_remarks = '' OR field_vol_remarks ISNULL,
-				'',
-				GROUP_CONCAT(CONCAT(field_name, ': ', field_vol_remarks), '\n\n')
-			),
-			field_vol_remarks
-		) as wa_vol_remarks,
+		CASE WHEN COUNT(uuid) > 1 THEN
+			CASE WHEN ANY_VALUE(field_vol_remarks) = '' OR ANY_VALUE(field_vol_remarks) IS NULL THEN
+				''
+				ELSE STRING_AGG(field_name || ': ' || field_vol_remarks, '\n\n')
+			END
+			ELSE ANY_VALUE(field_vol_remarks)
+		END as wa_vol_remarks,
 		SUM(rec_oil) as rec_oil,
 		SUM(rec_con) as rec_con,
 		SUM(rec_ga) as rec_ga,
@@ -246,12 +242,12 @@ CREATE VIEW wa_resources AS
 		SUM(eur_res_gn) as eur_res_gn,
 		SUM(eur_res_oc) as eur_res_oc,
 		SUM(eur_res_an) as eur_res_an,
-		IIF(SUM(ioip) > 0, SUM(cprd_sls_oil) / SUM(ioip), 0) as rf_oil,
-		IIF(SUM(igip) > 0, SUM(cprd_sls_gn) / SUM(igip), 0) as rf_gas,
-		IIF(SUM(ioip) > 0, SUM(cprd_sls_oil + rec_oil) / SUM(ioip), 0) as urf_rec_oil,
-		IIF(SUM(igip) > 0, SUM(cprd_sls_gn + rec_gn) / SUM(igip), 0) as urf_rec_gas,
-		IIF(SUM(ioip) > 0, SUM(cprd_sls_oil + res_oil) / SUM(ioip), 0) as urf_res_oil,
-		IIF(SUM(igip) > 0, SUM(cprd_sls_gn + res_gn) / SUM(igip), 0) as urf_res_gas,
+		CASE WHEN SUM(ioip) > 0 THEN SUM(cprd_sls_oil) / SUM(ioip) ELSE 0 END as rf_oil,
+		CASE WHEN SUM(igip) > 0 THEN SUM(cprd_sls_gn) / SUM(igip) ELSE 0 END as rf_gas,
+		CASE WHEN SUM(ioip) > 0 THEN SUM(cprd_sls_oil + rec_oil) / SUM(ioip) ELSE 0 END as urf_rec_oil,
+		CASE WHEN SUM(igip) > 0 THEN SUM(cprd_sls_gn + rec_gn) / SUM(igip) ELSE 0 END as urf_rec_gas,
+		CASE WHEN SUM(ioip) > 0 THEN SUM(cprd_sls_oil + res_oil) / SUM(ioip) ELSE 0 END as urf_res_oil,
+		CASE WHEN SUM(igip) > 0 THEN SUM(cprd_sls_gn + res_gn) / SUM(igip) ELSE 0 END as urf_res_gas,
 		SUM(rate_grs_oil) as rate_grs_oil,
 		SUM(rate_grs_con) as rate_grs_con,
 		SUM(rate_grs_ga) as rate_grs_ga,
@@ -307,13 +303,7 @@ CREATE VIEW wa_resources AS
 		SUM(dcpy_uc_oc) as dcpy_uc_oc,
 		SUM(dcpy_uc_an) as dcpy_uc_an,
 		SUM(ghv_avg) as ghv_avg,
-		(
-			  lower(hex(randomblob(4))) || '-' ||
-			  lower(hex(randomblob(2))) || '-' ||
-			  '4' || substr(hex(randomblob(2)), 2) || '-' ||
-			  substr('89ab', 1 + (abs(random()) % 4), 1) || substr(hex(randomblob(2)), 2) || '-' ||
-			  lower(hex(randomblob(6)))
-		) as uuid
+		gen_random_uuid() as uuid
 	FROM field_resources fr
 	GROUP BY report_year, wk_name, project_stage, project_class, uncert_level
 	ORDER BY report_year DESC, wk_name, project_stage, project_class, uncert_level;
@@ -423,13 +413,7 @@ CREATE VIEW nkri_resources AS
 		SUM(dcpy_uc_oc) as dcpy_uc_oc,
 		SUM(dcpy_uc_an) as dcpy_uc_an,
 		SUM(ghv_avg) as ghv_avg,
-		(
-			  lower(hex(randomblob(4))) || '-' ||
-			  lower(hex(randomblob(2))) || '-' ||
-			  '4' || substr(hex(randomblob(2)), 2) || '-' ||
-			  substr('89ab', 1 + (abs(random()) % 4), 1) || substr(hex(randomblob(2)), 2) || '-' ||
-			  lower(hex(randomblob(6)))
-		) as uuid
+		gen_random_uuid() as uuid
 	FROM wa_resources wr
 	GROUP BY report_year, project_stage, project_class, uncert_level
 	ORDER BY report_year DESC, project_stage, project_class, uncert_level;

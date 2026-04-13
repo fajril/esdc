@@ -1564,9 +1564,10 @@ def get_volume_columns(
     # Normalize volume type
     if volume_type in ("cadangan", "reserves", "reservoar"):
         prefix = "res"
-    elif volume_type in ("sumber_daya", "sumberdaya", "grr", "resources"):
-        prefix = "rec"
-    elif volume_type == "potensi":
+    elif (
+        volume_type in ("sumber_daya", "sumberdaya", "grr", "resources")
+        or volume_type == "potensi"
+    ):
         prefix = "rec"
         # Don't force is_risked - potensi can be any classification
     elif volume_type == "prospective":

@@ -59,8 +59,10 @@ class Config:
         if not config_file.exists():
             default_config = {
                 "api_url": cls.BASE_API_URL_V2,
+                "api": {"verify_ssl": True},
                 "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
                 "tool_format": "native",  # native, markdown, or auto
+                "cache": {"sql_ttl": 604800},
                 "logging": {
                     "level": "INFO",
                     "file": {
@@ -72,6 +74,9 @@ class Config:
                     "server": {"level": "INFO"},
                     "agent": {"level": "DEBUG"},
                     "chat": {"level": "WARNING"},
+                },
+                "semantic_search": {
+                    "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)
                 },
             }
             with open(config_file, "w") as f:
@@ -403,6 +408,46 @@ class Config:
         cls._save_config(config)
 
     @classmethod
+    def get_sql_cache_ttl(cls) -> int:
+        """Get SQL cache TTL in seconds.
+
+        Priority:
+        1. ESDC_SQL_CACHE_TTL environment variable
+        2. config.yaml: cache.sql_ttl
+        3. 604800 (1 week default)
+        """
+        env_ttl = os.environ.get("ESDC_SQL_CACHE_TTL")
+        if env_ttl:
+            try:
+                return int(env_ttl)
+            except ValueError:
+                pass
+
+        config = cls._load_config() or {}
+        cache_config = config.get("cache", {})
+        return cache_config.get("sql_ttl", 604800)
+
+    @classmethod
+    def get_cache_dir(cls) -> Path:
+        """Return the cache directory path.
+
+        Priority:
+        1. ESDC_CACHE_DIR environment variable
+        2. config.yaml: cache.path
+        3. ~/.esdc/cache (default)
+        """
+        custom_path = os.environ.get("ESDC_CACHE_DIR")
+        if custom_path:
+            return Path(custom_path)
+
+        config = cls._load_config() or {}
+        cache_config = config.get("cache", {})
+        if cache_path := cache_config.get("path"):
+            return Path(cache_path).expanduser()
+
+        return cls.get_config_dir() / "cache"
+
+    @classmethod
     def get_provider_config_by_name(cls, name: str) -> dict[str, Any] | None:
         """Get provider configuration by name."""
         providers = cls.get_providers()
@@ -418,7 +463,54 @@ class Config:
         cls._save_config(config)
 
     @classmethod
+    def get_verify_ssl(cls) -> bool:
+        """Get SSL certificate verification setting.
+
+        Priority:
+        1. ESDC_VERIFY_SSL environment variable ('true'/'1' = True, 'false'/'0' = False)
+        2. config.yaml: api.verify_ssl
+        3. True (verify SSL by default)
+
+        Returns:
+            True to verify SSL certificates, False to skip verification
+        """
+        env_val = os.environ.get("ESDC_VERIFY_SSL", "").lower()
+        if env_val in ("true", "1", "yes"):
+            return True
+        if env_val in ("false", "0", "no"):
+            return False
+
+        config = cls._load_config() or {}
+        api_config = config.get("api", {})
+        return api_config.get("verify_ssl", True)
+
+    @classmethod
     def has_chat_config(cls) -> bool:
         """Check if chat configuration exists."""
         config = cls._load_config() or {}
         return "providers" in config and len(config.get("providers", {})) > 0
+
+    @classmethod
+    def get_embedding_batch_size(cls) -> int:
+        """Get embedding batch size from config.
+
+        Priority:
+        1. ESDC_EMBEDDING_BATCH_SIZE environment variable
+        2. config.yaml: semantic_search.embedding_batch_size
+        3. 100 (default)
+
+        Returns:
+            Batch size for embedding generation (number of documents per batch)
+        """
+        env_batch_size = os.environ.get("ESDC_EMBEDDING_BATCH_SIZE")
+        if env_batch_size:
+            try:
+                size = int(env_batch_size)
+                if size > 0:
+                    return size
+            except ValueError:
+                pass
+
+        config = cls._load_config() or {}
+        semantic_config = config.get("semantic_search", {})
+        return semantic_config.get("embedding_batch_size", 100)

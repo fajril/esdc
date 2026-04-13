@@ -1,10 +1,10 @@
-import sqlite3
-
+import duckdb
 import pandas as pd
 import pytest
 
 from esdc.dbmanager import (
     _load_sql_script,
+    invalidate_sql_cache,
     load_data_to_db,
     run_query,
 )
@@ -22,7 +22,7 @@ class TestLoadSqlScript:
 
     def test_load_sql_script_view(self):
         """Test loading a view SQL script."""
-        script = _load_sql_script("view_project_resources.sql")
+        script = _load_sql_script("create_esdc_view.sql")
         assert script is not None
         assert "SELECT" in script.upper()
 
@@ -49,8 +49,9 @@ class TestRunQuery:
         db_file = tmp_path / "test.db"
         mocker.patch("esdc.dbmanager.Config.get_db_file", return_value=db_file)
         mocker.patch("pathlib.Path.exists", return_value=True)
-        mocker.patch("sqlite3.connect")
-        mocker.patch("pandas.read_sql_query", return_value=mock_df)
+        mock_conn = mocker.MagicMock()
+        mock_conn.execute.return_value.fetchdf.return_value = mock_df
+        mocker.patch("duckdb.connect", return_value=mock_conn)
 
         result = run_query(
             TableName.PROJECT_RESOURCES, where="project_name", like="test"
@@ -64,10 +65,11 @@ class TestRunQuery:
         db_file = tmp_path / "test.db"
         mocker.patch("esdc.dbmanager.Config.get_db_file", return_value=db_file)
         mocker.patch("pathlib.Path.exists", return_value=True)
-        mocker.patch("sqlite3.connect")
-        mocker.patch("pandas.read_sql_query", return_value=mock_df)
+        mock_conn = mocker.MagicMock()
+        mock_conn.execute.return_value.fetchdf.return_value = mock_df
+        mocker.patch("duckdb.connect", return_value=mock_conn)
 
-        result = run_query(TableName.PROJECT_RESOURCES, year=2024)
+        result = run_query(TableName.PROJECT_RESOURCES, years=[2024])
         assert result is not None
 
     def test_run_query_with_columns(self, tmp_path, mocker):
@@ -75,10 +77,12 @@ class TestRunQuery:
         mock_df = pd.DataFrame({"id": [1]})
 
         db_file = tmp_path / "test.db"
+        db_file = tmp_path / "test.db"
         mocker.patch("esdc.dbmanager.Config.get_db_file", return_value=db_file)
         mocker.patch("pathlib.Path.exists", return_value=True)
-        mocker.patch("sqlite3.connect")
-        mocker.patch("pandas.read_sql_query", return_value=mock_df)
+        mock_conn = mocker.MagicMock()
+        mock_conn.execute.return_value.fetchdf.return_value = mock_df
+        mocker.patch("duckdb.connect", return_value=mock_conn)
 
         result = run_query(TableName.PROJECT_RESOURCES, columns=["id", "name"])
         assert result is not None
@@ -88,11 +92,9 @@ class TestRunQuery:
         db_file = tmp_path / "test.db"
         mocker.patch("esdc.dbmanager.Config.get_db_file", return_value=db_file)
         mocker.patch("pathlib.Path.exists", return_value=True)
-        mocker.patch("sqlite3.connect")
-        mocker.patch(
-            "pandas.read_sql_query",
-            side_effect=sqlite3.OperationalError("no such table"),
-        )
+        mock_conn = mocker.MagicMock()
+        mock_conn.execute.side_effect = duckdb.Error("no such table")
+        mocker.patch("duckdb.connect", return_value=mock_conn)
 
         result = run_query(TableName.PROJECT_RESOURCES)
         assert result is None
@@ -112,6 +114,25 @@ class TestLoadDataToDb:
         )
         mocker.patch("pathlib.Path.mkdir", return_value=None)
 
-        # Test with empty data - expect exception
-        with pytest.raises(Exception):
+        with pytest.raises(duckdb.Error):
             load_data_to_db([], [], "project_resources")
+
+
+class TestInvalidateSqlCache:
+    """Tests for invalidate_sql_cache()."""
+
+    def test_invalidate_cache_removes_dir(self, tmp_path, mocker):
+        """Test that invalidate_sql_cache removes the cache directory."""
+        cache_dir = tmp_path / "sql_results"
+        cache_dir.mkdir()
+        (cache_dir / "test.cache").write_text("test")
+
+        mocker.patch("esdc.dbmanager.Config.get_cache_dir", return_value=tmp_path)
+        invalidate_sql_cache()
+
+        assert not cache_dir.exists()
+
+    def test_invalidate_cache_no_dir(self, tmp_path, mocker):
+        """Test invalidate_sql_cache handles missing cache dir gracefully."""
+        mocker.patch("esdc.dbmanager.Config.get_cache_dir", return_value=tmp_path)
+        invalidate_sql_cache()

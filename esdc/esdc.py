@@ -37,19 +37,30 @@ import io
 import json
 import logging
 import os
+import warnings
 from collections.abc import Iterable
 from contextlib import closing
 from datetime import date
-from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
 import requests
 import rich
 import typer
+from rich.console import Console
 from rich.logging import RichHandler
-from rich.progress import DownloadColumn, Progress, TransferSpeedColumn
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 from tabulate import tabulate
+
+console = Console()
 
 from esdc.chat.app import ESDCChatApp
 from esdc.commands.provider import provider_app
@@ -111,35 +122,39 @@ def fetch(
     save: bool = typer.Option(
         False,
         "--save/--no-save",
-        help="Specify whether to save the fetched data to a file.",
+        help="Save fetched data to ~/.esdc/ directory.",
+    ),
+    no_reload: bool = typer.Option(
+        False,
+        "--no-reload",
+        help="Only download data, skip loading into database (implies --save).",
     ),
 ) -> None:
-    """
-    Fetch data from ESDC and save it to a file.
+    """Fetch data from ESDC and optionally load into the database.
 
-    This function fetches data from the ESDC API and saves it to a file
-    based on the specified file type. If the file type is not supported,
-    a warning will be logged.
-
-    Parameters:
-        filetype:
-            The type of file to save the data to. Options are "csv" or "json".
-            Defaults to "json".
-        save:
-            Indicates whether to save the data to a file. Defaults to False.
-
-    Returns:
-        None
+    By default, downloads data and loads it into the database.
+    Use --no-reload to download and save data without loading into the database.
     """
     username, password = Config.get_credentials()
 
+    should_save = save or no_reload
+    should_reload = not no_reload
+
     if filetype == "csv":
         load_esdc_data(
-            filetype=FileType.CSV, to_file=save, username=username, password=password
+            filetype=FileType.CSV,
+            to_file=should_save,
+            reload=should_reload,
+            username=username,
+            password=password,
         )
     elif filetype == "json":
         load_esdc_data(
-            filetype=FileType.JSON, to_file=save, username=username, password=password
+            filetype=FileType.JSON,
+            to_file=should_save,
+            reload=should_reload,
+            username=username,
+            password=password,
         )
     else:
         logging.warning("File type %s is not available.", filetype)
@@ -150,35 +165,191 @@ def reload(
     filetype: Annotated[
         str | None, typer.Option(help="Options: csv, json, zip")
     ] = "csv",
+    reindex_only: Annotated[
+        bool,
+        typer.Option(
+            "--reindex-only",
+            help="Rebuild FTS/B-tree indexes only, without reloading data.",
+        ),
+    ] = False,
+    no_embeddings: Annotated[
+        bool,
+        typer.Option(
+            "--no-embeddings",
+            help="Skip semantic embeddings generation.",
+        ),
+    ] = False,
+    embeddings_only: Annotated[
+        bool,
+        typer.Option(
+            "--embeddings-only",
+            help="Only regenerate embeddings, skip data reload.",
+        ),
+    ] = False,
 ) -> None:
-    """
-    Reload data from binary files and save it to a file.
+    """Reload data from binary files and save it to a file.
+
+    By default, also generates semantic embeddings for project_remarks.
+    Use --no-embeddings to skip embedding generation.
+    Use --embeddings-only to only regenerate embeddings without reloading data.
 
     Args:
-        filetype (str, optional): The type of file to save the data to. Defaults to "csv".
+        filetype: The type of file to save the data to. Defaults to "csv".
+        reindex_only: If True, only rebuild FTS and B-tree indexes without reloading data.
+        no_embeddings: If True, skip semantic embeddings generation.
+        embeddings_only: If True, only regenerate embeddings without reloading data.
 
     Returns:
         None
-
-    Notes:
-        This function reloads data from binary files and saves it
-        to a file based on the provided filetype.
-        If the filetype is not supported, a debug message will be printed.
-        If a file is not found, a warning message will be printed.
     """
+    # Handle embeddings-only mode
+    if embeddings_only:
+        _generate_embeddings()
+        return
+
+    # Handle reindex-only mode
+    if reindex_only:
+        from esdc.dbmanager import reindex_fts
+
+        reindex_fts()
+        return
+
+    # Normal reload
+    db_dir = Config.get_db_dir()
     for table in TABLES:
-        filename = f"{table.value}.{filetype}"
-        if Path(filename).exists():
+        filename = db_dir / f"{table.value}.{filetype}"
+        if filename.exists():
             if filetype == "csv":
-                _load_file_as_csv(filename, table.value)
+                _load_file_as_csv(str(filename), table.value)
             elif filetype == "json":
-                _load_file_as_json(filename, table.value)
+                _load_file_as_json(str(filename), table.value)
             else:
                 logging.debug(
                     "failed to load %s. Unknown %s format", filename, filetype
                 )
         else:
             logging.warning("File %s is not found.", filename)
+
+    # Generate embeddings after reload (unless disabled)
+    if not no_embeddings:
+        _generate_embeddings()
+
+
+def _generate_embeddings() -> None:
+    """Generate semantic embeddings for project_remarks with progress bar."""
+    from esdc.configs import Config
+    from esdc.knowledge_graph.embedding_manager import EmbeddingManager
+    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+
+    logger = logging.getLogger(__name__)
+
+    logger.info("Starting semantic embeddings generation process")
+    console.print("[bold blue]Generating Semantic Embeddings[/bold blue]")
+
+    db_path = Config.get_db_file()
+    if not db_path.exists():
+        logger.warning(
+            f"Database not found at {db_path}, skipping embeddings generation"
+        )
+        console.print(
+            f"[yellow]Warning: Database not found at {db_path}, skipping embeddings[/yellow]"
+        )
+        return
+
+    # Check if Ollama is available
+    embedding_manager = EmbeddingManager()
+    logger.info(f"Initialized embedding manager with model: {embedding_manager.model}")
+
+    if not embedding_manager.health_check():
+        logger.warning("Ollama not available, cannot generate embeddings")
+        console.print(
+            "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"
+        )
+        console.print(
+            "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"
+        )
+        return
+
+    logger.info(f"Ollama is available, model {embedding_manager.model} is loaded")
+    resolver = SemanticResolver(db_path=db_path)
+
+    try:
+        # Drop existing embeddings table if it exists to ensure fresh start
+        logger.debug("Dropping existing embeddings table if present")
+        conn = resolver._get_connection()
+        conn.execute("DROP TABLE IF EXISTS project_embeddings")
+        conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
+
+        # Build table
+        logger.debug("Creating embeddings table in DuckDB")
+        console.print("Creating embeddings table...")
+        resolver.build_embeddings_table()
+
+        # Count total documents first (using resolver's connection)
+        total_docs = resolver.count_documents_with_remarks("project_resources")
+
+        if total_docs == 0:
+            logger.info("No documents with project_remarks found")
+            console.print("[yellow]No documents found to generate embeddings[/yellow]")
+            return
+
+        batch_size = Config.get_embedding_batch_size()
+        total_batches = (total_docs + batch_size - 1) // batch_size
+
+        logger.info(
+            f"Starting embedding generation: {total_docs} documents, {total_batches} batches, batch_size={batch_size}"
+        )
+
+        # Create progress bar
+        with Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=40),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            "•",
+            TextColumn("[green]{task.completed}/{task.total} docs"),
+            "•",
+            TimeElapsedColumn(),
+            "•",
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                f"Processing with {embedding_manager.model}", total=total_docs
+            )
+
+            # Progress callback function
+            def update_progress(current: int, total: int) -> None:
+                progress.update(task, completed=current)
+
+            # Generate embeddings with progress tracking
+            result = resolver.generate_and_store_embeddings(
+                table_name="project_resources",
+                batch_size=batch_size,
+                progress_callback=update_progress,
+            )
+
+        if result["status"] == "success":
+            logger.info(f"Successfully generated {result['count']} embeddings")
+            console.print(
+                f"[green]Success![/green] Generated {result['count']} embeddings"
+            )
+            console.print(
+                "[dim]Semantic search is now available via 'semantic_search' tool[/dim]"
+            )
+        else:
+            logger.warning(
+                f"Embedding generation completed with warning: {result.get('message')}"
+            )
+            console.print(
+                f"[yellow]Warning: {result.get('message', 'Unknown error')}[/yellow]"
+            )
+
+    except Exception as e:
+        logger.error(f"Embedding generation failed: {e}", exc_info=True)
+        console.print(f"[yellow]Warning: Embedding generation failed: {e}[/yellow]")
+        console.print("[dim]Semantic search will not be available[/dim]")
+    finally:
+        resolver.close()
 
 
 @app.command()
@@ -187,53 +358,58 @@ def show(
     where: Annotated[str | None, typer.Option(help="Column to search.")] = None,
     search: Annotated[str | None, typer.Option(help="Filter value")] = "",
     year: Annotated[
-        int | None, typer.Option(min=2019, help="Filter year value")
+        list[int] | None,
+        typer.Option(min=2019, help="Filter year value. Can specify multiple."),
     ] = None,
-    output: Annotated[int, typer.Option(help="Detail of output.")] = 0,
+    detail: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Detail level: reserves, resources, resources_risked, inplace, cumprod, rate, all. "
+            "Can specify multiple. Defaults to resources.",
+        ),
+    ] = None,
     save: bool = typer.Option(
         False,
         "--save/--no-save",
-        help="Specify whether to save the shown data to a file.",
+        help="Save output to Excel file in current directory.",
     ),
-    columns: Annotated[str, typer.Option(help="select column")] = "",
+    columns: Annotated[
+        str, typer.Option(help="Select specific columns (space-separated)")
+    ] = "",
 ):
-    """
-    Show data from a specific table.
+    """Show data from a specific table.
 
     Args:
-        table (str): The name of the table to show data from.
-        where (str, optional): The column to search. Defaults to None.
-        search (str, optional): A search keyword to apply to the selected column in where clause.
-            Defaults to "".
-        year (int, optional): A filter year value to apply to the data. Defaults to None.
-        output (int, optional): The level of detail to show in the output. Defaults to 0.
-        save (bool, optional): Whether to save the output data to a file. Defaults to False.
-        columns (str, optional): A space-separated list of column(s) to select. Defaults to "".
+        table: The name of the table to show data from.
+        where: The column to search. Defaults to None.
+        search: A search keyword to apply to the selected column.
+        year: Filter year value(s). Can specify multiple: --year 2024 --year 2025.
+        detail: Detail level(s) to show. Defaults to 'resources'.
+            Options: reserves, resources, resources_risked, inplace, cumprod, rate, all.
+        save: Whether to save the output data to an Excel file.
+        columns: A space-separated list of column(s) to select.
 
     Returns:
         None
-
-    Notes:
-        This function runs a query on the specified table with the provided filters
-        and displays the result.
-        The output is formatted to display float values with two decimal places.
-        If the save option is True, the output data will be saved to a CSV file.
     """
     if columns.strip():
         columns_splitted: list[str] | str = columns.split(" ")
     else:
         columns_splitted = ""
+
+    years_list = year if year else None
+    details_list = detail if detail else None
+
     df = run_query(
         table=TableName(table),
         where=where,
         like=search,
-        year=year,
-        output=output,
+        years=years_list,
+        details=details_list,
         columns=columns_splitted,
     )
     if df is not None:
         pd.options.display.float_format = "{:,.2f}".format
-        # Convert DataFrame to list of dicts for type compatibility with tabulate
         formatted_df = df.map(lambda x: f"{x:<,.2f}" if isinstance(x, float) else x)
         formatted_table = tabulate(
             formatted_df.to_dict("records"),
@@ -243,7 +419,6 @@ def show(
             stralign="right",
         )
         rich.print(formatted_table)
-        # Save the result to a Excel file if requested
         if save:
             today = date.today().strftime("%Y%m%d")
             df.to_excel(
@@ -256,35 +431,25 @@ def show(
 def load_esdc_data(
     filetype: FileType = FileType.CSV,
     to_file: bool = True,
+    reload: bool = True,
     username: str = "",
     password: str = "",
 ) -> None:
-    """
-    Downloads and loads data from the ESDC API into the local database.
-
-    This function downloads data from a specified URL and loads it into the ESDC database.
-    If the corresponding file already exists, it can skip downloading and loading the data
-    if the `to_file` parameter is set to `False`.
+    """Download data from the ESDC API and optionally load into the database.
 
     Parameters
     ----------
     filetype : FileType
-        The file type for the downloaded data. Currently, supports "csv" and "json".
+        The file type for the downloaded data. Currently supports "csv" and "json".
     to_file : bool
         Whether to save the downloaded data to a file. Defaults to True.
+    reload : bool
+        Whether to load the downloaded data into the database. Defaults to True.
+        When False, data is only downloaded and saved (not loaded).
     username : str
         The username for authenticating with the ESDC API.
     password : str
         The password for authenticating with the ESDC API.
-
-    Returns:
-    -------
-    None
-
-    Raises:
-    ------
-    Exception
-        Raises an exception if the download fails or if the data format is unsupported.
     """
     for table in TABLES:
         logging.info("Downloading %s table.", table.value)
@@ -295,14 +460,17 @@ def load_esdc_data(
             logging.warning("Failed to download %s data.", table.value)
             break
         if to_file:
-            logging.debug("Save data as %s.%s", table.value, filetype.value)
-            with open(table.value + "." + filetype.value, "wb") as f:
+            save_path = Config.get_db_dir() / f"{table.value}.{filetype.value}"
+            logging.debug("Save data as %s", save_path)
+            with open(save_path, "wb") as f:
                 _ = f.write(data)
+
+        if not reload:
+            logging.info("Skipping database load for %s (--no-reload).", table.value)
+            continue
 
         if filetype == FileType.CSV:
             decoded_data = data.decode("utf-8").splitlines()
-            # read_csv is used to handle remarks column that might
-            # have commas in the string.
             content, header = _read_csv(decoded_data)
             load_data_to_db(content, header, table.value)
         elif filetype == FileType.JSON:
@@ -409,8 +577,20 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
     try:
         logging.info("requesting data to server...")
         logging.debug(url)
+        verify_ssl = Config.get_verify_ssl()
+        if not verify_ssl:
+            warnings.warn(
+                "SSL certificate verification is disabled. "
+                "Set api.verify_ssl: true in config.yaml or ESDC_VERIFY_SSL=true "
+                "to enable certificate verification.",
+                stacklevel=2,
+            )
+            from urllib3.exceptions import InsecureRequestWarning
+
+            warnings.filterwarnings("ignore", category=InsecureRequestWarning)
+
         response = requests.get(
-            url, auth=(username, password), stream=True, timeout=300, verify=False
+            url, auth=(username, password), stream=True, timeout=300, verify=verify_ssl
         )
 
         if response.status_code == 200:
@@ -428,13 +608,22 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
                     DownloadColumn(binary_units=True),
                 ) as progress,
             ):
-                task_id = progress.add_task(
-                    f"[cyan]Downloading {round(file_size / 1e6)} MB...",
-                    total=file_size,
-                    unit="B",
-                    transfer=True,
-                    speed_unit="B/s",
-                )
+                if file_size > 0:
+                    task_id = progress.add_task(
+                        f"[cyan]Downloading {round(file_size / 1e6)} MB...",
+                        total=file_size,
+                        unit="B",
+                        transfer=True,
+                        speed_unit="B/s",
+                    )
+                else:
+                    task_id = progress.add_task(
+                        "[cyan]Downloading...",
+                        total=None,
+                        unit="B",
+                        transfer=True,
+                        speed_unit="B/s",
+                    )
                 if response.headers.get("Content-Encoding") == "gzip":
                     with gzip.GzipFile(fileobj=response.raw, mode="rb") as gz:
                         while True:
@@ -565,6 +754,36 @@ def serve(
             f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
         )
         run_server(host=host, port=port, log_level=log_level)
+
+
+@app.command(name="load-kg")
+def load_kg() -> None:
+    """Build the knowledge graph from the ESDC database.
+
+    Creates a LadybugDB graph database with nodes and relationships
+    for fields, working areas, projects, operators, and reports.
+    Uses zero-copy ATTACH to DuckDB for data loading.
+    """
+    from esdc.knowledge_graph.ladybug_manager import LadybugDBManager
+
+    db_file = Config.get_db_file()
+    if not db_file.exists():
+        rich.print("[red]Database not found. Run 'esdc fetch --save' first.[/red]")
+        return
+
+    rich.print("[bold cyan]Building knowledge graph...[/bold cyan]")
+    manager = LadybugDBManager()
+    if manager.build_graph(db_file):
+        schema_info = manager.get_schema_info()
+        table_count = len(schema_info.get("tables", []))
+        rich.print(
+            f"[green]Knowledge graph built successfully![/green] ({table_count} tables)"
+        )
+    else:
+        rich.print(
+            "[red]Failed to build knowledge graph. Check logs for details.[/red]"
+        )
+    manager.close()
 
 
 if __name__ == "__main__":

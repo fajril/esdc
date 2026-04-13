@@ -1,6 +1,7 @@
 # Standard library
 import json
 import logging
+import time
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
@@ -14,13 +15,23 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 # Local
 from esdc.chat.context_manager import manage_context_node
 from esdc.chat.prompts import get_system_prompt
+from esdc.chat.query_classifier import (
+    QueryClassifier,
+    format_classification_for_prompt,
+)
 from esdc.chat.tools import (
+    execute_cypher,
     execute_sql,
     get_recommended_table,
+    get_resources_columns,
     get_schema,
+    get_timeseries_columns,
+    knowledge_traversal,
     list_tables,
+    resolve_spatial,
     resolve_uncertainty_level,
     search_problem_cluster,
+    semantic_search,
 )
 
 # Logger is configured by app.py (runs first)
@@ -92,7 +103,7 @@ def create_agent(
 
     Args:
         llm: A LangChain chat model
-        tools: Optional list of tools. Defaults to [execute_sql, get_schema, list_tables]
+        tools: Optional list of tools. Defaults to all registered tools
         checkpointer: Optional checkpointer for memory persistence
         context_length: Maximum context length in tokens for context management. Default: 6000
 
@@ -101,12 +112,18 @@ def create_agent(
     """
     if tools is None:
         tools = [
+            knowledge_traversal,
+            resolve_spatial,
+            semantic_search,
+            execute_cypher,
             execute_sql,
             get_schema,
             list_tables,
             get_recommended_table,
             resolve_uncertainty_level,
             search_problem_cluster,
+            get_timeseries_columns,
+            get_resources_columns,
         ]
 
     tools_by_name = {tool.name: tool for tool in tools}
@@ -190,13 +207,133 @@ def create_agent(
         """Wrapper for manage_context_node with bound context_length."""
         return manage_context_node(state, context_length=context_length)
 
+    def entity_resolution_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
+        """Pre-resolve entities from the last user message via knowledge graph.
+
+        Injects resolved entities as a system message so the LLM can use
+        them directly without needing to call knowledge_traversal as a tool.
+        """
+        messages = state["messages"]
+        if not messages:
+            return {"messages": []}
+
+        last_human = None
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage) and msg.content:
+                last_human = msg.content
+                break
+
+        if not last_human:
+            return {"messages": []}
+
+        try:
+            import json as _json
+
+            from esdc.chat.tools import knowledge_traversal
+
+            result_str = knowledge_traversal.invoke(
+                {"query": last_human, "return_multiple": False}
+            )
+            result = _json.loads(result_str)
+            logger.info(
+                "entity_resolution: status=%s entities=%d",
+                result.get("status"),
+                len(result.get("entities", [])),
+            )
+
+            if result.get("status") == "failed":
+                return {"messages": []}
+
+            entity_names = []
+            for e in result.get("entities", []):
+                if e.get("confidence", 0) >= 0.7:
+                    entity_names.append(
+                        f"- {e['type']}: {e['name']} (id={e.get('id', '?')})"
+                    )
+
+            if not entity_names:
+                return {"messages": []}
+
+            context_parts = [
+                "[Knowledge Graph - Auto-resolved entities]",
+                "The following entities were automatically resolved from your query.",
+                "Use these to write precise SQL WHERE clauses "
+                "instead of ILIKE patterns.",
+            ]
+            context_parts.extend(entity_names)
+
+            if result.get("where_conditions"):
+                context_parts.append("Suggested WHERE conditions:")
+                for wc in result["where_conditions"]:
+                    context_parts.append(f"  {wc}")
+
+            if result.get("suggested_table"):
+                context_parts.append(f"Suggested table: {result['suggested_table']}")
+
+            if result.get("required_columns"):
+                context_parts.append(
+                    f"Required columns: {', '.join(result['required_columns'])}"
+                )
+
+            context_msg = SystemMessage(content="\n".join(context_parts))
+            logger.info(
+                "entity_resolution: injecting %d entities for query='%s'",
+                len(entity_names),
+                last_human[:50],
+            )
+            return {"messages": [cast(AnyMessage, context_msg)]}
+
+        except Exception as e:
+            logger.warning("entity_resolution: failed - %s", e)
+            return {"messages": []}
+
+    def query_classification_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
+        """Classify query and inject strategy into system prompt."""
+        messages = state["messages"]
+        if not messages:
+            return {"messages": []}
+
+        # Find last human message
+        last_human = None
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage) and msg.content:
+                last_human = msg.content
+                break
+
+        if not last_human:
+            return {"messages": []}
+
+        try:
+            classifier = QueryClassifier()
+            classification = classifier.classify(last_human)
+
+            strategy_text = format_classification_for_prompt(classification)
+
+            strategy_msg = SystemMessage(content=strategy_text)
+            logger.info(
+                "query_classification: type=%s confidence=%.2f query='%s...'",
+                classification.query_type.name,
+                classification.confidence,
+                last_human[:50],
+            )
+            return {"messages": [cast(AnyMessage, strategy_msg)]}
+
+        except Exception as e:
+            logger.warning("query_classification: failed - %s", e)
+            return {"messages": []}
+
+    # Build graph with query classification
     graph = (
         StateGraph(MessagesState)
         .add_node("manage_context", manage_context_with_length)
+        .add_node("query_classification", query_classification_node)
+        .add_node("entity_resolution", entity_resolution_node)
         .add_node("agent", agent_node)
         .add_node("tools", tool_node)
         .add_edge(START, "manage_context")
-        .add_edge("manage_context", "agent")
+        .add_edge("manage_context", "query_classification")
+        .add_edge("query_classification", "entity_resolution")
+        .add_edge("entity_resolution", "agent")
         .add_conditional_edges(
             "agent",
             should_continue,
@@ -246,6 +383,11 @@ async def run_agent_stream(
         AnyMessage
     ] = []  # Track messages for real-time token count
 
+    stream_start = time.perf_counter()
+    first_token_time: float | None = None
+    first_llm_time: float | None = None
+    tool_call_time: float | None = None
+
     logger.info("=" * 60)
     logger.info("🔔 AGENT_STREAM_STARTED: thread_id=%s", thread_id)
     logger.info("=" * 60)
@@ -264,11 +406,21 @@ async def run_agent_stream(
 
         # Log every event (but not too spammy)
         if event_count <= 5 or event_count % 20 == 0:
-            logger.info("🔔 AGENT_EVENT #%d: type=%s", event_count, event_type)
+            elapsed_ms = (time.perf_counter() - stream_start) * 1000
+            logger.debug(
+                "🔔 AGENT_EVENT #%d: type=%s | elapsed=%.0fms",
+                event_count,
+                event_type,
+                elapsed_ms,
+            )
 
         # Handle token streaming (character-by-character)
         # ChatOllama may emit either on_chat_model_stream or on_llm_stream
         if event_type in ("on_chat_model_stream", "on_llm_stream"):
+            if first_token_time is None:
+                first_token_time = time.perf_counter()
+                ttft_ms = (first_token_time - stream_start) * 1000
+                logger.debug("[TIMING] first_token | ttft=%.2fms", ttft_ms)
             token_event_count += 1
             chunk = data.get("chunk")
             if chunk:
@@ -316,6 +468,10 @@ async def run_agent_stream(
 
         # Handle completion (tool calls, final message)
         elif event_type == "on_chat_model_end":
+            if first_llm_time is None:
+                first_llm_time = time.perf_counter()
+                elapsed_ms = (first_llm_time - stream_start) * 1000
+                logger.debug("[TIMING] first_llm_response | elapsed=%.2fms", elapsed_ms)
             logger.info("🔚 CHAT_MODEL_END: completing LLM call")
             output = data.get("output")
             if output:
@@ -400,6 +556,15 @@ async def run_agent_stream(
             tool_result = data.get("output")
             tool_name = event.get("name", "unknown")
 
+            if tool_call_time is None:
+                tool_call_time = time.perf_counter()
+                elapsed_ms = (tool_call_time - stream_start) * 1000
+                logger.debug(
+                    "[TIMING] first_tool_result | elapsed=%.2fms | tool=%s",
+                    elapsed_ms,
+                    tool_name,
+                )
+
             logger.info(
                 "🔧 AGENT_TOOL_END: tool=%s, result_len=%d",
                 tool_name,
@@ -450,6 +615,36 @@ async def run_agent_stream(
                 "result": str(tool_result),
                 "sql": sql,
             }
+
+    # Stream complete - log final timing summary
+    total_ms = (time.perf_counter() - stream_start) * 1000
+    logger.debug("=" * 60)
+    logger.debug(
+        "[TIMING] STREAM_COMPLETE | total=%.2fms | events=%d", total_ms, event_count
+    )
+    if first_token_time:
+        ttft_ms = (first_token_time - stream_start) * 1000
+        logger.debug("[TIMING] time_to_first_token=%.2fms", ttft_ms)
+    if first_llm_time:
+        llm_ms = (first_llm_time - stream_start) * 1000
+        logger.debug("[TIMING] time_to_first_llm_response=%.2fms", llm_ms)
+    if tool_call_time:
+        tool_ms = (tool_call_time - stream_start) * 1000
+        logger.debug("[TIMING] time_to_first_tool_result=%.2fms", tool_ms)
+    logger.debug("=" * 60)
+    logger.info(
+        "[TIMING] STREAM_COMPLETE | total=%.2fms | events=%d", total_ms, event_count
+    )
+    if first_token_time:
+        ttft_ms = (first_token_time - stream_start) * 1000
+        logger.info("[TIMING] time_to_first_token=%.2fms", ttft_ms)
+    if first_llm_time:
+        llm_ms = (first_llm_time - stream_start) * 1000
+        logger.info("[TIMING] time_to_first_llm_response=%.2fms", llm_ms)
+    if tool_call_time:
+        tool_ms = (tool_call_time - stream_start) * 1000
+        logger.info("[TIMING] time_to_first_tool_result=%.2fms", tool_ms)
+    logger.info("=" * 60)
 
 
 def _extract_token_usage(message: AIMessage, user_input: str) -> int:

@@ -275,6 +275,8 @@ async def generate_streaming_response(
     event_counter = 0
     yield_counter = 0
     seen_msg_ids: set[str] = set()
+    stream_start = time.perf_counter()
+    first_token_time: float | None = None
 
     logger.debug("=" * 80)
     logger.debug(
@@ -314,6 +316,9 @@ async def generate_streaming_response(
 
         llm = create_llm_from_config(provider_config_obj)
         agent = create_agent(llm, checkpointer=None)
+        logger.debug(
+            f"[{request_id}] [TIMING] llm_and_agent_created | elapsed={((time.perf_counter() - stream_start) * 1000):.2f}ms"
+        )
 
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
@@ -362,6 +367,13 @@ async def generate_streaming_response(
                     f"No AIMessage extracted, skipping"
                 )
                 continue
+
+            if first_token_time is None:
+                first_token_time = time.perf_counter()
+                ttft_ms = (first_token_time - stream_start) * 1000
+                logger.debug(
+                    f"[{request_id}] [TIMING] first_ai_message | ttft={ttft_ms:.2f}ms"
+                )
 
             # DEBUG: Log AIMessage details with duplicate detection
             msg_id = getattr(ai_msg, "id", "no-id")
@@ -469,9 +481,13 @@ async def generate_streaming_response(
                         )
 
         # Send final chunk
+        total_ms = (time.perf_counter() - stream_start) * 1000
         logger.debug(
             f"[{request_id}] STREAM_END - events={event_counter}, "
             f"yields={yield_counter}, unique_msg_ids={len(seen_msg_ids)}"
+        )
+        logger.debug(
+            f"[{request_id}] [TIMING] stream_complete | total={total_ms:.2f}ms | events={event_counter}"
         )
 
         if use_native_format:

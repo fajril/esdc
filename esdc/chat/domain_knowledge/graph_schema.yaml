@@ -1,0 +1,889 @@
+# ESDC Knowledge Graph Entity Schema
+# Version: 1.1
+# Purpose: Define entity types, attributes, aliases, and relationships for LadybugDB
+#
+# Convention:
+#   - Attributes use exact column names from project_resources / project_timeseries
+#   - PK = Primary Key (required for LadybugDB node tables)
+#   - FK = Foreign Key (used for relationships)
+#   - ENUM = Enum property (not a separate node)
+#   - AUTO = Auto-generated during graph build (not from source data)
+#   - Derived from project_resources unless marked [timeseries]
+
+entity_types:
+
+  # ==========================================================================
+  # CORE ENTITIES
+  # ==========================================================================
+
+  Project:
+    description: "Oil/gas project - the most granular unit in ESDC. Contains ONLY static attributes that never change across reports."
+    attributes:
+      - project_id          # PK - source: project_id from API - truly static
+      - project_name        # Truly static - project name doesn't change
+      - project_name_previous  # Truly static - historical name
+      - field_id            # FK to Field - static assignment (project always in same field)
+    note: "Minimal entity. All report-varying attributes (stage, class, onstream, etc.) are in Report entity."
+
+  Field:
+    description: Oil/gas field - geographic/production unit containing projects
+    attributes:
+      - field_id       # PK
+      - field_name
+      - field_name_previous
+      - field_lat
+      - field_long
+      - field_area
+
+  WorkingArea:
+    description: WK (Wilayah Kerja) - contract/PSC area
+    attributes:
+      - wk_id          # PK
+      - wk_name
+      - wk_lat
+      - wk_long
+      - wk_area
+      - wk_area_ori
+      - wk_area_latest
+      - psc_eff_start
+      - psc_eff_end
+      - wk_subgroup
+      - wk_area_perwakilan_skkmigas
+      - wk_regionisasi_ngi
+
+  Basin128:
+    description: Geologic basin (128 classification)
+    attributes:
+      - basin128_id    # PK (mapped from basin128_id)
+      - basin128
+
+  Basin86:
+    description: Geologic basin (86 classification)
+    attributes:
+      - basin86_id    # PK (mapped from basin86_id)
+      - basin86
+
+  Province:
+    description: Indonesian province
+    attributes:
+      - prov_id       # PK
+      - province
+
+  Country:
+    description: Country (always Indonesia for ESDC)
+    attributes:
+      - country_id    # PK - ISO 3166-1 alpha-2 code
+      - country       # Always "Indonesia"
+    note: This node is not available in the source data. Auto-generated.
+
+  Operator:
+    description: Company operating a project/field
+    attributes:
+      - operator_id   # PK - AUTO (generated from operator_name hash)
+      - operator_name
+      - operator_group
+
+  POD:
+    description: Plan of Development - regulatory document for project
+    attributes:
+      - pod_id        # PK - AUTO (generated from pod_letter_num)
+      - pod_letter_num
+      - pod_name_raw  # Original semicolon-separated string
+      - pod_name      # Primary name (first from split)
+      - pod_date
+    note: pod_name can be semicolon-separated. Split into separate nodes during build.
+
+  # ==========================================================================
+  # REPORT & CLASSIFICATION
+  # ==========================================================================
+
+  Report:
+    description: "A specific report instance capturing the COMPLETE state of a project at a point in time. Contains ALL attributes that vary by report."
+    attributes:
+      - report_id           # PK - AUTO (composite: project_id + report_date)
+      - report_date
+      - report_year         # For filtering: tahun 2024
+      - report_status       # ENUM: Approved, Draft, Submitted
+      - is_offshore
+      - is_discovered       # Derived from project_class
+      - project_eol         # Project end of life year
+      - project_isactive
+      - project_stage       # 1. Exploitation, 2. Exploration, 3. Abandoned
+      - project_class       # 1. Reserves & GRR, 2. Contingent, 3. Prospective
+      - project_level       # E0-E8, X1-X5, A1-A3
+      - is_ltp
+      - is_pse_approved
+      - is_pod_approved
+      - is_report_accepted
+      - is_unitization
+      - onstream_year
+      - onstream_actual
+      - prod_stage
+      - groovy_isactive
+      - fusion_isactive
+      # Working Area (can change between reports!)
+      - wk_id
+      - wk_name
+      # Operator (can change between reports!)
+      - operator_name
+      - operator_group
+      # Foreign Keys
+      - project_id          # FK to Project (static)
+      - field_id            # FK to Field (static via Project)
+    note: "Complete project state snapshot. All report-varying attributes (stage, class, onstream, operator, etc.) captured here."
+
+  # ==========================================================================
+  # VOLUME ENTITIES (Resources table)
+  # ==========================================================================
+
+  Reserves:
+    description: "Reserves & GRR volumes at all aggregation levels. Maps to project_resources, field_resources, wa_resources, nkri_resources views."
+    attributes:
+      - reserves_id       # PK - AUTO
+      - level             # ENUM: project, field, wa, nkri
+      - report_year       # For filtering: tahun 2024
+      - uncert_level      # 1P/2P/3P (Low/Mid/High Value)
+      # Foreign keys (populated based on level)
+      - project_id        # Set if level=project
+      - field_id          # Set if level=field/wa/nkri
+      - wk_id             # Set if level=wa/nkri
+      # Volume columns (from view SUM aggregation)
+      - res_oil
+      - res_con
+      - res_ga
+      - res_gn
+      - res_oc
+      - res_an
+      - res_mboe
+      # EUR - Estimated Ultimate Recovery (Reserves)
+      - eur_res_oil
+      - eur_res_con
+      - eur_res_ga
+      - eur_res_gn
+      - eur_res_oc
+      - eur_res_an
+    note: "Multi-level: Project level from project_resources; Field/WA/NKRI level from field_resources/wa_resources/nkri_resources views. Includes EUR (Estimated Ultimate Recovery) for reserves."
+
+  Resources:
+    description: "Contingent and Prospective Resources at all levels. Maps to project_resources, field_resources, wa_resources, nkri_resources views."
+    attributes:
+      - resources_id      # PK - AUTO
+      - level             # ENUM: project, field, wa, nkri
+      - report_year
+      - project_class     # 2. Contingent or 3. Prospective
+      - uncert_level      # 1C/2C/3C or 1P/2P/3P
+      - project_id        # Set if level=project
+      - field_id          # Set if level=field/wa/nkri
+      - wk_id             # Set if level=wa/nkri
+      - rec_oil
+      - rec_con
+      - rec_ga
+      - rec_gn
+      - rec_oc
+      - rec_an
+      - rec_mboe
+      - rec_oil_risked
+      - rec_con_risked
+      - rec_ga_risked
+      - rec_gn_risked
+      - rec_oc_risked
+      - rec_an_risked
+      - rec_mboe_risked
+      # EUR - Estimated Ultimate Recovery (Resources)
+      - eur_rec_oil
+      - eur_rec_con
+      - eur_rec_ga
+      - eur_rec_gn
+      - eur_rec_oc
+      - eur_rec_an
+    note: "Risked columns NULL for Contingent Resources. EUR columns for resources."
+
+  InPlace:
+    description: "In-place volumes at all levels. ioip/igip from prj_ioip/prj_igip at project level; SUM at field/wa/nkri level."
+    attributes:
+      - inplace_id        # PK - AUTO
+      - level             # ENUM: project, field, wa, nkri
+      - report_year
+      - uncert_level      # P90/P50/P10
+      - project_id        # Set if level=project
+      - field_id          # Set if level=field/wa/nkri
+      - wk_id             # Set if level=wa/nkri
+      - ioip              # Initial Oil In Place
+      - igip              # Initial Gas In Place
+      # Recovery Factor (calculated: cumulative production / in-place)
+      - rf_oil            # Recovery Factor for oil
+      - rf_gas            # Recovery Factor for gas
+    note: "Each project/field/wa/nkri has 3 InPlace nodes (P90, P50, P10) per report_year. Includes Recovery Factor (rf_oil, rf_gas)."
+
+  # ==========================================================================
+  # VOLUME ENTITIES (Timeseries table)
+  # ==========================================================================
+
+  CumulativeProduction:
+    description: "Cumulative gross/sales production at all levels. From project_timeseries, field_timeseries, wa_timeseries, nkri_timeseries views."
+    attributes:
+      - cumprod_id        # PK - AUTO
+      - level             # ENUM: project, field, wa, nkri
+      - report_year       # Report year (not production year)
+      - project_id        # Set if level=project
+      - field_id          # Set if level=field/wa/nkri
+      - wk_id             # Set if level=wa/nkri
+      - cprd_grs_oil
+      - cprd_grs_con
+      - cprd_grs_ga
+      - cprd_grs_gn
+      - cprd_grs_oc
+      - cprd_grs_an
+      - cprd_sls_oil
+      - cprd_sls_con
+      - cprd_sls_ga
+      - cprd_sls_gn
+      - cprd_sls_oc
+      - cprd_sls_an
+    note: "Cumulative from onstream to report_year. Single value per report_year (not timeseries)."
+
+  ProductionYearlyRate:
+    description: "Yearly production rates at all levels. From project_timeseries, field_timeseries, wa_timeseries, nkri_timeseries views."
+    attributes:
+      - prodrate_id       # PK - AUTO
+      - level             # ENUM: project, field, wa, nkri
+      - report_year       # The report year (not the production year)
+      - year              # The actual production year (history year)
+      - project_id        # Set if level=project
+      - field_id          # Set if level=field/wa/nkri
+      - wk_id             # Set if level=wa/nkri
+      - rate_oil
+      - rate_con
+      - rate_ga
+      - rate_gn
+      - rate_oc
+      - rate_an
+    note: "Timeseries data - multiple rows per report_year (one per history year)."
+
+  Forecast:
+    description: "Production forecast at all levels (tpf, slf, spf, crf, prf, ciof, lossf). From project_timeseries, field_timeseries, wa_timeseries, nkri_timeseries views."
+    attributes:
+      - forecast_id       # PK - AUTO
+      - level             # ENUM: project, field, wa, nkri
+      - report_year       # The report year (the forecast was made)
+      - year              # The forecast year (future year being forecasted)
+      - project_id        # Set if level=project
+      - field_id          # Set if level=field/wa/nkri
+      - wk_id             # Set if level=wa/nkri
+      # Total Potential Forecast
+      - tpf_oil
+      - tpf_con
+      - tpf_ga
+      - tpf_gn
+      - tpf_oc
+      - tpf_an
+      - tpf_risked_oil
+      - tpf_risked_con
+      - tpf_risked_ga
+      - tpf_risked_gn
+      - tpf_risked_oc
+      - tpf_risked_an
+      # Sales Forecast
+      - slf_oil
+      - slf_con
+      - slf_ga
+      - slf_gn
+      - slf_oc
+      - slf_an
+      # Sales Potential Forecast
+      - spf_oil
+      - spf_con
+      - spf_ga
+      - spf_gn
+      - spf_oc
+      - spf_an
+      # Contingent Resources Forecast
+      - crf_oil
+      - crf_con
+      - crf_ga
+      - crf_gn
+      - crf_oc
+      - crf_an
+      # Prospective Resources Forecast
+      - prf_oil
+      - prf_con
+      - prf_ga
+      - prf_gn
+      - prf_oc
+      - prf_an
+      # Consumed in Operation Forecast
+      - ciof_oil
+      - ciof_con
+      - ciof_ga
+      - ciof_gn
+      - ciof_oc
+      - ciof_an
+      # Loss Production Forecast
+      - lossf_oil
+      - lossf_con
+      - lossf_ga
+      - lossf_gn
+      - lossf_oc
+      - lossf_an
+      # Gross Heating Value
+      - ghv
+    note: "Timeseries data - multiple rows per report_year (one per forecast year)."
+
+  YearOverYearChange:
+    description: "Year-over-year EUR (Estimated Ultimate Recovery) volume changes by cause category. Tracks QUANTITATIVE changes (why reserves/resources changed), NOT qualitative issues."
+    attributes:
+      - change_id           # PK - AUTO
+      - level               # ENUM: project, field, wa, nkri
+      - report_year         # Current year (the change TO)
+      - previous_year       # Previous year (the change FROM)
+      - uncert_level        # 1P/2P/3P or 1C/2C/3C - same as reserves/resources
+      - project_id          # Set if level=project
+      - field_id            # Set if level=field/wa/nkri
+      - wk_id               # Set if level=wa/nkri
+      # Category 1: UM = Update Model (subsurface model changes)
+      - dcpy_um_oil
+      - dcpy_um_con
+      - dcpy_um_ga
+      - dcpy_um_gn
+      - dcpy_um_oc
+      - dcpy_um_an
+      # Category 2: PPA = Production Performance Analysis (decline curve, material balance)
+      - dcpy_ppa_oil
+      - dcpy_ppa_con
+      - dcpy_ppa_ga
+      - dcpy_ppa_gn
+      - dcpy_ppa_oc
+      - dcpy_ppa_an
+      # Category 3: WI = Well Intervention (workover, well services)
+      - dcpy_wi_oil
+      - dcpy_wi_con
+      - dcpy_wi_ga
+      - dcpy_wi_gn
+      - dcpy_wi_oc
+      - dcpy_wi_an
+      # Category 4: CIO = Consumed In Operations (flare, fuel, shrinkage)
+      - dcpy_cio_oil
+      - dcpy_cio_con
+      - dcpy_cio_ga
+      - dcpy_cio_gn
+      - dcpy_cio_oc
+      - dcpy_cio_an
+      # Category 5: GTR = GRR to Reserves (commerciality: PSC extension, GSA, etc.)
+      - dcpy_gtr_oil
+      - dcpy_gtr_con
+      - dcpy_gtr_ga
+      - dcpy_gtr_gn
+      - dcpy_gtr_oc
+      - dcpy_gtr_an
+      # Category 6: UC = Unaccounted Changes
+      - dcpy_uc_oil
+      - dcpy_uc_con
+      - dcpy_uc_ga
+      - dcpy_uc_gn
+      - dcpy_uc_oc
+      - dcpy_uc_an
+    note: "Tracks 6 categories of EUR volume changes (UM, PPA, WI, CIO, GTR, UC). For qualitative issues, see Report.project_remarks instead."
+
+  # ==========================================================================
+  # ENUM DEFINITIONS (not nodes, just property constraints)
+  # ==========================================================================
+
+  enums:
+    report_status:
+      description: "Status of the report submission"
+      values:
+        - "Approved"         # Final approved report
+        - "Draft"            # Draft/preliminary report
+        - "Submitted"        # Submitted for review
+
+    project_class:
+      description: "Classification of project based on maturity"
+      values:
+        - "1. Reserves & GRR"
+        - "2. Contingent Resources"  # Note: spelled as 'Contigent' in some source data
+        - "3. Prospective Resources"
+        - "4. Abandoned"
+
+    project_stage:
+      values:
+        - "1. Exploitation"
+        - "2. Exploration"
+        - "3. Abandoned"
+
+    uncert_level:
+      values:
+        - "1. Low Value"
+        - "2. Middle Value"
+        - "3. High Value"
+
+    aggregation_level:
+      description: "Hierarchy level for volume entities (project/field/wa/nkri)"
+      values:
+        - "project"
+        - "field"
+        - "wa"
+        - "nkri"
+
+# ============================================================================
+# RELATIONSHIPS (Edge Types)
+# ============================================================================
+
+relationships:
+
+  # --- Hierarchical / Spatial ---
+
+  PROJECT_BELONGS_TO_FIELD:
+    from: Project
+    to: Field
+    cardinality: MANY_TO_ONE
+    description: "A project belongs to one field (static assignment, never changes)"
+
+  REPORT_BELONGS_TO_PROJECT:
+    from: Report
+    to: Project
+    cardinality: MANY_TO_ONE
+    description: "A report captures project state at a point in time. Report has varying attributes (stage, class, operator, onstream); Project has static attributes (id, name)."
+
+  REPORT_BELONGS_TO_FIELD:
+    from: Report
+    to: Field
+    cardinality: MANY_TO_ONE
+    description: "Report belongs to field (denormalized for convenience, or via Project)"
+
+  REPORT_IN_WORKING_AREA:
+    from: Report
+    to: WorkingArea
+    cardinality: MANY_TO_ONE
+    description: "Report captures project's working area at report time (wk_id can vary between reports)"
+
+  REPORT_OPERATED_BY:
+    from: Report
+    to: Operator
+    cardinality: MANY_TO_ONE
+    description: "Report captures project's operator at report time (operator can vary between reports)"
+
+  FIELD_LOCATED_IN_WORKING_AREA:
+    from: Field
+    to: WorkingArea
+    cardinality: MANY_TO_ONE
+    description: "A field is within one working area (static geographic assignment)"
+
+  WORKING_AREA_IN_PROVINCE:
+    from: WorkingArea
+    to: Province
+    cardinality: MANY_TO_ONE
+    description: "A working area is in one province"
+
+  PROVINCE_IN_COUNTRY:
+    from: Province
+    to: Country
+    cardinality: MANY_TO_ONE
+    description: "A province belongs to a country"
+
+  # --- Geologic ---
+
+  FIELD_IN_BASIN128:
+    from: Field
+    to: Basin128
+    cardinality: MANY_TO_ONE
+    description: "A field is in a geologic basin (128 classification)"
+
+  FIELD_IN_BASIN86:
+    from: Field
+    to: Basin86
+    cardinality: MANY_TO_ONE
+    description: "A field is in a geologic basin (86 classification)"
+
+  # --- POD (static assignment) ---
+
+  PROJECT_HAS_POD:
+    from: Project
+    to: POD
+    cardinality: MANY_TO_MANY
+    description: "A project can have multiple PODs (static assignment via POD mapping table)"
+
+  # --- Volume relationships (link to Report for project-level data) ---
+  # At project level: volumes linked via report_id (which has project_id)
+  # At field/wa/nkri level: volumes linked via field_id/wk_id
+
+  REPORT_HAS_RESERVES:
+    from: Report
+    to: Reserves
+    cardinality: ONE_TO_MANY
+    description: "Report has reserve volumes (1P/2P/3P) at project level"
+
+  REPORT_HAS_RESOURCES:
+    from: Report
+    to: Resources
+    cardinality: ONE_TO_MANY
+    description: "Report has resource volumes (1C/2C/3C or 1P/2P/3P) at project level"
+
+  REPORT_HAS_INPLACE:
+    from: Report
+    to: InPlace
+    cardinality: ONE_TO_MANY
+    description: "Report has in-place volumes (P90/P50/P10) at project level"
+
+  REPORT_HAS_CUMULATIVE_PRODUCTION:
+    from: Report
+    to: CumulativeProduction
+    cardinality: ONE_TO_ONE
+    description: "Report has cumulative production up to report year"
+
+  REPORT_HAS_YEARLY_RATE:
+    from: Report
+    to: ProductionYearlyRate
+    cardinality: ONE_TO_MANY
+    description: "Report has yearly production rates (history)"
+
+  REPORT_HAS_FORECAST:
+    from: Report
+    to: Forecast
+    cardinality: ONE_TO_MANY
+    description: "Report has production forecast (future years)"
+
+  REPORT_HAS_YEARLY_CHANGE:
+    from: Report
+    to: YearOverYearChange
+    cardinality: ONE_TO_MANY
+    description: "Report has year-over-year volume change explanations for EUR changes"
+
+  # --- Field/WA/NKRI-level volume relationships (aggregated) ---
+
+  FIELD_HAS_RESERVES:
+    from: Field
+    to: Reserves
+    cardinality: ONE_TO_MANY
+    description: "Field has aggregated reserve volumes (SUM of all projects in field)"
+
+  FIELD_HAS_RESOURCES:
+    from: Field
+    to: Resources
+    cardinality: ONE_TO_MANY
+    description: "Field has aggregated resource volumes"
+
+  FIELD_HAS_YEARLY_RATE:
+    from: Field
+    to: ProductionYearlyRate
+    cardinality: ONE_TO_MANY
+    description: "Field has historical production rates by year (direct access, 1 hop)"
+
+  FIELD_HAS_FORECAST:
+    from: Field
+    to: Forecast
+    cardinality: ONE_TO_MANY
+    description: "Field has production forecasts by year (direct access, 1 hop)"
+
+  WORKING_AREA_HAS_RESERVES:
+    from: WorkingArea
+    to: Reserves
+    cardinality: ONE_TO_MANY
+    description: "Working area has aggregated reserve volumes"
+
+  # --- Disambiguation ---
+
+  ALIAS_OF:
+    from: EntityAlias
+    to: [Project, Field, WorkingArea, Operator, Province, Basin128]
+    cardinality: MANY_TO_ONE
+    description: "An alias refers to a canonical entity"
+    properties:
+      - alias_name: STRING
+      - match_type: STRING  # exact, token, acronym, fuzzy
+      - confidence: FLOAT   # 0.0 - 1.0
+
+# ============================================================================
+# ALIASES & ABBREVIATIONS
+# ============================================================================
+
+aliases:
+  # Format: alias_string:
+  #   entity_type: <EntityTypeName>
+  #   canonical_key: <PK value of canonical entity>
+  #   confidence: exact | high | medium | low
+  #
+  # TODO: Fill in known aliases below. Auto-generated aliases will be
+  # supplemented from tokenization, fuzzy matching, and acronym extraction.
+
+  # --- Field aliases ---
+  # "MDK":
+  #   entity_type: Field
+  #   canonical_key: MDK
+  #   confidence: exact
+
+  # --- Working Area aliases ---
+  # "WK Rokan":
+  #   entity_type: WorkingArea
+  #   canonical_key: Rokan
+  #   confidence: exact
+
+  # --- Operator aliases ---
+  # "PHR":
+  #   entity_type: Operator
+  #   canonical_key: PT Pertamina Hulu Rokan
+  #   confidence: exact
+  # "CPI":
+  #   entity_type: Operator
+  #   canonical_key: Chevron Pacific Indonesia
+  #   confidence: exact
+
+# ============================================================================
+# QUERY PATTERNS
+# ============================================================================
+
+query_patterns:
+
+  profil_produksi:
+    description: "Production profile forecast for a field"
+    keywords: ["profil", "produksi", "forecast", "profile", "prediksi", "tpf"]
+    primary_entity: Field
+    requires_entity: true
+    default_table: field_timeseries
+    suggested_columns: [tpf_oc, tpf_an, slf_oc, slf_an]
+
+  cadangan:
+    description: "Reserve/resource volumes"
+    keywords: ["cadangan", "reserves", "sumber daya", "resources"]
+    primary_entity: Field
+    requires_entity: true
+    default_table: field_resources
+    suggested_columns: [res_oc, res_an, rec_oc, rec_an]
+
+  top_n:
+    description: "Top N entities by volume"
+    keywords: ["top", "tertinggi", "terbesar", "largest", "ranking"]
+    primary_entity: Field
+    requires_entity: false
+    aggregation: SUM
+    order_by: DESC
+
+  per_operator:
+    description: "All projects/fields by operator"
+    keywords: ["operator", "perusahaan", "company", "Pertamina", "Chevron"]
+    primary_entity: Operator
+    requires_entity: true
+    traversal: Operator -> Project -> Field
+
+  per_wk:
+    description: "All projects/fields in working area"
+    keywords: ["wilayah kerja", "wk", "working area", "blok"]
+    primary_entity: WorkingArea
+    requires_entity: true
+    traversal: WorkingArea -> Field -> Project
+
+  issues_remarks:
+    description: "Look for qualitative issues/problems in project_remarks or vol_remarks. YearOverYearChange is for quantitative volume changes only."
+    keywords: ["isu", "masalah", "problem", "issue", "catatan", "remarks"]
+    primary_entity: Report
+    requires_entity: true
+    key_columns: [project_remarks, vol_remarks]
+    note: "Do NOT query YearOverYearChange entity for 'issues' - that's for volume change categories (dcpy_* columns). Use Report.project_remarks for qualitative issue descriptions."
+
+  last_production_year:
+    description: "Find the last year a field/project produced (non-zero production). Use direct FIELD_HAS_YEARLY_RATE relationship."
+    keywords: ["terakhir berproduksi", "last produced", "produksi terakhir", "kapan", "when"]
+    primary_entity: Field
+    requires_entity: true
+    key_columns: [year, rate_oil, rate_gas]
+    filter: "rate_oil > 0 OR rate_gas > 0"
+    aggregation: "MAX(year)"
+    note: "Use direct FIELD_HAS_YEARLY_RATE relationship for 1-hop query. Filter for years with actual production (rate > 0), then take MAX(year)."
+
+  # ==========================================================================
+  # COMPOSITE QUERY PATTERNS (Single Tool Call - Multiple Lookups Combined)
+  # ==========================================================================
+
+  field_complete_status:
+    description: "Get complete field information: attributes, latest report status, reserves, and issues in SINGLE query"
+    keywords: ["status lapangan", "informasi lengkap", "complete field info", "gambaran lapangan"]
+    primary_entity: Field
+    requires_entity: true
+    cypher: |
+      MATCH (f:Field {field_name: $field_name})
+      OPTIONAL MATCH (f)<-[:PROJECT_BELONGS_TO_FIELD]-(p:Project)
+      OPTIONAL MATCH (p)<-[:REPORT_BELONGS_TO_PROJECT]-(r:Report)
+      WHERE r.report_year = $report_year
+      OPTIONAL MATCH (f)<-[:FIELD_HAS_RESERVES]-(res:Reserves)
+      WHERE res.report_year = $report_year AND res.uncert_level = '2. Middle Value'
+      RETURN 
+        f.field_name,
+        f.wk_name,
+        r.project_stage,
+        r.project_class,
+        r.onstream_year,
+        r.report_status,
+        r.is_pse_approved,
+        r.is_pod_approved,
+        res.res_oc,
+        res.res_an,
+        res.res_mboe
+    note: "SINGLE query returns: field info, project status, and reserves (mid/2P). Avoid multiple tool calls."
+
+  field_reserves_with_report:
+    description: "Get field reserves and associated report details in single query"
+    keywords: ["cadangan lapangan", "reserves field", "GRR lapangan", "sumber daya lapangan"]
+    primary_entity: Field
+    requires_entity: true
+    cypher: |
+      MATCH (f:Field {field_name: $field_name})
+      OPTIONAL MATCH (f)<-[:FIELD_HAS_RESERVES]-(res:Reserves)
+      WHERE res.report_year = $report_year
+      OPTIONAL MATCH (f)<-[:PROJECT_BELONGS_TO_FIELD]-(p:Project)
+      OPTIONAL MATCH (p)<-[:REPORT_BELONGS_TO_PROJECT]-(r:Report)
+      WHERE r.report_year = $report_year
+      RETURN 
+        f.field_name,
+        res.uncert_level,
+        res.res_oc,
+        res.res_an,
+        res.res_mboe,
+        res.eur_res_oc,
+        res.eur_res_an,
+        r.report_date,
+        r.report_status
+    note: "Returns reserves at all uncertainty levels (1P/2P/3P) plus EUR values. Combine with report metadata."
+
+  field_production_timeline:
+    description: "Get complete production history for a field (single query)"
+    keywords: ["profil produksi", "produksi historis", "riwayat produksi", "production history", "timeline"]
+    primary_entity: Field
+    requires_entity: true
+    cypher: |
+      MATCH (f:Field {field_name: $field_name})<-[:FIELD_HAS_YEARLY_RATE]-(p:ProductionYearlyRate)
+      WHERE p.level = 'field' AND p.report_year = $report_year
+      RETURN 
+        p.year,
+        p.rate_oil,
+        p.rate_gas,
+        p.rate_oc,
+        p.rate_an
+      ORDER BY p.year ASC
+    note: "Returns timeseries data. Use for production profiles and trend analysis."
+
+  field_forecast_timeline:
+    description: "Get production forecast for a field (single query)"
+    keywords: ["forecast", "prediksi", "ramalan", "proyeksi", "prospective production"]
+    primary_entity: Field
+    requires_entity: true
+    cypher: |
+      MATCH (f:Field {field_name: $field_name})<-[:FIELD_HAS_FORECAST]-(fc:Forecast)
+      WHERE fc.level = 'field' AND fc.report_year = $report_year
+      RETURN 
+        fc.year,
+        fc.tpf_oc,
+        fc.tpf_an,
+        fc.slf_oc,
+        fc.slf_an
+      ORDER BY fc.year ASC
+    note: "Returns forecast timeseries (TPF/SLF). Use for future production estimates."
+
+  field_issues_remarks:
+    description: "Get field issues from project_remarks in single query (not from YearOverYearChange)"
+    keywords: ["isu lapangan", "masalah lapangan", "catatan lapangan", "problems", "issues"]
+    primary_entity: Field
+    requires_entity: true
+    cypher: |
+      MATCH (f:Field {field_name: $field_name})<-[:PROJECT_BELONGS_TO_FIELD]-(p:Project)
+      OPTIONAL MATCH (p)<-[:REPORT_BELONGS_TO_PROJECT]-(r:Report)
+      WHERE r.report_year = $report_year
+      RETURN 
+        f.field_name,
+        r.project_remarks,
+        r.vol_remarks,
+        r.report_status
+    note: "For qualitative issues, query project_remarks. For volume changes, query YearOverYearChange."
+
+  working_area_aggregated_reserves:
+    description: "Get aggregated reserves for a Working Area (single query)"
+    keywords: ["cadangan WK", "cadangan wilayah kerja", "reserves working area", "total WK"]
+    primary_entity: WorkingArea
+    requires_entity: true
+    cypher: |
+      MATCH (wk:WorkingArea {wk_name: $wk_name})<-[:WORKING_AREA_HAS_RESERVES]-(res:Reserves)
+      WHERE res.report_year = $report_year AND res.uncert_level = '2. Middle Value'
+      RETURN 
+        wk.wk_name,
+        res.res_oc,
+        res.res_an,
+        res.res_mboe,
+        res.eur_res_oc,
+        res.eur_res_an
+    note: "Returns AGGREGATED reserves (sum of all fields in WK). Use for WK-level analysis."
+
+  field_recovery_metrics:
+    description: "Get recovery factor and in-place volumes for a field"
+    keywords: ["recovery factor", "rf oil", "rf gas", "in place", "ioip", "igip"]
+    primary_entity: Field
+    requires_entity: true
+    cypher: |
+      MATCH (f:Field {field_name: $field_name})<-[:REPORT_BELONGS_TO_FIELD]-(r:Report)
+      WHERE r.report_year = $report_year
+      OPTIONAL MATCH (r)-[:REPORT_HAS_INPLACE]->(ip:InPlace)
+      WHERE ip.uncert_level = 'P50'
+      RETURN 
+        f.field_name,
+        ip.ioip,
+        ip.igip,
+        ip.rf_oil,
+        ip.rf_gas
+    note: "Returns P50 (mid) in-place volumes and calculated recovery factors."
+
+  field_volume_changes:
+    description: "Get year-over-year volume changes by category (UM, PPA, WI, CIO, GTR, UC)"
+    keywords: ["perubahan volume", "kenapa turun", "volume change", "discrepancy", "update model", "EUR change"]
+    primary_entity: Field
+    requires_entity: true
+    cypher: |
+      MATCH (f:Field {field_name: $field_name})
+      OPTIONAL MATCH (f)<-[:FIELD_LOCATED_IN_WORKING_AREA]-(wk:WorkingArea)
+      OPTIONAL MATCH (f)<-[:REPORT_BELONGS_TO_FIELD]-(r:Report)
+      WHERE r.report_year = $report_year
+      OPTIONAL MATCH (r)-[:REPORT_HAS_YEARLY_CHANGE]->(yc:YearOverYearChange)
+      WHERE yc.report_year = $report_year
+      RETURN 
+        f.field_name,
+        yc.dcpy_um_oc AS update_model,
+        yc.dcpy_ppa_oc AS production_analysis,
+        yc.dcpy_wi_oc AS well_intervention,
+        yc.dcpy_gtr_oc AS commerciality_change,
+        yc.dcpy_uc_oc AS unaccounted,
+        r.project_remarks
+    note: "Use YearOverYearChange for quantitative changes, NOT for qualitative issues."
+
+# ============================================================================
+# SPECIAL CASES & NOTES
+# ============================================================================
+
+special_cases:
+  duplicate_field_names:
+    description: "Field names like 'A' appear in multiple WGs - need WK context to disambiguate"
+    resolution: "When user query matches multiple fields, return all matches with WK context for disambiguation"
+
+  abbreviation_conflicts:
+    description: "Same abbreviation might refer to different entity types"
+    resolution: "Use context from query (lapangan→Field, operator→Operator, wk→WorkingArea)"
+
+  pod_name_splitting:
+    description: "pod_name can be semicolon-separated with multiple POD names"
+    resolution: "Use separate POD mapping table instead. Split pod_name into individual POD nodes during graph build."
+
+  field_name_previous:
+    description: "Fields may have been renamed (field_name_previous column)"
+    resolution: "Create ALIAS_OF relationships from previous names to current field"
+
+  basin_dual_classification:
+    description: "Basins have both 86 and 128 classification systems"
+    resolution: "Model as separate node types (Basin86, Basin128) with relationship between them"
+
+# ============================================================================
+# BUILD NOTES
+# ============================================================================
+
+build_notes:
+  - "Rebuild on: esdc reload --reindex-only"
+  - "Source tables: project_resources, project_timeseries"
+  - "POD relationships: Use separate POD mapping table (not semicolon-separated pod_name)"
+  - "Auto-generated PKs: operator_id, pod_id, report_id, volume_id"
+  - "Auto-generated aliases: tokenization, acronym extraction, fuzzy matching, field_name_previous"
+  - "LadybugDB ATTACH to DuckDB for zero-copy data access where possible"
+  - "Estimated nodes: ~12,000 (5,473 projects + 3,732 fields + 200 WKs + operators + volumes)"
