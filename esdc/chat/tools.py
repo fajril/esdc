@@ -3,7 +3,7 @@ import asyncio
 import hashlib
 import logging
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Union
 
 # Third-party
 import diskcache
@@ -1093,13 +1093,13 @@ def resolve_spatial(
         "or 'average_distance' (average distance between multiple fields).",
     ],
     target: Annotated[
-        str,
+        Union[str, dict],
         "For proximity: field name. For working_area: working area name. "
         "For distance: comma-separated 'field1, field2'. For coordinates: field name. "
-        "For nearest_from_coords: JSON with 'lat', 'long', 'entity_type' ('field' or 'working_area'). "
-        "For field_clusters: JSON with 'max_distance_km', 'min_cluster_size'. "
-        "For adjacent_wk: JSON with 'wk_name', 'max_distance_km'. "
-        "For average_distance: JSON with 'field_names' as list.",
+        "For nearest_from_coords: dict with 'lat', 'long', 'entity_type' ('field' or 'working_area'). "
+        "For field_clusters: dict with 'max_distance_km', 'min_cluster_size'. "
+        "For adjacent_wk: dict with 'wk_name', 'max_distance_km'. "
+        "For average_distance: dict with 'field_names' as list.",
     ],
     radius_km: Annotated[
         float,
@@ -1162,53 +1162,53 @@ def resolve_spatial(
             result = resolver.get_field_coordinates(field_name=target)
         elif query_type == "nearest_from_coords":
             try:
-                params = json.loads(target)
+                params = target if isinstance(target, dict) else json.loads(target)
                 result = resolver.find_nearest_from_coordinates(
-                    lat=params.get("lat", 0.0),
-                    long=params.get("long", 0.0),
+                    lat=float(params.get("lat", 0.0)),
+                    long=float(params.get("long", 0.0)),
                     entity_type=params.get("entity_type", "field"),
-                    radius_km=params.get("radius_km", radius_km),
-                    limit=limit,
+                    radius_km=float(params.get("radius_km", radius_km)),
+                    limit=int(params.get("limit", limit)),
                 )
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
                 return json.dumps(
                     {
                         "status": "error",
-                        "message": "Invalid JSON format for nearest_from_coords. Expected: '{\"lat\": 1.5, \"long\": 101.3, \"entity_type\": \"field\", \"radius_km\": 20}'",
+                        "message": f"Invalid format for nearest_from_coords: {e}. Expected dict with lat, long, entity_type",
                     }
                 )
         elif query_type == "field_clusters":
             try:
-                params = json.loads(target)
+                params = target if isinstance(target, dict) else json.loads(target)
                 result = resolver.find_field_clusters(
-                    max_distance_km=params.get("max_distance_km", radius_km),
-                    min_cluster_size=params.get("min_cluster_size", 2),
+                    max_distance_km=float(params.get("max_distance_km", radius_km)),
+                    min_cluster_size=int(params.get("min_cluster_size", 2)),
                 )
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
                 return json.dumps(
                     {
                         "status": "error",
-                        "message": "Invalid JSON format for field_clusters. Expected: '{\"max_distance_km\": 20, \"min_cluster_size\": 2}'",
+                        "message": f"Invalid format for field_clusters: {e}. Expected dict with max_distance_km, min_cluster_size",
                     }
                 )
         elif query_type == "adjacent_wk":
             try:
-                params = json.loads(target)
+                params = target if isinstance(target, dict) else json.loads(target)
                 result = resolver.find_adjacent_working_areas(
                     wk_name=params.get("wk_name", ""),
-                    max_distance_km=params.get("max_distance_km", radius_km),
-                    limit=limit,
+                    max_distance_km=float(params.get("max_distance_km", radius_km)),
+                    limit=int(params.get("limit", limit)),
                 )
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
                 return json.dumps(
                     {
                         "status": "error",
-                        "message": "Invalid JSON format for adjacent_wk. Expected: '{\"wk_name\": \"Rokan\", \"max_distance_km\": 20}'",
+                        "message": f"Invalid format for adjacent_wk: {e}. Expected dict with wk_name, max_distance_km",
                     }
                 )
         elif query_type == "average_distance":
             try:
-                params = json.loads(target)
+                params = target if isinstance(target, dict) else json.loads(target)
                 field_names = params.get("field_names", [])
                 if not isinstance(field_names, list) or len(field_names) < 2:
                     return json.dumps(
@@ -1218,11 +1218,11 @@ def resolve_spatial(
                         }
                     )
                 result = resolver.calculate_average_distance(field_names=field_names)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
                 return json.dumps(
                     {
                         "status": "error",
-                        "message": "Invalid JSON format for average_distance. Expected: '{\"field_names\": [\"Duri\", \"Rokan\", \"Belanak\"]}'",
+                        "message": f"Invalid format for average_distance: {e}. Expected dict with field_names list",
                     }
                 )
         else:
