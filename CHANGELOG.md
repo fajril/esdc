@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2025-04-14
+
+### Added
+
+- **Spatial Enhancement**: Added 4 new spatial query features
+  - `find_nearest_from_coordinates()`: Find nearest fields/WK from arbitrary lat/long coordinates
+    - Supports both "field" and "working_area" entity types
+    - Returns distance in kilometers
+  - `find_field_clusters()`: Cluster fields based on proximity
+    - Simple distance-based clustering algorithm
+    - Configurable max_distance_km and min_cluster_size
+    - Returns cluster centers and unclustered fields
+  - `find_adjacent_working_areas()`: Find WK adjacent to a target WK
+    - Uses WK centroid coordinates (wk_lat, wk_long)
+    - Returns adjacent WK with distances
+  - `calculate_average_distance()`: Calculate average distance between multiple fields
+    - Computes pairwise distances for all combinations
+    - Returns statistics: average, min, max, pair count
+  - Updated `resolve_spatial()` tool with new query types:
+    - "nearest_from_coords": JSON with lat, long, entity_type, radius_km
+    - "field_clusters": JSON with max_distance_km, min_cluster_size
+    - "adjacent_wk": JSON with wk_name, max_distance_km
+    - "average_distance": JSON with field_names array
+
+### Technical Details
+
+- Uses DuckDB Spatial Extension functions:
+  - `ST_Point(lat, long)::POINT_2D` for point creation
+  - `ST_Distance_Spheroid()` for accurate geodesic distance calculation
+- Default radius: 20 km for all proximity queries
+- All distances returned in kilometers
+- Added comprehensive test suite (13 new tests)
+
 ## [0.5.2] - 2025-04-14
 
 ### Bug Fixes

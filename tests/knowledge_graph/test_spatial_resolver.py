@@ -30,25 +30,31 @@ def mock_spatial_db(tmp_path: Path) -> Path:
             field_name TEXT,
             field_lat DOUBLE,
             field_long DOUBLE,
-            wk_name TEXT
+            wk_id TEXT,
+            wk_name TEXT,
+            wk_lat DOUBLE,
+            wk_long DOUBLE
         )
     """)
     
     # Insert test data with known coordinates
     # Duri field (Riau, Indonesia) and nearby fields
     test_data = [
-        # field_id, field_name, field_lat, field_long, wk_name
-        ("DURI", "Duri", 1.7167, 101.4500, "Rokan"),
-        ("ROKAN", "Rokan", 1.8000, 101.5000, "Rokan"),
-        ("BELANAK", "Belanak", 1.6500, 101.4000, "Rokan"),
-        ("PELANGKEN", "Pelangken", 1.7200, 101.4600, "Rokan"),
-        ("DUMAI", "Dumai", 1.6667, 101.4500, "Rokan"),
+        # field_id, field_name, field_lat, field_long, wk_id, wk_name, wk_lat, wk_long
+        ("DURI", "Duri", 1.7167, 101.4500, "WK_ROKAN", "Rokan", 1.7500, 101.4700),
+        ("ROKAN", "Rokan", 1.8000, 101.5000, "WK_ROKAN", "Rokan", 1.7500, 101.4700),
+        ("BELANAK", "Belanak", 1.6500, 101.4000, "WK_ROKAN", "Rokan", 1.7500, 101.4700),
+        ("PELANGKEN", "Pelangken", 1.7200, 101.4600, "WK_ROKAN", "Rokan", 1.7500, 101.4700),
+        ("DUMAI", "Dumai", 1.6667, 101.4500, "WK_ROKAN", "Rokan", 1.7500, 101.4700),
+        # Another working area nearby
+        ("MINAS", "Minas", 1.6000, 101.3500, "WK_MINAS", "Minas WK", 1.5800, 101.3300),
+        ("LIrik", "Lirik", 1.5500, 101.3000, "WK_MINAS", "Minas WK", 1.5800, 101.3300),
         # Jakarta area (far from Duri - ~900km)
-        ("JAKARTA", "Jakarta Field", -6.2000, 106.8167, "North Java"),
+        ("JAKARTA", "Jakarta Field", -6.2000, 106.8167, "WK_JAKARTA", "Jakarta WK", -6.1800, 106.8000),
     ]
     
     conn.executemany(
-        "INSERT INTO project_resources VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO project_resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         test_data
     )
     conn.close()
@@ -185,3 +191,207 @@ class TestSpatialResolverProximity:
         
         assert result["status"] == "no_results"
         assert len(result["nearby_fields"]) == 0
+
+
+class TestFindNearestFromCoordinates:
+    """Tests for find_nearest_from_coordinates method."""
+    
+    def test_find_nearest_from_coordinates_field(self, mock_spatial_db: Path) -> None:
+        """Test finding nearest fields from arbitrary coordinates."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        # Coordinates near Duri
+        result = resolver.find_nearest_from_coordinates(
+            lat=1.72,
+            long=101.45,
+            entity_type="field",
+            radius_km=20.0,
+            limit=10
+        )
+        
+        assert result["status"] == "success"
+        assert len(result["nearby_entities"]) > 0
+        
+        # Duri should be the closest
+        first_field = result["nearby_entities"][0]
+        assert first_field["field_name"] == "Duri"
+        assert first_field["distance_km"] < 1.0  # Should be very close
+    
+    def test_find_nearest_from_coordinates_working_area(self, mock_spatial_db: Path) -> None:
+        """Test finding nearest working areas from arbitrary coordinates."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_nearest_from_coordinates(
+            lat=1.75,
+            long=101.47,
+            entity_type="working_area",
+            radius_km=50.0,
+            limit=10
+        )
+        
+        assert result["status"] == "success"
+        assert len(result["nearby_entities"]) > 0
+        
+        # Should find Rokan WK
+        wk_names = [e["wk_name"] for e in result["nearby_entities"]]
+        assert "Rokan" in wk_names
+    
+    def test_find_nearest_from_coordinates_invalid_entity_type(self, mock_spatial_db: Path) -> None:
+        """Test invalid entity type returns error."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_nearest_from_coordinates(
+            lat=1.0,
+            long=101.0,
+            entity_type="invalid_type",
+            radius_km=20.0,
+        )
+        
+        assert result["status"] == "error"
+        assert "entity_type" in result["message"].lower()
+    
+    def test_find_nearest_from_coordinates_no_results(self, mock_spatial_db: Path) -> None:
+        """Test coordinates with no nearby entities."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_nearest_from_coordinates(
+            lat=0.0,
+            long=0.0,  # Ocean, far from test data
+            entity_type="field",
+            radius_km=1.0,
+        )
+        
+        assert result["status"] == "no_results"
+        assert len(result["nearby_entities"]) == 0
+
+
+class TestFindFieldClusters:
+    """Tests for find_field_clusters method."""
+    
+    def test_find_field_clusters_basic(self, mock_spatial_db: Path) -> None:
+        """Test basic clustering functionality."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_field_clusters(
+            max_distance_km=25.0,
+            min_cluster_size=2
+        )
+        
+        assert result["status"] == "success"
+        # Should find at least one cluster with Rokan fields
+        assert result["cluster_count"] >= 1
+    
+    def test_find_field_clusters_respects_min_size(self, mock_spatial_db: Path) -> None:
+        """Test that min_cluster_size is respected."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_field_clusters(
+            max_distance_km=100.0,
+            min_cluster_size=3
+        )
+        
+        assert result["status"] == "success"
+        # All clusters should have at least min_cluster_size fields
+        for cluster in result["clusters"]:
+            assert cluster["field_count"] >= 3
+    
+    def test_find_field_clusters_unclustered(self, mock_spatial_db: Path) -> None:
+        """Test that distant fields are marked as unclustered."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_field_clusters(
+            max_distance_km=10.0,  # Small distance
+            min_cluster_size=2
+        )
+        
+        assert result["status"] == "success"
+        # Jakarta Field should be unclustered (far from others)
+        assert "Jakarta Field" in result["unclustered"]
+
+
+class TestFindAdjacentWorkingAreas:
+    """Tests for find_adjacent_working_areas method."""
+    
+    def test_find_adjacent_working_areas_basic(self, mock_spatial_db: Path) -> None:
+        """Test finding adjacent working areas."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_adjacent_working_areas(
+            wk_name="Rokan",
+            max_distance_km=50.0,
+            limit=10
+        )
+        
+        assert result["status"] == "success"
+        # Should find Minas WK as adjacent
+        wk_names = [wk["wk_name"] for wk in result["adjacent_working_areas"]]
+        assert "Minas WK" in wk_names
+    
+    def test_find_adjacent_working_areas_excludes_reference(self, mock_spatial_db: Path) -> None:
+        """Test that reference WK is not in results."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_adjacent_working_areas(
+            wk_name="Rokan",
+            max_distance_km=100.0,
+        )
+        
+        assert result["status"] == "success"
+        # Rokan should not appear in its own adjacent list
+        wk_names = [wk["wk_name"] for wk in result["adjacent_working_areas"]]
+        assert "Rokan" not in wk_names
+    
+    def test_find_adjacent_working_areas_no_results(self, mock_spatial_db: Path) -> None:
+        """Test with small radius returns no results."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.find_adjacent_working_areas(
+            wk_name="Rokan",
+            max_distance_km=1.0,
+        )
+        
+        assert result["status"] == "no_results"
+        assert len(result["adjacent_working_areas"]) == 0
+
+
+class TestCalculateAverageDistance:
+    """Tests for calculate_average_distance method."""
+    
+    def test_calculate_average_distance_basic(self, mock_spatial_db: Path) -> None:
+        """Test basic average distance calculation."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.calculate_average_distance(
+            field_names=["Duri", "Rokan", "Belanak"]
+        )
+        
+        assert result["status"] == "success"
+        assert result["field_count"] == 3
+        assert len(result["pairwise_distances"]) == 3  # 3 choose 2
+        
+        # Check statistics
+        stats = result["statistics"]
+        assert stats["average_distance_km"] > 0
+        assert stats["min_distance_km"] <= stats["max_distance_km"]
+        assert stats["pair_count"] == 3
+    
+    def test_calculate_average_distance_single_field(self, mock_spatial_db: Path) -> None:
+        """Test with single field returns error."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.calculate_average_distance(
+            field_names=["Duri"]
+        )
+        
+        assert result["status"] == "error"
+        assert "at least 2" in result["message"].lower()
+    
+    def test_calculate_average_distance_invalid_fields(self, mock_spatial_db: Path) -> None:
+        """Test with non-existent fields."""
+        resolver = SpatialResolver(db_path=mock_spatial_db)
+        
+        result = resolver.calculate_average_distance(
+            field_names=["NonExistent1", "NonExistent2"]
+        )
+        
+        assert result["status"] == "not_found"
