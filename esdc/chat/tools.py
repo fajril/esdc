@@ -1088,14 +1088,18 @@ def resolve_spatial(
         str,
         "Type of spatial query: 'proximity' (fields near a field), "
         "'working_area' (fields in a working area), 'distance' (between two fields), "
-        "or 'coordinates' (get field coordinates).",
+        "'coordinates' (get field coordinates), 'nearest_from_coords' (find nearest from lat/long), "
+        "'field_clusters' (cluster fields by proximity), 'adjacent_wk' (find adjacent working areas), "
+        "or 'average_distance' (average distance between multiple fields).",
     ],
     target: Annotated[
         str,
-        "For proximity: field name to find nearby fields. "
-        "For working_area: working area name. "
-        "For distance: comma-separated 'field1, field2'. "
-        "For coordinates: field name.",
+        "For proximity: field name. For working_area: working area name. "
+        "For distance: comma-separated 'field1, field2'. For coordinates: field name. "
+        "For nearest_from_coords: JSON with 'lat', 'long', 'entity_type' ('field' or 'working_area'). "
+        "For field_clusters: JSON with 'max_distance_km', 'min_cluster_size'. "
+        "For adjacent_wk: JSON with 'wk_name', 'max_distance_km'. "
+        "For average_distance: JSON with 'field_names' as list.",
     ],
     radius_km: Annotated[
         float,
@@ -1113,20 +1117,23 @@ def resolve_spatial(
     - Getting fields in a working area
     - Calculating distance between fields
     - Getting field coordinates
+    - Finding nearest entities from arbitrary coordinates
+    - Clustering fields by proximity
+    - Finding adjacent working areas
+    - Calculating average distance between multiple fields
 
     Returns:
-    JSON string with:
-    - status: "success", "no_results", "not_found", or "error"
-    - nearby_fields: List of fields with distances (for proximity queries)
-    - fields: List of fields (for working_area queries)
-    - distance_km: Distance value (for distance queries)
-    - latitude/longitude: Coordinates (for coordinate queries)
+    JSON string with query results.
 
     Examples:
     - resolve_spatial("proximity", "Duri", 20) -> Fields within 20km of Duri
     - resolve_spatial("working_area", "Rokan") -> All fields in Rokan working area
     - resolve_spatial("distance", "Duri, Bekapai") -> Distance between Duri and Bekapai
     - resolve_spatial("coordinates", "Duri") -> Lat/long of Duri field
+    - resolve_spatial("nearest_from_coords", '{"lat": 1.5, "long": 101.3, "entity_type": "field", "radius_km": 20}')
+    - resolve_spatial("field_clusters", '{"max_distance_km": 20, "min_cluster_size": 2}')
+    - resolve_spatial("adjacent_wk", '{"wk_name": "Rokan", "max_distance_km": 20}')
+    - resolve_spatial("average_distance", '{"field_names": ["Duri", "Rokan", "Belanak"]}')
     """
     import json
 
@@ -1153,12 +1160,77 @@ def resolve_spatial(
             result = resolver.calculate_distance(from_field=parts[0], to_field=parts[1])
         elif query_type == "coordinates":
             result = resolver.get_field_coordinates(field_name=target)
+        elif query_type == "nearest_from_coords":
+            try:
+                params = json.loads(target)
+                result = resolver.find_nearest_from_coordinates(
+                    lat=params.get("lat", 0.0),
+                    long=params.get("long", 0.0),
+                    entity_type=params.get("entity_type", "field"),
+                    radius_km=params.get("radius_km", radius_km),
+                    limit=limit,
+                )
+            except json.JSONDecodeError:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": "Invalid JSON format for nearest_from_coords. Expected: '{\"lat\": 1.5, \"long\": 101.3, \"entity_type\": \"field\", \"radius_km\": 20}'",
+                    }
+                )
+        elif query_type == "field_clusters":
+            try:
+                params = json.loads(target)
+                result = resolver.find_field_clusters(
+                    max_distance_km=params.get("max_distance_km", radius_km),
+                    min_cluster_size=params.get("min_cluster_size", 2),
+                )
+            except json.JSONDecodeError:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": "Invalid JSON format for field_clusters. Expected: '{\"max_distance_km\": 20, \"min_cluster_size\": 2}'",
+                    }
+                )
+        elif query_type == "adjacent_wk":
+            try:
+                params = json.loads(target)
+                result = resolver.find_adjacent_working_areas(
+                    wk_name=params.get("wk_name", ""),
+                    max_distance_km=params.get("max_distance_km", radius_km),
+                    limit=limit,
+                )
+            except json.JSONDecodeError:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": "Invalid JSON format for adjacent_wk. Expected: '{\"wk_name\": \"Rokan\", \"max_distance_km\": 20}'",
+                    }
+                )
+        elif query_type == "average_distance":
+            try:
+                params = json.loads(target)
+                field_names = params.get("field_names", [])
+                if not isinstance(field_names, list) or len(field_names) < 2:
+                    return json.dumps(
+                        {
+                            "status": "error",
+                            "message": "average_distance requires at least 2 field names in 'field_names' list",
+                        }
+                    )
+                result = resolver.calculate_average_distance(field_names=field_names)
+            except json.JSONDecodeError:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": "Invalid JSON format for average_distance. Expected: '{\"field_names\": [\"Duri\", \"Rokan\", \"Belanak\"]}'",
+                    }
+                )
         else:
             return json.dumps(
                 {
                     "status": "error",
                     "message": f"Unknown query_type: {query_type}. "
-                    "Use: proximity, working_area, distance, or coordinates",
+                    "Use: proximity, working_area, distance, coordinates, nearest_from_coords, field_clusters, adjacent_wk, or average_distance",
                 }
             )
 
