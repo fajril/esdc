@@ -405,7 +405,6 @@ class TestClusteringPerformance:
         
         db_path = tmp_path / "test_perf_100.db"
         conn = duckdb.connect(str(db_path))
-        conn.execute("LOAD spatial")
         conn.execute("""
             CREATE TABLE project_resources (
                 field_id TEXT PRIMARY KEY,
@@ -467,7 +466,6 @@ class TestClusteringPerformance:
         
         db_path = tmp_path / "test_perf_500.db"
         conn = duckdb.connect(str(db_path))
-        conn.execute("LOAD spatial")
         conn.execute("""
             CREATE TABLE project_resources (
                 field_id TEXT PRIMARY KEY,
@@ -523,7 +521,6 @@ class TestClusteringPerformance:
         """Test that clustering correctly identifies known groups."""
         db_path = tmp_path / "test_quality.db"
         conn = duckdb.connect(str(db_path))
-        conn.execute("LOAD spatial")
         conn.execute("""
             CREATE TABLE project_resources (
                 field_id TEXT PRIMARY KEY,
@@ -579,7 +576,6 @@ class TestClusteringPerformance:
         """Test that max fields limit is enforced."""
         db_path = tmp_path / "test_limit.db"
         conn = duckdb.connect(str(db_path))
-        conn.execute("LOAD spatial")
         conn.execute("""
             CREATE TABLE project_resources (
                 field_id TEXT PRIMARY KEY,
