@@ -74,7 +74,7 @@ class SpatialResolver:
                     field_name,
                     field_lat,
                     field_long,
-                    ST_Point(field_long, field_lat) as geom
+                    ST_Point(field_lat, field_long)::POINT_2D as geom
                 FROM project_resources
                 WHERE field_name ILIKE ?
                     AND field_lat IS NOT NULL
@@ -87,7 +87,7 @@ class SpatialResolver:
                     p.field_name,
                     p.field_lat,
                     p.field_long,
-                    ST_Point(p.field_long, p.field_lat) as geom
+                    ST_Point(p.field_lat, p.field_long)::POINT_2D as geom
                 FROM project_resources p
                 WHERE p.field_lat IS NOT NULL
                     AND p.field_long IS NOT NULL
@@ -96,13 +96,13 @@ class SpatialResolver:
             SELECT
                 c.field_id,
                 c.field_name,
-                ST_Distance(
+                ST_Distance_Spheroid(
                     r.geom,
                     c.geom
                 ) / 1000.0 as distance_km  -- Convert meters to km
             FROM reference r
             CROSS JOIN candidates c
-            WHERE ST_Distance(r.geom, c.geom) / 1000.0 <= ?
+            WHERE ST_Distance_Spheroid(r.geom, c.geom) / 1000.0 <= ?
             ORDER BY distance_km
             LIMIT ?
         """
