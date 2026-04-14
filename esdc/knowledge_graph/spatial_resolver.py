@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import numpy as np
+from sklearn.cluster import DBSCAN
 
 from esdc.configs import Config
 
@@ -532,68 +534,73 @@ class SpatialResolver:
                     "unclustered": [],
                 }
 
-            # Build distance matrix using spatial query
+            # Limit check - prevent memory issues with very large datasets
+            MAX_FIELDS = 10000
+            if len(result) > MAX_FIELDS:
+                return {
+                    "status": "error",
+                    "message": f"Too many fields ({len(result)}). Maximum supported: {MAX_FIELDS}",
+                }
+
+            # Build field data
             fields_data = [
                 {"field_id": row[0], "field_name": row[1], "lat": row[2], "long": row[3]}
                 for row in result
             ]
 
-            # Simple clustering: group fields where each field is within max_distance_km
-            # of at least one other field in the cluster
-            clusters = []
+            # Convert to numpy arrays for sklearn
+            # Coordinates in radians for haversine metric
+            coords_rad = np.array([[f["lat"], f["long"]] for f in fields_data]) * np.pi / 180.0
+
+            # Convert max_distance_km to radians (eps parameter for DBSCAN)
+            # Earth's radius = 6371 km
+            eps_radians = max_distance_km / 6371.0
+
+            # Apply DBSCAN clustering
+            # haversine metric is optimized for geographic coordinates
+            clustering = DBSCAN(
+                eps=eps_radians,
+                min_samples=min_cluster_size,
+                metric='haversine',
+                algorithm='ball_tree'
+            )
+            cluster_labels = clustering.fit_predict(coords_rad)
+
+            # Process results
+            clusters_dict = {}
             unclustered = []
-            assigned = set()
 
-            for i, field1 in enumerate(fields_data):
-                if field1["field_id"] in assigned:
-                    continue
-
-                # Check distance to all other unassigned fields
-                cluster_fields = [field1]
-                assigned.add(field1["field_id"])
-
-                for j, field2 in enumerate(fields_data[i + 1 :], start=i + 1):
-                    if field2["field_id"] in assigned:
-                        continue
-
-                    # Calculate distance using spatial query
-                    dist_query = """
-                        SELECT ST_Distance_Spheroid(
-                            ST_Point(?, ?)::POINT_2D,
-                            ST_Point(?, ?)::POINT_2D
-                        ) / 1000.0 as distance_km
-                    """
-                    dist_result = conn.execute(
-                        dist_query,
-                        [field1["lat"], field1["long"], field2["lat"], field2["long"]],
-                    ).fetchone()
-
-                    if dist_result and dist_result[0] <= max_distance_km:
-                        cluster_fields.append(field2)
-                        assigned.add(field2["field_id"])
-
-                if len(cluster_fields) >= min_cluster_size:
-                    # Calculate cluster center
-                    avg_lat = sum(f["lat"] for f in cluster_fields) / len(cluster_fields)
-                    avg_long = sum(f["long"] for f in cluster_fields) / len(cluster_fields)
-
-                    clusters.append({
-                        "cluster_id": len(clusters) + 1,
-                        "fields": [f["field_name"] for f in cluster_fields],
-                        "field_count": len(cluster_fields),
-                        "center_lat": round(avg_lat, 4),
-                        "center_long": round(avg_long, 4),
-                    })
-                else:
-                    # Add to unclustered
-                    unclustered.extend([f["field_name"] for f in cluster_fields])
-                    for f in cluster_fields:
-                        assigned.discard(f["field_id"])
-
-            # Collect remaining unassigned fields
-            for field in fields_data:
-                if field["field_id"] not in assigned:
+            for i, label in enumerate(cluster_labels):
+                field = fields_data[i]
+                if label == -1:
+                    # Noise point (unclustered)
                     unclustered.append(field["field_name"])
+                else:
+                    if label not in clusters_dict:
+                        clusters_dict[label] = []
+                    clusters_dict[label].append(field)
+
+            # Format clusters
+            clusters = []
+            for label, cluster_fields in clusters_dict.items():
+                # Calculate cluster center
+                avg_lat = sum(f["lat"] for f in cluster_fields) / len(cluster_fields)
+                avg_long = sum(f["long"] for f in cluster_fields) / len(cluster_fields)
+
+                clusters.append({
+                    "cluster_id": int(label) + 1,
+                    "fields": [f["field_name"] for f in cluster_fields],
+                    "field_count": len(cluster_fields),
+                    "center_lat": round(avg_lat, 4),
+                    "center_long": round(avg_long, 4),
+                })
+
+            # Sort clusters by field count (largest first)
+            clusters.sort(key=lambda x: x["field_count"], reverse=True)
+
+            # Reassign cluster IDs after sorting
+            for i, cluster in enumerate(clusters):
+                cluster["cluster_id"] = i + 1
 
             return {
                 "status": "success",

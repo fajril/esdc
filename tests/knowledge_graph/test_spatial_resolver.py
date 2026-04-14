@@ -395,3 +395,226 @@ class TestCalculateAverageDistance:
         )
         
         assert result["status"] == "not_found"
+
+class TestClusteringPerformance:
+    """Performance tests for clustering with larger datasets."""
+    
+    def test_clustering_100_fields_performance(self, tmp_path: Path) -> None:
+        """Test clustering performance with 100 fields."""
+        import time
+        
+        db_path = tmp_path / "test_perf_100.db"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("LOAD spatial")
+        conn.execute("""
+            CREATE TABLE project_resources (
+                field_id TEXT PRIMARY KEY,
+                field_name TEXT,
+                field_lat DOUBLE,
+                field_long DOUBLE,
+                wk_id TEXT,
+                wk_name TEXT,
+                wk_lat DOUBLE,
+                wk_long DOUBLE
+            )
+        """)
+        
+        # Generate 100 fields with clustered distribution
+        test_data = []
+        import random
+        random.seed(42)
+        
+        # Create 5 clusters with 20 fields each
+        cluster_centers = [
+            (1.7, 101.4),  # Rokan area
+            (1.6, 101.3),  # Minas area
+            (-6.1, 106.8), # Jakarta area
+            (0.5, 101.5),  # Central Sumatra
+            (2.0, 117.5),  # East Kalimantan
+        ]
+        
+        for i in range(100):
+            cluster_idx = i // 20
+            center_lat, center_long = cluster_centers[cluster_idx]
+            lat = center_lat + random.uniform(-0.1, 0.1)
+            long = center_long + random.uniform(-0.1, 0.1)
+            test_data.append(
+                (f"F{i:03d}", f"Field{i}", lat, long, f"WK{i}", f"WK{i}", lat, long)
+            )
+        
+        conn.executemany(
+            "INSERT INTO project_resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            test_data
+        )
+        conn.close()
+        
+        resolver = SpatialResolver(db_path=db_path)
+        
+        start_time = time.time()
+        result = resolver.find_field_clusters(
+            max_distance_km=30.0,
+            min_cluster_size=2
+        )
+        elapsed_time = time.time() - start_time
+        
+        assert result["status"] == "success"
+        assert elapsed_time < 5.0, f"Clustering 100 fields took {elapsed_time:.2f}s, expected < 5s"
+        print(f"\nPerformance: 100 fields clustered in {elapsed_time:.2f}s")
+    
+    def test_clustering_500_fields_performance(self, tmp_path: Path) -> None:
+        """Test clustering performance with 500 fields."""
+        import time
+        
+        db_path = tmp_path / "test_perf_500.db"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("LOAD spatial")
+        conn.execute("""
+            CREATE TABLE project_resources (
+                field_id TEXT PRIMARY KEY,
+                field_name TEXT,
+                field_lat DOUBLE,
+                field_long DOUBLE,
+                wk_id TEXT,
+                wk_name TEXT,
+                wk_lat DOUBLE,
+                wk_long DOUBLE
+            )
+        """)
+        
+        # Generate 500 fields
+        test_data = []
+        import random
+        random.seed(42)
+        
+        # Create 10 clusters with 50 fields each
+        for cluster_idx in range(10):
+            center_lat = random.uniform(-6.0, 3.0)
+            center_long = random.uniform(95.0, 140.0)
+            
+            for i in range(50):
+                lat = center_lat + random.uniform(-0.5, 0.5)
+                long = center_long + random.uniform(-0.5, 0.5)
+                field_idx = cluster_idx * 50 + i
+                test_data.append(
+                    (f"F{field_idx:03d}", f"Field{field_idx}", lat, long, 
+                     f"WK{cluster_idx}", f"WK{cluster_idx}", lat, long)
+                )
+        
+        conn.executemany(
+            "INSERT INTO project_resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            test_data
+        )
+        conn.close()
+        
+        resolver = SpatialResolver(db_path=db_path)
+        
+        start_time = time.time()
+        result = resolver.find_field_clusters(
+            max_distance_km=50.0,
+            min_cluster_size=3
+        )
+        elapsed_time = time.time() - start_time
+        
+        assert result["status"] == "success"
+        assert elapsed_time < 10.0, f"Clustering 500 fields took {elapsed_time:.2f}s, expected < 10s"
+        print(f"\nPerformance: 500 fields clustered in {elapsed_time:.2f}s")
+    
+    def test_clustering_quality_known_groups(self, tmp_path: Path) -> None:
+        """Test that clustering correctly identifies known groups."""
+        db_path = tmp_path / "test_quality.db"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("LOAD spatial")
+        conn.execute("""
+            CREATE TABLE project_resources (
+                field_id TEXT PRIMARY KEY,
+                field_name TEXT,
+                field_lat DOUBLE,
+                field_long DOUBLE,
+                wk_id TEXT,
+                wk_name TEXT,
+                wk_lat DOUBLE,
+                wk_long DOUBLE
+            )
+        """)
+        
+        # Create 3 well-separated clusters
+        test_data = [
+            # Cluster 1: Duri area (3 fields)
+            ("D1", "Duri1", 1.71, 101.45, "WK1", "Rokan", 1.71, 101.45),
+            ("D2", "Duri2", 1.72, 101.46, "WK1", "Rokan", 1.72, 101.46),
+            ("D3", "Duri3", 1.70, 101.44, "WK1", "Rokan", 1.70, 101.44),
+            # Cluster 2: Minas area (3 fields) - far from Duri
+            ("M1", "Minas1", 1.61, 101.35, "WK2", "Minas", 1.61, 101.35),
+            ("M2", "Minas2", 1.62, 101.36, "WK2", "Minas", 1.62, 101.36),
+            ("M3", "Minas3", 1.60, 101.34, "WK2", "Minas", 1.60, 101.34),
+            # Cluster 3: Jakarta area (3 fields) - far from others
+            ("J1", "Jakarta1", -6.20, 106.81, "WK3", "Jakarta", -6.20, 106.81),
+            ("J2", "Jakarta2", -6.21, 106.82, "WK3", "Jakarta", -6.21, 106.82),
+            ("J3", "Jakarta3", -6.19, 106.80, "WK3", "Jakarta", -6.19, 106.80),
+        ]
+        
+        conn.executemany(
+            "INSERT INTO project_resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            test_data
+        )
+        conn.close()
+        
+        resolver = SpatialResolver(db_path=db_path)
+        
+        result = resolver.find_field_clusters(
+            max_distance_km=5.0,  # Small radius to keep clusters separate
+            min_cluster_size=2
+        )
+        
+        assert result["status"] == "success"
+        assert result["cluster_count"] == 3, f"Expected 3 clusters, got {result['cluster_count']}"
+        
+        # Verify each cluster has 3 fields
+        for cluster in result["clusters"]:
+            assert cluster["field_count"] == 3, f"Expected 3 fields per cluster, got {cluster['field_count']}"
+        
+        print(f"\nQuality test: Found {result['cluster_count']} clusters as expected")
+    
+    def test_clustering_max_fields_limit(self, tmp_path: Path) -> None:
+        """Test that max fields limit is enforced."""
+        db_path = tmp_path / "test_limit.db"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("LOAD spatial")
+        conn.execute("""
+            CREATE TABLE project_resources (
+                field_id TEXT PRIMARY KEY,
+                field_name TEXT,
+                field_lat DOUBLE,
+                field_long DOUBLE,
+                wk_id TEXT,
+                wk_name TEXT,
+                wk_lat DOUBLE,
+                wk_long DOUBLE
+            )
+        """)
+        
+        # Create more than 10000 fields
+        test_data = []
+        for i in range(10001):
+            lat = 1.0 + (i * 0.0001)
+            long = 101.0 + (i * 0.0001)
+            test_data.append(
+                (f"F{i:05d}", f"Field{i}", lat, long, f"WK{i}", f"WK{i}", lat, long)
+            )
+        
+        conn.executemany(
+            "INSERT INTO project_resources VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            test_data
+        )
+        conn.close()
+        
+        resolver = SpatialResolver(db_path=db_path)
+        
+        result = resolver.find_field_clusters(
+            max_distance_km=20.0,
+            min_cluster_size=2
+        )
+        
+        assert result["status"] == "error"
+        assert "10000" in result["message"]
+        print(f"\nLimit test: Correctly rejected {10001} fields")
