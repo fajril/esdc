@@ -15,6 +15,7 @@ Key Functions:
 # Standard library
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -387,7 +388,24 @@ async def generate_responses_stream(
         f"input_type={input_type}, messages={len(lc_messages)}"
     )
     logger.debug(f"[TIMING] {response_id} stream_start")
+
+    # Log inference input details
+    total_chars = sum(len(str(m.content)) for m in lc_messages)
+    system_msgs = len([m for m in lc_messages if isinstance(m, SystemMessage)])
+    user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
+    ai_msgs = len([m for m in lc_messages if isinstance(m, AIMessage)])
+    logger.debug(
+        "[INFERENCE] responses_stream_input | response_id=%s | messages=%d | system=%d | user=%d | ai=%d | total_chars=%d",
+        response_id,
+        len(lc_messages),
+        system_msgs,
+        user_msgs,
+        ai_msgs,
+        total_chars,
+    )
+
     first_ai_response = True
+    stream_start = time.perf_counter()
 
     try:
         # Stream agent events
@@ -477,6 +495,7 @@ async def generate_responses_stream(
                 continue
 
             if first_ai_response:
+                first_response_ms = (time.perf_counter() - stream_start) * 1000
                 logger.debug(
                     f"[TIMING] {response_id} first_ai_response | event=#{event_counter}"
                 )
@@ -494,6 +513,16 @@ async def generate_responses_stream(
                 f"AIMessage: id={msg_id}, content_preview={msg_content_preview}..., "
                 f"tool_calls={tool_call_count}"
             )
+
+            # Log inference response details for first AI message
+            if first_ai_response is False and tool_call_count > 0:
+                logger.debug(
+                    "[INFERENCE] responses_first_response | response_id=%s | elapsed_ms=%.2f | content_preview=%s | tool_calls=%d",
+                    response_id,
+                    first_response_ms,
+                    msg_content_preview[:50],
+                    tool_call_count,
+                )
 
             # Handle message with content
             if ai_msg.content:
@@ -722,8 +751,18 @@ async def generate_responses_stream(
             f"events={event_counter}, output_items={len(output_items)}, "
             f"items=[{', '.join(output_summary)}], final_seq={completed_seq}"
         )
+
+        # Log inference stream completion
+        total_elapsed_ms = (time.perf_counter() - stream_start) * 1000
         logger.debug(
             f"[TIMING] {response_id} stream_complete | events={event_counter} items={len(output_items)}"
+        )
+        logger.debug(
+            "[INFERENCE] responses_stream_complete | response_id=%s | total_ms=%.2f | events=%d | output_items=%d",
+            response_id,
+            total_elapsed_ms,
+            event_counter,
+            len(output_items),
         )
         yield format_sse_event(
             create_response_completed_event(
@@ -820,6 +859,23 @@ async def generate_responses_sync(
         f"input_type={input_type}, messages={len(lc_messages)}"
     )
     logger.debug(f"[TIMING] {response_id} sync_start")
+
+    # Log inference input details
+    total_chars = sum(len(str(m.content)) for m in lc_messages)
+    system_msgs = len([m for m in lc_messages if isinstance(m, SystemMessage)])
+    user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
+    ai_msgs = len([m for m in lc_messages if isinstance(m, AIMessage)])
+    logger.debug(
+        "[INFERENCE] responses_sync_input | response_id=%s | messages=%d | system=%d | user=%d | ai=%d | total_chars=%d",
+        response_id,
+        len(lc_messages),
+        system_msgs,
+        user_msgs,
+        ai_msgs,
+        total_chars,
+    )
+
+    sync_start = time.perf_counter()
 
     try:
         # Collect all messages from agent
@@ -957,12 +1013,30 @@ async def generate_responses_sync(
             f"events={event_counter}, output_items={len(output_items)}, "
             f"items=[{', '.join(output_summary)}]"
         )
+
+        # Log inference sync completion
+        sync_elapsed_ms = (time.perf_counter() - sync_start) * 1000
         logger.debug(
             f"[TIMING] {response_id} sync_complete | events={event_counter} items={len(output_items)}"
+        )
+        logger.debug(
+            "[INFERENCE] responses_sync_complete | response_id=%s | elapsed_ms=%.2f | events=%d | output_items=%d",
+            response_id,
+            sync_elapsed_ms,
+            event_counter,
+            len(output_items),
         )
         return create_non_streaming_response(response_id, model, output_items)
 
     except Exception as e:
+        # Log inference error
+        error_elapsed_ms = (time.perf_counter() - sync_start) * 1000
+        logger.debug(
+            "[INFERENCE] responses_sync_error | response_id=%s | elapsed_ms=%.2f | error=%s",
+            response_id,
+            error_elapsed_ms,
+            str(e)[:100],
+        )
         logger.exception(f"[RESPONSES {response_id}] SYNC ERROR: {e}")
         return create_non_streaming_response(
             response_id,

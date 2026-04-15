@@ -74,7 +74,26 @@ Title:"""
             HumanMessage(content=prompt.format(query=user_query)),
         ]
 
+        # Log inference start with prompt details
+        total_chars = sum(len(str(m.content)) for m in messages)
+        logger.debug(
+            "[INFERENCE] title_generation_start | messages=%d | total_chars=%d",
+            len(messages),
+            total_chars,
+        )
+        inference_start = time.perf_counter()
+
         response = await llm.ainvoke(messages)
+
+        # Log inference completion
+        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+        response_content = response.content if hasattr(response, "content") else str(response)
+        content_len = len(response_content) if response_content else 0
+        logger.debug(
+            "[INFERENCE] title_generation_complete | elapsed=%.2fms | response_len=%d",
+            inference_elapsed_ms,
+            content_len,
+        )
         content = response.content
         if isinstance(content, list):
             title = str(content[0]) if content else ""
@@ -136,7 +155,36 @@ def create_agent(
             "messages"
         ]
 
+        # Log inference start with detailed prompt metrics
+        total_chars = sum(len(str(m.content)) for m in messages_with_system)
+        system_prompt_len = len(system_prompt)
+        user_messages = len([m for m in messages_with_system if isinstance(m, HumanMessage)])
+        logger.debug(
+            "[INFERENCE] llm_invoke_start | messages=%d | user_messages=%d | "
+            "system_prompt_len=%d | total_chars=%d",
+            len(messages_with_system),
+            user_messages,
+            system_prompt_len,
+            total_chars,
+        )
+        inference_start = time.perf_counter()
+
         response = llm_with_tools.invoke(messages_with_system)
+
+        # Log inference completion with response metrics
+        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+        response_len = len(str(response.content)) if hasattr(response, "content") else 0
+        has_tool_calls = hasattr(response, "tool_calls") and bool(response.tool_calls)
+        tool_call_count = len(response.tool_calls) if has_tool_calls else 0
+        logger.debug(
+            "[INFERENCE] llm_invoke_complete | elapsed=%.2fms | response_len=%d | "
+            "has_tool_calls=%s | tool_calls=%d",
+            inference_elapsed_ms,
+            response_len,
+            has_tool_calls,
+            tool_call_count,
+        )
+
         return {"messages": [cast(AnyMessage, response)]}
 
     def should_continue(state: MessagesState) -> str:

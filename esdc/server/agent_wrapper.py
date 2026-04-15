@@ -323,8 +323,21 @@ async def generate_streaming_response(
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
+        # Log inference input details
+        total_chars = sum(len(str(m.content)) for m in lc_messages)
+        system_msgs = len([m for m in lc_messages if isinstance(m, SystemMessage)])
+        user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
+        logger.debug(
+            "[INFERENCE] stream_input_prepared | messages=%d | system=%d | user=%d | total_chars=%d",
+            len(lc_messages),
+            system_msgs,
+            user_msgs,
+            total_chars,
+        )
+
         # Track first message
         is_first_ai_message = True
+        inference_start = time.perf_counter()
 
         # Stream the response
         async for event in agent.astream(
@@ -482,12 +495,20 @@ async def generate_streaming_response(
 
         # Send final chunk
         total_ms = (time.perf_counter() - stream_start) * 1000
+        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000 if 'inference_start' in locals() else 0
         logger.debug(
             f"[{request_id}] STREAM_END - events={event_counter}, "
             f"yields={yield_counter}, unique_msg_ids={len(seen_msg_ids)}"
         )
         logger.debug(
             f"[{request_id}] [TIMING] stream_complete | total={total_ms:.2f}ms | events={event_counter}"
+        )
+        logger.debug(
+            "[INFERENCE] stream_complete | total_ms=%.2f | inference_ms=%.2f | events=%d | yields=%d",
+            total_ms,
+            inference_elapsed_ms,
+            event_counter,
+            yield_counter,
         )
 
         if use_native_format:
@@ -575,10 +596,24 @@ async def generate_response(
         # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
+        # Log inference input details
+        total_chars = sum(len(str(m.content)) for m in lc_messages)
+        system_msgs = len([m for m in lc_messages if isinstance(m, SystemMessage)])
+        user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
+        logger.debug(
+            "[INFERENCE] sync_input_prepared | messages=%d | system=%d | user=%d | total_chars=%d",
+            len(lc_messages),
+            system_msgs,
+            user_msgs,
+            total_chars,
+        )
+
         # Accumulate content menggunakan buffer
         buffer = ContentAccumulator()
         stored_tool_calls = []  # Store tool calls for native format
         is_first_ai_message = True
+        inference_start = time.perf_counter()
+        event_counter = 0
 
         # Run the agent
         async for event in agent.astream(
@@ -587,13 +622,25 @@ async def generate_response(
                 configurable={"request_id": f"esdc-{int(time.time())}"}
             ),
         ):
+            event_counter += 1
             ai_msg = extract_ai_message_from_event(event)
             if not ai_msg:
                 continue
 
-            # Handle different message types
+            # Log AI message details with inference timing
             if is_first_ai_message:
+                first_response_ms = (time.perf_counter() - inference_start) * 1000
                 content_str = extract_content_str(ai_msg.content)
+                content_len = len(content_str) if content_str else 0
+                has_tool_calls = hasattr(ai_msg, "tool_calls") and bool(ai_msg.tool_calls)
+                tool_count = len(ai_msg.tool_calls) if has_tool_calls else 0
+                logger.debug(
+                    "[INFERENCE] first_response_received | elapsed_ms=%.2f | content_len=%d | has_tool_calls=%s | tool_count=%d",
+                    first_response_ms,
+                    content_len,
+                    has_tool_calls,
+                    tool_count,
+                )
                 if content_str and content_str.strip():
                     buffer.add_content(content_str)
                 is_first_ai_message = False
@@ -665,7 +712,25 @@ async def generate_response(
                 "finish_reason": "stop",
             }
 
+        # Log inference completion
+        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+        logger.debug(
+            "[INFERENCE] sync_complete | elapsed_ms=%.2f | events=%d | content_len=%d | tool_calls=%d",
+            inference_elapsed_ms,
+            event_counter,
+            len(final_content) if 'final_content' in locals() and final_content else 0,
+            len(stored_tool_calls),
+        )
+
     except Exception as e:
+        # Log inference error
+        if 'inference_start' in locals():
+            error_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+            logger.debug(
+                "[INFERENCE] sync_error | elapsed_ms=%.2f | error=%s",
+                error_elapsed_ms,
+                str(e)[:100],
+            )
         logger.error(f"Error in response generation: {e}", exc_info=True)
         return {
             "content": f"Error: {str(e)}",

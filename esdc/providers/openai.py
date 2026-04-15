@@ -1,9 +1,13 @@
 # Standard library
+import logging
+import time
 from typing import Any
 
 # Third-party
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 # Local
 from esdc.auth import is_token_expired, start_oauth_flow
@@ -37,9 +41,22 @@ class OpenAIProvider(Provider):
                 api_key=api_key or "",
                 base_url=cls.BASE_URL,
             )
+
+            logger.debug("[INFERENCE] openai_list_models | base_url=%s", cls.BASE_URL)
+            list_start = time.perf_counter()
+
             models = client.models.list()
-            return [m.id for m in models if "gpt" in m.id.lower()]  # type: ignore[union-attr]
-        except Exception:
+
+            elapsed_ms = (time.perf_counter() - list_start) * 1000
+            model_list = [m.id for m in models if "gpt" in m.id.lower()]  # type: ignore[union-attr]
+            logger.debug(
+                "[INFERENCE] openai_list_models_complete | elapsed=%.2fms | models=%d",
+                elapsed_ms,
+                len(model_list),
+            )
+            return model_list
+        except Exception as e:
+            logger.debug("[INFERENCE] openai_list_models_error | error=%s", str(e)[:100])
             return []
 
     @classmethod
@@ -130,7 +147,21 @@ class OpenAIProvider(Provider):
                 model=config.model or cls.DEFAULT_MODEL,
                 api_key=api_key,
             )
+
+            logger.debug(
+                "[INFERENCE] openai_test_connection_invoke | model=%s",
+                config.model or cls.DEFAULT_MODEL
+            )
+            invoke_start = time.perf_counter()
+
             llm.invoke("Hello")
+
+            invoke_elapsed_ms = (time.perf_counter() - invoke_start) * 1000
+            logger.debug(
+                "[INFERENCE] openai_test_connection_complete | model=%s | elapsed=%.2fms",
+                config.model or cls.DEFAULT_MODEL,
+                invoke_elapsed_ms,
+            )
             return True, f"Connected. Available models: {len(models)} models"
         except Exception as e:
             return False, str(e)
