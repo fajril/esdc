@@ -48,6 +48,8 @@ import requests
 import rich
 import typer
 from rich.console import Console
+
+from esdc.chat.agent import invalidate_entity_cache
 from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
@@ -478,6 +480,11 @@ def load_esdc_data(
             header = parsed_json[0].keys()
             content = [list(item.values()) for item in parsed_json]
             load_data_to_db(content, header, table.value)
+
+    # Invalidate entity cache after successful fetch
+    if reload:
+        invalidate_entity_cache()
+        logging.info("[INFERENCE] Entity cache invalidated after fetch")
 
 
 def esdc_url_builder(

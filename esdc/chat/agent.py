@@ -40,6 +40,26 @@ logger = logging.getLogger("esdc.chat.agent")
 TOKEN_CHARS_PER_TOKEN = 4
 MAX_TOOL_RESULT_CHARS = 10000
 
+# Module-level cache untuk entity resolution
+# Entities hanya berubah saat esdc fetch, jadi cache bisa persist lama
+_entity_resolution_cache: dict[str, dict[str, Any]] = {}
+_entity_cache_valid = True
+
+
+def _get_entity_cache_key(query: str) -> str:
+    """Generate cache key dari query untuk entity resolution."""
+    import hashlib
+
+    return hashlib.md5(query.encode()).hexdigest()
+
+
+def invalidate_entity_cache():
+    """Invalidate entity resolution cache - dipanggil saat esdc fetch."""
+    global _entity_cache_valid
+    _entity_cache_valid = False
+    _entity_resolution_cache.clear()
+    logger.info("[INFERENCE] entity_cache_invalidated")
+
 
 async def generate_conversation_title(
     llm: BaseChatModel,
@@ -131,7 +151,7 @@ def create_agent(
     """
     if tools is None:
         tools = [
-            knowledge_traversal,
+            # knowledge_traversal removed - entity resolution is now automatic
             resolve_spatial,
             semantic_search,
             execute_cypher,
@@ -265,6 +285,13 @@ def create_agent(
         if not messages:
             return {"messages": []}
 
+        # Skip entity resolution for follow-up queries (optimization)
+        # Entities are already resolved in first query and propagated via conversation history
+        human_messages = [m for m in messages if isinstance(m, HumanMessage) and m.content]
+        if len(human_messages) > 1:
+            logger.debug("[INFERENCE] entity_resolution_skipped | reason=follow_up_query")
+            return {"messages": []}
+
         last_human = None
         for msg in reversed(messages):
             if isinstance(msg, HumanMessage) and msg.content:
@@ -273,6 +300,14 @@ def create_agent(
 
         if not last_human:
             return {"messages": []}
+
+        # Check cache
+        cache_key = _get_entity_cache_key(last_human)
+        if cache_key in _entity_resolution_cache:
+            logger.debug("[INFERENCE] entity_resolution_cache_hit | key=%s", cache_key[:8])
+            return _entity_resolution_cache[cache_key]
+
+        logger.debug("[INFERENCE] entity_resolution_cache_miss | key=%s", cache_key[:8])
 
         try:
             import json as _json
@@ -329,7 +364,17 @@ def create_agent(
                 len(entity_names),
                 last_human[:50],
             )
-            return {"messages": [cast(AnyMessage, context_msg)]}
+
+            # Cache result
+            result_msg = {"messages": [cast(AnyMessage, context_msg)]}
+            _entity_resolution_cache[cache_key] = result_msg
+            logger.debug(
+                "[INFERENCE] entity_resolution_cached | key=%s | entities=%d",
+                cache_key[:8],
+                len(entity_names),
+            )
+
+            return result_msg
 
         except Exception as e:
             logger.warning("entity_resolution: failed - %s", e)
