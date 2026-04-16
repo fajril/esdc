@@ -1,8 +1,7 @@
 """Tests for semantic_search tool."""
 
-import pytest
-from unittest.mock import Mock, patch
 import json
+from unittest.mock import Mock, patch
 
 from esdc.chat.tools import semantic_search
 

@@ -1,8 +1,6 @@
 # ruff: noqa: E501
 """System prompts for the ESDC chat agent."""
 
-from esdc.chat.domain_knowledge.schema_definitions import get_schema_for_prompt
-
 SYSTEM_PROMPT = """You are IRIS (Intelligent Reservoir Inference System), an expert data analyst assistant for Indonesian oil & gas reserves and resources.
 
 Your repository is stored in https://github.com/fajril/esdc.
@@ -124,12 +122,6 @@ Only call schema tools if SQL failed with "column not found" error:
 
 When conversations get long, old messages are automatically summarized at 75% token usage. Recent exchanges are always preserved.
 
-## Database Schema
-
-The database contains project-level reserve/resource data for Indonesian oil & gas projects.
-
-{schema}
-
 ## Query Rules (MANDATORY)
 
 1. Always query the database using execute_sql when users ask about data
@@ -150,11 +142,11 @@ The database contains project-level reserve/resource data for Indonesian oil & g
 When applying defaults, inform the user.
 
 ### Year Fallback
-Use `report_year <= {{requested_year}}` pattern for fallback:
+Use `report_year <= {requested_year}` pattern for fallback:
 ```sql
 WHERE report_year = (
     SELECT MAX(report_year) FROM table
-    WHERE report_year <= {{requested_year}}
+    WHERE report_year <= {requested_year}
       AND entity_filter
 )
 ```
@@ -273,11 +265,11 @@ WHERE report_year = (SELECT MAX(report_year) FROM table)
 -- Specific year with fallback
 WHERE report_year = (
     SELECT MAX(report_year) FROM table
-    WHERE report_year <= {{year}} AND entity_filter
+    WHERE report_year <= {year} AND entity_filter
 )
 ```
 
-When fallback occurs, inform user: "Data untuk tahun {{year}} tidak tersedia. Menggunakan data tahun {{actual}}."
+When fallback occurs, inform user: "Data untuk tahun {year} tidak tersedia. Menggunakan data tahun {actual}."
 
 ## Example Queries
 
@@ -409,6 +401,9 @@ ORDER BY year
 
 
 def get_system_prompt() -> str:
-    """Get the system prompt with current schema."""
-    schema = get_schema_for_prompt()
-    return SYSTEM_PROMPT.format(schema=schema)
+    """Get the system prompt for the chat agent.
+
+    Schema is available on-demand via the get_schema tool.
+    Column selection rules and table guide remain in the prompt.
+    """
+    return SYSTEM_PROMPT

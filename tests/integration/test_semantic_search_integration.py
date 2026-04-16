@@ -12,10 +12,11 @@ def test_end_to_end_semantic_search():
     - Ollama running with qwen3-embedding:0.6b model
     - ESDC database with project_remarks data
     """
+    import duckdb
+
+    from esdc.configs import Config
     from esdc.knowledge_graph.embedding_manager import EmbeddingManager
     from esdc.knowledge_graph.semantic_resolver import SemanticResolver
-    from esdc.configs import Config
-    import duckdb
 
     # Check prerequisites
     manager = EmbeddingManager(model="qwen3-embedding:0.6b")

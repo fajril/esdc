@@ -1,7 +1,6 @@
 """Tests for SemanticResolver."""
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from esdc.knowledge_graph.semantic_resolver import SemanticResolver
 

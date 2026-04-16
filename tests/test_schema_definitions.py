@@ -30,3 +30,25 @@ def test_database_schema_structure():
     assert "primary_key" in pr
     assert "rec_oc" in pr["columns"]
     assert "tpf_oc" in DATABASE_SCHEMA["project_timeseries"]["columns"]
+
+
+def test_system_prompt_has_no_inline_schema():
+    """System prompt should NOT contain inline schema.
+
+    Schema is available via get_schema tool.
+    """
+    from esdc.chat.prompts import get_system_prompt
+
+    prompt = get_system_prompt()
+
+    assert "res_oc" in prompt
+    assert "rec_an" in prompt
+    assert "field_resources" in prompt
+
+    assert "project_id | TEXT" not in prompt
+    assert "field_lat | REAL" not in prompt
+    assert "rec_oil | REAL" not in prompt
+
+    assert len(prompt) < 20000, (
+        f"System prompt is {len(prompt)} chars, expected < 20000"
+    )

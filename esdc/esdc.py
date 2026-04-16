@@ -48,8 +48,6 @@ import requests
 import rich
 import typer
 from rich.console import Console
-
-from esdc.chat.agent import invalidate_entity_cache
 from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
@@ -61,6 +59,8 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 from tabulate import tabulate
+
+from esdc.chat.agent import invalidate_entity_cache
 
 console = Console()
 
