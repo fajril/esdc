@@ -1,8 +1,10 @@
 # Standard library
 import asyncio
 import hashlib
+import json
 import logging
 import re
+import shutil
 from typing import Annotated, Any
 
 # Third-party
@@ -10,12 +12,13 @@ import diskcache
 import duckdb
 from langchain.tools import tool
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("esdc.chat.tools")
 
 # Maximum rows to return to prevent context window overflow
 MAX_QUERY_ROWS = 50
 
 _sql_cache: diskcache.Cache | None = None
+_tool_cache: diskcache.Cache | None = None
 
 _FTS_TABLES: dict[str, str] = {
     "project_resources": "fts_main_project_resources",
@@ -139,6 +142,41 @@ def _get_cache() -> diskcache.Cache:
 
 def _get_cache_key(sql: str) -> str:
     return hashlib.sha256(sql.encode()).hexdigest()
+
+
+def _get_tool_cache() -> diskcache.Cache:
+    """Get or create the tool results cache (for non-SQL tools).
+
+    Same pattern as SQL cache: permanent storage, invalidated on esdc reload.
+    """
+    global _tool_cache
+    if _tool_cache is None:
+        from esdc.configs import Config
+
+        cache_dir = Config.get_cache_dir() / "tool_results"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        _tool_cache = diskcache.Cache(str(cache_dir))
+    return _tool_cache
+
+
+def _tool_cache_key(tool_name: str, **kwargs: Any) -> str:
+    """Generate a deterministic cache key from tool name and arguments."""
+    sorted_args = json.dumps(kwargs, sort_keys=True, default=str)
+    return f"{tool_name}:{hashlib.sha256(sorted_args.encode()).hexdigest()}"
+
+
+def invalidate_tool_cache() -> None:
+    """Clear the tool results cache directory."""
+    global _tool_cache
+    if _tool_cache is not None:
+        _tool_cache.clear()
+        _tool_cache = None
+    from esdc.configs import Config
+
+    cache_dir = Config.get_cache_dir() / "tool_results"
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+        logger.info("Tool cache invalidated: %s", cache_dir)
 
 
 def _validate_table_name(name: str | None) -> str | None:
@@ -316,6 +354,14 @@ def get_schema(
     if table_name and not safe_table_name:
         return f"Error: Invalid table name '{table_name}'. Only alphanumeric, underscore, and hyphen allowed."
 
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key("get_schema", table_name=safe_table_name)
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=get_schema key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=get_schema key=%s", cache_key[:16])
+
     conn = None
     try:
         conn = get_db_connection()
@@ -336,6 +382,8 @@ def get_schema(
                 default_val = col[4] if col[4] is not None else ""
                 output += f"{col[0]} | {col[1]} | {nullable} | {default_val}\n"
 
+            cache.set(cache_key, output)
+            logger.debug("[CACHE] stored | tool=get_schema key=%s", cache_key[:16])
             return output
         else:
             result = conn.execute(
@@ -353,6 +401,8 @@ def get_schema(
                 col_names = ", ".join(col[0] for col in tbl_columns)
                 output += f"- {tbl_name}: {col_names}\n"
 
+            cache.set(cache_key, output)
+            logger.debug("[CACHE] stored | tool=get_schema key=%s", cache_key[:16])
             return output
 
     except FileNotFoundError as e:
@@ -977,6 +1027,16 @@ def knowledge_traversal(
 
     from esdc.knowledge_graph.resolver import KnowledgeTraversalResolver
 
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "knowledge_traversal", query=query, return_multiple=return_multiple
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=knowledge_traversal key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=knowledge_traversal key=%s", cache_key[:16])
+
     try:
         conn = get_db_connection()
         try:
@@ -989,7 +1049,13 @@ def knowledge_traversal(
             else:
                 result["cypher_available"] = False
 
-            return json.dumps(result, indent=2, ensure_ascii=False)
+            result_str = json.dumps(result, indent=2, ensure_ascii=False)
+            if result.get("status") in ("success", "ambiguous"):
+                cache.set(cache_key, result_str)
+                logger.debug(
+                    "[CACHE] stored | tool=knowledge_traversal key=%s", cache_key[:16]
+                )
+            return result_str
         finally:
             conn.close()
 
@@ -1154,6 +1220,21 @@ def resolve_spatial(
         wk_name,
     )
 
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "resolve_spatial",
+        query_type=query_type,
+        target=str(target),
+        radius_km=radius_km,
+        limit=limit,
+        wk_name=wk_name,
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=resolve_spatial key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=resolve_spatial key=%s", cache_key[:16])
+
     resolver = SpatialResolver()
 
     try:
@@ -1272,7 +1353,14 @@ def resolve_spatial(
         logger.debug(
             "[SPATIAL_OK] query_type=%s | results=%d", query_type, result_count
         )
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        result_str = json.dumps(result, indent=2, ensure_ascii=False)
+        if isinstance(result, dict) and result.get("status") in (
+            "success",
+            "no_results",
+        ):
+            cache.set(cache_key, result_str)
+            logger.debug("[CACHE] stored | tool=resolve_spatial key=%s", cache_key[:16])
+        return result_str
 
     except Exception as e:
         logger.error(

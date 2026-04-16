@@ -234,6 +234,9 @@ def load_data_to_db(
         conn.close()
 
     invalidate_sql_cache()
+    from esdc.chat.tools import invalidate_tool_cache
+
+    invalidate_tool_cache()
 
 
 def run_query(
