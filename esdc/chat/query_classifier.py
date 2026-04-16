@@ -277,38 +277,44 @@ class QueryClassifier:
         return "project_resources"  # Default fallback
 
 
+_SCHEMA_TOOLS = ["Schema Inspector", "Table Lister", "Table Selector"]
+
+
 def get_tools_for_classification(classification: QueryClassification) -> list[str]:
     """Get minimal tool set for query type.
+
+    Returns LangChain tool names (matching @tool decorator strings).
+    ALWAYS includes schema tools since these are lightweight and may be
+    needed for any query type.
 
     Args:
         classification: The query classification
 
     Returns:
-        List of tool names to bind for this query
+        List of LangChain tool names to bind for this query
     """
-    base_tools = ["execute_sql"]
+    base_tools = ["SQL Executor"] + _SCHEMA_TOOLS
 
     if classification.query_type == QueryType.SIMPLE_FACTUAL:
         return base_tools
 
     elif classification.query_type == QueryType.CONCEPTUAL:
-        return ["semantic_search"] + base_tools
+        return ["Semantic Search"] + base_tools
 
     elif classification.query_type == QueryType.SPATIAL:
-        return ["resolve_spatial"] + base_tools
+        return ["Spatial Resolver"] + base_tools
 
     elif classification.query_type == QueryType.COMPLEX_FACTUAL:
-        # May need entity resolution
-        return ["knowledge_traversal"] + base_tools
+        return ["Uncertainty Resolver", "Problem Cluster Search"] + base_tools
 
     else:  # AMBIGUOUS
-        # Full tool set
         return [
-            "knowledge_traversal",
-            "semantic_search",
-            "resolve_spatial",
-            "execute_sql",
-        ]
+            "Knowledge Traversal",
+            "Semantic Search",
+            "Spatial Resolver",
+            "Uncertainty Resolver",
+            "Problem Cluster Search",
+        ] + base_tools
 
 
 def format_classification_for_prompt(classification: QueryClassification) -> str:

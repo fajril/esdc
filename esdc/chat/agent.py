@@ -18,6 +18,7 @@ from esdc.chat.prompts import get_system_prompt
 from esdc.chat.query_classifier import (
     QueryClassifier,
     format_classification_for_prompt,
+    get_tools_for_classification,
 )
 from esdc.chat.tools import (
     execute_cypher,
@@ -35,6 +36,8 @@ from esdc.chat.tools import (
 
 # Logger is configured by app.py (runs first)
 logger = logging.getLogger("esdc.chat.agent")
+
+MAX_TOOL_CALLS = 6
 
 
 _context_length_cache: dict[str, int] = {}
@@ -241,14 +244,18 @@ def create_agent(
             get_resources_columns,
         ]
 
-    tools_by_name = {tool.name: tool for tool in tools}
-    llm_with_tools = llm.bind_tools(tools)
+    all_tools: dict[str, Any] = {tool.name: tool for tool in tools}
+    tools_by_name = dict(all_tools)
 
-    def init_node(state: AgentState) -> dict[str, str]:
-        """Initialize system prompt in state (runs once)."""
+    def init_node(state: AgentState) -> dict[str, Any]:
+        """Initialize system prompt and defaults in state (runs once)."""
         system_prompt = get_system_prompt()
         logger.debug("[INIT] system_prompt_set | len=%d", len(system_prompt))
-        return {"system_prompt": system_prompt}
+        return {
+            "system_prompt": system_prompt,
+            "allowed_tools": list(all_tools.keys()),
+            "tool_call_count": 0,
+        }
 
     def agent_node(state: AgentState) -> dict[str, list[AnyMessage]]:
         """Agent node that calls the LLM with tools."""
@@ -278,7 +285,15 @@ def create_agent(
             "messages"
         ]
 
-        # Log inference start with detailed prompt metrics
+        allowed_tools = state.get("allowed_tools", list(all_tools.keys()))
+        selected_tools = [
+            all_tools[name] for name in allowed_tools if name in all_tools
+        ]
+        if not selected_tools:
+            selected_tools = list(all_tools.values())
+
+        llm_with_selected_tools = llm.bind_tools(selected_tools)
+
         total_chars = sum(len(str(m.content)) for m in messages_with_system)
         system_prompt_len = len(system_prompt)
         user_messages = len(
@@ -286,17 +301,17 @@ def create_agent(
         )
         logger.debug(
             "[INFERENCE] llm_invoke_start | messages=%d | user_messages=%d | "
-            "system_prompt_len=%d | total_chars=%d",
+            "system_prompt_len=%d | total_chars=%d | allowed_tools=%s",
             len(messages_with_system),
             user_messages,
             system_prompt_len,
             total_chars,
+            allowed_tools,
         )
         inference_start = time.perf_counter()
 
-        response = llm_with_tools.invoke(messages_with_system)
+        response = llm_with_selected_tools.invoke(messages_with_system)
 
-        # Log inference completion with response metrics
         inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
         response_len = len(str(response.content)) if hasattr(response, "content") else 0
         has_tool_calls = hasattr(response, "tool_calls") and bool(response.tool_calls)
@@ -314,6 +329,14 @@ def create_agent(
 
     def should_continue(state: AgentState) -> str:
         """Determine if we should continue to tools or end."""
+        tool_call_count = state.get("tool_call_count", 0)
+        if tool_call_count >= MAX_TOOL_CALLS:
+            logger.warning(
+                "🔧 TOOL_LIMIT: Reached %d tool calls, forcing end",
+                tool_call_count,
+            )
+            return END
+
         messages = state["messages"]
         last_message = messages[-1]
 
@@ -323,21 +346,44 @@ def create_agent(
 
         return END
 
-    async def tool_node(state: AgentState) -> dict[str, list[AnyMessage]]:
+    async def tool_node(state: AgentState) -> dict[str, Any]:
         """Tool execution node."""
         result = []
         last_message = state["messages"][-1]
+        allowed_tools = set(state.get("allowed_tools", list(all_tools.keys())))
 
         ai_message = cast(AIMessage, last_message)
         if not hasattr(ai_message, "tool_calls") or not ai_message.tool_calls:
-            return {"messages": []}
+            return {"messages": [], "tool_call_count": state.get("tool_call_count", 0)}
 
-        logger.info(f"🔧 TOOL_NODE: Processing {len(ai_message.tool_calls)} tool calls")
+        logger.info(
+            "🔧 TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
+        )
 
         for tool_call in ai_message.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call.get("args", {})
             tool_id = tool_call.get("id", "unknown")
+
+            if tool_name not in allowed_tools:
+                logger.warning(
+                    "🔧 TOOL_NODE: Blocked disallowed tool %s (allowed: %s)",
+                    tool_name,
+                    sorted(allowed_tools),
+                )
+                result.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": (
+                            f"Error: Tool '{tool_name}' is not available "
+                            f"for this query type. Use only: "
+                            f"{', '.join(sorted(allowed_tools))}"
+                        ),
+                    }
+                )
+                continue
 
             if tool_name in tools_by_name:
                 tool = tools_by_name[tool_name]
@@ -345,11 +391,13 @@ def create_agent(
                     if isinstance(tool_args, str):
                         tool_args = json.loads(tool_args)
 
-                    logger.info(f"🔧 TOOL_NODE: Invoking {tool_name} (id={tool_id})")
+                    logger.info("🔧 TOOL_NODE: Invoking %s (id=%s)", tool_name, tool_id)
                     observation = await tool.ainvoke(tool_args)
                     observation_str = str(observation)
                     logger.info(
-                        f"🔧 TOOL_NODE: {tool_name} returned {len(observation_str)} chars"
+                        "🔧 TOOL_NODE: %s returned %d chars",
+                        tool_name,
+                        len(observation_str),
                     )
 
                     if len(observation_str) > MAX_TOOL_RESULT_CHARS:
@@ -358,10 +406,13 @@ def create_agent(
                             + "\n\n[Result truncated to first 10000 characters for context efficiency]"
                         )
                         logger.info(
-                            f"🔧 TOOL_NODE: {tool_name} result truncated from {len(observation_str)} to {MAX_TOOL_RESULT_CHARS} chars"
+                            "🔧 TOOL_NODE: %s result truncated from %d to %d chars",
+                            tool_name,
+                            len(observation_str),
+                            MAX_TOOL_RESULT_CHARS,
                         )
                 except Exception as e:
-                    logger.error(f"🔧 TOOL_NODE: {tool_name} failed: {e}")
+                    logger.error("🔧 TOOL_NODE: %s failed: %s", tool_name, e)
                     observation = f"Error: {str(e)}"
 
                 result.append(
@@ -373,8 +424,12 @@ def create_agent(
                     }
                 )
 
-        logger.info(f"🔧 TOOL_NODE: Returning {len(result)} tool results")
-        return {"messages": result}
+        logger.info("🔧 TOOL_NODE: Returning %d tool results", len(result))
+        return {
+            "messages": result,
+            "tool_call_count": state.get("tool_call_count", 0)
+            + len(ai_message.tool_calls),
+        }
 
     def manage_context_with_length(state: AgentState) -> dict[str, Any]:
         """Wrapper for manage_context_node with bound context_length."""
@@ -491,11 +546,11 @@ def create_agent(
             logger.warning("entity_resolution: failed - %s", e)
             return {"messages": []}
 
-    def query_classification_node(state: AgentState) -> dict[str, list[AnyMessage]]:
+    def query_classification_node(state: AgentState) -> dict[str, Any]:
         """Classify query and inject strategy into system prompt."""
         messages = state["messages"]
         if not messages:
-            return {"messages": []}
+            return {"messages": [], "allowed_tools": list(all_tools.keys())}
 
         # Find last human message
         last_human = None
@@ -505,26 +560,31 @@ def create_agent(
                 break
 
         if not last_human:
-            return {"messages": []}
+            return {"messages": [], "allowed_tools": list(all_tools.keys())}
 
         try:
             classifier = QueryClassifier()
             classification = classifier.classify(last_human)
 
             strategy_text = format_classification_for_prompt(classification)
+            allowed_tools = get_tools_for_classification(classification)
 
             strategy_msg = SystemMessage(content=strategy_text)
             logger.info(
-                "query_classification: type=%s confidence=%.2f query='%s...'",
+                "query_classification: type=%s confidence=%.2f tools=%s query='%s...'",
                 classification.query_type.name,
                 classification.confidence,
+                allowed_tools,
                 last_human[:50],
             )
-            return {"messages": [cast(AnyMessage, strategy_msg)]}
+            return {
+                "messages": [cast(AnyMessage, strategy_msg)],
+                "allowed_tools": allowed_tools,
+            }
 
         except Exception as e:
             logger.warning("query_classification: failed - %s", e)
-            return {"messages": []}
+            return {"messages": [], "allowed_tools": list(all_tools.keys())}
 
     # Build graph with query classification
     graph = (
@@ -572,7 +632,7 @@ async def run_agent_stream(
         Dict with 'type' (message/tool/error) and 'content' or 'token_usage'
     """
     config: RunnableConfig = {  # type: ignore[assignment]
-        "recursion_limit": 50,
+        "recursion_limit": 15,
         "configurable": {
             "thread_id": thread_id,
             "checkpoint_ns": "esdc_chat",

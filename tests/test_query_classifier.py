@@ -1,6 +1,5 @@
 """Tests for query classifier."""
 
-
 from esdc.chat.query_classifier import (
     QueryClassification,
     QueryClassifier,
@@ -121,7 +120,12 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert tools == ["execute_sql"]
+        assert "SQL Executor" in tools
+        assert "Schema Inspector" in tools
+        assert "Table Lister" in tools
+        assert "Table Selector" in tools
+        assert "Spatial Resolver" not in tools
+        assert "Semantic Search" not in tools
 
     def test_conceptual_tools(self):
         """Test tools for conceptual queries."""
@@ -135,8 +139,9 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "semantic_search" in tools
-        assert "execute_sql" in tools
+        assert "Semantic Search" in tools
+        assert "SQL Executor" in tools
+        assert "Spatial Resolver" not in tools
 
     def test_spatial_tools(self):
         """Test tools for spatial queries."""
@@ -150,8 +155,9 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "resolve_spatial" in tools
-        assert "execute_sql" in tools
+        assert "Spatial Resolver" in tools
+        assert "SQL Executor" in tools
+        assert "Semantic Search" not in tools
 
     def test_ambiguous_tools(self):
         """Test full tool set for ambiguous queries."""
@@ -165,8 +171,8 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "knowledge_traversal" in tools
-        assert "execute_sql" in tools
+        assert "Knowledge Traversal" in tools
+        assert "SQL Executor" in tools
 
 
 class TestPromptFormatting:

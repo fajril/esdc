@@ -25,6 +25,8 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     system_prompt: str
     context_metadata: dict
+    allowed_tools: list[str]
+    tool_call_count: int
 
 
 def _get_content_str(content: str | list[str | dict[str, Any]] | None) -> str:
