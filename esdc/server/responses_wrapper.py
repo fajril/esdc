@@ -406,12 +406,24 @@ async def generate_responses_stream(
 
     first_ai_response = True
     stream_start = time.perf_counter()
+    last_event_time = stream_start
 
     try:
         # Stream agent events
         async for event in agent.astream({"messages": lc_messages}):
             event_counter += 1
+            current_time = time.perf_counter()
             event_keys = list(event.keys())
+
+            # Calculate gap from previous event
+            gap_ms = (current_time - last_event_time) * 1000
+            if gap_ms > 2000:
+                logger.debug(
+                    f"[GAP_DETECTED] {response_id} | gap={gap_ms:.2f}ms | "
+                    f"since_event=#{event_counter - 1} | to_event=#{event_counter}"
+                )
+            last_event_time = current_time
+
             logger.debug(
                 f"[RESPONSES {response_id}] EVENT #{event_counter} keys: {event_keys}"
             )

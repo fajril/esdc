@@ -3,7 +3,7 @@ import asyncio
 import hashlib
 import logging
 import re
-from typing import Annotated, Any, Union
+from typing import Annotated, Any
 
 # Third-party
 import diskcache
@@ -1093,7 +1093,7 @@ def resolve_spatial(
         "or 'average_distance' (average distance between multiple fields).",
     ],
     target: Annotated[
-        Union[str, dict],
+        str | dict,
         "For proximity: field name. For working_area: working area name. "
         "For distance: comma-separated 'field1, field2'. For coordinates: field name. "
         "For nearest_from_coords: dict with 'lat', 'long', 'entity_type' ('field' or 'working_area'). "
@@ -1139,6 +1139,13 @@ def resolve_spatial(
 
     from esdc.knowledge_graph.spatial_resolver import SpatialResolver
 
+    logger.debug(
+        "[SPATIAL_START] query_type=%s | target=%s | radius_km=%s",
+        query_type,
+        target,
+        radius_km,
+    )
+
     resolver = SpatialResolver()
 
     try:
@@ -1151,6 +1158,7 @@ def resolve_spatial(
         elif query_type == "distance":
             parts = [p.strip() for p in target.split(",")]
             if len(parts) != 2:
+                logger.debug("[SPATIAL_ERR] error=invalid_format")
                 return json.dumps(
                     {
                         "status": "error",
@@ -1171,6 +1179,7 @@ def resolve_spatial(
                     limit=int(params.get("limit", limit)),
                 )
             except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.debug("[SPATIAL_ERR] error=invalid_params")
                 return json.dumps(
                     {
                         "status": "error",
@@ -1185,6 +1194,7 @@ def resolve_spatial(
                     min_cluster_size=int(params.get("min_cluster_size", 2)),
                 )
             except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.debug("[SPATIAL_ERR] error=invalid_params")
                 return json.dumps(
                     {
                         "status": "error",
@@ -1200,6 +1210,7 @@ def resolve_spatial(
                     limit=int(params.get("limit", limit)),
                 )
             except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.debug("[SPATIAL_ERR] error=invalid_params")
                 return json.dumps(
                     {
                         "status": "error",
@@ -1211,6 +1222,7 @@ def resolve_spatial(
                 params = target if isinstance(target, dict) else json.loads(target)
                 field_names = params.get("field_names", [])
                 if not isinstance(field_names, list) or len(field_names) < 2:
+                    logger.debug("[SPATIAL_ERR] error=insufficient_fields")
                     return json.dumps(
                         {
                             "status": "error",
@@ -1219,6 +1231,7 @@ def resolve_spatial(
                     )
                 result = resolver.calculate_average_distance(field_names=field_names)
             except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.debug("[SPATIAL_ERR] error=invalid_params")
                 return json.dumps(
                     {
                         "status": "error",
@@ -1226,6 +1239,7 @@ def resolve_spatial(
                     }
                 )
         else:
+            logger.debug("[SPATIAL_ERR] error=unknown_query_type")
             return json.dumps(
                 {
                     "status": "error",
@@ -1234,11 +1248,20 @@ def resolve_spatial(
                 }
             )
 
+        result_count = (
+            len(result.get("nearby_fields", [])) if isinstance(result, dict) else 0
+        )
+        logger.debug(
+            "[SPATIAL_OK] query_type=%s | results=%d", query_type, result_count
+        )
         return json.dumps(result, indent=2, ensure_ascii=False)
 
     except Exception as e:
         logger.error(
-            "[Spatial] query_failed | type=%s target=%s error=%s", query_type, target, e
+            "[SPATIAL_ERR] query_failed | type=%s target=%s error=%s",
+            query_type,
+            target,
+            e,
         )
         return json.dumps(
             {

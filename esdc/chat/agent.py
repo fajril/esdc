@@ -10,10 +10,10 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph import END, START, StateGraph
 
 # Local
-from esdc.chat.context_manager import manage_context_node
+from esdc.chat.context_manager import AgentState, manage_context_node
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.query_classifier import (
     QueryClassifier,
@@ -26,7 +26,6 @@ from esdc.chat.tools import (
     get_resources_columns,
     get_schema,
     get_timeseries_columns,
-    knowledge_traversal,
     list_tables,
     resolve_spatial,
     resolve_uncertainty_level,
@@ -36,6 +35,77 @@ from esdc.chat.tools import (
 
 # Logger is configured by app.py (runs first)
 logger = logging.getLogger("esdc.chat.agent")
+
+
+_context_length_cache: dict[str, int] = {}
+
+
+def _detect_context_length(llm: BaseChatModel) -> int:
+    """Auto-detect model context length from LLM instance.
+
+    Checks provider-specific APIs (Ollama, OpenAI) and caches results.
+    Returns the full model context length — the system prompt is stored
+    separately in AgentState and doesn't compete with messages for the
+    context budget, so no reservation is needed.
+    """
+    model_key = ""
+    model_context_length = 0
+
+    try:
+        from langchain_ollama import ChatOllama
+
+        if isinstance(llm, ChatOllama):
+            model = getattr(llm, "model", "")
+            base_url = str(getattr(llm, "base_url", "http://localhost:11434"))
+            model_key = f"ollama:{model}@{base_url}"
+
+            if model_key in _context_length_cache:
+                return _context_length_cache[model_key]
+
+            from esdc.providers.ollama import OllamaProvider
+
+            model_context_length = OllamaProvider.get_context_length_from_api(
+                model, base_url
+            )
+    except ImportError:
+        pass
+
+    if model_context_length == 0:
+        try:
+            from langchain_openai import ChatOpenAI
+
+            if isinstance(llm, ChatOpenAI):
+                model_name = getattr(llm, "model_name", "")
+                model_key = f"openai:{model_name}"
+
+                if model_key in _context_length_cache:
+                    return _context_length_cache[model_key]
+
+                from esdc.providers.openai import OpenAIProvider
+
+                model_context_length = OpenAIProvider.get_context_length(model_name)
+        except ImportError:
+            pass
+
+    if model_context_length == 0:
+        from esdc.providers.base import DEFAULT_CONTEXT_LENGTH
+
+        model_context_length = DEFAULT_CONTEXT_LENGTH
+        logger.debug(
+            "[CONTEXT_LENGTH] using_default | context_length=%d",
+            model_context_length,
+        )
+
+    _context_length_cache[model_key] = model_context_length
+
+    logger.info(
+        "[CONTEXT_LENGTH] detected | model_key=%s | context_length=%d",
+        model_key,
+        model_context_length,
+    )
+
+    return model_context_length
+
 
 TOKEN_CHARS_PER_TOKEN = 4
 MAX_TOOL_RESULT_CHARS = 10000
@@ -107,7 +177,9 @@ Title:"""
 
         # Log inference completion
         inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
-        response_content = response.content if hasattr(response, "content") else str(response)
+        response_content = (
+            response.content if hasattr(response, "content") else str(response)
+        )
         content_len = len(response_content) if response_content else 0
         logger.debug(
             "[INFERENCE] title_generation_complete | elapsed=%.2fms | response_len=%d",
@@ -136,7 +208,7 @@ def create_agent(
     llm: BaseChatModel,
     tools: list | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
-    context_length: int = 6000,
+    context_length: int | None = None,
 ) -> Runnable:
     """Create a LangGraph agent with tools.
 
@@ -144,11 +216,15 @@ def create_agent(
         llm: A LangChain chat model
         tools: Optional list of tools. Defaults to all registered tools
         checkpointer: Optional checkpointer for memory persistence
-        context_length: Maximum context length in tokens for context management. Default: 6000
+        context_length: Maximum context length in tokens for messages.
+            If None, auto-detected from the LLM model's context window.
+            Explicit values (e.g. from TUI) take precedence.
 
     Returns:
         A compiled StateGraph agent
     """
+    if context_length is None:
+        context_length = _detect_context_length(llm)
     if tools is None:
         tools = [
             # knowledge_traversal removed - entity resolution is now automatic
@@ -168,9 +244,36 @@ def create_agent(
     tools_by_name = {tool.name: tool for tool in tools}
     llm_with_tools = llm.bind_tools(tools)
 
-    def agent_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
-        """Agent node that calls the LLM with tools."""
+    def init_node(state: AgentState) -> dict[str, str]:
+        """Initialize system prompt in state (runs once)."""
         system_prompt = get_system_prompt()
+        logger.debug("[INIT] system_prompt_set | len=%d", len(system_prompt))
+        return {"system_prompt": system_prompt}
+
+    def agent_node(state: AgentState) -> dict[str, list[AnyMessage]]:
+        """Agent node that calls the LLM with tools."""
+        system_prompt = state.get("system_prompt", "")
+        if not system_prompt:
+            system_prompt = get_system_prompt()
+            logger.warning(
+                "[AGENT] system_prompt missing from state, regenerating | len=%d",
+                len(system_prompt),
+            )
+
+        big_sys_in_msgs = [
+            m
+            for m in state["messages"]
+            if isinstance(m, SystemMessage) and len(str(m.content)) > 10000
+        ]
+        if big_sys_in_msgs:
+            logger.warning(
+                "[AGENT] DUPLICATE_SYSTEM_PROMPT_DETECTED | big_sys_count=%d | "
+                "total_msgs=%d | prompt_len=%d",
+                len(big_sys_in_msgs),
+                len(state["messages"]),
+                len(system_prompt),
+            )
+
         messages_with_system = [SystemMessage(content=system_prompt)] + state[
             "messages"
         ]
@@ -178,7 +281,9 @@ def create_agent(
         # Log inference start with detailed prompt metrics
         total_chars = sum(len(str(m.content)) for m in messages_with_system)
         system_prompt_len = len(system_prompt)
-        user_messages = len([m for m in messages_with_system if isinstance(m, HumanMessage)])
+        user_messages = len(
+            [m for m in messages_with_system if isinstance(m, HumanMessage)]
+        )
         logger.debug(
             "[INFERENCE] llm_invoke_start | messages=%d | user_messages=%d | "
             "system_prompt_len=%d | total_chars=%d",
@@ -207,7 +312,7 @@ def create_agent(
 
         return {"messages": [cast(AnyMessage, response)]}
 
-    def should_continue(state: MessagesState) -> str:
+    def should_continue(state: AgentState) -> str:
         """Determine if we should continue to tools or end."""
         messages = state["messages"]
         last_message = messages[-1]
@@ -218,7 +323,7 @@ def create_agent(
 
         return END
 
-    async def tool_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
+    async def tool_node(state: AgentState) -> dict[str, list[AnyMessage]]:
         """Tool execution node."""
         result = []
         last_message = state["messages"][-1]
@@ -271,11 +376,11 @@ def create_agent(
         logger.info(f"🔧 TOOL_NODE: Returning {len(result)} tool results")
         return {"messages": result}
 
-    def manage_context_with_length(state: MessagesState) -> dict[str, list[AnyMessage]]:
+    def manage_context_with_length(state: AgentState) -> dict[str, Any]:
         """Wrapper for manage_context_node with bound context_length."""
         return manage_context_node(state, context_length=context_length)
 
-    def entity_resolution_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
+    def entity_resolution_node(state: AgentState) -> dict[str, list[AnyMessage]]:
         """Pre-resolve entities from the last user message via knowledge graph.
 
         Injects resolved entities as a system message so the LLM can use
@@ -287,9 +392,13 @@ def create_agent(
 
         # Skip entity resolution for follow-up queries (optimization)
         # Entities are already resolved in first query and propagated via conversation history
-        human_messages = [m for m in messages if isinstance(m, HumanMessage) and m.content]
+        human_messages = [
+            m for m in messages if isinstance(m, HumanMessage) and m.content
+        ]
         if len(human_messages) > 1:
-            logger.debug("[INFERENCE] entity_resolution_skipped | reason=follow_up_query")
+            logger.debug(
+                "[INFERENCE] entity_resolution_skipped | reason=follow_up_query"
+            )
             return {"messages": []}
 
         last_human = None
@@ -304,7 +413,9 @@ def create_agent(
         # Check cache
         cache_key = _get_entity_cache_key(last_human)
         if cache_key in _entity_resolution_cache:
-            logger.debug("[INFERENCE] entity_resolution_cache_hit | key=%s", cache_key[:8])
+            logger.debug(
+                "[INFERENCE] entity_resolution_cache_hit | key=%s", cache_key[:8]
+            )
             return _entity_resolution_cache[cache_key]
 
         logger.debug("[INFERENCE] entity_resolution_cache_miss | key=%s", cache_key[:8])
@@ -380,7 +491,7 @@ def create_agent(
             logger.warning("entity_resolution: failed - %s", e)
             return {"messages": []}
 
-    def query_classification_node(state: MessagesState) -> dict[str, list[AnyMessage]]:
+    def query_classification_node(state: AgentState) -> dict[str, list[AnyMessage]]:
         """Classify query and inject strategy into system prompt."""
         messages = state["messages"]
         if not messages:
@@ -417,13 +528,15 @@ def create_agent(
 
     # Build graph with query classification
     graph = (
-        StateGraph(MessagesState)
+        StateGraph(AgentState)
+        .add_node("init", init_node)
         .add_node("manage_context", manage_context_with_length)
         .add_node("query_classification", query_classification_node)
         .add_node("entity_resolution", entity_resolution_node)
         .add_node("agent", agent_node)
         .add_node("tools", tool_node)
-        .add_edge(START, "manage_context")
+        .add_edge(START, "init")
+        .add_edge("init", "manage_context")
         .add_edge("manage_context", "query_classification")
         .add_edge("query_classification", "entity_resolution")
         .add_edge("entity_resolution", "agent")
