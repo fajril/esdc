@@ -422,6 +422,14 @@ def list_tables() -> str:
 
     Use this tool to see what data is available.
     """
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key("list_tables")
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=list_tables key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=list_tables key=%s", cache_key[:16])
+
     try:
         conn = get_db_connection()
 
@@ -456,6 +464,8 @@ def list_tables() -> str:
                 output += f"  - {view[0]}\n"
 
         conn.close()
+        cache.set(cache_key, output)
+        logger.debug("[CACHE] stored | tool=list_tables key=%s", cache_key[:16])
         return output
 
     except FileNotFoundError as e:
@@ -1473,8 +1483,6 @@ def semantic_search(
 
     from esdc.knowledge_graph.semantic_resolver import SemanticResolver
 
-    resolver = SemanticResolver()
-
     # Build filters dict from optional parameters
     filters: dict[str, Any] = {}
     if report_year is not None:
@@ -1506,6 +1514,16 @@ def semantic_search(
     if wk_area_perwakilan_skkmigas is not None:
         filters["wk_area_perwakilan_skkmigas"] = wk_area_perwakilan_skkmigas
 
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key("semantic_search", query=query, limit=limit, **filters)
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=semantic_search key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=semantic_search key=%s", cache_key[:16])
+
+    resolver = SemanticResolver()
+
     try:
         result = resolver.search_by_text(
             query=query,
@@ -1516,11 +1534,21 @@ def semantic_search(
         # If embeddings not available, fallback to FTS search
         if result.get("status") == "not_available":
             logger.info("[Semantic] embeddings not available, falling back to FTS")
-            # For FTS fallback, we can't apply all filters, but we can try with basic ones
             fallback_result = _search_remarks_via_fts(query, limit, "project_resources")
-            return json.dumps(fallback_result, indent=2, ensure_ascii=False)
+            fallback_str = json.dumps(fallback_result, indent=2, ensure_ascii=False)
+            if fallback_result.get("status") in ("success", "no_results"):
+                cache.set(cache_key, fallback_str)
+                logger.debug(
+                    "[CACHE] stored | tool=semantic_search key=%s (fts fallback)",
+                    cache_key[:16],
+                )
+            return fallback_str
 
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        result_str = json.dumps(result, indent=2, ensure_ascii=False)
+        if result.get("status") in ("success", "no_results"):
+            cache.set(cache_key, result_str)
+            logger.debug("[CACHE] stored | tool=semantic_search key=%s", cache_key[:16])
+        return result_str
 
     except Exception as e:
         logger.error("[Semantic] tool failed | query=%s error=%s", query, e)
