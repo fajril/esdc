@@ -103,11 +103,11 @@ When writing SQL queries, use DuckDB syntax:
 - For others: Use results from Step 1
 - Always include report_year filter
 
-**Step 3: Schema Discovery (OPTIONAL - Rarely Needed)**
-Only call schema tools if SQL failed with "column not found" error:
-- `get_schema` for table structure
-- `get_recommended_table` if unsure which table
-- `get_resources_columns` for column selection
+**Step 3: Schema Discovery (if needed)**
+Only call schema tools if:
+- SQL failed with "column not found" error
+- You're unsure which column to use for a specific metric
+Call `get_schema(table_name)` for column details, or `get_recommended_table` if unsure which table.
 
 **Examples:**
 - Simple: `execute_sql` with table=`field_resources`, WHERE field_name ILIKE '%Duri%'
