@@ -24,7 +24,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 # Local
-from esdc.chat.agent import create_agent
+from esdc.chat.agent import create_agent, generate_conversation_title
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
@@ -44,6 +44,12 @@ from esdc.server.responses_events import (
 )
 from esdc.server.responses_models import ResponseInputItem
 from esdc.server.stream_utils import chunk_json, chunk_text
+from esdc.server.title_detection import (
+    create_title_stream_events,
+    create_title_sync_response,
+    extract_user_query_from_title_request,
+    is_title_generation_request,
+)
 
 logger = logging.getLogger("esdc.server.responses")
 
@@ -312,6 +318,42 @@ async def generate_responses_stream(
     """
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
     seq = SequenceCounter()
+
+    # Bypass: Detect OpenWebUI title-generation requests
+    if is_title_generation_request(input_messages):
+        logger.info(
+            "[RESPONSES %s] TITLE_GEN_STREAM: bypassing agent pipeline",
+            response_id,
+        )
+        user_query = extract_user_query_from_title_request(input_messages)
+
+        provider_config = Config.get_provider_config()
+        if not provider_config:
+            created_seq = seq.next()
+            yield format_sse_event(
+                create_response_created_event(response_id, model, created_seq)
+            )
+            yield "data: [DONE]\n\n"
+            return
+
+        provider_config_obj = {
+            "provider_type": provider_config.get("provider_type", "ollama"),
+            "model": provider_config.get("model"),
+            "base_url": provider_config.get("base_url"),
+            "api_key": provider_config.get("api_key"),
+        }
+        llm = create_llm_from_config(provider_config_obj)
+
+        title = await generate_conversation_title(llm, user_query)
+        logger.info(
+            "[RESPONSES %s] TITLE_GEN_STREAM: completed, title=%r",
+            response_id,
+            title,
+        )
+
+        for event in create_title_stream_events(title, response_id, model):
+            yield event
+        return
 
     # DEBUG: Track execution
     event_counter = 0
@@ -818,6 +860,40 @@ async def generate_responses_sync(
 
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
     output_items: list[dict[str, Any]] = []
+
+    # Bypass: Detect OpenWebUI title-generation requests
+    if is_title_generation_request(input_messages):
+        logger.info("[RESPONSES %s] TITLE_GEN: bypassing agent pipeline", response_id)
+        user_query = extract_user_query_from_title_request(input_messages)
+
+        provider_config = Config.get_provider_config()
+        if not provider_config:
+            return create_non_streaming_response(
+                response_id,
+                model,
+                [],
+                error={"message": "No provider configured", "type": "server_error"},
+            )
+
+        provider_config_obj = {
+            "provider_type": provider_config.get("provider_type", "ollama"),
+            "model": provider_config.get("model"),
+            "base_url": provider_config.get("base_url"),
+            "api_key": provider_config.get("api_key"),
+        }
+        llm = create_llm_from_config(provider_config_obj)
+
+        title_start = time.perf_counter()
+        title = await generate_conversation_title(llm, user_query)
+        title_elapsed = (time.perf_counter() - title_start) * 1000
+        logger.info(
+            "[RESPONSES %s] TITLE_GEN: completed in %.0fms, title=%r",
+            response_id,
+            title_elapsed,
+            title,
+        )
+
+        return create_title_sync_response(title, response_id)
 
     # Create LLM and agent
     provider_config = Config.get_provider_config()
