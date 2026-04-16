@@ -1109,6 +1109,13 @@ def resolve_spatial(
         int,
         "Maximum number of results to return (default: 10).",
     ] = 10,
+    wk_name: Annotated[
+        str | None,
+        "Optional working area name to scope results. "
+        "When provided, field lookups filter to the specified working area. "
+        "Use when the query mentions a working area context like "
+        "'lapangan X di WK Y' or 'field X in working area Y'.",
+    ] = None,
 ) -> str:
     """Execute spatial queries using DuckDB's native spatial capabilities.
 
@@ -1140,10 +1147,11 @@ def resolve_spatial(
     from esdc.knowledge_graph.spatial_resolver import SpatialResolver
 
     logger.debug(
-        "[SPATIAL_START] query_type=%s | target=%s | radius_km=%s",
+        "[SPATIAL_START] query_type=%s | target=%s | radius_km=%s | wk_name=%s",
         query_type,
         target,
         radius_km,
+        wk_name,
     )
 
     resolver = SpatialResolver()
@@ -1151,7 +1159,10 @@ def resolve_spatial(
     try:
         if query_type == "proximity":
             result = resolver.find_fields_near_field(
-                field_name=target, radius_km=radius_km, limit=limit
+                field_name=target,
+                radius_km=radius_km,
+                limit=limit,
+                wk_name=wk_name,
             )
         elif query_type == "working_area":
             result = resolver.find_fields_in_working_area(wk_name=target, limit=limit)
@@ -1165,9 +1176,16 @@ def resolve_spatial(
                         "message": "Distance query requires 'field1, field2' format",
                     }
                 )
-            result = resolver.calculate_distance(from_field=parts[0], to_field=parts[1])
+            result = resolver.calculate_distance(
+                from_field=parts[0],
+                to_field=parts[1],
+                wk_name=wk_name,
+            )
         elif query_type == "coordinates":
-            result = resolver.get_field_coordinates(field_name=target)
+            result = resolver.get_field_coordinates(
+                field_name=target,
+                wk_name=wk_name,
+            )
         elif query_type == "nearest_from_coords":
             try:
                 params = target if isinstance(target, dict) else json.loads(target)
