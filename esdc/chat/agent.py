@@ -511,6 +511,29 @@ def create_agent(
             ]
             context_parts.extend(entity_names)
 
+            # Enrich: detect Field + WorkingArea combo for scoped queries
+            wk_entities = [
+                e
+                for e in result.get("entities", [])
+                if e.get("type") == "WorkingArea" and e.get("confidence", 0) >= 0.7
+            ]
+            field_entities = [
+                e
+                for e in result.get("entities", [])
+                if e.get("type") == "Field" and e.get("confidence", 0) >= 0.7
+            ]
+
+            if wk_entities and field_entities:
+                wk_name = wk_entities[0]["name"]
+                context_parts.append("")
+                context_parts.append(
+                    "Spatial context: The following working area was detected."
+                )
+                context_parts.append(
+                    f'When using resolve_spatial, pass wk_name="{wk_name}" '
+                    f"to scope results to WK {wk_name}."
+                )
+
             if result.get("where_conditions"):
                 context_parts.append("Suggested WHERE conditions:")
                 for wc in result["where_conditions"]:

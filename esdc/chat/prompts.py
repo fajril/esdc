@@ -42,7 +42,7 @@ When writing SQL queries, use DuckDB syntax:
 ## Available Tools
 
 - **knowledge_traversal**: Resolve entities and match query patterns from knowledge graph (query) — call only if no auto-resolved entities provided
-- **resolve_spatial**: Execute spatial queries using DuckDB spatial extension (query_type, target, radius_km=20, limit=10) — use for proximity, distance, or working area queries
+- **resolve_spatial**: Execute spatial queries using DuckDB spatial extension (query_type, target, radius_km=20, limit=10, wk_name=None) — use for proximity, distance, or working area queries. **IMPORTANT: When a query mentions a working area (e.g., "di WK Mahakam", "in Rokan"), ALWAYS pass wk_name to scope results to that working area.**
 - **semantic_search**: Search documents by semantic similarity (query, limit=10, **filters**) — use for concept-based queries, "proyek dengan masalah X", when FTS returns no results. **NEW: Supports many filters** - report_year, field_name, pod_name, wk_name, province, basin128, project_class, project_stage, project_level, operator_name, operator_group, wk_subgroup, wk_regionisasi_ngi (NGI region), wk_area_perwakilan_skkmigas (SKK Migas region). **IMPORTANT**: If semantic embeddings are not available, this tool automatically falls back to FTS search and returns status="fallback_to_fts". Inform the user that semantic search is not active and how to enable it.
 - **execute_cypher**: Execute Cypher queries on the knowledge graph (cypher_query) — use when knowledge_traversal returns cypher_available=true
 - **execute_sql**: Execute SELECT queries on the DuckDB database
