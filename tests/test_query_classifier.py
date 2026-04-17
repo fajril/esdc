@@ -22,7 +22,8 @@ class TestQueryClassifier:
 
         assert result.query_type == QueryType.SIMPLE_FACTUAL
         assert result.confidence == 0.9
-        assert result.detected_entities.get("field_name").lower() == "duri"
+        assert result.detected_entities.get("field_name") is not None
+        assert result.detected_entities.get("field_name", "").lower() == "duri"
         assert result.detected_entities.get("report_year") == "2024"
         assert result.suggested_table == "field_resources"
         assert "res_oc" in result.suggested_columns
@@ -100,7 +101,7 @@ class TestQueryClassifier:
             "berapa cadangan lapangan Duri wk rokan tahun 2024 provinsi Riau?"
         )
 
-        assert result.detected_entities.get("field_name").lower() == "duri"
+        assert result.detected_entities.get("field_name", "").lower() == "duri"
         assert result.detected_entities.get("wk_name") == "rokan"
         assert result.detected_entities.get("report_year") == "2024"
 

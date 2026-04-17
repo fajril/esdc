@@ -32,7 +32,7 @@ def test_end_to_end_semantic_search():
     result = conn.execute(
         "SELECT COUNT(*) FROM project_resources WHERE project_remarks IS NOT NULL"
     ).fetchone()
-    if result[0] == 0:
+    if result is None or result[0] == 0:
         pytest.skip("No project_remarks data in database")
     conn.close()
 

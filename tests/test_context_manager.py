@@ -2,6 +2,7 @@
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from esdc.chat.agent import AgentState
 from esdc.chat.context_manager import ContextManager, manage_context_node
 
 
@@ -180,7 +181,13 @@ class TestManageContextNode:
 
     def test_empty_messages(self):
         """Test node handles empty messages."""
-        state = {"messages": []}
+        state: AgentState = {
+            "messages": [],
+            "system_prompt": "",
+            "context_metadata": {},
+            "allowed_tools": [],
+            "tool_call_count": 0,
+        }
         result = manage_context_node(state)
 
         assert result["messages"] == []
@@ -188,7 +195,13 @@ class TestManageContextNode:
 
     def test_returns_context_metadata(self):
         """Test node returns context metadata."""
-        state = {"messages": [HumanMessage(content=f"Query {i}") for i in range(20)]}
+        state: AgentState = {
+            "messages": [HumanMessage(content=f"Query {i}") for i in range(20)],
+            "system_prompt": "",
+            "context_metadata": {},
+            "allowed_tools": [],
+            "tool_call_count": 0,
+        }
         result = manage_context_node(state)
 
         assert "context_metadata" in result
@@ -196,7 +209,13 @@ class TestManageContextNode:
 
     def test_context_length_parameter_default(self):
         """Test node uses default context_length (6000)."""
-        state = {"messages": [HumanMessage(content="Test")]}
+        state: AgentState = {
+            "messages": [HumanMessage(content="Test")],
+            "system_prompt": "",
+            "context_metadata": {},
+            "allowed_tools": [],
+            "tool_call_count": 0,
+        }
         result = manage_context_node(state)
 
         assert "context_metadata" in result
@@ -206,7 +225,13 @@ class TestManageContextNode:
         """Test node uses custom context_length."""
         # Create enough messages to trigger compaction (need more than recent_messages=6)  # noqa: E501
         # 10 messages * 80 chars = 800 chars / 4 = 200 tokens
-        state = {"messages": [HumanMessage(content="x" * 80) for _ in range(10)]}
+        state: AgentState = {
+            "messages": [HumanMessage(content="x" * 80) for _ in range(10)],
+            "system_prompt": "",
+            "context_metadata": {},
+            "allowed_tools": [],
+            "tool_call_count": 0,
+        }
 
         # With default context_length=6000, should NOT compact (under threshold: 200 < 4500)  # noqa: E501
         result_default = manage_context_node(state, context_length=6000)
@@ -290,7 +315,13 @@ class TestLargeContext:
         """
         # Create messages that would trigger compaction at 6K (200 tokens / 6000 = 3.3%)
         # but should NOT trigger at 262K (200 tokens / 262K = 0.08%)
-        state = {"messages": [HumanMessage(content="x" * 80) for _ in range(10)]}
+        state: AgentState = {
+            "messages": [HumanMessage(content="x" * 80) for _ in range(10)],
+            "system_prompt": "",
+            "context_metadata": {},
+            "allowed_tools": [],
+            "tool_call_count": 0,
+        }
 
         # With large context (262K), should NOT compact
         result_large = manage_context_node(state, context_length=262144)

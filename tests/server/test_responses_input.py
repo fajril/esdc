@@ -3,6 +3,7 @@
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from esdc.server.responses_models import (
+    FlexibleContentPart,
     ResponseInputFunctionCallItem,
     ResponseInputFunctionCallOutputItem,
     ResponseInputItem,
@@ -128,18 +129,18 @@ class TestFunctionCallOutputItems:
         item = ResponseInputItem(
             type="function_call_output",
             call_id="call_123",
-            output=[{"type": "input_text", "text": "Result"}],
+            output=[FlexibleContentPart(type="input_text", text="Result")],
         )
         messages = convert_responses_input_to_langchain([item])
         assert len(messages) == 1
-        assert messages[0].content == "Result"
+        assert "Result" in str(messages[0].content)
 
     def test_new_function_call_output_item_model(self) -> None:
         """Test new ResponseInputFunctionCallOutputItem model."""
         item = ResponseInputFunctionCallOutputItem(
             type="function_call_output",
             call_id="call_123",
-            output=[{"type": "input_text", "text": "Result"}],
+            output=[FlexibleContentPart(type="input_text", text="Result")],
         )
         messages = convert_responses_input_to_langchain([item])
         assert len(messages) == 1

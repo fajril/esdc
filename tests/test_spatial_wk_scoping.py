@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+from pydantic import BaseModel
+
 from esdc.knowledge_graph.spatial_resolver import SpatialResolver
 
 
@@ -158,6 +160,9 @@ class TestResolveSpatialToolWKParam:
 
         args_schema = resolve_spatial.args_schema
         assert args_schema is not None, "Tool has no args_schema"
+        assert isinstance(args_schema, type) and issubclass(args_schema, BaseModel), (
+            "args_schema should be a BaseModel subclass"
+        )
         properties = args_schema.model_fields
         assert "wk_name" in properties, (
             f"wk_name not in args_schema fields: {list(properties.keys())}"
