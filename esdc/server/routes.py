@@ -150,7 +150,7 @@ async def chat_completions(
                             }
                         ],
                     }
-                    yield f"data: {error_chunk}\n\n"
+                    yield f"data: {json.dumps(error_chunk)}\n\n"
                     yield "data: [DONE]\n\n"
 
             return StreamingResponse(

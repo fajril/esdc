@@ -68,7 +68,9 @@ class OllamaProvider(Provider):
             )
             return models
         except Exception as e:
-            logger.debug("[INFERENCE] ollama_list_models_error | error=%s", str(e)[:100])
+            logger.debug(
+                "[INFERENCE] ollama_list_models_error | error=%s", str(e)[:100]
+            )
             return []
 
     @classmethod
@@ -101,7 +103,11 @@ class OllamaProvider(Provider):
 
             client = ollama.Client(host=base_url or cls.DEFAULT_BASE_URL)
 
-            logger.debug("[INFERENCE] ollama_show_model | model=%s | base_url=%s", model, base_url)
+            logger.debug(
+                "[INFERENCE] ollama_show_model | model=%s | base_url=%s",
+                model,
+                base_url,
+            )
             show_start = time.perf_counter()
 
             info = client.show(model)
@@ -175,6 +181,8 @@ class OllamaProvider(Provider):
             model=model,
             base_url=base_url or cls.DEFAULT_BASE_URL,
             temperature=temperature,
+            sync_client_kwargs={"timeout": 120},
+            async_client_kwargs={"timeout": 120},
             **kwargs,
         )
 
@@ -194,7 +202,7 @@ class OllamaProvider(Provider):
 
             logger.debug(
                 "[INFERENCE] ollama_test_connection_invoke | model=%s",
-                config.model or default_model
+                config.model or default_model,
             )
             invoke_start = time.perf_counter()
 

@@ -179,6 +179,19 @@ def invalidate_tool_cache() -> None:
         logger.info("Tool cache invalidated: %s", cache_dir)
 
 
+def reset_sql_cache() -> None:
+    """Reset the SQL results cache (in-memory + on-disk).
+
+    Called by dbmanager after reload to ensure the stale diskcache.Cache
+    object doesn't serve outdated results.
+    """
+    global _sql_cache
+    if _sql_cache is not None:
+        _sql_cache.clear()
+        _sql_cache = None
+    logger.info("SQL cache reset (in-memory handle cleared)")
+
+
 def _validate_table_name(name: str | None) -> str | None:
     """Validate table name to prevent SQL injection.
 
@@ -430,6 +443,7 @@ def list_tables() -> str:
 
     logger.debug("[CACHE] miss | tool=list_tables key=%s", cache_key[:16])
 
+    conn = None
     try:
         conn = get_db_connection()
 
@@ -442,7 +456,6 @@ def list_tables() -> str:
         items = result.fetchall()
 
         if not items:
-            conn.close()
             return "No tables or views found in the database."
 
         output = "Available tables and views:\n\n"
@@ -463,7 +476,6 @@ def list_tables() -> str:
             for view in views:
                 output += f"  - {view[0]}\n"
 
-        conn.close()
         cache.set(cache_key, output)
         logger.debug("[CACHE] stored | tool=list_tables key=%s", cache_key[:16])
         return output
@@ -474,6 +486,9 @@ def list_tables() -> str:
         return f"SQL Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
 
 @tool("Model Checker")

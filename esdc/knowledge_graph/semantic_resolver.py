@@ -6,6 +6,7 @@ using vector embeddings and HNSW index for fast similarity search.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -45,14 +46,24 @@ class SemanticResolver:
         self._embedding_manager = EmbeddingManager(model=model)
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
-        """Get or create DuckDB connection with VSS extension loaded."""
+        """Get or create DuckDB connection with VSS extension loaded.
+
+        Includes health check to detect stale connections after DB file
+        replacement (e.g. during esdc fetch).
+        """
+        if self._conn is not None:
+            try:
+                self._conn.execute("SELECT 1")
+            except Exception:
+                logger.info("[Semantic] Stale connection detected, reconnecting")
+                with contextlib.suppress(Exception):
+                    self._conn.close()
+                self._conn = None
+
         if self._conn is None:
             self._conn = duckdb.connect(str(self._db_path))
-            # Load VSS extension for vector similarity search
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.execute("INSTALL vss")
-            except Exception:
-                pass  # Already installed
             self._conn.execute("LOAD vss")
             logger.debug("[Semantic] DuckDB connection established with VSS extension")
         return self._conn

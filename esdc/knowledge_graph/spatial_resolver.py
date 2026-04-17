@@ -6,6 +6,7 @@ native spatial capabilities without requiring LadybugDB.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 from typing import Any
@@ -36,14 +37,24 @@ class SpatialResolver:
         self._conn: duckdb.DuckDBPyConnection | None = None
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
-        """Get or create DuckDB connection with spatial extension loaded."""
+        """Get or create DuckDB connection with spatial extension loaded.
+
+        Includes health check to detect stale connections after DB file
+        replacement (e.g. during esdc fetch).
+        """
+        if self._conn is not None:
+            try:
+                self._conn.execute("SELECT 1")
+            except Exception:
+                logger.info("[Spatial] Stale connection detected, reconnecting")
+                with contextlib.suppress(Exception):
+                    self._conn.close()
+                self._conn = None
+
         if self._conn is None:
             self._conn = duckdb.connect(str(self._db_path), read_only=True)
-            # Load spatial extension
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.execute("INSTALL spatial")
-            except Exception:
-                pass  # Already installed
             self._conn.execute("LOAD spatial")
             logger.debug(
                 "[Spatial] DuckDB connection established with spatial extension"

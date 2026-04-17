@@ -26,7 +26,7 @@ class TestDynamicToolBinding:
         assert "Table Selector" in tools
         assert "Spatial Resolver" not in tools
         assert "Semantic Search" not in tools
-        assert "Knowledge Traversal" not in tools
+        assert "Knowledge Traversal" in tools
 
     def test_spatial_gets_spatial_plus_sql(self):
         classification = QueryClassification(
@@ -41,7 +41,7 @@ class TestDynamicToolBinding:
         assert "Spatial Resolver" in tools
         assert "SQL Executor" in tools
         assert "Semantic Search" not in tools
-        assert "Knowledge Traversal" not in tools
+        assert "Knowledge Traversal" in tools
 
     def test_conceptual_gets_semantic_plus_sql(self):
         classification = QueryClassification(

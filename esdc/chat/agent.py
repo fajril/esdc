@@ -1,4 +1,5 @@
 # Standard library
+import asyncio
 import json
 import logging
 import time
@@ -238,7 +239,7 @@ def create_agent(
             "tool_call_count": 0,
         }
 
-    def agent_node(state: AgentState) -> dict[str, list[AnyMessage]]:
+    async def agent_node(state: AgentState) -> dict[str, list[AnyMessage]]:
         """Agent node that calls the LLM with tools."""
         system_prompt = state.get("system_prompt", "")
         if not system_prompt:
@@ -291,7 +292,27 @@ def create_agent(
         )
         inference_start = time.perf_counter()
 
-        response = llm_with_selected_tools.invoke(messages_with_system)
+        try:
+            response = await asyncio.wait_for(
+                llm_with_selected_tools.ainvoke(messages_with_system),
+                timeout=120,
+            )
+        except asyncio.TimeoutError:
+            inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+            logger.error(
+                "[INFERENCE] llm_invoke_timeout | elapsed=%.2fms | timeout=120s",
+                inference_elapsed_ms,
+            )
+            return {
+                "messages": [
+                    cast(
+                        AnyMessage,
+                        AIMessage(
+                            content="Maaf, permintaan Anda memakan waktu terlalu lama untuk diproses. Silakan coba lagi atau sederhanakan pertanyaan Anda."
+                        ),
+                    )
+                ]
+            }
 
         inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
         response_len = len(str(response.content)) if hasattr(response, "content") else 0
@@ -319,6 +340,10 @@ def create_agent(
             return END
 
         messages = state["messages"]
+        if not messages:
+            logger.warning("[AGENT] should_continue: empty messages, ending")
+            return END
+
         last_message = messages[-1]
 
         ai_message = cast(AIMessage, last_message)
