@@ -139,11 +139,11 @@ class Config:
 
         try:
             from rich.prompt import Prompt
-        except ImportError:
+        except ImportError as err:
             raise RuntimeError(
                 "Rich library required for interactive prompts. "
                 "Install with: pip install rich"
-            )
+            ) from err
 
         if not username:
             username = Prompt.ask("Username")

@@ -69,11 +69,7 @@ class OpenAIProvider(Provider):
     @classmethod
     def is_configured(cls, config: ProviderConfig) -> bool:
         """Check if OpenAI is configured (OAuth or API key)."""
-        if config.api_key:
-            return True
-        if config.oauth and "access_token" in config.oauth:
-            return True
-        return False
+        return bool(config.api_key or (config.oauth and "access_token" in config.oauth))
 
     @classmethod
     def create_llm(

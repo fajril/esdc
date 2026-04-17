@@ -232,7 +232,9 @@ class SemanticResolver:
                 embeddings = self._embedding_manager.generate_embeddings_batch(texts)
 
                 # Store in DuckDB with all contextual columns
-                for j, (row, embedding) in enumerate(zip(batch, embeddings)):
+                for _j, (row, embedding) in enumerate(
+                    zip(batch, embeddings, strict=True)
+                ):
                     conn.execute(
                         f"""
                         INSERT OR REPLACE INTO {self.EMBEDDING_TABLE}

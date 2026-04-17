@@ -29,10 +29,7 @@ def _hash_messages(messages: Any) -> str:
         SHA256 hash string (first 16 chars)
     """
     try:
-        if hasattr(messages, "__iter__"):
-            messages_list = list(messages)
-        else:
-            messages_list = [messages]
+        messages_list = list(messages) if hasattr(messages, "__iter__") else [messages]
 
         json_str = json.dumps(
             messages_list,

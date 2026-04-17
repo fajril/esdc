@@ -1549,7 +1549,7 @@ class ESDCChatApp(App):
             tool_args = chunk.get("args", {})
 
             # Tool-specific status messages
-            TOOL_STATUS_MAP = {
+            TOOL_STATUS_MAP = {  # noqa: N806
                 "execute_sql": "⏳ Executing SQL query...",
                 "SQL Executor": "🛠️ Using SQL Executor...",
                 "get_schema": "⏳ Getting table schema...",
@@ -1619,7 +1619,7 @@ class ESDCChatApp(App):
             )
 
             # Tool-specific completion messages
-            TOOL_COMPLETED_MAP = {
+            TOOL_COMPLETED_MAP = {  # noqa: N806
                 "execute_sql": "✅ SQL query completed",
                 "SQL Executor": "✅ SQL Executor completed",
                 "get_schema": "✅ Schema retrieved",

@@ -585,7 +585,7 @@ class SpatialResolver:
                 }
 
             # Limit check - prevent memory issues with very large datasets
-            MAX_FIELDS = 10000
+            MAX_FIELDS = 10000  # noqa: N806
             if len(result) > MAX_FIELDS:
                 return {
                     "status": "error",

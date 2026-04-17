@@ -161,9 +161,7 @@ class OllamaProvider(Provider):
     @classmethod
     def is_configured(cls, config: ProviderConfig) -> bool:
         """Check if Ollama is configured and server is running."""
-        if not config.model and not cls.get_default_model(config.base_url or None):
-            return False
-        return True
+        return bool(config.model or cls.get_default_model(config.base_url or None))
 
     @classmethod
     def create_llm(

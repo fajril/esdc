@@ -383,11 +383,13 @@ def _build_enriched_sql(
     )
 
     # Add GROUP BY if needed
-    if group_by_columns and has_aggregation:
-        # Check if already has GROUP BY
-        if not re.search(r"\bGROUP\s+BY\b", enriched_sql, re.IGNORECASE):
-            group_by_sql = ", ".join([f"pr.{col}" for col in group_by_columns])
-            enriched_sql += f"\nGROUP BY {group_by_sql}"
+    if (
+        group_by_columns
+        and has_aggregation
+        and not re.search(r"\bGROUP\s+BY\b", enriched_sql, re.IGNORECASE)
+    ):
+        group_by_sql = ", ".join([f"pr.{col}" for col in group_by_columns])
+        enriched_sql += f"\nGROUP BY {group_by_sql}"
 
     return enriched_sql
 
@@ -417,10 +419,7 @@ def should_include_remarks(remarks_value: str | None) -> bool:
 
     # Skip generic/empty values
     meaningless_values = ["", "-", "null", "none", "n/a", "na"]
-    if remarks_value.lower().strip() in meaningless_values:
-        return False
-
-    return True
+    return remarks_value.lower().strip() not in meaningless_values
 
 
 def resolve_concept(term: str) -> dict | None:
@@ -479,13 +478,17 @@ def get_columns_for_concept(
     Returns:
         List of column names
     """
-    if concept_type == "volume_type":
-        if concept_name in DOMAIN_CONCEPTS["volume_types"]:
-            return DOMAIN_CONCEPTS["volume_types"][concept_name]["columns"]
+    if (
+        concept_type == "volume_type"
+        and concept_name in DOMAIN_CONCEPTS["volume_types"]
+    ):
+        return DOMAIN_CONCEPTS["volume_types"][concept_name]["columns"]
 
-    if concept_type == "project_class":
-        if concept_name in DOMAIN_CONCEPTS["project_classes"]:
-            return DOMAIN_CONCEPTS["project_classes"][concept_name]["columns"]
+    if (
+        concept_type == "project_class"
+        and concept_name in DOMAIN_CONCEPTS["project_classes"]
+    ):
+        return DOMAIN_CONCEPTS["project_classes"][concept_name]["columns"]
 
     return []
 
@@ -1521,11 +1524,9 @@ def is_forecast_data(
         >>> is_forecast_data(2023, report_year=2024)
         False
     """
-    if hist_year is not None and year > hist_year:
-        return True
-    if report_year is not None and year > report_year:
-        return True
-    return False
+    return (hist_year is not None and year > hist_year) or (
+        report_year is not None and year > report_year
+    )
 
 
 def get_volume_columns(
