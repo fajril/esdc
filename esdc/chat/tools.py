@@ -136,7 +136,7 @@ def _get_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "sql_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _sql_cache = diskcache.Cache(str(cache_dir))
+        _sql_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
     return _sql_cache
 
 
@@ -155,7 +155,7 @@ def _get_tool_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "tool_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _tool_cache = diskcache.Cache(str(cache_dir))
+        _tool_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
     return _tool_cache
 
 
