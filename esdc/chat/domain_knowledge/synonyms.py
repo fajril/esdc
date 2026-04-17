@@ -131,4 +131,11 @@ SYNONYMS: dict[str, str] = {
     "high": "high_value",
     "tinggi": "high_value",
     "maksimum": "high_value",
+    # Report timing synonyms
+    "wap": "wap",
+    "waktu acuan pelaporan": "wap",
+    "waktu referensi": "wap",
+    "tahun referensi": "wap",
+    "reference date": "wap",
+    "reference year": "wap",
 }

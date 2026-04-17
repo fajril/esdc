@@ -210,4 +210,17 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
             "description": "Associated + Non-associated gas combined",
         },
     },
+    "report_terms": {
+        "wap": {
+            "full_name": "Waktu Acuan Pelaporan",
+            "description": (
+                "Waktu Acuan Pelaporan (WAP) is the annual reference date for"
+                " reporting, set at December 31, 23:59 each year. Written as"
+                " 31.12.20XX or abbreviated as just the year (20XX). Data"
+                " 'tahun 2024' means WAP 31.12.2024. Project status evaluations"
+                " are calculated at WAP. Previously the reference was January 1,"
+                " 00:00 of the following year."
+            ),
+        },
+    },
 }

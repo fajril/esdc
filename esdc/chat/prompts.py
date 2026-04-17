@@ -181,6 +181,11 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | Contingent Resources | `project_class LIKE '%Contingent%'` | rec_* |
 | Prospective Resources | `project_class LIKE '%Prospective%'` | rec_*_risked |
 
+### Report Timing
+- **WAP (Waktu Acuan Pelaporan)**: Annual reference date (31 December, 23:59). Project data is evaluated at WAP.
+- `report_year` in SQL = WAP year (e.g., report_year=2024 means data as of WAP 31.12.2024)
+- "Data tahun 2024" = WAP 31.12.2024
+
 ## Column Selection (CRITICAL)
 
 ### Substance Suffixes
