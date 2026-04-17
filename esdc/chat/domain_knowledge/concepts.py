@@ -8,7 +8,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         },
         "1R": {
             "db_value": "1. Low Value",
-            "description": "Low estimate GRR - P90 confidence",
+            "description": "Low estimate GRR (Government Recoverable Resources) - P90 confidence. R = GRR suffix.",
         },
         "1C": {
             "db_value": "1. Low Value",
@@ -24,7 +24,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         },
         "2R": {
             "db_value": "2. Middle Value",
-            "description": "Best estimate GRR - P50 confidence",
+            "description": "Best estimate GRR (Government Recoverable Resources) - P50 confidence. R = GRR suffix, meaning 2R is the mid-value estimate of GRR.",
         },
         "2C": {
             "db_value": "2. Middle Value",
@@ -40,7 +40,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         },
         "3R": {
             "db_value": "3. High Value",
-            "description": "High estimate GRR - P10 confidence",
+            "description": "High estimate GRR (Government Recoverable Resources) - P10 confidence. R = GRR suffix.",
         },
         "3C": {
             "db_value": "3. High Value",

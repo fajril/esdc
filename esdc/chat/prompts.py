@@ -170,6 +170,8 @@ WHERE report_year = (
 | probable/mungkin | | calculated: 2P-1P | Reserves only |
 | possible/harapan | | calculated: 3P-2P | Reserves only |
 
+The suffix letter indicates the resource class: **P = Reserves (Proven/Probable/Possible), R = GRR (Government Recoverable Resources), C = Contingent, U = Prospective**. So 2R = mid estimate of GRR, 1C = low estimate of Contingent Resources, etc.
+
 Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 
 ### Project Classes

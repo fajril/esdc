@@ -30,7 +30,7 @@ UNCERTAINTY_MAP: dict[str, UncertaintySpec] = {
         db_value="1. Low Value",
         is_cumulative=False,
         reserves_only=False,
-        description="Low estimate GRR - P90 confidence",
+        description="Low estimate GRR (R=GRR suffix) - P90 confidence",
     ),
     "1C": UncertaintySpec(
         type="direct",
@@ -58,7 +58,7 @@ UNCERTAINTY_MAP: dict[str, UncertaintySpec] = {
         db_value="2. Middle Value",
         is_cumulative=True,
         reserves_only=False,
-        description="Best estimate GRR - P50 confidence",
+        description="Best estimate GRR (R=GRR suffix) - P50 confidence",
     ),
     "2C": UncertaintySpec(
         type="direct",
@@ -86,7 +86,7 @@ UNCERTAINTY_MAP: dict[str, UncertaintySpec] = {
         db_value="3. High Value",
         is_cumulative=True,
         reserves_only=False,
-        description="High estimate GRR - P10 confidence",
+        description="High estimate GRR (R=GRR suffix) - P10 confidence",
     ),
     "3C": UncertaintySpec(
         type="direct",
