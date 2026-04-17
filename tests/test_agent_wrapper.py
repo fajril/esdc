@@ -204,20 +204,17 @@ class TestAgentWrapperIntegration:
                     assert len(chunks) > 0
                     assert all("choices" in c for c in chunks)
 
+    @pytest.mark.asyncio
+    async def test_generate_response_no_provider(self):
         """Test generate_response when no provider configured."""
         from esdc.server.agent_wrapper import generate_response
 
-        with patch(
-            "esdc.server.agent_wrapper.Config.get_provider_config"
-        ) as mock_config:
-            mock_config.return_value = None
+        result = await generate_response(
+            messages=[MagicMock(role="user", content="Hello")],
+        )
 
-            result = await generate_response(
-                messages=[MagicMock(role="user", content="Hello")],
-            )
-
-            assert "Error" in result["content"]
-            assert result["finish_reason"] == "stop"
+        assert "Error" in result["content"]
+        assert result["finish_reason"] == "stop"
 
     @pytest.mark.asyncio
     async def test_generate_streaming_response_no_provider(self):
@@ -239,20 +236,39 @@ class TestAgentWrapperIntegration:
             assert "Error" in chunks[0]["choices"][0]["delta"]["content"]
 
 
+@pytest.mark.asyncio
 async def test_generate_streaming_response_character_level():
-    """Test that content is streamed character-by-character (3 chars at a time)."""
-    messages = [{"role": "user", "content": "hello"}]
+    """Test that content is streamed character-by-character."""
+    from esdc.server.models import Message
 
+    ai_msg = AIMessage(content="Hello world!", tool_calls=[])
+    messages = [Message(role="user", content="hello")]
     content_chunks = []
 
-    async for chunk in generate_streaming_response(messages):
-        data = json.loads(chunk)
-        delta = data["choices"][0]["delta"]
-        if content := delta.get("content"):
-            content_chunks.append(content)
+    with patch("esdc.server.agent_wrapper.Config") as mock_config:
+        mock_config.get_provider_config.return_value = {
+            "provider_type": "ollama",
+            "model": "test-model",
+            "base_url": "http://localhost:11434",
+        }
 
-    # Each chunk should be small (<= 3 chars)
-    # Exception: tool call chunks can be larger
+        async def mock_astream(*args, **kwargs):
+            yield {"agent": {"messages": [ai_msg]}}
+
+        mock_agent = MagicMock()
+        mock_agent.astream = mock_astream
+
+        with (
+            patch("esdc.server.agent_wrapper.create_llm_from_config"),
+            patch("esdc.server.agent_wrapper.create_agent", return_value=mock_agent),
+        ):
+            async for chunk in generate_streaming_response(
+                messages=messages, use_native_format=True
+            ):
+                data = json.loads(chunk)
+                delta = data.get("choices", [{}])[0].get("delta", {})
+                if content := delta.get("content"):
+                    content_chunks.append(content)
+
     for chunk in content_chunks:
-        # Allow small chunks (3 chars) or header/markdown constructs
         assert len(chunk) <= 10, f"Chunk too large: {len(chunk)} chars: {chunk!r}"

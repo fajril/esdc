@@ -4,15 +4,21 @@ Tests for KeyError: 'role' issue when using native format with non-streaming req
 """
 
 # Third-party
+import pytest
 from fastapi.testclient import TestClient
 
 # Local
 from esdc.server.app import create_app
 
-client = TestClient(create_app())
+
+@pytest.fixture
+def client():
+    """Create a TestClient for non-streaming route tests."""
+    with TestClient(create_app()) as c:
+        yield c
 
 
-def test_nonstreaming_native_format():
+def test_nonstreaming_native_format(client):
     """Test that non-streaming requests with native format don't cause KeyError."""
     response = client.post(
         "/v1/chat/completions",
@@ -30,7 +36,7 @@ def test_nonstreaming_native_format():
     assert data["choices"][0]["message"]["content"] is not None
 
 
-def test_nonstreaming_response_structure():
+def test_nonstreaming_response_structure(client):
     """Test that non-streaming response has correct OpenAI-compatible structure."""
     response = client.post(
         "/v1/chat/completions",

@@ -17,6 +17,15 @@ def reset_config_cache():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_provider_config():
+    """Prevent accidental real LLM calls in tests."""
+    from unittest.mock import patch
+
+    with patch("esdc.configs.Config.get_provider_config", return_value=None):
+        yield
+
+
 @pytest.fixture
 def isolated_config(tmp_path, monkeypatch):
     """Create isolated config directory for integration tests.
