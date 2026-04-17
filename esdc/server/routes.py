@@ -27,7 +27,6 @@ from esdc.server.responses_wrapper import (
     generate_responses_stream,
     generate_responses_sync,
 )
-from esdc.server.tool_formatter import should_use_native_format
 
 router = APIRouter()
 logger = logging.getLogger("esdc.server.routes")
@@ -181,11 +180,6 @@ async def chat_completions(
         f"time={time.time():.3f}"
     )
 
-    # Detect format preference from headers
-    headers = dict(request_obj.headers)
-    use_native = should_use_native_format(headers, request.stream)
-    logger.debug(f"[REQUEST {request_id}] use_native_format={use_native}")
-
     try:
         if request.stream:
             # Return streaming response
@@ -197,7 +191,6 @@ async def chat_completions(
                         messages=request.messages,
                         model=request.model,
                         temperature=request.temperature or 0.7,
-                        use_native_format=use_native,
                         request_id=request_id,
                     ):
                         yield f"data: {chunk}\n\n"
@@ -241,53 +234,31 @@ async def chat_completions(
                     messages=request.messages,
                     model=request.model,
                     temperature=request.temperature or 0.7,
-                    use_native_format=use_native,
                 )
 
                 logger.info(f"[REQUEST {request_id}] Non-streaming response completed")
 
-                # Handle both native OpenAI format and legacy format
-                if "choices" in result:
-                    # Native OpenAI format - result is already ChatCompletion-like
-                    return ChatCompletionResponse(
-                        id=result.get("id", request_id),
-                        created=result.get("created", created),
-                        model=result.get("model", request.model),
-                        choices=[
-                            Choice(
-                                message=Message(
-                                    role=result["choices"][0]["message"].get(
-                                        "role", "assistant"
-                                    ),
-                                    content=result["choices"][0]["message"].get(
-                                        "content", ""
-                                    ),
-                                    tool_calls=result["choices"][0]["message"].get(
-                                        "tool_calls"
-                                    ),
+                # Result is always OpenAI format
+                return ChatCompletionResponse(
+                    id=result["id"],
+                    created=result["created"],
+                    model=result["model"],
+                    choices=[
+                        Choice(
+                            message=Message(
+                                role=result["choices"][0]["message"].get(
+                                    "role", "assistant"
                                 ),
-                                finish_reason=result["choices"][0].get(
-                                    "finish_reason", "stop"
+                                content=result["choices"][0]["message"].get(
+                                    "content", ""
                                 ),
-                            )
-                        ],
-                    )
-                else:
-                    # Legacy format - simple dict with role/content/finish_reason
-                    return ChatCompletionResponse(
-                        id=request_id,
-                        created=created,
-                        model=request.model,
-                        choices=[
-                            Choice(
-                                message=Message(
-                                    role=result.get("role", "assistant"),
-                                    content=result.get("content", ""),
-                                ),
-                                finish_reason=result.get("finish_reason", "stop"),
-                            )
-                        ],
-                    )
+                            ),
+                            finish_reason=result["choices"][0].get(
+                                "finish_reason", "stop"
+                            ),
+                        )
+                    ],
+                )
 
             except Exception as e:
                 error_msg = f"{type(e).__name__}: {str(e)}"

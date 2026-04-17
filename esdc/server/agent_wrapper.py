@@ -4,7 +4,7 @@ This module provides OpenAI-compatible chat completion endpoints that:
 - Convert messages between OpenAI and LangChain formats
 - Handle OpenWebUI's extended format with output arrays
 - Stream responses with real token-level streaming via astream_events
-- Support native tool calling and markdown formats
+- Hide server-side tool execution from clients (tool calls are internal)
 
 Key Functions:
     - convert_messages_to_langchain: Convert OpenAI messages to LangChain
@@ -34,13 +34,7 @@ from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
 from esdc.server.constants import SSE_STREAM_TIMEOUT
-from esdc.server.content_accumulator import ContentAccumulator
 from esdc.server.event_streamer import astream_agent_events
-from esdc.server.tool_formatter import (
-    create_final_chunk,
-    create_tool_call_chunk,
-    create_tool_role_chunk,
-)
 
 logger = logging.getLogger("esdc.server.agent")
 
@@ -233,19 +227,18 @@ async def generate_streaming_response(
     messages: list,
     model: str = "iris",
     temperature: float = 0.7,
-    use_native_format: bool = True,
     request_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate streaming chat completion response with real token-level streaming.
 
-    Uses astream_agent_events() for token-by-token streaming instead of
-    agent.astream() which only yields complete AIMessages per node.
+    Uses astream_agent_events() for token-by-token streaming.
+    Tool execution is server-side and hidden from the client — only final
+    text content is streamed.
 
     Args:
         messages: List of conversation messages
         model: Model ID
         temperature: Sampling temperature
-        use_native_format: Whether to use native tool_calls format or markdown
         request_id: Optional request ID for tracking (auto-generated if not provided)
 
     Yields:
@@ -266,10 +259,7 @@ async def generate_streaming_response(
     stream_start = time.perf_counter()
 
     logger.debug("=" * 80)
-    logger.debug(
-        f"[{request_id}] STREAM_START - use_native_format={use_native_format}, "
-        f"num_messages={len(messages)}"
-    )
+    logger.debug(f"[{request_id}] STREAM_START - num_messages={len(messages)}")
 
     try:
         provider_config = Config.get_provider_config()
@@ -358,56 +348,20 @@ async def generate_streaming_response(
 
             elif event_type == "message_complete":
                 ai_message = event["ai_message"]
-                has_tool_calls = bool(ai_message.tool_calls)
-
-                if use_native_format and has_tool_calls:
-                    tool_calls_dict = [
-                        {
-                            "name": tc.get("name", ""),
-                            "args": tc.get("args", {}),
-                            "id": tc.get("id", ""),
-                        }
-                        for tc in ai_message.tool_calls
-                    ]
-                    chunk = create_tool_call_chunk(tool_calls_dict, model)
-                    yield_counter += 1
+                tool_call_count = (
+                    len(ai_message.tool_calls) if ai_message.tool_calls else 0
+                )
+                if tool_call_count > 0:
                     logger.debug(
-                        f"[{request_id}] YIELD #{yield_counter} - "
-                        f"tool_calls_chunk, tool_count={len(tool_calls_dict)}"
+                        f"[{request_id}] Skipping message_complete with "
+                        f"{tool_call_count} tool_calls (server-side execution)"
                     )
-                    yield json.dumps(chunk)
-
-                if not use_native_format and has_tool_calls:
-                    from esdc.server.content_accumulator import format_tool_section
-
-                    for tool_call in ai_message.tool_calls:
-                        tool_name = tool_call.get("name", "unknown")
-                        tool_args = tool_call.get("args", {})
-                        tool_section = format_tool_section(tool_name, tool_args)
-                        yield_counter += 1
-                        yield json.dumps(
-                            create_openai_chunk(
-                                content=tool_section,
-                                model=model,
-                                chunk_id=next_chunk_id(),
-                            )
-                        )
 
             elif event_type == "tool_result":
-                if use_native_format:
-                    tool_call_id = event.get("tool_call_id", "")
-                    result = event.get("result", "")
-                    chunk = create_tool_role_chunk(
-                        tool_call_id=tool_call_id,
-                        content=result,
-                        model=model,
-                    )
-                    yield_counter += 1
-                    logger.debug(
-                        f"[{request_id}] YIELD #{yield_counter} - "
-                        f"tool_role_chunk, tool_call_id={tool_call_id}"
-                    )
-                    yield json.dumps(chunk)
+                logger.debug(
+                    f"[{request_id}] Skipping tool_result for "
+                    f"{event.get('tool_name', 'unknown')} (server-side execution)"
+                )
 
             elif event_type == "recursion_error":
                 error_message = event["message"]
@@ -436,19 +390,14 @@ async def generate_streaming_response(
             yield_counter,
         )
 
-        if use_native_format:
-            final_chunk = create_final_chunk(model)
-            yield_counter += 1
-            yield json.dumps(final_chunk)
-        else:
-            final_chunk = create_openai_chunk(
-                content="",
-                model=model,
-                finish_reason="stop",
-                chunk_id=next_chunk_id(),
-            )
-            yield_counter += 1
-            yield json.dumps(final_chunk)
+        final_chunk = create_openai_chunk(
+            content="",
+            model=model,
+            finish_reason="stop",
+            chunk_id=next_chunk_id(),
+        )
+        yield_counter += 1
+        yield json.dumps(final_chunk)
 
     except Exception as e:
         logger.error(
@@ -469,17 +418,17 @@ async def generate_response(
     messages: list,
     model: str = "iris",
     temperature: float = 0.7,
-    use_native_format: bool = True,
 ) -> dict[str, Any]:
     """Generate non-streaming chat completion response.
 
     Uses astream_agent_events() for consistency with streaming path.
+    Tool execution is server-side and hidden from the client — only final
+    text content is returned.
 
     Args:
         messages: List of conversation messages
         model: Model ID
         temperature: Sampling temperature
-        use_native_format: Whether to use native tool_calls format or markdown
 
     Returns:
         OpenAI-compatible response dictionary
@@ -491,9 +440,20 @@ async def generate_response(
         provider_config = Config.get_provider_config()
         if not provider_config:
             return {
-                "content": "Error: No provider configured.",
-                "role": "assistant",
-                "finish_reason": "stop",
+                "id": f"chatcmpl-{response_uuid}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Error: No provider configured.",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
             }
 
         provider_name = provider_config.get("provider_type", "ollama")
@@ -525,9 +485,7 @@ async def generate_response(
             total_chars,
         )
 
-        buffer = ContentAccumulator()
-        stored_tool_calls: list[dict[str, Any]] = []
-        accumulated_text = ""
+        accumulated_content = ""
         had_recursion_error = False
 
         async for event in astream_agent_events(agent, lc_messages):
@@ -536,94 +494,41 @@ async def generate_response(
             if event_type == "token" or event_type == "reasoning_token":
                 content = event["content"]
                 if content:
-                    accumulated_text += content
+                    accumulated_content += content
 
-            elif event_type == "message_complete":
-                ai_message = event["ai_message"]
-                has_tool_calls = bool(ai_message.tool_calls)
-
-                if has_tool_calls:
-                    if not use_native_format and buffer.has_content():
-                        buffer.flush()
-
-                    stored_tool_calls = [
-                        {
-                            "name": tc.get("name", ""),
-                            "args": tc.get("args", {}),
-                            "id": tc.get("id", ""),
-                        }
-                        for tc in ai_message.tool_calls
-                    ]
-
-                    if not use_native_format:
-                        for tool_call in ai_message.tool_calls:
-                            tool_name = tool_call.get("name", "unknown")
-                            tool_args = tool_call.get("args", {})
-                            buffer.add_tool_call(tool_name, tool_args)
-                            buffer.flush()
-
-                if accumulated_text.strip():
-                    buffer.add_content(accumulated_text)
-                    accumulated_text = ""
+            elif event_type in ("message_complete", "tool_result"):
+                pass
 
             elif event_type == "recursion_error":
-                buffer.add_content(event["message"])
+                accumulated_content = event["message"]
                 had_recursion_error = True
                 break
 
-        if use_native_format:
-            from esdc.server.tool_formatter import format_tool_calls_for_response
+        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+        logger.debug(
+            "[INFERENCE] sync_complete"
+            " | elapsed_ms=%.2f | content_len=%d | recursion_error=%s",
+            inference_elapsed_ms,
+            len(accumulated_content),
+            had_recursion_error,
+        )
 
-            final_content = buffer.flush_final()
-            tool_calls_formatted = (
-                format_tool_calls_for_response(stored_tool_calls)
-                if stored_tool_calls
-                else None
-            )
-
-            inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
-            logger.debug(
-                "[INFERENCE] sync_complete"
-                " | elapsed_ms=%.2f | content_len=%d"
-                " | tool_calls=%d | recursion_error=%s",
-                inference_elapsed_ms,
-                len(final_content) if final_content else 0,
-                len(stored_tool_calls),
-                had_recursion_error,
-            )
-
-            return {
-                "id": f"chatcmpl-{response_uuid}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": final_content if final_content else None,
-                            "tool_calls": tool_calls_formatted,
-                        },
-                        "finish_reason": "stop",
-                    }
-                ],
-            }
-        else:
-            final_content = buffer.flush_final()
-
-            inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
-            logger.debug(
-                "[INFERENCE] sync_complete (legacy) | elapsed_ms=%.2f | content_len=%d",
-                inference_elapsed_ms,
-                len(final_content) if final_content else 0,
-            )
-
-            return {
-                "content": final_content if final_content else "No response generated",
-                "role": "assistant",
-                "finish_reason": "stop",
-            }
+        return {
+            "id": f"chatcmpl-{response_uuid}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": accumulated_content if accumulated_content else None,
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
 
     except Exception as e:
         error_elapsed_ms = (time.perf_counter() - inference_start) * 1000
@@ -634,7 +539,18 @@ async def generate_response(
         )
         logger.error(f"Error in response generation: {e}", exc_info=True)
         return {
-            "content": f"Error: {str(e)}",
-            "role": "assistant",
-            "finish_reason": "stop",
+            "id": f"chatcmpl-{response_uuid}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": f"Error: {str(e)}",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
         }
