@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from esdc.server.event_streamer import _filter_sql_blocks, astream_agent_events
+from esdc.server.event_streamer import astream_agent_events
 
 
 class AsyncEventIterator:
@@ -30,39 +30,8 @@ def make_chunk(content, reasoning_content=None):
     if reasoning_content is not None:
         chunk.reasoning_content = reasoning_content
     else:
-        # Ensure reasoning_content attribute doesn't exist
         del chunk.reasoning_content
     return chunk
-
-
-class TestFilterSqlBlocks:
-    """Tests for _filter_sql_blocks helper."""
-
-    def test_no_sql_blocks(self):
-        assert _filter_sql_blocks("Hello world") == "Hello world"
-
-    def test_removes_sql_block(self):
-        text = "Here is some code:\n```sql\nSELECT 1;\n```\nDone."
-        result = _filter_sql_blocks(text)
-        assert "SELECT" not in result
-        assert "Done." in result
-
-    def test_removes_sql_block_case_insensitive(self):
-        text = "```SQL\nSELECT 1;\n```"
-        result = _filter_sql_blocks(text)
-        assert "SELECT" not in result
-
-    def test_removes_table_artifacts(self):
-        text = "```\n| a | b |\n|---|---|\n| 1 | 2 |\n```\nDone."
-        result = _filter_sql_blocks(text)
-        assert "Done." in result
-
-    def test_no_sql_prefix_returns_unchanged(self):
-        text = "Just some regular text"
-        assert _filter_sql_blocks(text) == "Just some regular text"
-
-    def test_empty_string(self):
-        assert _filter_sql_blocks("") == ""
 
 
 class TestAstreamAgentEvents:
@@ -117,16 +86,51 @@ class TestAstreamAgentEvents:
         assert msg_events[0]["ai_message"].content == "Test response"
 
     @pytest.mark.asyncio
-    async def test_tool_result_event(self):
-        """Test that tool_result events are yielded correctly."""
-        mock_tool_result = MagicMock()
-        mock_tool_result.__str__ = lambda self: "query result"
-        mock_tool_result.tool_call_id = "call_123"
+    async def test_message_complete_content_is_unfiltered(self):
+        """Test that message_complete content is NOT SQL-filtered (streamer is passthrough)."""
+        from langchain_core.messages import AIMessage
+
+        content = "Here:\n```sql\nSELECT 1;\n```\nDone."
+        ai_message = AIMessage(content=content)
 
         events = [
             {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message},
+                "name": "chat_model",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        assert "SELECT" in msg_events[0]["ai_message"].content
+
+    @pytest.mark.asyncio
+    async def test_tool_call_id_correlation(self):
+        """Test that tool_call_id is correlated from message_complete to tool_result."""
+        from langchain_core.messages import AIMessage
+
+        ai_message = AIMessage(content="")
+        ai_message.tool_calls = [
+            {"name": "execute_sql", "args": {"query": "SELECT 1"}, "id": "call_abc"},
+        ]
+
+        events = [
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message},
+                "name": "chat_model",
+            },
+            {
                 "event": "on_tool_end",
-                "data": {"output": mock_tool_result},
+                "data": {"output": "result data"},
                 "name": "execute_sql",
             },
         ]
@@ -138,10 +142,73 @@ class TestAstreamAgentEvents:
         async for event in astream_agent_events(mock_agent, []):
             result.append(event)
 
-        tool_events = [e for e in result if e["type"] == "tool_result"]
-        assert len(tool_events) == 1
-        assert tool_events[0]["tool_name"] == "execute_sql"
-        assert tool_events[0]["tool_call_id"] == "call_123"
+        tool_result_events = [e for e in result if e["type"] == "tool_result"]
+        assert len(tool_result_events) == 1
+        assert tool_result_events[0]["tool_call_id"] == "call_abc"
+        assert tool_result_events[0]["tool_name"] == "execute_sql"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_id_multiple_tools(self):
+        """Test tool_call_id correlation with multiple tool calls in sequence."""
+        from langchain_core.messages import AIMessage
+
+        ai_message = AIMessage(content="")
+        ai_message.tool_calls = [
+            {"name": "list_tables", "args": {}, "id": "call_first"},
+            {"name": "execute_sql", "args": {"query": "SELECT 1"}, "id": "call_second"},
+        ]
+
+        events = [
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message},
+                "name": "chat_model",
+            },
+            {
+                "event": "on_tool_end",
+                "data": {"output": "table list"},
+                "name": "list_tables",
+            },
+            {
+                "event": "on_tool_end",
+                "data": {"output": "query result"},
+                "name": "execute_sql",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        tool_result_events = [e for e in result if e["type"] == "tool_result"]
+        assert len(tool_result_events) == 2
+        assert tool_result_events[0]["tool_call_id"] == "call_first"
+        assert tool_result_events[1]["tool_call_id"] == "call_second"
+
+    @pytest.mark.asyncio
+    async def test_tool_result_without_pending_call(self):
+        """Test that tool_result with no pending tool_call gets empty call_id + warning."""
+        events = [
+            {
+                "event": "on_tool_end",
+                "data": {"output": "orphan result"},
+                "name": "execute_sql",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        tool_result_events = [e for e in result if e["type"] == "tool_result"]
+        assert len(tool_result_events) == 1
+        assert tool_result_events[0]["tool_call_id"] == ""
 
     @pytest.mark.asyncio
     async def test_reasoning_content_token(self):
@@ -185,33 +252,6 @@ class TestAstreamAgentEvents:
 
         token_events = [e for e in result if e["type"] == "token"]
         assert len(token_events) == 0
-
-    @pytest.mark.asyncio
-    async def test_sql_filtering_in_message_complete(self):
-        """Test that SQL blocks are filtered in message_complete events."""
-        from langchain_core.messages import AIMessage
-
-        content = "Here:\n```sql\nSELECT 1;\n```\nDone."
-        ai_message = AIMessage(content=content)
-
-        events = [
-            {
-                "event": "on_chat_model_end",
-                "data": {"output": ai_message},
-                "name": "chat_model",
-            },
-        ]
-
-        mock_agent = MagicMock()
-        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
-
-        result = []
-        async for event in astream_agent_events(mock_agent, []):
-            result.append(event)
-
-        msg_events = [e for e in result if e["type"] == "message_complete"]
-        assert len(msg_events) == 1
-        assert "SELECT" not in msg_events[0]["ai_message"].content
 
     @pytest.mark.asyncio
     async def test_on_llm_stream_event(self):
@@ -270,8 +310,8 @@ class TestAstreamAgentEvents:
         assert token_events[2]["content"] == "!"
 
     @pytest.mark.asyncio
-    async def test_tool_call_extraction(self):
-        """Test that tool_calls are extracted from message_complete events."""
+    async def test_tool_calls_on_message_complete(self):
+        """Test that tool_calls are preserved on message_complete ai_message."""
         from langchain_core.messages import AIMessage
 
         ai_message = AIMessage(content="")
@@ -294,7 +334,38 @@ class TestAstreamAgentEvents:
         async for event in astream_agent_events(mock_agent, []):
             result.append(event)
 
-        tool_call_events = [e for e in result if e["type"] == "tool_call"]
-        assert len(tool_call_events) == 1
-        assert tool_call_events[0]["name"] == "execute_sql"
-        assert tool_call_events[0]["id"] == "call_1"
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        assert len(msg_events[0]["ai_message"].tool_calls) == 1
+        assert msg_events[0]["ai_message"].tool_calls[0]["name"] == "execute_sql"
+
+    @pytest.mark.asyncio
+    async def test_usage_metadata_preserved(self):
+        """Test that usage_metadata is preserved on message_complete."""
+        from langchain_core.messages import AIMessage
+
+        ai_message = AIMessage(content="test")
+        ai_message.usage_metadata = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "total_tokens": 150,
+        }
+
+        events = [
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message},
+                "name": "chat_model",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        assert msg_events[0]["ai_message"].usage_metadata["input_tokens"] == 100

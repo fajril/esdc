@@ -13,6 +13,7 @@ Key Functions:
 """
 
 # Standard library
+import asyncio
 import json
 import logging
 import time
@@ -41,6 +42,7 @@ from esdc.server.responses_events import (
     create_output_text_done_event,
     create_response_completed_event,
     create_response_created_event,
+    create_response_failed_event,
     format_sse_event,
 )
 from esdc.server.responses_models import ResponseInputItem
@@ -455,10 +457,16 @@ async def generate_responses_stream(
     accumulated_text = ""
     delta_count = 0
     content_index = 0
+    last_usage: dict[str, Any] | None = None
 
     try:
+        stream_deadline = time.perf_counter() + 120
+
         # Stream agent events using astream_events for real token-level streaming
         async for event in astream_agent_events(agent, lc_messages):
+            if time.perf_counter() > stream_deadline:
+                raise asyncio.TimeoutError()
+
             event_type = event["type"]
             event_counter += 1
 
@@ -591,22 +599,20 @@ async def generate_responses_stream(
             elif event_type == "message_complete":
                 ai_message = event["ai_message"]
 
+                # Track usage from last LLM response
+                if hasattr(ai_message, "usage_metadata") and ai_message.usage_metadata:
+                    last_usage = ai_message.usage_metadata
+
                 # Close any open text content
                 if content_started and accumulated_text:
-                    content_str = (
-                        extract_content_str(ai_message.content)
-                        if ai_message.content
-                        else accumulated_text
-                    )
-
-                    # Emit text done
+                    # Emit text done using accumulated_text (exactly what was streamed)
                     text_done_seq = seq.next()
                     logger.debug(
                         "[RESPONSES %s] EMIT response.output_text.done "
                         "seq=%d, text_len=%d, deltas_sent=%d",
                         response_id,
                         text_done_seq,
-                        len(content_str),
+                        len(accumulated_text),
                         delta_count,
                     )
                     yield format_sse_event(
@@ -615,12 +621,15 @@ async def generate_responses_stream(
                             output_index,
                             content_index,
                             current_item_id,
-                            content_str,
+                            accumulated_text,
                         )
                     )
 
                     # Emit content part done
-                    content_part_done = {"type": "output_text", "text": content_str}
+                    content_part_done = {
+                        "type": "output_text",
+                        "text": accumulated_text,
+                    }
                     part_done_seq = seq.next()
                     yield format_sse_event(
                         create_content_part_done_event(
@@ -750,12 +759,6 @@ async def generate_responses_stream(
                         output_items.append(function_call_item)
                         output_index += 1
 
-            # ---- Tool call events: emitted alongside message_complete ----
-            elif event_type == "tool_call":
-                # tool_call events are yielded from message_complete for convenience
-                # but the actual function_call items are already emitted above
-                pass
-
             # ---- Tool result events ----
             elif event_type == "tool_result":
                 tool_name = event["tool_name"]
@@ -839,10 +842,20 @@ async def generate_responses_stream(
         )
         yield format_sse_event(
             create_response_completed_event(
-                completed_seq, response_id, model, output_items
+                completed_seq, response_id, model, output_items, usage=last_usage
             )
         )
 
+    except asyncio.TimeoutError:
+        logger.error("[RESPONSES %s] TIMEOUT after 120s", response_id)
+        yield format_sse_event(
+            create_response_failed_event(
+                seq.next(),
+                response_id,
+                model,
+                {"message": "Response timed out after 120 seconds", "type": "timeout"},
+            )
+        )
     except Exception as e:
         logger.exception("[RESPONSES %s] ERROR: %s", response_id, e)
         yield format_sse_event(
