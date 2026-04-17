@@ -369,3 +369,51 @@ class TestAstreamAgentEvents:
         msg_events = [e for e in result if e["type"] == "message_complete"]
         assert len(msg_events) == 1
         assert msg_events[0]["ai_message"].usage_metadata["input_tokens"] == 100
+
+    @pytest.mark.asyncio
+    async def test_graph_recursion_error_yields_event(self):
+        """Test that GraphRecursionError yields recursion_error event."""
+        from langgraph.errors import GraphRecursionError
+
+        async def _raise_recursion(*args, **kwargs):
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": make_chunk("Hi")},
+                "name": "chat_model",
+            }
+            raise GraphRecursionError("Recursion limit of 25 reached")
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = _raise_recursion
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        types = [e["type"] for e in result]
+        assert "token" in types
+        assert "recursion_error" in types
+        recursion_events = [e for e in result if e["type"] == "recursion_error"]
+        assert len(recursion_events) == 1
+        assert "Maaf" in recursion_events[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_other_exceptions_reraise(self):
+        """Test that non-GraphRecursionError exceptions are re-raised."""
+
+        async def _raise_value_error(*args, **kwargs):
+            raise ValueError("test error")
+            yield  # noqa: unreachable — makes this an async generator
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = _raise_value_error
+
+        with pytest.raises(ValueError, match="test error"):
+            async for _ in astream_agent_events(mock_agent, []):
+                pass
+
+    def test_default_recursion_limit(self):
+        """Test that DEFAULT_RECURSION_LIMIT is 25."""
+        from esdc.server.event_streamer import DEFAULT_RECURSION_LIMIT
+
+        assert DEFAULT_RECURSION_LIMIT == 25

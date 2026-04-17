@@ -29,8 +29,8 @@ from esdc.chat.agent import create_agent, generate_conversation_title
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
+from esdc.server.constants import SSE_STREAM_TIMEOUT
 from esdc.server.event_streamer import astream_agent_events
-from esdc.server.message_utils import extract_ai_message_from_event, extract_content_str
 from esdc.server.responses_events import (
     create_content_part_added_event,
     create_content_part_done_event,
@@ -68,6 +68,12 @@ class SequenceCounter:
         current = self._value
         self._value += 1
         return current
+
+
+class _RecursionLimitExceededError(Exception):
+    """Raised when LangGraph recursion limit is exceeded during streaming."""
+
+    pass
 
 
 def convert_responses_input_to_langchain(
@@ -260,33 +266,6 @@ def convert_responses_input_to_langchain(
     return messages
 
 
-def extract_tool_messages_from_event(event: dict) -> list[dict[str, Any]]:
-    """Extract tool results from LangGraph event.
-
-    LangGraph's tool_node returns dicts with 'role': 'tool',
-    NOT ToolMessage objects.
-
-    Args:
-        event: LangGraph event dictionary
-
-    Returns:
-        List of tool result dicts from the event
-    """
-    tool_messages = []
-
-    # Check for 'tools' node (contains tool results)
-    if "tools" in event:
-        tools_data = event["tools"]
-        if isinstance(tools_data, dict) and "messages" in tools_data:
-            messages = tools_data["messages"]
-            for msg in messages:
-                # LangGraph returns dicts with role="tool"
-                if isinstance(msg, dict) and msg.get("role") == "tool":
-                    tool_messages.append(msg)
-
-    return tool_messages
-
-
 def generate_item_id(prefix: str = "msg") -> str:
     """Generate a unique item ID with proper prefix.
 
@@ -460,7 +439,7 @@ async def generate_responses_stream(
     last_usage: dict[str, Any] | None = None
 
     try:
-        stream_deadline = time.perf_counter() + 120
+        stream_deadline = time.perf_counter() + SSE_STREAM_TIMEOUT
 
         # Stream agent events using astream_events for real token-level streaming
         async for event in astream_agent_events(agent, lc_messages):
@@ -816,6 +795,15 @@ async def generate_responses_stream(
                     event.get("metadata"),
                 )
 
+            # ---- Recursion error: emit response.failed ----
+            elif event_type == "recursion_error":
+                logger.error(
+                    "[RESPONSES %s] RECURSION_ERROR: %s",
+                    response_id,
+                    event["message"],
+                )
+                raise _RecursionLimitExceededError(event["message"])
+
         # Emit response.completed
         completed_seq = seq.next()
         output_summary = [
@@ -847,13 +835,28 @@ async def generate_responses_stream(
         )
 
     except asyncio.TimeoutError:
-        logger.error("[RESPONSES %s] TIMEOUT after 120s", response_id)
+        logger.error(
+            "[RESPONSES %s] TIMEOUT after %ds", response_id, SSE_STREAM_TIMEOUT
+        )
         yield format_sse_event(
             create_response_failed_event(
                 seq.next(),
                 response_id,
                 model,
-                {"message": "Response timed out after 120 seconds", "type": "timeout"},
+                {
+                    "message": f"Response timed out after {SSE_STREAM_TIMEOUT} seconds",
+                    "type": "timeout",
+                },
+            )
+        )
+    except _RecursionLimitExceededError as e:
+        logger.error("[RESPONSES %s] RECURSION_LIMIT: %s", response_id, str(e))
+        yield format_sse_event(
+            create_response_failed_event(
+                seq.next(),
+                response_id,
+                model,
+                {"message": str(e), "type": "recursion_limit"},
             )
         )
     except Exception as e:
@@ -998,131 +1001,111 @@ async def generate_responses_sync(
     sync_start = time.perf_counter()
 
     try:
-        # Collect all messages from agent
+        all_function_calls: list[dict[str, Any]] = []
         all_tool_results: list[dict[str, Any]] = []
-        all_ai_messages: list[AIMessage] = []
+        accumulated_text = ""
+        last_message_content = ""
+        had_recursion_error = False
 
-        async for event in agent.astream({"messages": lc_messages}):
+        async for event in astream_agent_events(agent, lc_messages):
             event_counter += 1
-            event_keys = list(event.keys())
-            logger.debug(
-                f"[RESPONSES {response_id}] SYNC EVENT #{event_counter} "
-                f"keys: {event_keys}"
-            )
+            event_type = event["type"]
 
-            # Collect tool results
-            tool_messages = extract_tool_messages_from_event(event)
-            if tool_messages:
-                logger.debug(
-                    f"[RESPONSES {response_id}] SYNC EVENT #{event_counter} "
-                    f"Found {len(tool_messages)} tool result(s)"
-                )
-                logger.debug(
-                    f"[TIMING] {response_id} sync_tool_result | event=#{event_counter} count={len(tool_messages)}"  # noqa: E501
-                )
-                for i, tool_msg in enumerate(tool_messages):
-                    call_id = tool_msg.get("tool_call_id", "")
-                    content_len = len(str(tool_msg.get("content", "")))
-                    logger.debug(
-                        f"[RESPONSES {response_id}] SYNC Tool result #{i}: "
-                        f"call_id={call_id}, content_len={content_len}"
-                    )
-                    all_tool_results.append(
-                        {
-                            "id": generate_item_id("fco"),
-                            "type": "function_call_output",
-                            "status": "completed",
-                            "call_id": call_id,
-                            "output": [
+            if event_type == "token" or event_type == "reasoning_token":
+                content = event["content"]
+                if content:
+                    accumulated_text += content
+
+            elif event_type == "message_complete":
+                ai_message = event["ai_message"]
+                has_tool_calls = bool(ai_message.tool_calls)
+
+                if has_tool_calls:
+                    for tc in ai_message.tool_calls:
+                        if isinstance(tc, dict):
+                            all_function_calls.append(
                                 {
-                                    "type": "input_text",
-                                    "text": str(tool_msg.get("content", "")),
+                                    "id": generate_item_id("fc"),
+                                    "type": "function_call",
+                                    "status": "completed",
+                                    "name": tc.get("name", ""),
+                                    "call_id": tc.get("id", ""),
+                                    "arguments": json.dumps(tc.get("args", {})),
                                 }
-                            ],
-                        }
-                    )
-                continue
+                            )
 
-            # Collect AI messages
-            ai_msg = extract_ai_message_from_event(event)
-            if ai_msg:
-                msg_id = getattr(ai_msg, "id", "no-id")
-                has_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
-                tool_call_count = len(ai_msg.tool_calls) if has_tool_calls else 0
-                logger.debug(
-                    f"[RESPONSES {response_id}] SYNC EVENT #{event_counter} "
-                    f"AIMessage: id={msg_id}, tool_calls={tool_call_count}"
+                if accumulated_text.strip():
+                    last_message_content = accumulated_text
+                    accumulated_text = ""
+
+            elif event_type == "tool_result":
+                tool_name = event.get("tool_name", "unknown")
+                tool_call_id = event.get("tool_call_id", "")
+                result_text = event.get("result", "")
+
+                all_tool_results.append(
+                    {
+                        "id": generate_item_id("fco"),
+                        "type": "function_call_output",
+                        "status": "completed",
+                        "call_id": tool_call_id,
+                        "output": [
+                            {
+                                "type": "input_text",
+                                "text": result_text,
+                            }
+                        ],
+                    }
                 )
-                all_ai_messages.append(ai_msg)
-
-        # Build output items
-        # First: all function_calls
-        for ai_msg in all_ai_messages:
-            if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
                 logger.debug(
-                    f"[RESPONSES {response_id}] SYNC tool_calls type: "
-                    f"{type(ai_msg.tool_calls)}, count: {len(ai_msg.tool_calls)}"
+                    "[RESPONSES %s] SYNC tool_result:"
+                    " tool=%s, call_id=%s, result_len=%d",
+                    response_id,
+                    tool_name,
+                    tool_call_id,
+                    len(result_text),
                 )
-                for tc_idx, tc in enumerate(ai_msg.tool_calls):
-                    # DIAGNOSTIC: Log type and value of each tool_call
-                    logger.debug(
-                        f"[RESPONSES {response_id}] SYNC tool_call[{tc_idx}] "
-                        f"type: {type(tc).__name__}, "
-                        f"value: {repr(tc)[:200]}"
-                    )
-                    # If it's not a dict, skip and log warning
-                    if not isinstance(tc, dict):
-                        logger.warning(
-                            f"[RESPONSES {response_id}] SYNC SKIPPING malformed "
-                            f"tool_call[{tc_idx}] - expected dict, got "
-                            f"{type(tc).__name__}: {repr(tc)[:100]}"
-                        )
-                        continue
-                    tc_name = tc.get("name", "")
-                    tc_id = tc.get("id", "")
-                    logger.debug(
-                        f"[RESPONSES {response_id}] SYNC Building function_call: "
-                        f"name={tc_name}, call_id={tc_id}"
-                    )
-                    output_items.append(
-                        {
-                            "id": generate_item_id("fc"),
-                            "type": "function_call",
-                            "status": "completed",
-                            "name": tc_name,
-                            "call_id": tc_id,
-                            "arguments": json.dumps(tc.get("args", {})),
-                        }
-                    )
 
-        # Second: all function_call_outputs
+            elif event_type == "recursion_error":
+                logger.error(
+                    "[RESPONSES %s] SYNC RECURSION_ERROR: %s",
+                    response_id,
+                    event["message"],
+                )
+                return create_non_streaming_response(
+                    response_id,
+                    model,
+                    [],
+                    error={"message": event["message"], "type": "recursion_limit"},
+                )
+
+            elif event_type == "context_metadata":
+                pass
+
+        output_items.extend(all_function_calls)
         output_items.extend(all_tool_results)
 
-        # Last: final message (if any AI message had content)
-        for ai_msg in reversed(all_ai_messages):
-            if ai_msg.content:
-                content_str = extract_content_str(ai_msg.content)
-                if content_str.strip():
-                    logger.debug(
-                        f"[RESPONSES {response_id}] SYNC Building message item: "
-                        f"content_len={len(content_str)}"
-                    )
-                    output_items.append(
+        if last_message_content.strip():
+            logger.debug(
+                "[RESPONSES %s] SYNC Building message item: content_len=%d",
+                response_id,
+                len(last_message_content),
+            )
+            output_items.append(
+                {
+                    "id": generate_item_id("msg"),
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
                         {
-                            "id": generate_item_id("msg"),
-                            "type": "message",
-                            "status": "completed",
-                            "role": "assistant",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": content_str,
-                                    "annotations": [],
-                                }
-                            ],
+                            "type": "output_text",
+                            "text": last_message_content,
+                            "annotations": [],
                         }
-                    )
-                break
+                    ],
+                }
+            )
 
         output_summary = [
             f"{item.get('type')}:{item.get('name', item.get('call_id', 'msg'))}"
@@ -1134,25 +1117,25 @@ async def generate_responses_sync(
             f"items=[{', '.join(output_summary)}]"
         )
 
-        # Log inference sync completion
         sync_elapsed_ms = (time.perf_counter() - sync_start) * 1000
         logger.debug(
-            f"[TIMING] {response_id} sync_complete | events={event_counter} items={len(output_items)}"  # noqa: E501
-        )
-        logger.debug(
-            "[INFERENCE] responses_sync_complete | response_id=%s | elapsed_ms=%.2f | events=%d | output_items=%d",  # noqa: E501
+            "[INFERENCE] responses_sync_complete"
+            " | response_id=%s | elapsed_ms=%.2f"
+            " | events=%d | output_items=%d"
+            " | recursion_error=%s",
             response_id,
             sync_elapsed_ms,
             event_counter,
             len(output_items),
+            had_recursion_error,
         )
         return create_non_streaming_response(response_id, model, output_items)
 
     except Exception as e:
-        # Log inference error
         error_elapsed_ms = (time.perf_counter() - sync_start) * 1000
         logger.debug(
-            "[INFERENCE] responses_sync_error | response_id=%s | elapsed_ms=%.2f | error=%s",  # noqa: E501
+            "[INFERENCE] responses_sync_error"
+            " | response_id=%s | elapsed_ms=%.2f | error=%s",
             response_id,
             error_elapsed_ms,
             str(e)[:100],
