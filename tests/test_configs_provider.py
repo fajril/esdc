@@ -31,7 +31,6 @@ providers:
     model: llama3.2
 """
             )
-            Config._config_cache = None  # Clear cache
             providers = Config.get_providers()
             assert "openai" in providers
             assert "ollama" in providers
@@ -42,7 +41,6 @@ providers:
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text("api_url: https://example.com\n")
-            Config._config_cache = None  # Clear cache
             providers = Config.get_providers()
             assert providers == {}
 
@@ -53,7 +51,6 @@ class TestSaveProvider:
     def test_save_provider_creates_new(self, tmp_path):
         """Test save_provider adds a new provider."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
-            Config._config_cache = None
             Config.save_provider(
                 "openai",
                 {"provider_type": "openai", "api_key": "sk-test", "model": "gpt-4o"},
@@ -78,7 +75,7 @@ providers:
     model: gpt-4o
 """
             )
-            Config._config_cache = None
+
             Config.save_provider(
                 "openai",
                 {"provider_type": "openai", "api_key": "sk-new", "model": "gpt-4o"},
@@ -99,7 +96,7 @@ providers:
     api_key: sk-test
 """
             )
-            Config._config_cache = None
+
             Config.save_provider(
                 "ollama",
                 {"provider_type": "ollama", "base_url": "http://localhost:11434"},
@@ -126,7 +123,7 @@ providers:
     provider_type: ollama
 """
             )
-            Config._config_cache = None
+
             result = Config.remove_provider("openai")
             assert result is True
             with open(config_file) as f:
@@ -145,7 +142,7 @@ providers:
     provider_type: openai
 """
             )
-            Config._config_cache = None
+
             result = Config.remove_provider("nonexistent")
             assert result is False
             with open(config_file) as f:
@@ -157,7 +154,7 @@ providers:
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text("api_url: https://example.com\n")
-            Config._config_cache = None
+
             result = Config.remove_provider("openai")
             assert result is False
 
@@ -183,7 +180,7 @@ providers:
     model: llama3.2
 """
             )
-            Config._config_cache = None  # Clear cache
+            # Clear cache
             provider_config = Config.get_provider_config()
             assert provider_config is not None
             assert provider_config["provider_type"] == "ollama"
@@ -202,7 +199,7 @@ providers:
     model: gpt-4o
 """
             )
-            Config._config_cache = None  # Clear cache
+            # Clear cache
             provider_config = Config.get_provider_config()
             assert provider_config is None
 
@@ -211,14 +208,14 @@ providers:
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text("api_url: https://example.com\n")
-            Config._config_cache = None  # Clear cache
+            # Clear cache
             provider_config = Config.get_provider_config()
             assert provider_config is None
 
     def test_get_provider_config_no_config(self, tmp_path):
         """Test get_provider_config returns None when no config file."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
-            Config._config_cache = None  # Clear cache
+            # Clear cache
             provider_config = Config.get_provider_config()
             assert provider_config is None
 
@@ -239,7 +236,7 @@ providers:
     provider_type: ollama
 """
             )
-            Config._config_cache = None
+
             Config.set_default_provider("ollama")
             with open(config_file) as f:
                 config = yaml.safe_load(f)
@@ -248,7 +245,6 @@ providers:
     def test_set_default_provider_creates_section(self, tmp_path):
         """Test set_default_provider works when no config exists."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
-            Config._config_cache = None
             Config.set_default_provider("openai")
             config_file = tmp_path / "config.yaml"
             with open(config_file) as f:

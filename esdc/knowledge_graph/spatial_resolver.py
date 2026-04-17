@@ -796,15 +796,14 @@ class SpatialResolver:
 
         conn = self._get_connection()
 
-        # Get coordinates for all fields
-        placeholders = ", ".join(["?"] * len(field_names))
+        where_clauses = " OR ".join([f"field_name ILIKE ?" for _ in field_names])
         query = f"""
             SELECT DISTINCT
                 field_name,
                 field_lat,
                 field_long
             FROM project_resources
-            WHERE field_name ILIKE ANY (ARRAY[{placeholders}])
+            WHERE ({where_clauses})
                 AND field_lat IS NOT NULL
                 AND field_long IS NOT NULL
         """

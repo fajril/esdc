@@ -121,9 +121,10 @@ class TestReloadCommand:
 
     def test_reload_missing_file(self, tmp_path):
         """Test reload with missing file shows warning."""
-        with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(app, ["reload", "--filetype", "csv"])
-            # Either shows warning or error (code has bug with unbound filename)
+        with patch("esdc.esdc.Config.get_db_dir", return_value=tmp_path):
+            result = runner.invoke(
+                app, ["reload", "--filetype", "csv", "--no-embeddings"]
+            )
             assert result.exit_code in [0, 1]
 
 

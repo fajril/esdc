@@ -2,7 +2,7 @@
 
 # Standard library
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 # Third-party
 import pytest
@@ -141,7 +141,7 @@ class TestAgentWrapperIntegration:
         """Test generate_response with mocked agent."""
         from esdc.server.agent_wrapper import generate_response
 
-        mock_event = {"messages": [MagicMock(spec=AIMessage, content="Test response")]}
+        mock_event = {"agent": {"messages": [AIMessage(content="Test response")]}}
 
         with patch(
             "esdc.server.agent_wrapper.Config.get_provider_config"
@@ -154,24 +154,28 @@ class TestAgentWrapperIntegration:
                     }
                     mock_llm.return_value = MagicMock()
                     mock_agent.return_value = MagicMock()
-                    mock_agent.return_value.astream = AsyncMock(
-                        return_value=[mock_event]
-                    )
+
+                    async def _astream(*args, **kwargs):
+                        yield mock_event
+
+                    mock_agent.return_value.astream = _astream
 
                     result = await generate_response(
                         messages=[MagicMock(role="user", content="Hello")],
                         model="iris",
                     )
 
-                    assert result["role"] == "assistant"
-                    assert result["finish_reason"] == "stop"
+                    assert isinstance(result, dict)
+                    assert "choices" in result
+                    assert result["choices"][0]["message"]["role"] == "assistant"
+                    assert result["choices"][0]["finish_reason"] == "stop"
 
     @pytest.mark.asyncio
     async def test_generate_streaming_response_mock(self):
         """Test generate_streaming_response with mocked agent."""
         from esdc.server.agent_wrapper import generate_streaming_response
 
-        mock_event = {"messages": [MagicMock(spec=AIMessage, content="Test")]}
+        mock_event = {"agent": {"messages": [AIMessage(content="Test")]}}
 
         with patch(
             "esdc.server.agent_wrapper.Config.get_provider_config"
@@ -184,9 +188,11 @@ class TestAgentWrapperIntegration:
                     }
                     mock_llm.return_value = MagicMock()
                     mock_agent.return_value = MagicMock()
-                    mock_agent.return_value.astream = AsyncMock(
-                        return_value=[mock_event]
-                    )
+
+                    async def _astream(*args, **kwargs):
+                        yield mock_event
+
+                    mock_agent.return_value.astream = _astream
 
                     chunks = []
                     async for chunk in generate_streaming_response(
