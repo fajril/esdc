@@ -293,7 +293,7 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
     Returns:
         List of LangChain tool names to bind for this query
     """
-    base_tools = ["SQL Executor"] + _SCHEMA_TOOLS
+    base_tools = ["Knowledge Traversal", "SQL Executor"] + _SCHEMA_TOOLS
 
     if classification.query_type == QueryType.SIMPLE_FACTUAL:
         return base_tools
@@ -309,7 +309,6 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
 
     else:  # AMBIGUOUS
         return [
-            "Knowledge Traversal",
             "Semantic Search",
             "Spatial Resolver",
             "Uncertainty Resolver",

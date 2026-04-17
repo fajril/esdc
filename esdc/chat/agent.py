@@ -27,6 +27,7 @@ from esdc.chat.tools import (
     get_resources_columns,
     get_schema,
     get_timeseries_columns,
+    knowledge_traversal,
     list_tables,
     resolve_spatial,
     resolve_uncertainty_level,
@@ -112,26 +113,6 @@ def _detect_context_length(llm: BaseChatModel) -> int:
 
 TOKEN_CHARS_PER_TOKEN = 4
 MAX_TOOL_RESULT_CHARS = 10000
-
-# Module-level cache untuk entity resolution
-# Entities hanya berubah saat esdc fetch, jadi cache bisa persist lama
-_entity_resolution_cache: dict[str, dict[str, Any]] = {}
-_entity_cache_valid = True
-
-
-def _get_entity_cache_key(query: str) -> str:
-    """Generate cache key dari query untuk entity resolution."""
-    import hashlib
-
-    return hashlib.md5(query.encode()).hexdigest()
-
-
-def invalidate_entity_cache():
-    """Invalidate entity resolution cache - dipanggil saat esdc fetch."""
-    global _entity_cache_valid
-    _entity_cache_valid = False
-    _entity_resolution_cache.clear()
-    logger.info("[INFERENCE] entity_cache_invalidated")
 
 
 async def generate_conversation_title(
@@ -230,7 +211,7 @@ def create_agent(
         context_length = _detect_context_length(llm)
     if tools is None:
         tools = [
-            # knowledge_traversal removed - entity resolution is now automatic
+            knowledge_traversal,
             resolve_spatial,
             semantic_search,
             execute_cypher,
@@ -435,140 +416,6 @@ def create_agent(
         """Wrapper for manage_context_node with bound context_length."""
         return manage_context_node(state, context_length=context_length)
 
-    def entity_resolution_node(state: AgentState) -> dict[str, list[AnyMessage]]:
-        """Pre-resolve entities from the last user message via knowledge graph.
-
-        Injects resolved entities as a system message so the LLM can use
-        them directly without needing to call knowledge_traversal as a tool.
-        """
-        messages = state["messages"]
-        if not messages:
-            return {"messages": []}
-
-        # Skip entity resolution for follow-up queries (optimization)
-        # Entities are already resolved in first query and propagated via conversation history
-        human_messages = [
-            m for m in messages if isinstance(m, HumanMessage) and m.content
-        ]
-        if len(human_messages) > 1:
-            logger.debug(
-                "[INFERENCE] entity_resolution_skipped | reason=follow_up_query"
-            )
-            return {"messages": []}
-
-        last_human = None
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage) and msg.content:
-                last_human = msg.content
-                break
-
-        if not last_human:
-            return {"messages": []}
-
-        # Check cache
-        cache_key = _get_entity_cache_key(last_human)
-        if cache_key in _entity_resolution_cache:
-            logger.debug(
-                "[INFERENCE] entity_resolution_cache_hit | key=%s", cache_key[:8]
-            )
-            return _entity_resolution_cache[cache_key]
-
-        logger.debug("[INFERENCE] entity_resolution_cache_miss | key=%s", cache_key[:8])
-
-        try:
-            import json as _json
-
-            from esdc.chat.tools import knowledge_traversal
-
-            result_str = knowledge_traversal.invoke(
-                {"query": last_human, "return_multiple": False}
-            )
-            result = _json.loads(result_str)
-            logger.info(
-                "entity_resolution: status=%s entities=%d",
-                result.get("status"),
-                len(result.get("entities", [])),
-            )
-
-            if result.get("status") == "failed":
-                return {"messages": []}
-
-            entity_names = []
-            for e in result.get("entities", []):
-                if e.get("confidence", 0) >= 0.7:
-                    entity_names.append(
-                        f"- {e['type']}: {e['name']} (id={e.get('id', '?')})"
-                    )
-
-            if not entity_names:
-                return {"messages": []}
-
-            context_parts = [
-                "[Knowledge Graph - Auto-resolved entities]",
-                "The following entities were automatically resolved from your query.",
-                "Use these to write precise SQL WHERE clauses "
-                "instead of ILIKE patterns.",
-            ]
-            context_parts.extend(entity_names)
-
-            # Enrich: detect Field + WorkingArea combo for scoped queries
-            wk_entities = [
-                e
-                for e in result.get("entities", [])
-                if e.get("type") == "WorkingArea" and e.get("confidence", 0) >= 0.7
-            ]
-            field_entities = [
-                e
-                for e in result.get("entities", [])
-                if e.get("type") == "Field" and e.get("confidence", 0) >= 0.7
-            ]
-
-            if wk_entities and field_entities:
-                wk_name = wk_entities[0]["name"]
-                context_parts.append("")
-                context_parts.append(
-                    "Spatial context: The following working area was detected."
-                )
-                context_parts.append(
-                    f'When using resolve_spatial, pass wk_name="{wk_name}" '
-                    f"to scope results to WK {wk_name}."
-                )
-
-            if result.get("where_conditions"):
-                context_parts.append("Suggested WHERE conditions:")
-                for wc in result["where_conditions"]:
-                    context_parts.append(f"  {wc}")
-
-            if result.get("suggested_table"):
-                context_parts.append(f"Suggested table: {result['suggested_table']}")
-
-            if result.get("required_columns"):
-                context_parts.append(
-                    f"Required columns: {', '.join(result['required_columns'])}"
-                )
-
-            context_msg = SystemMessage(content="\n".join(context_parts))
-            logger.info(
-                "entity_resolution: injecting %d entities for query='%s'",
-                len(entity_names),
-                last_human[:50],
-            )
-
-            # Cache result
-            result_msg = {"messages": [cast(AnyMessage, context_msg)]}
-            _entity_resolution_cache[cache_key] = result_msg
-            logger.debug(
-                "[INFERENCE] entity_resolution_cached | key=%s | entities=%d",
-                cache_key[:8],
-                len(entity_names),
-            )
-
-            return result_msg
-
-        except Exception as e:
-            logger.warning("entity_resolution: failed - %s", e)
-            return {"messages": []}
-
     def query_classification_node(state: AgentState) -> dict[str, Any]:
         """Classify query and inject strategy into system prompt."""
         messages = state["messages"]
@@ -615,14 +462,12 @@ def create_agent(
         .add_node("init", init_node)
         .add_node("manage_context", manage_context_with_length)
         .add_node("query_classification", query_classification_node)
-        .add_node("entity_resolution", entity_resolution_node)
         .add_node("agent", agent_node)
         .add_node("tools", tool_node)
         .add_edge(START, "init")
         .add_edge("init", "manage_context")
         .add_edge("manage_context", "query_classification")
-        .add_edge("query_classification", "entity_resolution")
-        .add_edge("entity_resolution", "agent")
+        .add_edge("query_classification", "agent")
         .add_conditional_edges(
             "agent",
             should_continue,
