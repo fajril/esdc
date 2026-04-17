@@ -187,4 +187,4 @@ class TestSSEConstants:
         assert SSE_KEEPALIVE_INTERVAL == 15
 
     def test_stream_timeout(self):
-        assert SSE_STREAM_TIMEOUT == 120
+        assert SSE_STREAM_TIMEOUT == 300
