@@ -218,6 +218,7 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | wilayah kerja | `wk_name ILIKE '%name%'` |
 | provinsi/province | `province ILIKE '%name%'` |
 | cekungan/basin | `basin128 ILIKE '%name%'` |
+| LTP/Long Term Plan | `is_ltp = 1` filter |
 
 ## Table/View Selection
 

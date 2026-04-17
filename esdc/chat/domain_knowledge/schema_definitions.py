@@ -180,7 +180,7 @@ DATABASE_SCHEMA: dict[str, dict] = {
             },
             "is_ltp": {
                 "type": "INTEGER",
-                "description": "Whether project is LTP (Letter to President).",
+                "description": "Whether project has a Long Term Plan (LTP). LTP = Long Term Plan, a multi-year development plan for oil & gas projects.",
             },
             "is_pse_approved": {
                 "type": "INTEGER",
