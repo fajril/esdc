@@ -2,7 +2,7 @@
 
 # Standard library
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 # Third-party
 import pytest
@@ -211,8 +211,9 @@ class TestAgentWrapperIntegration:
             messages=[MagicMock(role="user", content="Hello")],
         )
 
-        assert "Error" in result["content"]
-        assert result["finish_reason"] == "stop"
+        assert isinstance(result, dict)
+        assert "choices" in result
+        assert "Error" in result["choices"][0]["message"]["content"]
 
     @pytest.mark.asyncio
     async def test_generate_streaming_response_no_provider(self):
@@ -262,7 +263,7 @@ async def test_generate_streaming_response_real_token_streaming():
         ),
     ):
         async for chunk in generate_streaming_response(
-            messages=messages, use_native_format=True
+            messages=messages,
         ):
             data = json.loads(chunk)
             delta = data.get("choices", [{}])[0].get("delta", {})
@@ -301,7 +302,7 @@ async def test_generate_streaming_response_recursion_error():
         ),
     ):
         async for chunk in generate_streaming_response(
-            messages=messages, use_native_format=True
+            messages=messages,
         ):
             data = json.loads(chunk)
             delta = data.get("choices", [{}])[0].get("delta", {})
