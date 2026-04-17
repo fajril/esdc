@@ -100,15 +100,13 @@ class TestContentBeforeToolCalls:
         )
 
     @pytest.mark.asyncio
-    async def test_thinking_wrapped_with_tags(self):
-        """Verify that thinking content is wrapped with think tags."""
+    async def test_content_is_streamed_as_plain_text(self):
+        """Content is streamed as-is without think tags (thinking logic removed)."""
         ai_msg = AIMessage(
             content="Let me think about this query...",
             tool_calls=[{"name": "list_tables", "args": {}, "id": "test-456"}],
         )
-
         emitted_chunks = []
-
         messages = [Message(role="user", content="test")]
 
         with patch("esdc.server.agent_wrapper.Config") as mock_config:
@@ -134,7 +132,6 @@ class TestContentBeforeToolCalls:
                     ):
                         emitted_chunks.append(json.loads(chunk))
 
-        # Find content chunk
         content_chunks = [
             chunk
             for chunk in emitted_chunks
@@ -143,11 +140,12 @@ class TestContentBeforeToolCalls:
 
         assert len(content_chunks) > 0, "Should have content chunks"
 
-        content = content_chunks[0]["choices"][0]["delta"]["content"]
-        # Check for think tags (format: <think> content </think>)
-        assert "<think>" in content and "</think>" in content, (
-            f"Content should be wrapped with think tags. Got: {content[:100]}"
+        content = "".join(c["choices"][0]["delta"]["content"] for c in content_chunks)
+        assert "Let me think" in content, (
+            f"Content should contain original text. Got: {content[:100]}"
         )
+        assert "laissez" not in content, "Content should not have think tags (removed)"
+        assert "liziez" not in content, "Content should not have think tags (removed)"
 
     @pytest.mark.asyncio
     async def test_no_duplicate_thinking(self):
