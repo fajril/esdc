@@ -316,8 +316,9 @@ def create_agent(
 
         inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
         response_len = len(str(response.content)) if hasattr(response, "content") else 0
-        has_tool_calls = hasattr(response, "tool_calls") and bool(response.tool_calls)
-        tool_call_count = len(response.tool_calls) if has_tool_calls else 0
+        ai_response = cast(AIMessage, response)
+        has_tool_calls = bool(ai_response.tool_calls)
+        tool_call_count = len(ai_response.tool_calls) if has_tool_calls else 0
         logger.debug(
             "[INFERENCE] llm_invoke_complete | elapsed=%.2fms | response_len=%d | "
             "has_tool_calls=%s | tool_calls=%d",
@@ -475,7 +476,7 @@ def create_agent(
             return {"messages": [], "allowed_tools": list(all_tools.keys())}
 
         # Find last human message
-        last_human = None
+        last_human: str | list[str | dict[str, Any]] | None = None
         for msg in reversed(messages):
             if isinstance(msg, HumanMessage) and msg.content:
                 last_human = msg.content
@@ -484,9 +485,11 @@ def create_agent(
         if not last_human:
             return {"messages": [], "allowed_tools": list(all_tools.keys())}
 
+        query_text = str(last_human) if not isinstance(last_human, str) else last_human
+
         try:
             classifier = QueryClassifier()
-            classification = classifier.classify(last_human)
+            classification = classifier.classify(query_text)
 
             strategy_text = format_classification_for_prompt(classification)
             allowed_tools = get_tools_for_classification(classification)

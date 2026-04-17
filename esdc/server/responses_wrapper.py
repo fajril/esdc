@@ -447,6 +447,7 @@ async def generate_responses_stream(
     )
 
     first_ai_response = True
+    first_response_ms = 0.0
     stream_start = time.perf_counter()
     last_event_time = stream_start
 

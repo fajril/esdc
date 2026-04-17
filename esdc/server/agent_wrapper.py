@@ -495,7 +495,11 @@ async def generate_streaming_response(
 
         # Send final chunk
         total_ms = (time.perf_counter() - stream_start) * 1000
-        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000 if 'inference_start' in locals() else 0
+        inference_elapsed_ms = (
+            (time.perf_counter() - inference_start) * 1000
+            if "inference_start" in locals()
+            else 0
+        )
         logger.debug(
             f"[{request_id}] STREAM_END - events={event_counter}, "
             f"yields={yield_counter}, unique_msg_ids={len(seen_msg_ids)}"
@@ -567,6 +571,7 @@ async def generate_response(
     """
     # Generate UUID for this response
     response_uuid = uuid.uuid4().hex[:12]
+    inference_start = time.perf_counter()
 
     try:
         # Create LLM and agent
@@ -610,9 +615,8 @@ async def generate_response(
 
         # Accumulate content menggunakan buffer
         buffer = ContentAccumulator()
-        stored_tool_calls = []  # Store tool calls for native format
+        stored_tool_calls = []
         is_first_ai_message = True
-        inference_start = time.perf_counter()
         event_counter = 0
 
         # Run the agent
@@ -632,7 +636,9 @@ async def generate_response(
                 first_response_ms = (time.perf_counter() - inference_start) * 1000
                 content_str = extract_content_str(ai_msg.content)
                 content_len = len(content_str) if content_str else 0
-                has_tool_calls = hasattr(ai_msg, "tool_calls") and bool(ai_msg.tool_calls)
+                has_tool_calls = hasattr(ai_msg, "tool_calls") and bool(
+                    ai_msg.tool_calls
+                )
                 tool_count = len(ai_msg.tool_calls) if has_tool_calls else 0
                 logger.debug(
                     "[INFERENCE] first_response_received | elapsed_ms=%.2f | content_len=%d | has_tool_calls=%s | tool_count=%d",
@@ -718,19 +724,17 @@ async def generate_response(
             "[INFERENCE] sync_complete | elapsed_ms=%.2f | events=%d | content_len=%d | tool_calls=%d",
             inference_elapsed_ms,
             event_counter,
-            len(final_content) if 'final_content' in locals() and final_content else 0,
+            len(final_content) if "final_content" in locals() and final_content else 0,
             len(stored_tool_calls),
         )
 
     except Exception as e:
-        # Log inference error
-        if 'inference_start' in locals():
-            error_elapsed_ms = (time.perf_counter() - inference_start) * 1000
-            logger.debug(
-                "[INFERENCE] sync_error | elapsed_ms=%.2f | error=%s",
-                error_elapsed_ms,
-                str(e)[:100],
-            )
+        error_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+        logger.debug(
+            "[INFERENCE] sync_error | elapsed_ms=%.2f | error=%s",
+            error_elapsed_ms,
+            str(e)[:100],
+        )
         logger.error(f"Error in response generation: {e}", exc_info=True)
         return {
             "content": f"Error: {str(e)}",

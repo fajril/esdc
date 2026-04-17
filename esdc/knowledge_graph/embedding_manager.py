@@ -36,21 +36,22 @@ class EmbeddingManager:
             model: Ollama model name (default from config or qwen3-embedding:0.6b)
             host: Ollama host URL (default: None, uses localhost)
         """
-        # Load from config if not provided
         if model is None:
             config = Config._load_config()
-            model = (
+            resolved_model = (
                 config.get("embedding_model", self.DEFAULT_MODEL)
                 if config
                 else self.DEFAULT_MODEL
             )
+        else:
+            resolved_model = model
 
-        self.model = model
+        self.model: str = resolved_model
         self._client = ollama.Client(host=host) if host else ollama.Client()
 
         logger.info(
             "[Embedding] initialized | model=%s",
-            model,
+            self.model,
         )
 
     def generate_embedding(
@@ -78,7 +79,7 @@ class EmbeddingManager:
                 len(text),
             )
 
-            return embedding
+            return list(embedding)
 
         except Exception as e:
             logger.error("[Embedding] failed | error=%s", e)
@@ -108,7 +109,7 @@ class EmbeddingManager:
                 len(texts),
             )
 
-            return response.embeddings
+            return [list(e) for e in response.embeddings]
 
         except Exception as e:
             logger.error("[Embedding] batch failed | error=%s", e)

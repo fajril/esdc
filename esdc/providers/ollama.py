@@ -60,7 +60,7 @@ class OllamaProvider(Provider):
             result = ollama_list()
 
             elapsed_ms = (time.perf_counter() - list_start) * 1000
-            models = [m.model for m in result.models]  # type: ignore[union-attr]
+            models = [m.model for m in result.models if m.model is not None]
             logger.debug(
                 "[INFERENCE] ollama_list_models_complete | elapsed=%.2fms | models=%d",
                 elapsed_ms,

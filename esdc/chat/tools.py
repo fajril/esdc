@@ -1268,18 +1268,27 @@ def resolve_spatial(
 
     resolver = SpatialResolver()
 
+    target_str: str = ""
+    target_dict: dict[str, Any] = {}
+    if isinstance(target, dict):
+        target_dict = target
+    else:
+        target_str = str(target)
+
     try:
         if query_type == "proximity":
             result = resolver.find_fields_near_field(
-                field_name=target,
+                field_name=target_str,
                 radius_km=radius_km,
                 limit=limit,
                 wk_name=wk_name,
             )
         elif query_type == "working_area":
-            result = resolver.find_fields_in_working_area(wk_name=target, limit=limit)
+            result = resolver.find_fields_in_working_area(
+                wk_name=target_str, limit=limit
+            )
         elif query_type == "distance":
-            parts = [p.strip() for p in target.split(",")]
+            parts = [p.strip() for p in target_str.split(",")]
             if len(parts) != 2:
                 logger.debug("[SPATIAL_ERR] error=invalid_format")
                 return json.dumps(
@@ -1295,12 +1304,12 @@ def resolve_spatial(
             )
         elif query_type == "coordinates":
             result = resolver.get_field_coordinates(
-                field_name=target,
+                field_name=target_str,
                 wk_name=wk_name,
             )
         elif query_type == "nearest_from_coords":
             try:
-                params = target if isinstance(target, dict) else json.loads(target)
+                params = target_dict or json.loads(target_str)
                 result = resolver.find_nearest_from_coordinates(
                     lat=float(params.get("lat", 0.0)),
                     long=float(params.get("long", 0.0)),
@@ -1318,7 +1327,7 @@ def resolve_spatial(
                 )
         elif query_type == "field_clusters":
             try:
-                params = target if isinstance(target, dict) else json.loads(target)
+                params = target_dict or json.loads(target_str)
                 result = resolver.find_field_clusters(
                     max_distance_km=float(params.get("max_distance_km", radius_km)),
                     min_cluster_size=int(params.get("min_cluster_size", 2)),
@@ -1333,7 +1342,7 @@ def resolve_spatial(
                 )
         elif query_type == "adjacent_wk":
             try:
-                params = target if isinstance(target, dict) else json.loads(target)
+                params = target_dict or json.loads(target_str)
                 result = resolver.find_adjacent_working_areas(
                     wk_name=params.get("wk_name", ""),
                     max_distance_km=float(params.get("max_distance_km", radius_km)),
@@ -1349,7 +1358,7 @@ def resolve_spatial(
                 )
         elif query_type == "average_distance":
             try:
-                params = target if isinstance(target, dict) else json.loads(target)
+                params = target_dict or json.loads(target_str)
                 field_names = params.get("field_names", [])
                 if not isinstance(field_names, list) or len(field_names) < 2:
                     logger.debug("[SPATIAL_ERR] error=insufficient_fields")
