@@ -464,6 +464,12 @@ def resolve_concept(term: str) -> dict | None:
     if normalized in DOMAIN_CONCEPTS["report_terms"]:
         return {"type": "report_term", **DOMAIN_CONCEPTS["report_terms"][normalized]}
 
+    if normalized in DOMAIN_CONCEPTS["document_types"]:
+        return {
+            "type": "document_type",
+            **DOMAIN_CONCEPTS["document_types"][normalized],
+        }
+
     return None
 
 

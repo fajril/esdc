@@ -233,4 +233,57 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
             ),
         },
     },
+    "document_types": {
+        "POD": {
+            "full_name": "Plan of Development",
+            "description": (
+                "Plan of Development - regulatory development plan for oil &"
+                " gas projects. Approved by Minister of ESDM. The pod_name"
+                " column contains the specific POD variant name."
+            ),
+        },
+        "POFD": {
+            "full_name": "Plan of Further Development",
+            "description": (
+                "Plan of Further Development - POD variant for ongoing"
+                " development phases of existing projects."
+            ),
+        },
+        "OPL": {
+            "full_name": "Optimasi Pengembangan Lapangan",
+            "description": (
+                "Optimasi Pengembangan Lapangan - POD variant for field"
+                " development optimization."
+            ),
+        },
+        "OPLL": {
+            "full_name": "Optimasi Pengembangan Lapangan - Lapangan",
+            "description": (
+                "Optimasi Pengembangan Lapangan - Lapangan - POD variant"
+                " for multi-field development optimization."
+            ),
+        },
+        "POP": {
+            "full_name": "Put on Production",
+            "description": (
+                "Put on Production - POD variant for projects transitioning"
+                " to production. Narrow scope within POD classification."
+            ),
+        },
+        "POD_I": {
+            "full_name": "Plan of Development I",
+            "description": (
+                "Plan of Development I - the first POD approved for a working"
+                " area. Approved by Minister of ESDM."
+            ),
+        },
+        "PSE": {
+            "full_name": "Penentuan Status Eksplorasi",
+            "description": (
+                "Penentuan Status Eksplorasi - determination of exploration"
+                " status for a project. The is_pse_approved column indicates"
+                " whether a project has PSE approved."
+            ),
+        },
+    },
 }

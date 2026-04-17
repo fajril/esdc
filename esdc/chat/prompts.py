@@ -224,6 +224,8 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | provinsi/province | `province ILIKE '%name%'` |
 | cekungan/basin | `basin128 ILIKE '%name%'` |
 | LTP/Long Term Plan | `is_ltp = 1` filter |
+| POD/approved development plan | `is_pod_approved = 1` filter; `pod_name` for variant (POD, POFD, OPL, OPLL, POP, POD I) |
+| PSE/Penentuan Status Eksplorasi | `is_pse_approved = 1` filter |
 
 ## Table/View Selection
 
