@@ -76,7 +76,7 @@ class Config:
                     "chat": {"level": "WARNING"},
                 },
                 "semantic_search": {
-                    "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)
+                    "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)  # noqa: E501
                 },
             }
             with open(config_file, "w") as f:
@@ -318,7 +318,8 @@ class Config:
             Logging configuration dict with structure:
             {
                 "level": "INFO",
-                "file": {"enabled": True, "path": "logs/esdc.log", "max_size": "10MB", "backup_count": 5},
+                "file": {"enabled": True, "path": "logs/esdc.log",
+                "max_size": "10MB", "backup_count": 5},
                 "server": {"level": "INFO"},
                 "agent": {"level": "DEBUG"},
                 "chat": {"level": "WARNING"}

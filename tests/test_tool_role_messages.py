@@ -115,7 +115,7 @@ class TestToolRoleMessagesInStreaming:
         """Test that streaming response includes tool role messages after tool calls."""
         from esdc.server.agent_wrapper import generate_streaming_response
 
-        # Mock event sequence: AI message with tool_calls -> tool result -> AI message with content
+        # Mock event sequence: AI message with tool_calls -> tool result -> AI message with content  # noqa: E501
         mock_events = [
             # Event 1: AI message with tool_calls
             {
@@ -159,7 +159,7 @@ class TestToolRoleMessagesInStreaming:
             patch(
                 "esdc.server.agent_wrapper.Config.get_provider_config"
             ) as mock_config,
-            patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm,
+            patch("esdc.server.agent_wrapper.create_llm_from_config"),
             patch("esdc.server.agent_wrapper.create_agent", return_value=mock_agent),
         ):
             mock_config.return_value = {"provider_type": "test", "model": "test-model"}
@@ -171,7 +171,7 @@ class TestToolRoleMessagesInStreaming:
                 chunks.append(json.loads(chunk))
 
         # Verify sequence
-        # Should have: content chunks -> tool_call chunk -> tool_role chunk -> content chunks -> final chunk
+        # Should have: content chunks -> tool_call chunk -> tool_role chunk -> content chunks -> final chunk  # noqa: E501
         assert len(chunks) > 0
 
         # Find tool_call chunk
@@ -250,7 +250,7 @@ class TestToolRoleMessagesInStreaming:
             patch(
                 "esdc.server.agent_wrapper.Config.get_provider_config"
             ) as mock_config,
-            patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm,
+            patch("esdc.server.agent_wrapper.create_llm_from_config"),
             patch("esdc.server.agent_wrapper.create_agent", return_value=mock_agent),
         ):
             mock_config.return_value = {"provider_type": "test", "model": "test-model"}

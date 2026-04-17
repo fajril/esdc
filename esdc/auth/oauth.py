@@ -18,7 +18,7 @@ OAUTH_CONFIG = {
     "auth_url": "https://models.inference.ai.azure.com/ml/oauth2/authorize",
     "token_url": "https://models.inference.ai.azure.com/ml/oauth2/token",
     "client_id": os.environ.get("ESDC_OAUTH_CLIENT_ID", DEFAULT_CLIENT_ID),
-    "scope": f"api://{os.environ.get('ESDC_OAUTH_CLIENT_ID', DEFAULT_CLIENT_ID)}/.default",
+    "scope": f"api://{os.environ.get('ESDC_OAUTH_CLIENT_ID', DEFAULT_CLIENT_ID)}/.default",  # noqa: E501
 }
 
 

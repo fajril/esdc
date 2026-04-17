@@ -10,8 +10,8 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 # Local
-from esdc.auth import is_token_expired, start_oauth_flow
-from esdc.providers.base import Provider, ProviderConfig
+from esdc.auth import is_token_expired, start_oauth_flow  # noqa: E402
+from esdc.providers.base import Provider, ProviderConfig  # noqa: E402
 
 
 class OpenAIProvider(Provider):
@@ -56,7 +56,9 @@ class OpenAIProvider(Provider):
             )
             return model_list
         except Exception as e:
-            logger.debug("[INFERENCE] openai_list_models_error | error=%s", str(e)[:100])
+            logger.debug(
+                "[INFERENCE] openai_list_models_error | error=%s", str(e)[:100]
+            )
             return []
 
     @classmethod
@@ -140,7 +142,7 @@ class OpenAIProvider(Provider):
             if not models:
                 return (
                     False,
-                    "Connected but no models available. Your account may not have access.",
+                    "Connected but no models available. Your account may not have access.",  # noqa: E501
                 )
 
             llm = cls.create_llm(
@@ -150,7 +152,7 @@ class OpenAIProvider(Provider):
 
             logger.debug(
                 "[INFERENCE] openai_test_connection_invoke | model=%s",
-                config.model or cls.DEFAULT_MODEL
+                config.model or cls.DEFAULT_MODEL,
             )
             invoke_start = time.perf_counter()
 
@@ -158,7 +160,7 @@ class OpenAIProvider(Provider):
 
             invoke_elapsed_ms = (time.perf_counter() - invoke_start) * 1000
             logger.debug(
-                "[INFERENCE] openai_test_connection_complete | model=%s | elapsed=%.2fms",
+                "[INFERENCE] openai_test_connection_complete | model=%s | elapsed=%.2fms",  # noqa: E501
                 config.model or cls.DEFAULT_MODEL,
                 invoke_elapsed_ms,
             )

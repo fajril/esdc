@@ -184,7 +184,7 @@ class TestManageContextNode:
         result = manage_context_node(state)
 
         assert result["messages"] == []
-        assert result["context_metadata"]["was_compacted"] == False
+        assert not result["context_metadata"]["was_compacted"]
 
     def test_returns_context_metadata(self):
         """Test node returns context metadata."""
@@ -200,22 +200,22 @@ class TestManageContextNode:
         result = manage_context_node(state)
 
         assert "context_metadata" in result
-        assert result["context_metadata"]["was_compacted"] == False
+        assert not result["context_metadata"]["was_compacted"]
 
     def test_context_length_parameter_custom(self):
         """Test node uses custom context_length."""
-        # Create enough messages to trigger compaction (need more than recent_messages=6)
+        # Create enough messages to trigger compaction (need more than recent_messages=6)  # noqa: E501
         # 10 messages * 80 chars = 800 chars / 4 = 200 tokens
         state = {"messages": [HumanMessage(content="x" * 80) for _ in range(10)]}
 
-        # With default context_length=6000, should NOT compact (under threshold: 200 < 4500)
+        # With default context_length=6000, should NOT compact (under threshold: 200 < 4500)  # noqa: E501
         result_default = manage_context_node(state, context_length=6000)
-        assert result_default["context_metadata"]["was_compacted"] == False
+        assert not result_default["context_metadata"]["was_compacted"]
 
         # With context_length=100, should compact (over 75% threshold: 200 > 75)
         # 10 messages, recent_messages=6 means 4 older messages to summarize
         result_custom = manage_context_node(state, context_length=100)
-        assert result_custom["context_metadata"]["was_compacted"] == True
+        assert result_custom["context_metadata"]["was_compacted"]
         assert result_custom["context_metadata"]["summarized_count"] == 4
 
 
@@ -225,7 +225,7 @@ class TestLargeContext:
     def test_context_manager_large_context_threshold(self):
         """Test ContextManager with 262144 max_tokens calculates correct threshold."""
         # Bug: was hardcoded to 6000, compaction threshold was 4500 (75% of 6000)
-        # Fix: should use passed context_length, threshold should be 196608 (75% of 262144)
+        # Fix: should use passed context_length, threshold should be 196608 (75% of 262144)  # noqa: E501
         manager = ContextManager(max_tokens=262144, compaction_threshold=0.75)
 
         # Verify threshold is 75% of 262K = 196608
@@ -294,11 +294,11 @@ class TestLargeContext:
 
         # With large context (262K), should NOT compact
         result_large = manage_context_node(state, context_length=262144)
-        assert result_large["context_metadata"]["was_compacted"] == False
+        assert not result_large["context_metadata"]["was_compacted"]
 
         # With small context (100 tokens), should compact
         result_small = manage_context_node(state, context_length=100)
-        assert result_small["context_metadata"]["was_compacted"] == True
+        assert result_small["context_metadata"]["was_compacted"]
         assert result_small["context_metadata"]["summarized_count"] == 4
 
     def test_create_agent_passes_context_length(self):

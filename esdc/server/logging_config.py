@@ -36,7 +36,8 @@ def setup_server_logging(config: dict[str, Any] | None = None) -> logging.Logger
     """Setup logging for ESDC server.
 
     Args:
-        config: Optional logging configuration. If None, uses Config.get_logging_config().
+        config: Optional logging configuration. If None,
+        uses Config.get_logging_config().
 
     Returns:
         Logger instance

@@ -129,22 +129,27 @@ async def generate_conversation_title(
     Returns:
         Short title (max 50 chars) summarizing the conversation
     """
-    prompt = """Generate a very short title (max 50 characters) summarizing this user query.
-The title should be concise and descriptive. Respond with ONLY the title, no quotes or explanation.
-
-Examples:
-- "how much oil reserves in Rokan field" -> "Rokan Field Oil Reserves"
-- "list all working areas with gas production" -> "Working Areas Gas Production"
-- "compare reserves between 2020 and 2023" -> "Reserve Comparison 2020-2023"
-
-User query: {query}
-
-Title:"""
+    prompt = (
+        "Generate a very short title (max 50 characters) "
+        "summarizing this user query.\n"
+        "The title should be concise and descriptive. "
+        "Respond with ONLY the title,\n"
+        "no quotes or explanation.\n\n"
+        "Examples:\n"
+        '- "how much oil reserves in Rokan field" -> '
+        '"Rokan Field Oil Reserves"\n'
+        '- "list all working areas with gas production" -> '
+        '"Working Areas Gas Production"\n'
+        '- "compare reserves between 2020 and 2023" -> '
+        '"Reserve Comparison 2020-2023"\n\n'
+        "User query: {query}\n\n"
+        "Title:"
+    )
 
     try:
         messages = [
             SystemMessage(
-                content="You are a helpful assistant that generates concise conversation titles."
+                content="You are a helpful assistant that generates concise conversation titles."  # noqa: E501
             ),
             HumanMessage(content=prompt.format(query=user_query)),
         ]
@@ -308,7 +313,7 @@ def create_agent(
                     cast(
                         AnyMessage,
                         AIMessage(
-                            content="Maaf, permintaan Anda memakan waktu terlalu lama untuk diproses. Silakan coba lagi atau sederhanakan pertanyaan Anda."
+                            content="Maaf, permintaan Anda memakan waktu terlalu lama untuk diproses. Silakan coba lagi atau sederhanakan pertanyaan Anda."  # noqa: E501
                         ),
                     )
                 ]
@@ -335,7 +340,7 @@ def create_agent(
                     cast(
                         AnyMessage,
                         AIMessage(
-                            content="Maaf, saya tidak dapat memproses permintaan Anda. Silakan coba lagi."
+                            content="Maaf, saya tidak dapat memproses permintaan Anda. Silakan coba lagi."  # noqa: E501
                         ),
                     )
                 ]
@@ -423,7 +428,7 @@ def create_agent(
                     if len(observation_str) > MAX_TOOL_RESULT_CHARS:
                         observation = (
                             observation_str[:MAX_TOOL_RESULT_CHARS]
-                            + "\n\n[Result truncated to first 10000 characters for context efficiency]"
+                            + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
                         )
                         logger.info(
                             "🔧 TOOL_NODE: %s result truncated from %d to %d chars",
@@ -581,7 +586,8 @@ async def run_agent_stream(
         agent: Compiled LangGraph agent
         user_input: User message
         thread_id: Conversation thread ID
-        checkpointer: Optional checkpointer for memory (agent should already be compiled)
+        checkpointer: Optional checkpointer for memory
+            (agent should already be compiled)
 
     Yields:
         Dict with 'type' (message/tool/error) and 'content' or 'token_usage'
@@ -735,7 +741,7 @@ async def run_agent_stream(
                         )
 
                         logger.info(
-                            f"AGENT_STORING: tool_call={tc['name']}, query={query[:50] if query else 'N/A'}..."
+                            f"AGENT_STORING: tool_call={tc['name']}, query={query[:50] if query else 'N/A'}..."  # noqa: E501
                         )
 
                         yield {
@@ -814,7 +820,7 @@ async def run_agent_stream(
                     )
             else:
                 logger.info(
-                    "YIELDING tool_result NO SQL - tool=%s, result_length=%d (no stored calls)",
+                    "YIELDING tool_result NO SQL - tool=%s, result_length=%d (no stored calls)",  # noqa: E501
                     tool_name,
                     len(str(tool_result)),
                 )
@@ -887,7 +893,7 @@ def _extract_token_usage(message: AIMessage, user_input: str) -> int:
     if hasattr(message, "usage_metadata") and message.usage_metadata:
         usage = message.usage_metadata
         if isinstance(usage, dict):
-            # LangChain format: {'input_tokens': X, 'output_tokens': Y, 'total_tokens': Z}
+            # LangChain format: {'input_tokens': X, 'output_tokens': Y, 'total_tokens': Z}  # noqa: E501
             if "total_tokens" in usage:
                 return int(usage["total_tokens"])
             elif "output_tokens" in usage and "input_tokens" in usage:

@@ -7,7 +7,7 @@ class TestWKEnrichment:
     """Test that entity resolution includes WK context in WHERE conditions."""
 
     def test_where_conditions_include_wk_for_working_area(self):
-        """When both Field and WorkingArea are resolved, WHERE should include wk_name."""
+        """When both Field and WorkingArea are resolved, WHERE should include wk_name."""  # noqa: E501
         entities = [
             {
                 "type": "Field",

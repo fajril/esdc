@@ -13,7 +13,7 @@ def test_detect_task_with_title():
             {
                 "type": "message",
                 "role": "user",
-                "content": "### Task:\nGenerate a concise, 3-5 word title with emojis. Summarize the conversation.\n\nUser: di mana lokasi lapangan kinanti?",
+                "content": "### Task:\nGenerate a concise, 3-5 word title with emojis. Summarize the conversation.\n\nUser: di mana lokasi lapangan kinanti?",  # noqa: E501
             }
         ]
     )
@@ -83,7 +83,7 @@ def test_extract_user_query():
             {
                 "type": "message",
                 "role": "user",
-                "content": "### Task:\nGenerate a concise title.\n\nUser: di mana lokasi lapangan kinanti?\n\nTitle:",
+                "content": "### Task:\nGenerate a concise title.\n\nUser: di mana lokasi lapangan kinanti?\n\nTitle:",  # noqa: E501
             }
         ]
     )
@@ -125,7 +125,7 @@ def test_detect_task_with_pydantic_model():
         content=[
             {
                 "type": "input_text",
-                "text": "### Task:\nGenerate a concise, 3-5 word title with emojis. Summarize the conversation.\n\nUser: di mana lokasi lapangan kinanti?\n\nTitle:",
+                "text": "### Task:\nGenerate a concise, 3-5 word title with emojis. Summarize the conversation.\n\nUser: di mana lokasi lapangan kinanti?\n\nTitle:",  # noqa: E501
             }
         ],
     )
@@ -141,7 +141,7 @@ def test_extract_user_query_with_pydantic_model():
         content=[
             {
                 "type": "input_text",
-                "text": "### Task:\nGenerate a concise title.\n\nUser: di mana lokasi lapangan kinanti?\n\nTitle:",
+                "text": "### Task:\nGenerate a concise title.\n\nUser: di mana lokasi lapangan kinanti?\n\nTitle:",  # noqa: E501
             }
         ],
     )

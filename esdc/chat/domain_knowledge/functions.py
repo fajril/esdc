@@ -137,7 +137,8 @@ def is_already_enriched(sql: str) -> tuple[bool, str]:
         - source_reason: "model", "needs_fallback", or "no_classification_needed"
 
     Examples:
-        >>> is_already_enriched("SELECT field_remarks, SUM(rec_oc) FROM field_resources")
+        >>> is_already_enriched("SELECT field_remarks,
+        SUM(rec_oc) FROM field_resources")
         (True, "model")
         >>> is_already_enriched("SELECT SUM(rec_oc) FROM field_resources")
         (False, "needs_fallback")
@@ -201,7 +202,8 @@ def enrich_sql_query(
 
     Examples:
         >>> # Model already enriched → no changes
-        >>> result = enrich_sql_query("SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources")
+        >>> result = enrich_sql_query("SELECT field_remarks, project_class,
+        project_stage, SUM(rec_oc) FROM field_resources")
         >>> result.was_already_enriched
         True
         >>> result.enrichment_source
@@ -639,7 +641,8 @@ def calculate_peak_production_year(
     For SQL generation, use get_peak_production_year_sql().
 
     Args:
-        table: Table name (field_timeseries, wa_timeseries, nkri_timeseries, project_timeseries)
+        table: Table name (field_timeseries, wa_timeseries, nkri_timeseries,
+        project_timeseries)
         entity_name: Optional entity name to filter
         substance: Substance suffix (oil, con, ga, gn, oc, an)
         forecast_type: Forecast type (tpf, slf, spf, crf, prf)
@@ -813,7 +816,7 @@ def build_timeseries_query(
 
     if include_daily:
         columns.append(
-            f"ROUND({forecast_col} * 1000 / CASE WHEN year % 4 = 0 THEN 366 ELSE 365 END, 2) as forecast_{daily_unit.lower()}"
+            f"ROUND({forecast_col} * 1000 / CASE WHEN year % 4 = 0 THEN 366 ELSE 365 END, 2) as forecast_{daily_unit.lower()}"  # noqa: E501
         )
 
     columns_str = ", ".join(columns)
@@ -894,19 +897,19 @@ def get_timeseries_columns(
 
     if data_type not in valid_data_types:
         return {
-            "error": f"Invalid data_type '{data_type}'. Must be one of: {valid_data_types}",
+            "error": f"Invalid data_type '{data_type}'. Must be one of: {valid_data_types}",  # noqa: E501
             "column": None,
         }
 
     if data_type == "forecast" and forecast_type not in valid_forecast_types:
         return {
-            "error": f"Invalid forecast_type '{forecast_type}'. Must be one of: {valid_forecast_types}",
+            "error": f"Invalid forecast_type '{forecast_type}'. Must be one of: {valid_forecast_types}",  # noqa: E501
             "column": None,
         }
 
     if substance not in valid_substances:
         return {
-            "error": f"Invalid substance '{substance}'. Must be one of: {valid_substances}",
+            "error": f"Invalid substance '{substance}'. Must be one of: {valid_substances}",  # noqa: E501
             "column": None,
         }
 
@@ -974,7 +977,7 @@ def get_timeseries_columns(
     incorrect_alternatives = []
 
     if category == "forecast":
-        warning = f"Use {prefix}_* for forecast volumes. Do NOT use rate_* columns for forecasts."
+        warning = f"Use {prefix}_* for forecast volumes. Do NOT use rate_* columns for forecasts."  # noqa: E501
         incorrect_alternatives = [
             f"rate_{substance}",
             f"rate_grs_{substance}",
@@ -993,15 +996,15 @@ def get_timeseries_columns(
         examples = [
             "SELECT year, tpf_oc FROM field_timeseries WHERE field_name LIKE '%Duri%'",
             "SELECT SUM(tpf_oc) FROM project_timeseries WHERE year = 2025",
-            "SELECT year, tpf_oc FROM field_timeseries WHERE field_name LIKE '%Duri%' ORDER BY tpf_oc DESC LIMIT 1",
+            "SELECT year, tpf_oc FROM field_timeseries WHERE field_name LIKE '%Duri%' ORDER BY tpf_oc DESC LIMIT 1",  # noqa: E501
         ]
     elif category == "historical":
         examples = [
-            "SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"
+            "SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"  # noqa: E501
         ]
     elif category == "rate":
         examples = [
-            "SELECT year, rate_oc FROM project_timeseries WHERE project_name LIKE '%Duri%' AND year = 2024"
+            "SELECT year, rate_oc FROM project_timeseries WHERE project_name LIKE '%Duri%' AND year = 2024"  # noqa: E501
         ]
 
     return {
@@ -1096,8 +1099,8 @@ def get_resources_columns(
 
     examples = [
         f"SELECT SUM({column}) FROM field_resources WHERE field_name LIKE '%Duri%'",
-        f"SELECT {column}, uncert_level FROM project_resources WHERE project_name LIKE '%Duri%'",
-        f"SELECT SUM({column}) FROM nkri_resources WHERE uncert_level = '2. Middle Value'",
+        f"SELECT {column}, uncert_level FROM project_resources WHERE project_name LIKE '%Duri%'",  # noqa: E501
+        f"SELECT SUM({column}) FROM nkri_resources WHERE uncert_level = '2. Middle Value'",  # noqa: E501
     ]
 
     return {
@@ -1246,7 +1249,7 @@ def get_aggregation_table_info() -> dict[str, dict]:
         "project_timeseries": {
             "level": 0,
             "entity_type": "project_timeseries",
-            "description": "Project-level timeseries forecast data (detail per project per year)",
+            "description": "Project-level timeseries forecast data (detail per project per year)",  # noqa: E501
             "columns": [
                 "project_id",
                 "project_name",
@@ -1311,7 +1314,7 @@ WHERE {entity_col} LIKE '%{entity_name}%'
         WHERE {entity_col} LIKE '%{entity_name}%'
     );
 """,
-            "notes": "Returns the year and volume at peak production. Use with tpf_oc or tpf_an columns.",
+            "notes": "Returns the year and volume at peak production. Use with tpf_oc or tpf_an columns.",  # noqa: E501
         },
         "last_production_year": {
             "description": "Find the last year where production is still expected",
@@ -1321,7 +1324,7 @@ FROM {table}
 WHERE {entity_col} LIKE '%{entity_name}%'
     AND ({oil_col} > 0 OR {gas_col} > 0);
 """,
-            "notes": "Returns the final year of production (End of Life). Checks both oil and gas columns.",
+            "notes": "Returns the final year of production (End of Life). Checks both oil and gas columns.",  # noqa: E501
         },
         "onstream_year": {
             "description": "Find the first year of production (onstream)",
@@ -1336,10 +1339,10 @@ SELECT DISTINCT
 FROM {table} AS pt1
 WHERE {entity_col} LIKE '%{entity_name}%';
 """,
-            "notes": "Uses onstream_year column if available, otherwise finds first year with tpf > 0",
+            "notes": "Uses onstream_year column if available, otherwise finds first year with tpf > 0",  # noqa: E501
         },
         "forecast_volume": {
-            "description": "Get forecast volume for a specific year with unit conversion",
+            "description": "Get forecast volume for a specific year with unit conversion",  # noqa: E501
             "sql_template": """
 SELECT
     {entity_col},
@@ -1358,7 +1361,7 @@ FROM {table}
 WHERE {entity_col} LIKE '%{entity_name}%'
     AND year = {target_year};
 """,
-            "notes": "Returns MSTB/BSCF and converts to BOPD/MMSCFD. BOPD = MSTB * 1000 / days_in_year",
+            "notes": "Returns MSTB/BSCF and converts to BOPD/MMSCFD. BOPD = MSTB * 1000 / days_in_year",  # noqa: E501
         },
         "production_trend": {
             "description": "Get production trend over a time range",
@@ -1373,7 +1376,7 @@ WHERE {entity_col} LIKE '%{entity_name}%'
     AND year <= (SELECT MAX(report_year) FROM project_timeseries) + {years_forward}
 ORDER BY year;
 """,
-            "notes": "Shows production trend from current report_year forward. Default is 5 years.",
+            "notes": "Shows production trend from current report_year forward. Default is 5 years.",  # noqa: E501
         },
     }
 
@@ -1416,7 +1419,7 @@ def get_forecast_vs_historical_guide() -> dict[str, Any]:
                 "rate_oc",
                 "rate_an",
             ],
-            "description": "Cumulative production (cprd_*) and production rates (rate_*)",
+            "description": "Cumulative production (cprd_*) and production rates (rate_*)",  # noqa: E501
             "data_type": "Actual/factual historical data",
             "year_logic": "year <= hist_year OR year <= report_year",
         },
@@ -1492,7 +1495,7 @@ def get_forecast_vs_historical_guide() -> dict[str, Any]:
         },
         "user_guidance": {
             "always_include_report_year": True,
-            "rationale": "report_year provides context - e.g., report_year 2023 may have forecast for 2024",
+            "rationale": "report_year provides context - e.g., report_year 2023 may have forecast for 2024",  # noqa: E501
             "example": "Say: 'Forecast for 2025 (based on 2024 report)'",
         },
     }
@@ -1538,9 +1541,11 @@ def get_volume_columns(
     - contingent → rec_* (contingent resources)
 
     Args:
-        volume_type: Type of volume (cadangan, sumber_daya, grr, potensi, prospective, contingent)
+        volume_type: Type of volume (cadangan, sumber_daya, grr, potensi,
+        prospective, contingent)
         is_risked: Whether to return risked columns (only for prospective)
-        substance: Specific substance if mentioned ("minyak", "oil", "gas", or None for combined)
+        substance: Specific substance if mentioned ("minyak", "oil", "gas",
+        or None for combined)
 
     Returns:
         Tuple of (oil_condensate_column, gas_column)
@@ -1654,7 +1659,8 @@ def detect_volume_type_from_query(query: str) -> str:
         query: User's query text (natural language)
 
     Returns:
-        Volume type: "cadangan", "sumber_daya", "potensi", "prospective", or "contingent"
+        Volume type: "cadangan", "sumber_daya", "potensi", "prospective",
+        or "contingent"
 
     Examples:
         >>> detect_volume_type_from_query("berapa cadangan lapangan duri?")
@@ -1735,7 +1741,8 @@ def should_use_risked_columns(query: str, table: str) -> bool:
         True if risked columns should be used
 
     Examples:
-        >>> should_use_risked_columns("potensi eksplorasi lapangan duri?", "field_resources")
+        >>> should_use_risked_columns("potensi eksplorasi lapangan duri?",
+        "field_resources")
         True
         >>> should_use_risked_columns("potensi lapangan duri?", "field_resources")
         False  # General potensi uses rec_*, not risked
@@ -1802,9 +1809,11 @@ def get_available_report_year(
     If target_year has no data, check previous years until data found.
 
     Args:
-        table: Table name (field_resources, wa_resources, nkri_resources, project_resources)
+        table: Table name (field_resources, wa_resources, nkri_resources,
+        project_resources)
         target_year: Desired report year (defaults to current year)
-        entity_filter: Optional WHERE clause for entity (e.g., "field_name LIKE '%Duri%'")
+        entity_filter: Optional WHERE clause for entity (e.g.,
+        "field_name LIKE '%Duri%'")
         max_fallback_years: Maximum years to check backwards (default 10)
 
     Returns:
@@ -1881,9 +1890,11 @@ def build_report_year_filter(
     Examples:
         >>> sql_clause, meta = build_report_year_filter("field_resources", 2024)
         >>> print(sql_clause)
-        report_year = (SELECT MAX(report_year) FROM field_resources WHERE report_year <= 2024)
+        report_year =
+        (SELECT MAX(report_year) FROM field_resources WHERE report_year <= 2024)
 
-        >>> sql_clause, meta = build_report_year_filter("project_resources", 2024, "project_name LIKE '%X%'", use_subquery=False)
+        >>> sql_clause, meta = build_report_year_filter("project_resources",
+        2024, "project_name LIKE '%X%'", use_subquery=False)
         >>> print(sql_clause)
         report_year <= 2024
     """
@@ -2002,7 +2013,8 @@ def build_aggregate_query(
         >>> result["table"]
         'field_resources'
 
-        >>> result = build_aggregate_query("field", "Duri", "cadangan", "2P", report_year=2023)
+        >>> result = build_aggregate_query("field", "Duri", "cadangan", "2P",
+        report_year=2023)
         >>> "2023" in result["sql"]
         True
     """
@@ -2067,9 +2079,11 @@ def build_aggregate_query(
     if is_calculated:
         sql = f"""SELECT
     SUM(CASE WHEN pr.uncert_level = '2. Middle Value' THEN pr.{oc_col} ELSE 0 END)
-    - SUM(CASE WHEN pr.uncert_level = '1. Low Value' THEN pr.{oc_col} ELSE 0 END) as oil_condensate,
+    - SUM(CASE WHEN pr.uncert_level = '1.
+    Low Value' THEN pr.{oc_col} ELSE 0 END) as oil_condensate,
     SUM(CASE WHEN pr.uncert_level = '2. Middle Value' THEN pr.{gas_col} ELSE 0 END)
-    - SUM(CASE WHEN pr.uncert_level = '1. Low Value' THEN pr.{gas_col} ELSE 0 END) as gas
+    - SUM(CASE WHEN pr.uncert_level = '1.
+    Low Value' THEN pr.{gas_col} ELSE 0 END) as gas
 FROM {table} pr
 WHERE {report_year_where}"""
     else:

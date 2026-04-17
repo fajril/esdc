@@ -36,7 +36,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         },
         "3P": {
             "db_value": "3. High Value",
-            "description": "Proven plus Probable plus Possible reserves - P10 confidence",
+            "description": "Proven plus Probable plus Possible reserves - P10 confidence",  # noqa: E501
         },
         "3R": {
             "db_value": "3. High Value",
@@ -69,7 +69,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         "grr": {
             "db_value": "1. Reserves & GRR",
             "columns": ["rec_*"],
-            "description": "Government of Indonesia Recoverable Resources - total recoverable resources for government share, including reserves and sales potential",
+            "description": "Government of Indonesia Recoverable Resources - total recoverable resources for government share, including reserves and sales potential",  # noqa: E501
         },
         "contingent": {
             "db_value": "2. Contingent Resources",
@@ -79,87 +79,87 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         "prospective": {
             "db_value": "3. Prospective Resources",
             "columns": ["rec_*", "rec_*_risked"],
-            "description": "Prospective Resources - undiscovered potential. Risked means the resources is multiplied by total_gcf column",
+            "description": "Prospective Resources - undiscovered potential. Risked means the resources is multiplied by total_gcf column",  # noqa: E501
         },
         "sales potential": {
             "db_value": "1. Reserves & GRR",
             "columns": ["rec_*", "res_*"],
             "calculation": "rec_* - res_*",
-            "description": "Sales Potential - resources that could be produced if commercial constraints are resolved (GRR - Reserves)",
+            "description": "Sales Potential - resources that could be produced if commercial constraints are resolved (GRR - Reserves)",  # noqa: E501
         },
     },
     "forecast_types": {
         "tpf": {
             "full_name": "Total Potential Forecast",
             "columns": ["tpf_*"],
-            "description": "Profil perkiraan produksi. Jumlah seluruh TPF sama dengan kolom rec_* (Resources).",
+            "description": "Profil perkiraan produksi. Jumlah seluruh TPF sama dengan kolom rec_* (Resources).",  # noqa: E501
             "equivalent_to": "resources",
         },
         "total_potential_forecast": {
             "full_name": "Total Potential Forecast",
             "columns": ["tpf_*"],
-            "description": "Profil perkiraan produksi. Jumlah seluruh TPF sama dengan kolom rec_* (Resources).",
+            "description": "Profil perkiraan produksi. Jumlah seluruh TPF sama dengan kolom rec_* (Resources).",  # noqa: E501
             "equivalent_to": "resources",
         },
         "slf": {
             "full_name": "Sales Forecast",
             "columns": ["slf_*"],
-            "description": "Profil perkiraan produksi reserves. Jumlah seluruh SLF sama dengan kolom res_* (Reserves).",
+            "description": "Profil perkiraan produksi reserves. Jumlah seluruh SLF sama dengan kolom res_* (Reserves).",  # noqa: E501
             "equivalent_to": "reserves",
         },
         "sales_forecast": {
             "full_name": "Sales Forecast",
             "columns": ["slf_*"],
-            "description": "Profil perkiraan produksi reserves. Jumlah seluruh SLF sama dengan kolom res_* (Reserves).",
+            "description": "Profil perkiraan produksi reserves. Jumlah seluruh SLF sama dengan kolom res_* (Reserves).",  # noqa: E501
             "equivalent_to": "reserves",
         },
         "spf": {
             "full_name": "Sales Potential Forecast",
             "columns": ["spf_*"],
-            "description": "Selisih antara TPF dan SLF. Potensi yang bisa diproduksikan andaikata kendala komersial dapat diatasi.",
+            "description": "Selisih antara TPF dan SLF. Potensi yang bisa diproduksikan andaikata kendala komersial dapat diatasi.",  # noqa: E501
             "calculation": "tpf_* - slf_*",
             "equivalent_to": "sales_potential",
         },
         "sales_potential_forecast": {
             "full_name": "Sales Potential Forecast",
             "columns": ["spf_*"],
-            "description": "Selisih antara TPF dan SLF. Potensi yang bisa diproduksikan andaikata kendala komersial dapat diatasi.",
+            "description": "Selisih antara TPF dan SLF. Potensi yang bisa diproduksikan andaikata kendala komersial dapat diatasi.",  # noqa: E501
             "calculation": "tpf_* - slf_*",
             "equivalent_to": "sales_potential",
         },
         "crf": {
             "full_name": "Contingent Resources Forecast",
             "columns": ["crf_*"],
-            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Contingent Resources.",
+            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Contingent Resources.",  # noqa: E501
             "applies_to": "contingent_resources",
         },
         "contingent_resources_forecast": {
             "full_name": "Contingent Resources Forecast",
             "columns": ["crf_*"],
-            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Contingent Resources.",
+            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Contingent Resources.",  # noqa: E501
             "applies_to": "contingent_resources",
         },
         "prf": {
             "full_name": "Prospective Resources Forecast",
             "columns": ["prf_*"],
-            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Prospective Resources.",
+            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Prospective Resources.",  # noqa: E501
             "applies_to": "prospective_resources",
         },
         "prospective_resources_forecast": {
             "full_name": "Prospective Resources Forecast",
             "columns": ["prf_*"],
-            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Prospective Resources.",
+            "description": "Profil perkiraan produksi untuk proyek dengan klasifikasi Prospective Resources.",  # noqa: E501
             "applies_to": "prospective_resources",
         },
         "ciof": {
             "full_name": "Consumed in Operation Forecast",
             "columns": ["ciof_*"],
-            "description": "Profil produksi yang digunakan oleh kegiatan operasi (Fuel, Flare, Shrinkage).",
+            "description": "Profil produksi yang digunakan oleh kegiatan operasi (Fuel, Flare, Shrinkage).",  # noqa: E501
         },
         "consumed_in_operation_forecast": {
             "full_name": "Consumed in Operation Forecast",
             "columns": ["ciof_*"],
-            "description": "Profil produksi yang digunakan oleh kegiatan operasi (Fuel, Flare, Shrinkage).",
+            "description": "Profil produksi yang digunakan oleh kegiatan operasi (Fuel, Flare, Shrinkage).",  # noqa: E501
         },
         "lossf": {
             "full_name": "Loss Production Forecast",

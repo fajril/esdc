@@ -317,7 +317,7 @@ async def generate_streaming_response(
         llm = create_llm_from_config(provider_config_obj)
         agent = create_agent(llm, checkpointer=None)
         logger.debug(
-            f"[{request_id}] [TIMING] llm_and_agent_created | elapsed={((time.perf_counter() - stream_start) * 1000):.2f}ms"
+            f"[{request_id}] [TIMING] llm_and_agent_created | elapsed={((time.perf_counter() - stream_start) * 1000):.2f}ms"  # noqa: E501
         )
 
         # Convert messages
@@ -328,7 +328,7 @@ async def generate_streaming_response(
         system_msgs = len([m for m in lc_messages if isinstance(m, SystemMessage)])
         user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
         logger.debug(
-            "[INFERENCE] stream_input_prepared | messages=%d | system=%d | user=%d | total_chars=%d",
+            "[INFERENCE] stream_input_prepared | messages=%d | system=%d | user=%d | total_chars=%d",  # noqa: E501
             len(lc_messages),
             system_msgs,
             user_msgs,
@@ -505,10 +505,10 @@ async def generate_streaming_response(
             f"yields={yield_counter}, unique_msg_ids={len(seen_msg_ids)}"
         )
         logger.debug(
-            f"[{request_id}] [TIMING] stream_complete | total={total_ms:.2f}ms | events={event_counter}"
+            f"[{request_id}] [TIMING] stream_complete | total={total_ms:.2f}ms | events={event_counter}"  # noqa: E501
         )
         logger.debug(
-            "[INFERENCE] stream_complete | total_ms=%.2f | inference_ms=%.2f | events=%d | yields=%d",
+            "[INFERENCE] stream_complete | total_ms=%.2f | inference_ms=%.2f | events=%d | yields=%d",  # noqa: E501
             total_ms,
             inference_elapsed_ms,
             event_counter,
@@ -606,7 +606,7 @@ async def generate_response(
         system_msgs = len([m for m in lc_messages if isinstance(m, SystemMessage)])
         user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
         logger.debug(
-            "[INFERENCE] sync_input_prepared | messages=%d | system=%d | user=%d | total_chars=%d",
+            "[INFERENCE] sync_input_prepared | messages=%d | system=%d | user=%d | total_chars=%d",  # noqa: E501
             len(lc_messages),
             system_msgs,
             user_msgs,
@@ -641,7 +641,7 @@ async def generate_response(
                 )
                 tool_count = len(ai_msg.tool_calls) if has_tool_calls else 0
                 logger.debug(
-                    "[INFERENCE] first_response_received | elapsed_ms=%.2f | content_len=%d | has_tool_calls=%s | tool_count=%d",
+                    "[INFERENCE] first_response_received | elapsed_ms=%.2f | content_len=%d | has_tool_calls=%s | tool_count=%d",  # noqa: E501
                     first_response_ms,
                     content_len,
                     has_tool_calls,
@@ -721,7 +721,7 @@ async def generate_response(
         # Log inference completion
         inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
         logger.debug(
-            "[INFERENCE] sync_complete | elapsed_ms=%.2f | events=%d | content_len=%d | tool_calls=%d",
+            "[INFERENCE] sync_complete | elapsed_ms=%.2f | events=%d | content_len=%d | tool_calls=%d",  # noqa: E501
             inference_elapsed_ms,
             event_counter,
             len(final_content) if "final_content" in locals() and final_content else 0,

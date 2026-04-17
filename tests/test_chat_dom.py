@@ -75,7 +75,6 @@ class TestThinkingIndicator:
     def test_thinking_indicator_title_updates(self):
         """ThinkingIndicator title should update with step count."""
         indicator = ThinkingIndicator()
-        initial_title = indicator.title
         indicator.add_step("Step 1")
         # Title should contain step count after adding
         # (verified in _update_display called by add_step)
@@ -231,7 +230,7 @@ class TestWidgetMountingOrder:
         """Test that widgets mount in correct order: Thinking → SQL → Results → AI."""
         app = ESDCChatApp()
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             # Get chat panel
             chat_panel = app.query_one(ChatPanel)
             assert chat_panel is not None
@@ -312,7 +311,7 @@ class TestNoDuplicateMounting:
         """Verify mounting a widget twice doesn't duplicate it."""
         app = ESDCChatApp()
 
-        async with app.run_test() as pilot:
+        async with app.run_test():
             chat_panel = app.query_one(ChatPanel)
 
             # Create and mount widget once

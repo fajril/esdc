@@ -116,7 +116,6 @@ SYNONYMS: dict[str, str] = {
     "timeseries": "timeseries",
     "time series": "timeseries",
     "time-series": "timeseries",
-    "profil produksi": "timeseries",
     "production profile": "timeseries",
     # Uncertainty level synonyms (direct database value shortcuts)
     "low": "low_value",

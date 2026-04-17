@@ -473,7 +473,7 @@ class SpatialResolver:
         else:
             return {
                 "status": "error",
-                "message": f"Invalid entity_type: {entity_type}. Use 'field' or 'working_area'",
+                "message": f"Invalid entity_type: {entity_type}. Use 'field' or 'working_area'",  # noqa: E501
             }
 
         try:
@@ -551,7 +551,8 @@ class SpatialResolver:
         of each other are grouped together.
 
         Args:
-            max_distance_km: Maximum distance between fields in same cluster (default: 20)
+            max_distance_km: Maximum distance between fields
+                in same cluster (default: 20)
             min_cluster_size: Minimum number of fields to form a cluster (default: 2)
 
         Returns:
@@ -578,7 +579,7 @@ class SpatialResolver:
             if not result or len(result) < min_cluster_size:
                 return {
                     "status": "no_results",
-                    "message": f"Insufficient fields with coordinates (found {len(result)})",
+                    "message": f"Insufficient fields with coordinates (found {len(result)})",  # noqa: E501
                     "clusters": [],
                     "unclustered": [],
                 }
@@ -588,7 +589,7 @@ class SpatialResolver:
             if len(result) > MAX_FIELDS:
                 return {
                     "status": "error",
-                    "message": f"Too many fields ({len(result)}). Maximum supported: {MAX_FIELDS}",
+                    "message": f"Too many fields ({len(result)}). Maximum supported: {MAX_FIELDS}",  # noqa: E501
                 }
 
             # Build field data
@@ -796,7 +797,7 @@ class SpatialResolver:
 
         conn = self._get_connection()
 
-        where_clauses = " OR ".join([f"field_name ILIKE ?" for _ in field_names])
+        where_clauses = " OR ".join(["field_name ILIKE ?" for _ in field_names])
         query = f"""
             SELECT DISTINCT
                 field_name,

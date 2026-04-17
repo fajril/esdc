@@ -125,7 +125,7 @@ class TestFetchAuthFailure:
         monkeypatch.setenv("ESDC_USER", "baduser")
         monkeypatch.setenv("ESDC_PASS", "badpass")
 
-        result = runner.invoke(app, ["fetch", "--filetype", "json"])
+        runner.invoke(app, ["fetch", "--filetype", "json"])
 
         # Check logs for warning messages
         log_messages = caplog.text

@@ -126,29 +126,6 @@ class TestLoggingConfig:
         # Should use default values
 
         # Expected defaults:
-        expected_defaults = {
-            "level": "WARNING",  # Conservative default
-            "server": {
-                "level": "INFO",
-                "file": {
-                    "enabled": True,
-                    "path": "logs/esdc_server.log",
-                    "max_size": "10MB",
-                    "backup_count": 5,
-                },
-                "console": {"enabled": True},
-            },
-            "chat": {
-                "level": "WARNING",
-                "file": {
-                    "enabled": True,
-                    "path": "logs/esdc_chat.log",
-                    "max_size": "10MB",
-                    "backup_count": 5,
-                },
-                "console": {"enabled": False},
-            },
-        }
 
         # This will test Config.get_logging_config() with missing logging section
         # Should return defaults

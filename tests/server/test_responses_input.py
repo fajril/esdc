@@ -185,7 +185,7 @@ class TestRealOpenWebUIConversation:
 
         messages = convert_responses_input_to_langchain(conversation)
         # Now function_call creates AIMessage with tool_calls
-        # 1 HumanMessage + 1 AIMessage(tool_call) + 1 ToolMessage + 1 AIMessage + 1 HumanMessage = 5
+        # 1 HumanMessage + 1 AIMessage(tool_call) + 1 ToolMessage + 1 AIMessage + 1 HumanMessage = 5  # noqa: E501
         assert len(messages) == 5
         assert isinstance(messages[0], HumanMessage)
         assert isinstance(messages[1], AIMessage)

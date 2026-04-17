@@ -89,14 +89,14 @@ class TestContentBeforeToolCalls:
         print(f"Total chunks: {len(emitted_chunks)}")
         for i, chunk in enumerate(emitted_chunks):
             print(
-                f"Chunk {i}: {list(chunk.get('choices', [{}])[0].get('delta', {}).keys())}"
+                f"Chunk {i}: {list(chunk.get('choices', [{}])[0].get('delta', {}).keys())}"  # noqa: E501
             )
 
         # Assertions
         assert content_found, "Content should be emitted"
         assert tool_calls_found, "Tool calls should be emitted"
         assert content_index < tool_calls_index, (
-            f"Content (index {content_index}) should come before tool_calls (index {tool_calls_index})"
+            f"Content (index {content_index}) should come before tool_calls (index {tool_calls_index})"  # noqa: E501
         )
 
     @pytest.mark.asyncio
@@ -194,7 +194,7 @@ class TestContentBeforeToolCalls:
 
         # Thinking should appear only ONCE (not duplicated)
         assert thinking_count <= 1, (
-            f"Thinking content should appear at most once, but found {thinking_count} times"
+            f"Thinking content should appear at most once, but found {thinking_count} times"  # noqa: E501
         )
 
 

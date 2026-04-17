@@ -437,7 +437,7 @@ async def generate_responses_stream(
     user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
     ai_msgs = len([m for m in lc_messages if isinstance(m, AIMessage)])
     logger.debug(
-        "[INFERENCE] responses_stream_input | response_id=%s | messages=%d | system=%d | user=%d | ai=%d | total_chars=%d",
+        "[INFERENCE] responses_stream_input | response_id=%s | messages=%d | system=%d | user=%d | ai=%d | total_chars=%d",  # noqa: E501
         response_id,
         len(lc_messages),
         system_msgs,
@@ -480,7 +480,7 @@ async def generate_responses_stream(
                     f"Found {len(tool_messages)} tool result(s)"
                 )
                 logger.debug(
-                    f"[TIMING] {response_id} tool_result | event=#{event_counter} count={len(tool_messages)}"
+                    f"[TIMING] {response_id} tool_result | event=#{event_counter} count={len(tool_messages)}"  # noqa: E501
                 )
                 # Emit function_call_output items for each tool result
                 for i, tool_msg in enumerate(tool_messages):
@@ -572,7 +572,7 @@ async def generate_responses_stream(
             # Log inference response details for first AI message
             if first_ai_response is False and tool_call_count > 0:
                 logger.debug(
-                    "[INFERENCE] responses_first_response | response_id=%s | elapsed_ms=%.2f | content_preview=%s | tool_calls=%d",
+                    "[INFERENCE] responses_first_response | response_id=%s | elapsed_ms=%.2f | content_preview=%s | tool_calls=%d",  # noqa: E501
                     response_id,
                     first_response_ms,
                     msg_content_preview[:50],
@@ -810,10 +810,10 @@ async def generate_responses_stream(
         # Log inference stream completion
         total_elapsed_ms = (time.perf_counter() - stream_start) * 1000
         logger.debug(
-            f"[TIMING] {response_id} stream_complete | events={event_counter} items={len(output_items)}"
+            f"[TIMING] {response_id} stream_complete | events={event_counter} items={len(output_items)}"  # noqa: E501
         )
         logger.debug(
-            "[INFERENCE] responses_stream_complete | response_id=%s | total_ms=%.2f | events=%d | output_items=%d",
+            "[INFERENCE] responses_stream_complete | response_id=%s | total_ms=%.2f | events=%d | output_items=%d",  # noqa: E501
             response_id,
             total_elapsed_ms,
             event_counter,
@@ -955,7 +955,7 @@ async def generate_responses_sync(
     user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
     ai_msgs = len([m for m in lc_messages if isinstance(m, AIMessage)])
     logger.debug(
-        "[INFERENCE] responses_sync_input | response_id=%s | messages=%d | system=%d | user=%d | ai=%d | total_chars=%d",
+        "[INFERENCE] responses_sync_input | response_id=%s | messages=%d | system=%d | user=%d | ai=%d | total_chars=%d",  # noqa: E501
         response_id,
         len(lc_messages),
         system_msgs,
@@ -987,7 +987,7 @@ async def generate_responses_sync(
                     f"Found {len(tool_messages)} tool result(s)"
                 )
                 logger.debug(
-                    f"[TIMING] {response_id} sync_tool_result | event=#{event_counter} count={len(tool_messages)}"
+                    f"[TIMING] {response_id} sync_tool_result | event=#{event_counter} count={len(tool_messages)}"  # noqa: E501
                 )
                 for i, tool_msg in enumerate(tool_messages):
                     call_id = tool_msg.get("tool_call_id", "")
@@ -1106,10 +1106,10 @@ async def generate_responses_sync(
         # Log inference sync completion
         sync_elapsed_ms = (time.perf_counter() - sync_start) * 1000
         logger.debug(
-            f"[TIMING] {response_id} sync_complete | events={event_counter} items={len(output_items)}"
+            f"[TIMING] {response_id} sync_complete | events={event_counter} items={len(output_items)}"  # noqa: E501
         )
         logger.debug(
-            "[INFERENCE] responses_sync_complete | response_id=%s | elapsed_ms=%.2f | events=%d | output_items=%d",
+            "[INFERENCE] responses_sync_complete | response_id=%s | elapsed_ms=%.2f | events=%d | output_items=%d",  # noqa: E501
             response_id,
             sync_elapsed_ms,
             event_counter,
@@ -1121,7 +1121,7 @@ async def generate_responses_sync(
         # Log inference error
         error_elapsed_ms = (time.perf_counter() - sync_start) * 1000
         logger.debug(
-            "[INFERENCE] responses_sync_error | response_id=%s | elapsed_ms=%.2f | error=%s",
+            "[INFERENCE] responses_sync_error | response_id=%s | elapsed_ms=%.2f | error=%s",  # noqa: E501
             response_id,
             error_elapsed_ms,
             str(e)[:100],

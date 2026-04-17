@@ -120,32 +120,52 @@ UNCERTAINTY_MAP: dict[str, UncertaintySpec] = {
         type="calculated",
         calculation="2P - 1P",
         reserves_only=True,
-        sql_template="""SUM(CASE WHEN uncert_level = '2. Middle Value' THEN {column} ELSE 0 END) -
-    SUM(CASE WHEN uncert_level = '1. Low Value' THEN {column} ELSE 0 END)""",
-        description="Probable reserves - INCREMENTAL volume between 1P and 2P, reserves ONLY",
+        sql_template=(
+            "SUM(CASE WHEN uncert_level = '2. Middle Value' "
+            "THEN {column} ELSE 0 END) - "
+            "SUM(CASE WHEN uncert_level = '1. Low Value' "
+            "THEN {column} ELSE 0 END)"
+        ),
+        description=(
+            "Probable reserves - INCREMENTAL volume between 1P and 2P, reserves ONLY"
+        ),
     ),
     "MUNGKIN": UncertaintySpec(
         type="calculated",
         calculation="2P - 1P",
         reserves_only=True,
-        sql_template="""SUM(CASE WHEN uncert_level = '2. Middle Value' THEN {column} ELSE 0 END) -
-    SUM(CASE WHEN uncert_level = '1. Low Value' THEN {column} ELSE 0 END)""",
+        sql_template=(
+            "SUM(CASE WHEN uncert_level = '2. Middle Value' "
+            "THEN {column} ELSE 0 END) - "
+            "SUM(CASE WHEN uncert_level = '1. Low Value' "
+            "THEN {column} ELSE 0 END)"
+        ),
         description="Probable reserves (Indonesian) - same as probable",
     ),
     "POSSIBLE": UncertaintySpec(
         type="calculated",
         calculation="3P - 2P",
         reserves_only=True,
-        sql_template="""SUM(CASE WHEN uncert_level = '3. High Value' THEN {column} ELSE 0 END) -
-    SUM(CASE WHEN uncert_level = '2. Middle Value' THEN {column} ELSE 0 END)""",
-        description="Possible reserves - INCREMENTAL volume between 2P and 3P, reserves ONLY",
+        sql_template=(
+            "SUM(CASE WHEN uncert_level = '3. High Value' "
+            "THEN {column} ELSE 0 END) - "
+            "SUM(CASE WHEN uncert_level = '2. Middle Value' "
+            "THEN {column} ELSE 0 END)"
+        ),
+        description=(
+            "Possible reserves - INCREMENTAL volume between 2P and 3P, reserves ONLY"
+        ),
     ),
     "HARAPAN": UncertaintySpec(
         type="calculated",
         calculation="3P - 2P",
         reserves_only=True,
-        sql_template="""SUM(CASE WHEN uncert_level = '3. High Value' THEN {column} ELSE 0 END) -
-    SUM(CASE WHEN uncert_level = '2. Middle Value' THEN {column} ELSE 0 END)""",
+        sql_template=(
+            "SUM(CASE WHEN uncert_level = '3. High Value' "
+            "THEN {column} ELSE 0 END) - "
+            "SUM(CASE WHEN uncert_level = '2. Middle Value' "
+            "THEN {column} ELSE 0 END)"
+        ),
         description="Possible reserves (Indonesian) - same as possible",
     ),
 }
@@ -165,7 +185,8 @@ def get_uncertainty_filter(uncertainty: str) -> str:
 
     Args:
         uncertainty: Uncertainty level (1P, 2P, 3P, proven, probable, possible,
-                     low_value, middle_value, high_value, or generic terms like "low", "mid", "high")
+                     low_value, middle_value, high_value,
+                     or generic terms like "low", "mid", "high")
 
     Returns:
         Database filter value for uncert_level column
@@ -213,7 +234,8 @@ def get_uncertainty_spec(
         UncertaintySpec(type='direct', db_value='2. Middle Value', ...)
 
         >>> get_uncertainty_spec("probable")
-        UncertaintySpec(type='calculated', calculation='2P - 1P', reserves_only=True, ...)
+        UncertaintySpec(type='calculated', calculation='2P - 1P',
+        reserves_only=True, ...)
 
         >>> get_uncertainty_spec("probable", volume_type="contingent")
         ValueError: 'probable' only applies to Reserves (cadangan), not contingent
@@ -244,8 +266,8 @@ def get_uncertainty_spec(
         valid_reserve_types = ["cadangan", "reserves", "reserve", "res_oc", "res_an"]
         if volume_type not in valid_reserve_types:
             raise ValueError(
-                f"'{uncertainty.lower()}' only applies to Reserves (cadangan), not {volume_type}. "
-                f"Use 1C/2C/3C for Contingent Resources or 1U/2U/3U for Prospective Resources."
+                f"'{uncertainty.lower()}' only applies to Reserves (cadangan), not {volume_type}. "  # noqa: E501
+                f"Use 1C/2C/3C for Contingent Resources or 1U/2U/3U for Prospective Resources."  # noqa: E501
             )
 
     return spec

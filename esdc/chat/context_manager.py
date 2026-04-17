@@ -112,7 +112,7 @@ class ContextManager:
         managed = [
             *system_messages,
             SystemMessage(
-                content=f"[Context automatically compacted to manage token usage. Previous conversation summary below:]\n\n{summary}\n\n[End of summary. Recent {len(recent)} messages follow verbatim:]"
+                content=f"[Context automatically compacted to manage token usage. Previous conversation summary below:]\n\n{summary}\n\n[End of summary. Recent {len(recent)} messages follow verbatim:]"  # noqa: E501
             ),
             *recent,
         ]
@@ -174,7 +174,7 @@ class ContextManager:
         total_chars = 0
 
         for m in messages:
-            # Count message content (applies to HumanMessage, AIMessage, ToolMessage, SystemMessage)
+            # Count message content (applies to HumanMessage, AIMessage, ToolMessage, SystemMessage)  # noqa: E501
             if m.content:
                 total_chars += len(str(m.content))
 

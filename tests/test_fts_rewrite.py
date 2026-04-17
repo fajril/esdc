@@ -4,7 +4,6 @@ Tests that ILIKE patterns are correctly rewritten to use FTS where appropriate,
 and that the rewrite handles all edge cases correctly.
 """
 
-
 from esdc.chat.tools import _rewrite_with_fts
 
 

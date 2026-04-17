@@ -1,6 +1,5 @@
 """Tests for spatial resolver WK-scoped queries."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from esdc.knowledge_graph.spatial_resolver import SpatialResolver

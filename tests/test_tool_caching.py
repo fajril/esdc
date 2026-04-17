@@ -137,8 +137,6 @@ class TestInvalidateToolCache:
 
     def test_invalidate_tool_cache_clears_cache(self):
         """invalidate_tool_cache should clear the module-level cache."""
-        from esdc.chat.tools import _tool_cache
-
         with patch("esdc.chat.tools._tool_cache") as mock_cache:
             from esdc.chat.tools import invalidate_tool_cache
 

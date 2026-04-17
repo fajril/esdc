@@ -210,7 +210,7 @@ class OllamaProvider(Provider):
 
             invoke_elapsed_ms = (time.perf_counter() - invoke_start) * 1000
             logger.debug(
-                "[INFERENCE] ollama_test_connection_complete | model=%s | elapsed=%.2fms",
+                "[INFERENCE] ollama_test_connection_complete | model=%s | elapsed=%.2fms",  # noqa: E501
                 config.model or default_model,
                 invoke_elapsed_ms,
             )

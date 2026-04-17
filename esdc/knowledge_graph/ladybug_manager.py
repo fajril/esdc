@@ -258,7 +258,8 @@ class LadybugDBManager:
     def _get_data_loading_statements(self) -> list[str]:
         """Return COPY FROM statements to load data from attached DuckDB.
 
-        Uses LadybugDB LOAD FROM syntax: COPY table FROM (LOAD FROM alias.table RETURN cols)
+        Uses LadybugDB LOAD FROM syntax:
+        COPY table FROM (LOAD FROM alias.table RETURN cols)
         """
         return [
             "COPY Field FROM ("

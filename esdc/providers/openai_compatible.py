@@ -82,7 +82,7 @@ class OpenAICompatibleProvider(Provider):
 
             return (
                 True,
-                f"Connected. Available models: {', '.join(models[:5])}{'...' if len(models) > 5 else ''}",
+                f"Connected. Available models: {', '.join(models[:5])}{'...' if len(models) > 5 else ''}",  # noqa: E501
             )
         except Exception as e:
             return False, str(e)

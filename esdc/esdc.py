@@ -60,14 +60,13 @@ from rich.progress import (
 )
 from tabulate import tabulate
 
-
 console = Console()
 
-from esdc.chat.app import ESDCChatApp
-from esdc.commands.provider import provider_app
-from esdc.configs import Config
-from esdc.dbmanager import load_data_to_db, run_query
-from esdc.selection import ApiVer, FileType, TableName
+from esdc.chat.app import ESDCChatApp  # noqa: E402
+from esdc.commands.provider import provider_app  # noqa: E402
+from esdc.configs import Config  # noqa: E402
+from esdc.dbmanager import load_data_to_db, run_query  # noqa: E402
+from esdc.selection import ApiVer, FileType, TableName  # noqa: E402
 
 TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
@@ -196,7 +195,8 @@ def reload(
 
     Args:
         filetype: The type of file to save the data to. Defaults to "csv".
-        reindex_only: If True, only rebuild FTS and B-tree indexes without reloading data.
+        reindex_only: If True,
+        only rebuild FTS and B-tree indexes without reloading data.
         no_embeddings: If True, skip semantic embeddings generation.
         embeddings_only: If True, only regenerate embeddings without reloading data.
 
@@ -253,7 +253,7 @@ def _generate_embeddings() -> None:
             f"Database not found at {db_path}, skipping embeddings generation"
         )
         console.print(
-            f"[yellow]Warning: Database not found at {db_path}, skipping embeddings[/yellow]"
+            f"[yellow]Warning: Database not found at {db_path}, skipping embeddings[/yellow]"  # noqa: E501
         )
         return
 
@@ -264,10 +264,10 @@ def _generate_embeddings() -> None:
     if not embedding_manager.health_check():
         logger.warning("Ollama not available, cannot generate embeddings")
         console.print(
-            "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"
+            "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"  # noqa: E501
         )
         console.print(
-            "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"
+            "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"  # noqa: E501
         )
         return
 
@@ -298,7 +298,7 @@ def _generate_embeddings() -> None:
         total_batches = (total_docs + batch_size - 1) // batch_size
 
         logger.info(
-            f"Starting embedding generation: {total_docs} documents, {total_batches} batches, batch_size={batch_size}"
+            f"Starting embedding generation: {total_docs} documents, {total_batches} batches, batch_size={batch_size}"  # noqa: E501
         )
 
         # Create progress bar
@@ -365,7 +365,7 @@ def show(
     detail: Annotated[
         list[str] | None,
         typer.Option(
-            help="Detail level: reserves, resources, resources_risked, inplace, cumprod, rate, all. "
+            help="Detail level: reserves, resources, resources_risked, inplace, cumprod, rate, all. "  # noqa: E501
             "Can specify multiple. Defaults to resources.",
         ),
     ] = None,
@@ -722,7 +722,7 @@ def db_info() -> None:
         rich.print("[green]Database exists: Yes[/green]")
     else:
         rich.print(
-            "[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"
+            "[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"  # noqa: E501
         )
 
 
