@@ -1,4 +1,5 @@
 # Standard library
+import asyncio
 import hashlib
 import json
 import logging
@@ -29,6 +30,51 @@ from esdc.server.tool_formatter import should_use_native_format
 
 router = APIRouter()
 logger = logging.getLogger("esdc.server.routes")
+
+SSE_KEEPALIVE_INTERVAL = 15
+
+
+async def with_keepalive(
+    stream: AsyncGenerator[str, None],
+    request_obj: Request,
+    request_id: str,
+) -> AsyncGenerator[str, None]:
+    """Wrap an SSE stream with keep-alive comments and disconnect detection.
+
+    Sends ``: keep-alive\\n\\n`` SSE comments every
+    ``SSE_KEEPALIVE_INTERVAL`` seconds when no data is flowing,
+    preventing cloudflared tunnel timeouts (100s default).
+    Also checks for client disconnection.
+    """
+    yield_counter = 0
+    stream_aiter = stream.__aiter__()
+
+    while True:
+        try:
+            chunk = await asyncio.wait_for(
+                stream_aiter.__anext__(),
+                timeout=SSE_KEEPALIVE_INTERVAL,
+            )
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            if await request_obj.is_disconnected():
+                logger.info(
+                    f"[REQUEST {request_id}] Client disconnected "
+                    f"during keep-alive wait, stopping stream"
+                )
+                return
+            yield ": keep-alive\n\n"
+            continue
+
+        if await request_obj.is_disconnected():
+            logger.info(
+                f"[REQUEST {request_id}] Client disconnected "
+                f"after {yield_counter} yields, stopping stream"
+            )
+            return
+        yield_counter += 1
+        yield chunk
 
 
 @router.get("/models")
@@ -108,9 +154,8 @@ async def chat_completions(
     try:
         if request.stream:
             # Return streaming response
-            async def generate_stream() -> AsyncGenerator[str, None]:
-                """Generate SSE stream."""
-                yield_counter = 0
+            async def generate_stream_inner() -> AsyncGenerator[str, None]:
+                """Generate SSE data chunks."""
                 logger.debug(f"[REQUEST {request_id}] Starting streaming response")
                 try:
                     async for chunk in generate_streaming_response(
@@ -120,15 +165,11 @@ async def chat_completions(
                         use_native_format=use_native,
                         request_id=request_id,
                     ):
-                        # Format as SSE data
-                        yield_counter += 1
                         yield f"data: {chunk}\n\n"
 
-                    # Send final [DONE] marker
                     yield "data: [DONE]\n\n"
                     logger.info(
-                        f"[REQUEST {request_id}] Streaming completed successfully - "
-                        f"total_yields={yield_counter}"
+                        f"[REQUEST {request_id}] Streaming completed successfully"
                     )
 
                 except Exception as e:
@@ -136,7 +177,6 @@ async def chat_completions(
                     logger.exception(
                         f"[REQUEST {request_id}] ERROR during streaming: {error_msg}"
                     )
-                    # Send error as final chunk
                     error_chunk = {
                         "id": request_id,
                         "object": "chat.completion.chunk",
@@ -154,7 +194,7 @@ async def chat_completions(
                     yield "data: [DONE]\n\n"
 
             return StreamingResponse(
-                generate_stream(),
+                with_keepalive(generate_stream_inner(), request_obj, request_id),
                 media_type="text/event-stream",
             )
 
@@ -262,7 +302,7 @@ async def create_response(
     try:
         if request.stream:
             # Return streaming response
-            async def generate_stream() -> AsyncGenerator[str, None]:
+            async def generate_stream_inner() -> AsyncGenerator[str, None]:
                 """Generate SSE stream for Responses API."""
                 logger.debug(f"[RESPONSES {request_id}] Starting streaming response")
                 try:
@@ -275,7 +315,6 @@ async def create_response(
                     ):
                         yield event
 
-                    # Send final [DONE] marker
                     yield "data: [DONE]\n\n"
                     logger.info(
                         f"[RESPONSES {request_id}] Streaming completed successfully"
@@ -286,11 +325,10 @@ async def create_response(
                     logger.exception(
                         f"[RESPONSES {request_id}] ERROR during streaming: {error_msg}"
                     )
-                    # Error events are already formatted in the stream
                     yield "data: [DONE]\n\n"
 
             return StreamingResponse(
-                generate_stream(),
+                with_keepalive(generate_stream_inner(), request_obj, request_id),
                 media_type="text/event-stream",
             )
 

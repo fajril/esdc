@@ -327,6 +327,19 @@ def create_agent(
             tool_call_count,
         )
 
+        if not response.content and not has_tool_calls:
+            logger.warning("[AGENT] Empty LLM response, injecting fallback")
+            return {
+                "messages": [
+                    cast(
+                        AnyMessage,
+                        AIMessage(
+                            content="Maaf, saya tidak dapat memproses permintaan Anda. Silakan coba lagi."
+                        ),
+                    )
+                ]
+            }
+
         return {"messages": [cast(AnyMessage, response)]}
 
     def should_continue(state: AgentState) -> str:
@@ -429,6 +442,20 @@ def create_agent(
                         "content": observation,
                     }
                 )
+            else:
+                logger.warning(
+                    "🔧 TOOL_NODE: Unknown tool %s (not in tools_by_name: %s)",
+                    tool_name,
+                    sorted(tools_by_name.keys()),
+                )
+                result.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": f"Error: Tool '{tool_name}' is not available.",
+                    }
+                )
 
         logger.info("🔧 TOOL_NODE: Returning %d tool results", len(result))
         return {
@@ -480,6 +507,38 @@ def create_agent(
         except Exception as e:
             logger.warning("query_classification: failed - %s", e)
             return {"messages": [], "allowed_tools": list(all_tools.keys())}
+
+    def _validate_tool_name_mapping() -> None:
+        """Warn if any tool name from classifier doesn't exist in all_tools."""
+        from esdc.chat.query_classifier import (
+            QueryClassification,
+            QueryType,
+            get_tools_for_classification,
+        )
+
+        classifier_tools: set[str] = set()
+        for qtype in QueryType:
+            classification = QueryClassification(
+                query_type=qtype,
+                confidence=0.9,
+                detected_entities={},
+                suggested_table=None,
+                suggested_columns=[],
+                reason="Validation",
+            )
+            for name in get_tools_for_classification(classification):
+                classifier_tools.add(name)
+
+        missing = classifier_tools - set(all_tools.keys())
+        if missing:
+            logger.warning(
+                "[AGENT] Tool name mismatch: classifier references %s "
+                "but not found in @tool() decorators: %s",
+                missing,
+                sorted(all_tools.keys()),
+            )
+
+    _validate_tool_name_mapping()
 
     # Build graph with query classification
     graph = (

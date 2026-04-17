@@ -252,10 +252,16 @@ async def execute_sql(
     This is an async tool that runs the query in a thread pool to avoid blocking
     the event loop, keeping the UI responsive during database operations.
     """
-    # Run the synchronous database query in a thread pool
-    return await asyncio.get_event_loop().run_in_executor(
-        None, _execute_sql_sync, query, db_path
-    )
+    try:
+        return await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(
+                None, _execute_sql_sync, query, db_path
+            ),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        logger.error("[SQL] Query timed out after 30s: %s", query[:80])
+        return "Error: Query timed out after 30 seconds. Try simplifying your query."
 
 
 def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
@@ -1134,7 +1140,7 @@ async def execute_cypher(
     import json
 
     try:
-        return await asyncio.get_event_loop().run_in_executor(
+        return await asyncio.get_running_loop().run_in_executor(
             None, _execute_cypher_sync, query
         )
     except Exception as e:
