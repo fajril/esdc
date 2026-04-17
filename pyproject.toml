@@ -124,5 +124,6 @@ dev = [
 asyncio_mode = "auto"
 markers = [
     "integration: tests that require external services or real database",
+    "allow_provider_config: skip the autouse provider config mock",
 ]
 

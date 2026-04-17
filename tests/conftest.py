@@ -18,11 +18,26 @@ def reset_config_cache():
 
 
 @pytest.fixture(autouse=True)
-def _mock_provider_config():
-    """Prevent accidental real LLM calls in tests."""
+def _mock_provider_config(request):
+    """Prevent accidental real LLM calls in tests.
+
+    Patches get_provider_config in agent_wrapper where
+    generate_response/generate_streaming_response call it. Does NOT
+    patch esdc.configs globally so that config tests still work.
+
+    Skip this fixture with @pytest.mark.allow_provider_config marker.
+    """
     from unittest.mock import patch
 
-    with patch("esdc.configs.Config.get_provider_config", return_value=None):
+    marker = request.node.get_closest_marker("allow_provider_config")
+    if marker is not None:
+        yield
+        return
+
+    with patch(
+        "esdc.server.agent_wrapper.Config.get_provider_config",
+        return_value=None,
+    ):
         yield
 
 

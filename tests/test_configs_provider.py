@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from esdc.configs import Config
@@ -159,6 +160,7 @@ providers:
             assert result is False
 
 
+@pytest.mark.allow_provider_config
 class TestGetProviderConfig:
     """Tests for get_provider_config()."""
 
