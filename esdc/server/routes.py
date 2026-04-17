@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 # Local
 from esdc.server.agent_wrapper import generate_response, generate_streaming_response
+from esdc.server.constants import SSE_KEEPALIVE_INTERVAL
 from esdc.server.models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -31,50 +32,84 @@ from esdc.server.tool_formatter import should_use_native_format
 router = APIRouter()
 logger = logging.getLogger("esdc.server.routes")
 
-SSE_KEEPALIVE_INTERVAL = 15
-
 
 async def with_keepalive(
     stream: AsyncGenerator[str, None],
     request_obj: Request,
     request_id: str,
 ) -> AsyncGenerator[str, None]:
-    """Wrap an SSE stream with keep-alive comments and disconnect detection.
+    r"""Wrap an SSE stream with keep-alive comments and disconnect detection.
 
-    Sends ``: keep-alive\\n\\n`` SSE comments every
+    Sends ``: keep-alive\n\n`` SSE comments every
     ``SSE_KEEPALIVE_INTERVAL`` seconds when no data is flowing,
     preventing cloudflared tunnel timeouts (100s default).
     Also checks for client disconnection.
-    """
-    yield_counter = 0
-    stream_aiter = stream.__aiter__()
 
-    while True:
+    Uses ``asyncio.wait()`` with a persistent pending task instead of
+    ``asyncio.wait_for()``.  This is critical because ``wait_for()``
+    cancels the underlying coroutine on timeout, which permanently
+    closes async generators — destroying the stream after the first
+    keep-alive ping.  The ``wait()`` approach keeps the pending
+    ``__anext__()`` task alive across timeouts.
+    """
+    _stream_end = object()
+
+    async def get_next():
         try:
-            chunk = await asyncio.wait_for(
-                stream_aiter.__anext__(),
+            return await stream_aiter.__anext__()
+        except StopAsyncIteration:
+            return _stream_end
+
+    stream_aiter = stream.__aiter__()
+    yield_counter = 0
+    keepalive_counter = 0
+    pending_task = asyncio.ensure_future(get_next())
+
+    try:
+        while True:
+            done, _ = await asyncio.wait(
+                {pending_task},
                 timeout=SSE_KEEPALIVE_INTERVAL,
             )
-        except StopAsyncIteration:
-            break
-        except asyncio.TimeoutError:
-            if await request_obj.is_disconnected():
-                logger.info(
-                    f"[REQUEST {request_id}] Client disconnected "
-                    f"during keep-alive wait, stopping stream"
-                )
-                return
-            yield ": keep-alive\n\n"
-            continue
 
-        if await request_obj.is_disconnected():
-            logger.info(
-                f"[REQUEST {request_id}] Client disconnected "
-                f"after {yield_counter} yields, stopping stream"
-            )
-            return
-        yield_counter += 1
-        yield chunk
+            if done:
+                result = pending_task.result()
+                if result is _stream_end:
+                    return
+
+                if await request_obj.is_disconnected():
+                    logger.info(
+                        "[REQUEST %s] Client disconnected after"
+                        " %d yields, stopping stream",
+                        request_id,
+                        yield_counter,
+                    )
+                    return
+
+                yield_counter += 1
+                assert isinstance(result, str)
+                yield result
+                pending_task = asyncio.ensure_future(get_next())
+                keepalive_counter = 0
+            else:
+                if await request_obj.is_disconnected():
+                    logger.info(
+                        "[REQUEST %s] Client disconnected during"
+                        " keep-alive wait, stopping stream",
+                        request_id,
+                    )
+                    return
+
+                keepalive_counter += 1
+                logger.debug(
+                    "[REQUEST %s] Keep-alive #%d sent (%d yields so far)",
+                    request_id,
+                    keepalive_counter,
+                    yield_counter,
+                )
+                yield ": keep-alive\n\n"
+    finally:
+        pending_task.cancel()
 
 
 @router.get("/models")

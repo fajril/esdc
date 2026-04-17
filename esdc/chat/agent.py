@@ -244,6 +244,12 @@ def create_agent(
             "tool_call_count": 0,
         }
 
+    _max_tool_calls_reached_msg = (
+        "Tool call limit reached ({limit}). "
+        "You must now provide your final answer using the data you already have. "
+        "Do NOT make any more tool calls."
+    )
+
     async def agent_node(state: AgentState) -> dict[str, list[AnyMessage]]:
         """Agent node that calls the LLM with tools."""
         system_prompt = state.get("system_prompt", "")
@@ -271,6 +277,22 @@ def create_agent(
         messages_with_system = [SystemMessage(content=system_prompt)] + state[
             "messages"
         ]
+
+        tool_call_count = state.get("tool_call_count", 0)
+        if tool_call_count >= 4:
+            nudge = (
+                f"CRITICAL: You have already made {tool_call_count} tool calls. "
+                "If you have enough data to answer the user's question, "
+                "do NOT make more tool calls. "
+                "Synthesize the data you already have and respond directly. "
+                "Only call another tool if you are absolutely "
+                "missing critical information."
+            )
+            messages_with_system.append(SystemMessage(content=nudge))
+            logger.info(
+                "[AGENT] synthesize_nudge_injected | tool_call_count=%d",
+                tool_call_count,
+            )
 
         allowed_tools = state.get("allowed_tools", list(all_tools.keys()))
         selected_tools = [
@@ -376,10 +398,37 @@ def create_agent(
         result = []
         last_message = state["messages"][-1]
         allowed_tools = set(state.get("allowed_tools", list(all_tools.keys())))
+        current_tool_count = state.get("tool_call_count", 0)
 
         ai_message = cast(AIMessage, last_message)
         if not hasattr(ai_message, "tool_calls") or not ai_message.tool_calls:
-            return {"messages": [], "tool_call_count": state.get("tool_call_count", 0)}
+            return {"messages": [], "tool_call_count": current_tool_count}
+
+        if current_tool_count >= MAX_TOOL_CALLS:
+            logger.warning(
+                "[TOOL_NODE] Forced stop: tool_call_count=%d >= MAX_TOOL_CALLS=%d | "
+                "returning limit-reached messages for %d pending calls",
+                current_tool_count,
+                MAX_TOOL_CALLS,
+                len(ai_message.tool_calls),
+            )
+            for tool_call in ai_message.tool_calls:
+                tool_id = tool_call.get("id", "unknown")
+                tool_name = tool_call.get("name", "unknown")
+                result.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": _max_tool_calls_reached_msg.format(
+                            limit=MAX_TOOL_CALLS
+                        ),
+                    }
+                )
+            return {
+                "messages": result,
+                "tool_call_count": current_tool_count,
+            }
 
         logger.info(
             "🔧 TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
@@ -466,8 +515,7 @@ def create_agent(
         logger.info("🔧 TOOL_NODE: Returning %d tool results", len(result))
         return {
             "messages": result,
-            "tool_call_count": state.get("tool_call_count", 0)
-            + len(ai_message.tool_calls),
+            "tool_call_count": current_tool_count + len(ai_message.tool_calls),
         }
 
     def manage_context_with_length(state: AgentState) -> dict[str, Any]:
@@ -593,7 +641,7 @@ async def run_agent_stream(
         Dict with 'type' (message/tool/error) and 'content' or 'token_usage'
     """
     config: RunnableConfig = {  # type: ignore[assignment]
-        "recursion_limit": 15,
+        "recursion_limit": 25,
         "configurable": {
             "thread_id": thread_id,
             "checkpoint_ns": "esdc_chat",

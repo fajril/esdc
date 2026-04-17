@@ -3,7 +3,7 @@
 This module provides OpenAI-compatible chat completion endpoints that:
 - Convert messages between OpenAI and LangChain formats
 - Handle OpenWebUI's extended format with output arrays
-- Stream responses with character-level chunking
+- Stream responses with real token-level streaming via astream_events
 - Support native tool calling and markdown formats
 
 Key Functions:
@@ -27,17 +27,15 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.runnables import RunnableConfig
 
 # Local
 from esdc.chat.agent import create_agent
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
-from esdc.server.content_accumulator import ContentAccumulator, format_tool_section
-from esdc.server.message_utils import extract_ai_message_from_event, extract_content_str
-from esdc.server.responses_wrapper import extract_tool_messages_from_event
-from esdc.server.stream_utils import chunk_text
+from esdc.server.constants import SSE_STREAM_TIMEOUT
+from esdc.server.content_accumulator import ContentAccumulator
+from esdc.server.event_streamer import astream_agent_events
 from esdc.server.tool_formatter import (
     create_final_chunk,
     create_tool_call_chunk,
@@ -92,7 +90,6 @@ def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
                 )
 
         else:
-            # Pydantic model
             role = getattr(msg, "role", "")
             content = getattr(msg, "content", "") or ""
             output = getattr(msg, "output", None)
@@ -136,11 +133,9 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
         item_type = item.get("type")
 
         if item_type == "message":
-            # Default to assistant role if not specified
             role = item.get("role", "assistant")
             content_parts = item.get("content", [])
 
-            # Extract text from content parts
             text_parts_str = []
             for part in content_parts:
                 if isinstance(part, dict):
@@ -178,7 +173,6 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
             output_content = item.get("output", "")
 
             if isinstance(output_content, list):
-                # Extract text from parts
                 text_parts = []
                 for part in output_content:
                     if isinstance(part, dict):
@@ -242,10 +236,10 @@ async def generate_streaming_response(
     use_native_format: bool = True,
     request_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
-    """Generate streaming chat completion response with character-level streaming.
+    """Generate streaming chat completion response with real token-level streaming.
 
-    Streams content 3 characters at a time using chunk_text(), matching
-    the Responses API implementation for consistent streaming behavior.
+    Uses astream_agent_events() for token-by-token streaming instead of
+    agent.astream() which only yields complete AIMessages per node.
 
     Args:
         messages: List of conversation messages
@@ -257,26 +251,19 @@ async def generate_streaming_response(
     Yields:
         OpenAI-compatible streaming chunks as SSE formatted strings
     """
-    # Generate one base UUID per stream to avoid per-chunk UUID overhead
     stream_uuid = uuid.uuid4().hex[:12]
     if not request_id:
         request_id = f"chatcmpl-{stream_uuid}"
 
-    # Chunk ID counter for efficient streaming
     chunk_counter = 0
 
     def next_chunk_id() -> str:
-        """Generate next chunk ID without UUID overhead."""
         nonlocal chunk_counter
         chunk_counter += 1
         return f"chatcmpl-{stream_uuid}-{chunk_counter:04d}"
 
-    # DEBUG: Counters for tracking execution paths
-    event_counter = 0
     yield_counter = 0
-    seen_msg_ids: set[str] = set()
     stream_start = time.perf_counter()
-    first_token_time: float | None = None
 
     logger.debug("=" * 80)
     logger.debug(
@@ -285,13 +272,9 @@ async def generate_streaming_response(
     )
 
     try:
-        # Create LLM and agent
         provider_config = Config.get_provider_config()
         if not provider_config:
             yield_counter += 1
-            logger.warning(
-                f"[{request_id}] ERROR - No provider configured, yield #{yield_counter}"
-            )
             yield json.dumps(
                 create_openai_chunk(
                     content="Error: No provider configured.",
@@ -317,211 +300,145 @@ async def generate_streaming_response(
         llm = create_llm_from_config(provider_config_obj)
         agent = create_agent(llm, checkpointer=None)
         logger.debug(
-            f"[{request_id}] [TIMING] llm_and_agent_created | elapsed={((time.perf_counter() - stream_start) * 1000):.2f}ms"  # noqa: E501
+            f"[{request_id}] [TIMING] llm_and_agent_created | "
+            f"elapsed={((time.perf_counter() - stream_start) * 1000):.2f}ms"
         )
 
-        # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
-        # Log inference input details
         total_chars = sum(len(str(m.content)) for m in lc_messages)
         system_msgs = len([m for m in lc_messages if isinstance(m, SystemMessage)])
         user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
         logger.debug(
-            "[INFERENCE] stream_input_prepared | messages=%d | system=%d | user=%d | total_chars=%d",  # noqa: E501
+            "[INFERENCE] stream_input_prepared"
+            " | messages=%d | system=%d | user=%d | total_chars=%d",
             len(lc_messages),
             system_msgs,
             user_msgs,
             total_chars,
         )
 
-        # Track first message
-        is_first_ai_message = True
         inference_start = time.perf_counter()
+        stream_deadline = time.perf_counter() + SSE_STREAM_TIMEOUT
 
-        # Stream the response
-        async for event in agent.astream(
-            {"messages": lc_messages},
-            config=RunnableConfig(configurable={"thread_id": request_id}),
-        ):
-            event_counter += 1
-            logger.debug(
-                f"[{request_id}] EVENT #{event_counter} - keys={list(event.keys())}"
-            )
-
-            # Check for tool messages FIRST (before AI messages)
-            if use_native_format:
-                tool_messages = extract_tool_messages_from_event(event)
-                logger.debug(
-                    f"[{request_id}] EVENT #{event_counter} - "
-                    f"extracted {len(tool_messages)} tool_messages from event"
+        async for event in astream_agent_events(agent, lc_messages):
+            if time.perf_counter() > stream_deadline:
+                logger.error(
+                    "[%s] STREAM_TIMEOUT after %ds, yielding error and stopping",
+                    request_id,
+                    SSE_STREAM_TIMEOUT,
                 )
-                if tool_messages:
-                    for tool_msg in tool_messages:
-                        tool_call_id = tool_msg.get("tool_call_id", "")
-                        content = tool_msg.get("content", "")
-                        chunk = create_tool_role_chunk(
-                            tool_call_id=tool_call_id,
-                            content=content,
-                            model=model,
+                yield_counter += 1
+                yield json.dumps(
+                    create_openai_chunk(
+                        content=(
+                            "Maaf, permintaan Anda memerlukan waktu"
+                            " terlalu lama untuk diproses."
+                            " Silakan sederhanakan pertanyaan atau"
+                            " coba lagi."
+                        ),
+                        model=model,
+                        finish_reason="stop",
+                        chunk_id=next_chunk_id(),
+                    )
+                )
+                return
+
+            event_type = event["type"]
+
+            if event_type == "token" or event_type == "reasoning_token":
+                content = event["content"]
+                if content:
+                    yield_counter += 1
+                    yield json.dumps(
+                        create_openai_chunk(
+                            content=content, model=model, chunk_id=next_chunk_id()
                         )
-                        yield_counter += 1
-                        logger.debug(
-                            f"[{request_id}] YIELD #{yield_counter} - tool_role_chunk, "
-                            f"tool_call_id={tool_call_id}, content_len={len(content)}"
-                        )
-                        yield json.dumps(chunk)
-                    continue  # Skip AI message handling for tool events
+                    )
 
-            ai_msg = extract_ai_message_from_event(event)
-            if not ai_msg:
-                logger.debug(
-                    f"[{request_id}] EVENT #{event_counter} - "
-                    f"No AIMessage extracted, skipping"
-                )
-                continue
+            elif event_type == "message_complete":
+                ai_message = event["ai_message"]
+                has_tool_calls = bool(ai_message.tool_calls)
 
-            if first_token_time is None:
-                first_token_time = time.perf_counter()
-                ttft_ms = (first_token_time - stream_start) * 1000
-                logger.debug(
-                    f"[{request_id}] [TIMING] first_ai_message | ttft={ttft_ms:.2f}ms"
-                )
-
-            # DEBUG: Log AIMessage details with duplicate detection
-            msg_id = getattr(ai_msg, "id", "no-id")
-            msg_content_preview = (
-                str(ai_msg.content)[:100] if ai_msg.content else "None"
-            )
-            has_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
-            tool_call_count = len(ai_msg.tool_calls) if has_tool_calls else 0
-
-            if msg_id in seen_msg_ids:
-                logger.warning(
-                    f"[{request_id}] EVENT #{event_counter} - "
-                    f"DUPLICATE AI MESSAGE! msg_id={msg_id} already seen, "
-                    f"content_preview='{msg_content_preview}...'"
-                )
-            else:
-                seen_msg_ids.add(msg_id)
-                logger.debug(
-                    f"[{request_id}] EVENT #{event_counter} - "
-                    f"AIMessage id={msg_id}, "
-                    f"content_preview='{msg_content_preview}...', "
-                    f"tool_calls={tool_call_count}"
-                )
-
-            # Handle different message types
-            if is_first_ai_message:
-                content_str = extract_content_str(ai_msg.content)
-
-                # Stream content character-by-character (3 chars at a time)
-                if content_str and content_str.strip():
-                    for chunk in chunk_text(content_str):
-                        yield_counter += 1
-                        yield json.dumps(
-                            create_openai_chunk(
-                                content=chunk, model=model, chunk_id=next_chunk_id()
-                            )
-                        )
-
-                # Emit tool calls after content
-                if (
-                    hasattr(ai_msg, "tool_calls")
-                    and ai_msg.tool_calls
-                    and use_native_format
-                ):
+                if use_native_format and has_tool_calls:
                     tool_calls_dict = [
                         {
                             "name": tc.get("name", ""),
                             "args": tc.get("args", {}),
                             "id": tc.get("id", ""),
                         }
-                        for tc in ai_msg.tool_calls
+                        for tc in ai_message.tool_calls
                     ]
                     chunk = create_tool_call_chunk(tool_calls_dict, model)
                     yield_counter += 1
                     logger.debug(
-                        f"[{request_id}] YIELD #{yield_counter} - tool_calls_chunk, "
-                        f"tool_count={len(tool_calls_dict)}"
+                        f"[{request_id}] YIELD #{yield_counter} - "
+                        f"tool_calls_chunk, tool_count={len(tool_calls_dict)}"
                     )
                     yield json.dumps(chunk)
 
-                is_first_ai_message = False
+                if not use_native_format and has_tool_calls:
+                    from esdc.server.content_accumulator import format_tool_section
 
-            elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                if use_native_format:
-                    # Emit tool calls chunk (no buffering)
-                    tool_calls_dict = [
-                        {
-                            "name": tc.get("name", ""),
-                            "args": tc.get("args", {}),
-                            "id": tc.get("id", ""),
-                        }
-                        for tc in ai_msg.tool_calls
-                    ]
-                    chunk = create_tool_call_chunk(tool_calls_dict, model)
-                    yield_counter += 1
-                    logger.debug(
-                        f"[{request_id}] YIELD #{yield_counter} - tool_calls_chunk, "
-                        f"tool_count={len(tool_calls_dict)}"
-                    )
-                    yield json.dumps(chunk)
-                else:
-                    # Legacy markdown mode: stream tool info
-                    for tool_call in ai_msg.tool_calls:
+                    for tool_call in ai_message.tool_calls:
                         tool_name = tool_call.get("name", "unknown")
                         tool_args = tool_call.get("args", {})
                         tool_section = format_tool_section(tool_name, tool_args)
-                        for chunk in chunk_text(tool_section):
-                            yield_counter += 1
-                            yield json.dumps(
-                                create_openai_chunk(
-                                    content=chunk, model=model, chunk_id=next_chunk_id()
-                                )
-                            )
-
-            else:
-                # Stream content character-by-character
-                content_str = extract_content_str(ai_msg.content)
-                if content_str and content_str.strip():
-                    for chunk in chunk_text(content_str):
                         yield_counter += 1
                         yield json.dumps(
                             create_openai_chunk(
-                                content=chunk, model=model, chunk_id=next_chunk_id()
+                                content=tool_section,
+                                model=model,
+                                chunk_id=next_chunk_id(),
                             )
                         )
 
-        # Send final chunk
+            elif event_type == "tool_result":
+                if use_native_format:
+                    tool_call_id = event.get("tool_call_id", "")
+                    result = event.get("result", "")
+                    chunk = create_tool_role_chunk(
+                        tool_call_id=tool_call_id,
+                        content=result,
+                        model=model,
+                    )
+                    yield_counter += 1
+                    logger.debug(
+                        f"[{request_id}] YIELD #{yield_counter} - "
+                        f"tool_role_chunk, tool_call_id={tool_call_id}"
+                    )
+                    yield json.dumps(chunk)
+
+            elif event_type == "recursion_error":
+                error_message = event["message"]
+                yield_counter += 1
+                yield json.dumps(
+                    create_openai_chunk(
+                        content=error_message,
+                        model=model,
+                        finish_reason="stop",
+                        chunk_id=next_chunk_id(),
+                    )
+                )
+                return
+
+            elif event_type == "context_metadata":
+                pass
+
         total_ms = (time.perf_counter() - stream_start) * 1000
-        inference_elapsed_ms = (
-            (time.perf_counter() - inference_start) * 1000
-            if "inference_start" in locals()
-            else 0
-        )
+        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+        logger.debug(f"[{request_id}] STREAM_END - yields={yield_counter}")
         logger.debug(
-            f"[{request_id}] STREAM_END - events={event_counter}, "
-            f"yields={yield_counter}, unique_msg_ids={len(seen_msg_ids)}"
-        )
-        logger.debug(
-            f"[{request_id}] [TIMING] stream_complete | total={total_ms:.2f}ms | events={event_counter}"  # noqa: E501
-        )
-        logger.debug(
-            "[INFERENCE] stream_complete | total_ms=%.2f | inference_ms=%.2f | events=%d | yields=%d",  # noqa: E501
+            "[INFERENCE] stream_complete"
+            " | total_ms=%.2f | inference_ms=%.2f | yields=%d",
             total_ms,
             inference_elapsed_ms,
-            event_counter,
             yield_counter,
         )
 
         if use_native_format:
             final_chunk = create_final_chunk(model)
             yield_counter += 1
-            logger.debug(
-                f"[{request_id}] YIELD #{yield_counter} - "
-                f"final_chunk, finish_reason=stop"
-            )
             yield json.dumps(final_chunk)
         else:
             final_chunk = create_openai_chunk(
@@ -531,10 +448,6 @@ async def generate_streaming_response(
                 chunk_id=next_chunk_id(),
             )
             yield_counter += 1
-            logger.debug(
-                f"[{request_id}] YIELD #{yield_counter} - "
-                f"final_chunk (legacy), finish_reason=stop"
-            )
             yield json.dumps(final_chunk)
 
     except Exception as e:
@@ -558,7 +471,9 @@ async def generate_response(
     temperature: float = 0.7,
     use_native_format: bool = True,
 ) -> dict[str, Any]:
-    """Generate non-streaming chat completion response with markdown formatting.
+    """Generate non-streaming chat completion response.
+
+    Uses astream_agent_events() for consistency with streaming path.
 
     Args:
         messages: List of conversation messages
@@ -569,12 +484,10 @@ async def generate_response(
     Returns:
         OpenAI-compatible response dictionary
     """
-    # Generate UUID for this response
     response_uuid = uuid.uuid4().hex[:12]
     inference_start = time.perf_counter()
 
     try:
-        # Create LLM and agent
         provider_config = Config.get_provider_config()
         if not provider_config:
             return {
@@ -598,91 +511,67 @@ async def generate_response(
         llm = create_llm_from_config(provider_config_obj)
         agent = create_agent(llm, checkpointer=None)
 
-        # Convert messages
         lc_messages = convert_messages_to_langchain(messages)
 
-        # Log inference input details
         total_chars = sum(len(str(m.content)) for m in lc_messages)
         system_msgs = len([m for m in lc_messages if isinstance(m, SystemMessage)])
         user_msgs = len([m for m in lc_messages if isinstance(m, HumanMessage)])
         logger.debug(
-            "[INFERENCE] sync_input_prepared | messages=%d | system=%d | user=%d | total_chars=%d",  # noqa: E501
+            "[INFERENCE] sync_input_prepared"
+            " | messages=%d | system=%d | user=%d | total_chars=%d",
             len(lc_messages),
             system_msgs,
             user_msgs,
             total_chars,
         )
 
-        # Accumulate content menggunakan buffer
         buffer = ContentAccumulator()
-        stored_tool_calls = []
-        is_first_ai_message = True
-        event_counter = 0
+        stored_tool_calls: list[dict[str, Any]] = []
+        accumulated_text = ""
+        had_recursion_error = False
 
-        # Run the agent
-        async for event in agent.astream(
-            {"messages": lc_messages},
-            config=RunnableConfig(
-                configurable={"request_id": f"esdc-{int(time.time())}"}
-            ),
-        ):
-            event_counter += 1
-            ai_msg = extract_ai_message_from_event(event)
-            if not ai_msg:
-                continue
+        async for event in astream_agent_events(agent, lc_messages):
+            event_type = event["type"]
 
-            # Log AI message details with inference timing
-            if is_first_ai_message:
-                first_response_ms = (time.perf_counter() - inference_start) * 1000
-                content_str = extract_content_str(ai_msg.content)
-                content_len = len(content_str) if content_str else 0
-                has_tool_calls = hasattr(ai_msg, "tool_calls") and bool(
-                    ai_msg.tool_calls
-                )
-                tool_count = len(ai_msg.tool_calls) if has_tool_calls else 0
-                logger.debug(
-                    "[INFERENCE] first_response_received | elapsed_ms=%.2f | content_len=%d | has_tool_calls=%s | tool_count=%d",  # noqa: E501
-                    first_response_ms,
-                    content_len,
-                    has_tool_calls,
-                    tool_count,
-                )
-                if content_str and content_str.strip():
-                    buffer.add_content(content_str)
-                is_first_ai_message = False
+            if event_type == "token" or event_type == "reasoning_token":
+                content = event["content"]
+                if content:
+                    accumulated_text += content
 
-            elif hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                # Only flush buffer for markdown mode
-                if not use_native_format and buffer.has_content():
-                    buffer.flush()
+            elif event_type == "message_complete":
+                ai_message = event["ai_message"]
+                has_tool_calls = bool(ai_message.tool_calls)
 
-                # Store tool calls for final response (convert to dict format)
-                stored_tool_calls = [
-                    {
-                        "name": tc.get("name", ""),
-                        "args": tc.get("args", {}),
-                        "id": tc.get("id", ""),
-                    }
-                    for tc in ai_msg.tool_calls
-                ]
+                if has_tool_calls:
+                    if not use_native_format and buffer.has_content():
+                        buffer.flush()
 
-                if not use_native_format:
-                    # Add to buffer for markdown mode
-                    for tool_call in ai_msg.tool_calls:
-                        tool_name = tool_call.get("name", "unknown")
-                        tool_args = tool_call.get("args", {})
-                        buffer.add_tool_call(tool_name, tool_args)
-                        buffer.flush()  # Flush each tool immediately
+                    stored_tool_calls = [
+                        {
+                            "name": tc.get("name", ""),
+                            "args": tc.get("args", {}),
+                            "id": tc.get("id", ""),
+                        }
+                        for tc in ai_message.tool_calls
+                    ]
 
-            else:
-                # Final content
-                content_str = extract_content_str(ai_msg.content)
-                if content_str:
-                    buffer.add_content(content_str)
+                    if not use_native_format:
+                        for tool_call in ai_message.tool_calls:
+                            tool_name = tool_call.get("name", "unknown")
+                            tool_args = tool_call.get("args", {})
+                            buffer.add_tool_call(tool_name, tool_args)
+                            buffer.flush()
 
-        # Build final response
+                if accumulated_text.strip():
+                    buffer.add_content(accumulated_text)
+                    accumulated_text = ""
+
+            elif event_type == "recursion_error":
+                buffer.add_content(event["message"])
+                had_recursion_error = True
+                break
+
         if use_native_format:
-            # Import formatter
             from esdc.server.tool_formatter import format_tool_calls_for_response
 
             final_content = buffer.flush_final()
@@ -690,6 +579,17 @@ async def generate_response(
                 format_tool_calls_for_response(stored_tool_calls)
                 if stored_tool_calls
                 else None
+            )
+
+            inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+            logger.debug(
+                "[INFERENCE] sync_complete"
+                " | elapsed_ms=%.2f | content_len=%d"
+                " | tool_calls=%d | recursion_error=%s",
+                inference_elapsed_ms,
+                len(final_content) if final_content else 0,
+                len(stored_tool_calls),
+                had_recursion_error,
             )
 
             return {
@@ -710,23 +610,20 @@ async def generate_response(
                 ],
             }
         else:
-            # Legacy markdown response
             final_content = buffer.flush_final()
+
+            inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+            logger.debug(
+                "[INFERENCE] sync_complete (legacy) | elapsed_ms=%.2f | content_len=%d",
+                inference_elapsed_ms,
+                len(final_content) if final_content else 0,
+            )
+
             return {
                 "content": final_content if final_content else "No response generated",
                 "role": "assistant",
                 "finish_reason": "stop",
             }
-
-        # Log inference completion
-        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
-        logger.debug(
-            "[INFERENCE] sync_complete | elapsed_ms=%.2f | events=%d | content_len=%d | tool_calls=%d",  # noqa: E501
-            inference_elapsed_ms,
-            event_counter,
-            len(final_content) if "final_content" in locals() and final_content else 0,
-            len(stored_tool_calls),
-        )
 
     except Exception as e:
         error_elapsed_ms = (time.perf_counter() - inference_start) * 1000

@@ -91,9 +91,44 @@ class TestQueryClassifier:
 
     def test_ambiguous_query(self):
         """Test classification of ambiguous query."""
-        result = self.classifier.classify("info tentang minyak")  # Very vague
+        result = self.classifier.classify("info tentang minyak")
 
         assert result.query_type == QueryType.AMBIGUOUS
+
+    def test_year_transition_indonesian(self):
+        """Test classification of year transition query (Indonesian)."""
+        result = self.classifier.classify(
+            "ada berapa banyak project yang tahun 2024 prospective resources "
+            "namun di 2025 menjadi contingent resources atau reserves"
+        )
+
+        assert result.query_type == QueryType.YEAR_TRANSITION
+        assert result.confidence >= 0.85
+        assert "project_resources" in result.suggested_table
+
+    def test_year_transition_dari_ke(self):
+        """Test classification of dari...ke year transition query."""
+        result = self.classifier.classify(
+            "project yang dari tahun 2023 ke tahun 2025 berubah project class"
+        )
+
+        assert result.query_type == QueryType.YEAR_TRANSITION
+
+    def test_year_transition_menjadi(self):
+        """Test classification of 'menjadi' year transition query."""
+        result = self.classifier.classify(
+            "project di 2024 yang menjadi reserves di 2025"
+        )
+
+        assert result.query_type == QueryType.YEAR_TRANSITION
+
+    def test_year_transition_english(self):
+        """Test classification of English year transition query."""
+        result = self.classifier.classify(
+            "projects in 2024 that became reserves in 2025"
+        )
+
+        assert result.query_type == QueryType.YEAR_TRANSITION
 
     def test_detect_entities_multiple(self):
         """Test detection of multiple entities."""
@@ -175,6 +210,23 @@ class TestToolSelection:
         assert "Knowledge Traversal" in tools
         assert "SQL Executor" in tools
 
+    def test_year_transition_tools(self):
+        """Test minimal tools for year transition queries."""
+        classification = QueryClassification(
+            query_type=QueryType.YEAR_TRANSITION,
+            confidence=0.85,
+            detected_entities={},
+            suggested_table="project_resources",
+            suggested_columns=["project_class", "report_year"],
+            reason="Year transition query",
+        )
+
+        tools = get_tools_for_classification(classification)
+        assert "SQL Executor" in tools
+        assert "Knowledge Traversal" in tools
+        assert "Semantic Search" not in tools
+        assert "Spatial Resolver" not in tools
+
 
 class TestPromptFormatting:
     """Test formatting classification for prompts."""
@@ -229,3 +281,21 @@ class TestPromptFormatting:
         formatted = format_classification_for_prompt(classification)
 
         assert "resolve_spatial" in formatted
+
+    def test_year_transition_formatting(self):
+        """Test formatting of year transition classification."""
+        classification = QueryClassification(
+            query_type=QueryType.YEAR_TRANSITION,
+            confidence=0.85,
+            detected_entities={"report_year": "2024"},
+            suggested_table="project_resources",
+            suggested_columns=["project_class", "report_year"],
+            reason="Year-over-year transition detected",
+        )
+
+        formatted = format_classification_for_prompt(classification)
+
+        assert "Year Transition" in formatted
+        assert "CASE WHEN" in formatted
+        assert "ONE SQL query" in formatted
+        assert "project_resources" in formatted

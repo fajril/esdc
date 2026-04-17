@@ -23,10 +23,10 @@ from esdc.server.responses_models import (
 from esdc.server.responses_wrapper import (
     SequenceCounter,
     chunk_json,
-    chunk_text,
     convert_responses_input_to_langchain,
     generate_item_id,
 )
+from esdc.server.stream_utils import chunk_text
 
 
 class TestResponsesModels:

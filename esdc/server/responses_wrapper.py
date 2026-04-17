@@ -13,6 +13,7 @@ Key Functions:
 """
 
 # Standard library
+import asyncio
 import json
 import logging
 import time
@@ -28,7 +29,8 @@ from esdc.chat.agent import create_agent, generate_conversation_title
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
-from esdc.server.message_utils import extract_ai_message_from_event, extract_content_str
+from esdc.server.constants import SSE_STREAM_TIMEOUT
+from esdc.server.event_streamer import astream_agent_events
 from esdc.server.responses_events import (
     create_content_part_added_event,
     create_content_part_done_event,
@@ -40,10 +42,11 @@ from esdc.server.responses_events import (
     create_output_text_done_event,
     create_response_completed_event,
     create_response_created_event,
+    create_response_failed_event,
     format_sse_event,
 )
 from esdc.server.responses_models import ResponseInputItem
-from esdc.server.stream_utils import chunk_json, chunk_text
+from esdc.server.stream_utils import chunk_json
 from esdc.server.title_detection import (
     create_title_stream_events,
     create_title_sync_response,
@@ -65,6 +68,12 @@ class SequenceCounter:
         current = self._value
         self._value += 1
         return current
+
+
+class _RecursionLimitExceededError(Exception):
+    """Raised when LangGraph recursion limit is exceeded during streaming."""
+
+    pass
 
 
 def convert_responses_input_to_langchain(
@@ -257,33 +266,6 @@ def convert_responses_input_to_langchain(
     return messages
 
 
-def extract_tool_messages_from_event(event: dict) -> list[dict[str, Any]]:
-    """Extract tool results from LangGraph event.
-
-    LangGraph's tool_node returns dicts with 'role': 'tool',
-    NOT ToolMessage objects.
-
-    Args:
-        event: LangGraph event dictionary
-
-    Returns:
-        List of tool result dicts from the event
-    """
-    tool_messages = []
-
-    # Check for 'tools' node (contains tool results)
-    if "tools" in event:
-        tools_data = event["tools"]
-        if isinstance(tools_data, dict) and "messages" in tools_data:
-            messages = tools_data["messages"]
-            for msg in messages:
-                # LangGraph returns dicts with role="tool"
-                if isinstance(msg, dict) and msg.get("role") == "tool":
-                    tool_messages.append(msg)
-
-    return tool_messages
-
-
 def generate_item_id(prefix: str = "msg") -> str:
     """Generate a unique item ID with proper prefix.
 
@@ -446,153 +428,42 @@ async def generate_responses_stream(
         total_chars,
     )
 
-    first_ai_response = True
-    first_response_ms = 0.0
     stream_start = time.perf_counter()
-    last_event_time = stream_start
+
+    # State tracking for real token-level streaming
+    current_item_id = ""
+    content_started = False
+    accumulated_text = ""
+    delta_count = 0
+    content_index = 0
+    last_usage: dict[str, Any] | None = None
 
     try:
-        # Stream agent events
-        async for event in agent.astream({"messages": lc_messages}):
+        stream_deadline = time.perf_counter() + SSE_STREAM_TIMEOUT
+
+        # Stream agent events using astream_events for real token-level streaming
+        async for event in astream_agent_events(agent, lc_messages):
+            if time.perf_counter() > stream_deadline:
+                raise asyncio.TimeoutError()
+
+            event_type = event["type"]
             event_counter += 1
-            current_time = time.perf_counter()
-            event_keys = list(event.keys())
 
-            # Calculate gap from previous event
-            gap_ms = (current_time - last_event_time) * 1000
-            if gap_ms > 2000:
-                logger.debug(
-                    f"[GAP_DETECTED] {response_id} | gap={gap_ms:.2f}ms | "
-                    f"since_event=#{event_counter - 1} | to_event=#{event_counter}"
-                )
-            last_event_time = current_time
+            # ---- Token events: emit deltas immediately ----
+            if event_type == "token":
+                content = event["content"]
+                if not content:
+                    continue
 
-            logger.debug(
-                f"[RESPONSES {response_id}] EVENT #{event_counter} keys: {event_keys}"
-            )
+                # First token for this message → emit item.added + content_part.added
+                if not content_started:
+                    current_item_id = generate_item_id("msg")
+                    content_started = True
+                    accumulated_text = ""
+                    delta_count = 0
 
-            # Check for tool results FIRST (before AI messages)
-            tool_messages = extract_tool_messages_from_event(event)
-
-            if tool_messages:
-                logger.debug(
-                    f"[RESPONSES {response_id}] EVENT #{event_counter} "
-                    f"Found {len(tool_messages)} tool result(s)"
-                )
-                logger.debug(
-                    f"[TIMING] {response_id} tool_result | event=#{event_counter} count={len(tool_messages)}"  # noqa: E501
-                )
-                # Emit function_call_output items for each tool result
-                for i, tool_msg in enumerate(tool_messages):
-                    item_id = generate_item_id("fco")
-                    tool_call_id = tool_msg.get("tool_call_id", "")
-                    tool_content = str(tool_msg.get("content", ""))
-                    content_len = len(tool_content)
-                    content_preview = (
-                        tool_content[:100] if content_len > 100 else tool_content
-                    )
-
-                    logger.debug(
-                        f"[RESPONSES {response_id}] EVENT #{event_counter} "
-                        f"Tool result #{i}: call_id={tool_call_id}, "
-                        f"content_len={content_len}, preview={content_preview}..."
-                    )
-
-                    function_call_output = {
-                        "id": item_id,
-                        "type": "function_call_output",
-                        "status": "completed",
-                        "call_id": tool_call_id,
-                        "output": [{"type": "input_text", "text": tool_content}],
-                    }
-
-                    # Emit item added
-                    added_seq = seq.next()
-                    logger.debug(
-                        f"[RESPONSES {response_id}] EMIT response.output_item.added "
-                        f"seq={added_seq}, output_index={output_index}, "
-                        f"type=function_call_output, id={item_id}, "
-                        f"call_id={tool_call_id}"
-                    )
-                    yield format_sse_event(
-                        create_output_item_added_event(
-                            added_seq, output_index, function_call_output
-                        )
-                    )
-
-                    # Emit item done (output is included, no deltas needed)
-                    function_call_output["status"] = "completed"
-                    done_seq = seq.next()
-                    logger.debug(
-                        f"[RESPONSES {response_id}] EMIT response.output_item.done "
-                        f"seq={done_seq}, output_index={output_index}, "
-                        f"type=function_call_output, id={item_id}"
-                    )
-                    yield format_sse_event(
-                        create_output_item_done_event(
-                            done_seq, output_index, function_call_output
-                        )
-                    )
-
-                    output_items.append(function_call_output)
-                    output_index += 1
-
-                # Tool results processed, continue to next event
-                continue
-
-            # Extract AI message
-            ai_msg = extract_ai_message_from_event(event)
-            if not ai_msg:
-                logger.debug(
-                    f"[RESPONSES {response_id}] EVENT #{event_counter} "
-                    f"No AIMessage extracted, skipping"
-                )
-                continue
-
-            if first_ai_response:
-                first_response_ms = (time.perf_counter() - stream_start) * 1000
-                logger.debug(
-                    f"[TIMING] {response_id} first_ai_response | event=#{event_counter}"
-                )
-                first_ai_response = False
-
-            # DEBUG: Log AIMessage details
-            msg_id = getattr(ai_msg, "id", "no-id")
-            msg_content_preview = (
-                str(ai_msg.content)[:100] if ai_msg.content else "None"
-            )
-            has_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
-            tool_call_count = len(ai_msg.tool_calls) if has_tool_calls else 0
-            logger.debug(
-                f"[RESPONSES {response_id}] EVENT #{event_counter} "
-                f"AIMessage: id={msg_id}, content_preview={msg_content_preview}..., "
-                f"tool_calls={tool_call_count}"
-            )
-
-            # Log inference response details for first AI message
-            if first_ai_response is False and tool_call_count > 0:
-                logger.debug(
-                    "[INFERENCE] responses_first_response | response_id=%s | elapsed_ms=%.2f | content_preview=%s | tool_calls=%d",  # noqa: E501
-                    response_id,
-                    first_response_ms,
-                    msg_content_preview[:50],
-                    tool_call_count,
-                )
-
-            # Handle message with content
-            if ai_msg.content:
-                item_id = generate_item_id("msg")
-                content_str = extract_content_str(ai_msg.content)
-
-                if content_str.strip():
-                    logger.debug(
-                        f"[RESPONSES {response_id}] Processing message content: "
-                        f"len={len(content_str)}, preview={content_str[:50]}..."
-                    )
-
-                    # Emit message item added
                     message_item = {
-                        "id": item_id,
+                        "id": current_item_id,
                         "type": "message",
                         "status": "in_progress",
                         "role": "assistant",
@@ -600,9 +471,12 @@ async def generate_responses_stream(
                     }
                     added_seq = seq.next()
                     logger.debug(
-                        f"[RESPONSES {response_id}] EMIT response.output_item.added "
-                        f"seq={added_seq}, output_index={output_index}, "
-                        f"type=message, id={item_id}"
+                        "[RESPONSES %s] EMIT response.output_item.added "
+                        "seq=%d, output_index=%d, type=message, id=%s",
+                        response_id,
+                        added_seq,
+                        output_index,
+                        current_item_id,
                     )
                     yield format_sse_event(
                         create_output_item_added_event(
@@ -610,49 +484,123 @@ async def generate_responses_stream(
                         )
                     )
 
-                    # Emit content part added
                     content_part = {"type": "output_text", "text": ""}
                     part_added_seq = seq.next()
                     logger.debug(
-                        f"[RESPONSES {response_id}] EMIT response.content_part.added "
-                        f"seq={part_added_seq}, output_index={output_index}, "
-                        f"content_index=0, item_id={item_id}"
+                        "[RESPONSES %s] EMIT response.content_part.added "
+                        "seq=%d, output_index=%d, content_index=%d, item_id=%s",
+                        response_id,
+                        part_added_seq,
+                        output_index,
+                        content_index,
+                        current_item_id,
                     )
                     yield format_sse_event(
                         create_content_part_added_event(
-                            part_added_seq, output_index, 0, item_id, content_part
+                            part_added_seq,
+                            output_index,
+                            content_index,
+                            current_item_id,
+                            content_part,
                         )
                     )
 
-                    # Stream text deltas
+                # Emit delta immediately — real streaming!
+                if not current_item_id:
+                    continue
+                accumulated_text += content
+                delta_count += 1
+                delta_seq = seq.next()
+                yield format_sse_event(
+                    create_output_text_delta_event(
+                        delta_seq, output_index, content_index, current_item_id, content
+                    )
+                )
+
+            # ---- Reasoning token events ----
+            elif event_type == "reasoning_token":
+                # Models that emit reasoning_content field get a reasoning output item
+                reasoning_content = event["content"]
+                if not reasoning_content:
+                    continue
+
+                # For now, emit reasoning tokens as text deltas in the same
+                # content stream. OpenWebUI detects thinking tags natively.
+                # TODO: Emit as proper reasoning output item per Open Responses spec.
+                if not content_started:
+                    current_item_id = generate_item_id("msg")
+                    content_started = True
                     accumulated_text = ""
                     delta_count = 0
-                    for chunk in chunk_text(content_str):
-                        accumulated_text += chunk
-                        delta_count += 1
-                        delta_seq = seq.next()
-                        logger.debug(
-                            f"[RESPONSES {response_id}] "
-                            f"EMIT response.output_text.delta "
-                            f"seq={delta_seq}, delta_len={len(chunk)}, "
-                            f"accumulated_len={len(accumulated_text)}"
-                        )
-                        yield format_sse_event(
-                            create_output_text_delta_event(
-                                delta_seq, output_index, 0, item_id, chunk
-                            )
-                        )
 
-                    # Emit text done
+                    message_item = {
+                        "id": current_item_id,
+                        "type": "message",
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": [],
+                    }
+                    added_seq = seq.next()
+                    yield format_sse_event(
+                        create_output_item_added_event(
+                            added_seq, output_index, message_item
+                        )
+                    )
+
+                    content_part = {"type": "output_text", "text": ""}
+                    part_added_seq = seq.next()
+                    yield format_sse_event(
+                        create_content_part_added_event(
+                            part_added_seq,
+                            output_index,
+                            content_index,
+                            current_item_id,
+                            content_part,
+                        )
+                    )
+
+                if not current_item_id:
+                    continue
+                accumulated_text += reasoning_content
+                delta_count += 1
+                delta_seq = seq.next()
+                yield format_sse_event(
+                    create_output_text_delta_event(
+                        delta_seq,
+                        output_index,
+                        content_index,
+                        current_item_id,
+                        reasoning_content,
+                    )
+                )
+
+            # ---- Message complete: close content, emit tool calls ----
+            elif event_type == "message_complete":
+                ai_message = event["ai_message"]
+
+                # Track usage from last LLM response
+                if hasattr(ai_message, "usage_metadata") and ai_message.usage_metadata:
+                    last_usage = ai_message.usage_metadata
+
+                # Close any open text content
+                if content_started and accumulated_text:
+                    # Emit text done using accumulated_text (exactly what was streamed)
                     text_done_seq = seq.next()
                     logger.debug(
-                        f"[RESPONSES {response_id}] EMIT response.output_text.done "
-                        f"seq={text_done_seq}, text_len={len(accumulated_text)}, "
-                        f"deltas_sent={delta_count}"
+                        "[RESPONSES %s] EMIT response.output_text.done "
+                        "seq=%d, text_len=%d, deltas_sent=%d",
+                        response_id,
+                        text_done_seq,
+                        len(accumulated_text),
+                        delta_count,
                     )
                     yield format_sse_event(
                         create_output_text_done_event(
-                            text_done_seq, output_index, 0, item_id, accumulated_text
+                            text_done_seq,
+                            output_index,
+                            content_index,
+                            current_item_id,
+                            accumulated_text,
                         )
                     )
 
@@ -662,24 +610,32 @@ async def generate_responses_stream(
                         "text": accumulated_text,
                     }
                     part_done_seq = seq.next()
-                    logger.debug(
-                        f"[RESPONSES {response_id}] EMIT response.content_part.done "
-                        f"seq={part_done_seq}, output_index={output_index}"
-                    )
                     yield format_sse_event(
                         create_content_part_done_event(
-                            part_done_seq, output_index, 0, item_id, content_part_done
+                            part_done_seq,
+                            output_index,
+                            content_index,
+                            current_item_id,
+                            content_part_done,
                         )
                     )
 
                     # Complete message item
-                    message_item["status"] = "completed"
-                    message_item["content"] = [content_part_done]
+                    message_item = {
+                        "id": current_item_id,
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [content_part_done],
+                    }
                     item_done_seq = seq.next()
                     logger.debug(
-                        f"[RESPONSES {response_id}] EMIT response.output_item.done "
-                        f"seq={item_done_seq}, output_index={output_index}, "
-                        f"type=message, id={item_id}"
+                        "[RESPONSES %s] EMIT response.output_item.done "
+                        "seq=%d, output_index=%d, type=message, id=%s",
+                        response_id,
+                        item_done_seq,
+                        output_index,
+                        current_item_id,
                     )
                     yield format_sse_event(
                         create_output_item_done_event(
@@ -690,110 +646,163 @@ async def generate_responses_stream(
                     output_items.append(message_item)
                     output_index += 1
 
-            # Handle function calls
-            if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
-                logger.debug(
-                    f"[RESPONSES {response_id}] EVENT #{event_counter} "
-                    f"Processing {len(ai_msg.tool_calls)} tool call(s)"
-                )
-                for tc_idx, tc in enumerate(ai_msg.tool_calls):
-                    # DIAGNOSTIC: Log type and value of each tool_call
-                    logger.debug(
-                        f"[RESPONSES {response_id}] EVENT #{event_counter} "
-                        f"tool_call[{tc_idx}] type: {type(tc).__name__}, "
-                        f"value: {repr(tc)[:200]}"
-                    )
-                    # If it's not a dict, skip and log warning
-                    if not isinstance(tc, dict):
-                        logger.warning(
-                            f"[RESPONSES {response_id}] EVENT #{event_counter} "
-                            f"SKIPPING malformed tool_call[{tc_idx}] "
-                            f"- expected dict, got {type(tc).__name__}: "
-                            f"{repr(tc)[:100]}"
-                        )
-                        continue
-                    item_id = generate_item_id("fc")
-                    tc_name = tc.get("name", "")
-                    tc_id = tc.get("id", "")
-                    tc_args = json.dumps(tc.get("args", {}))
-
-                    logger.debug(
-                        f"[RESPONSES {response_id}] EVENT #{event_counter} "
-                        f"Tool call #{tc_idx}: name={tc_name}, call_id={tc_id}, "
-                        f"args_len={len(tc_args)}"
-                    )
-
-                    function_call_item = {
-                        "id": item_id,
-                        "type": "function_call",
-                        "status": "in_progress",
-                        "name": tc_name,
-                        "call_id": tc_id,
-                        "arguments": "",
-                    }
-
-                    # Emit item added
-                    added_seq = seq.next()
-                    logger.debug(
-                        f"[RESPONSES {response_id}] EMIT "
-                        f"response.output_item.added "
-                        f"seq={added_seq}, output_index={output_index}, "
-                        f"type=function_call, id={item_id}, "
-                        f"name={tc_name}, call_id={tc_id}"
-                    )
-                    yield format_sse_event(
-                        create_output_item_added_event(
-                            added_seq, output_index, function_call_item
-                        )
-                    )
-
-                    # Stream argument deltas
+                    # Reset state for next LLM turn (after tool calls)
+                    content_started = False
+                    accumulated_text = ""
                     delta_count = 0
-                    for arg_chunk in chunk_json(tc_args):
-                        function_call_item["arguments"] += arg_chunk
-                        delta_count += 1
-                        delta_seq = seq.next()
+                    content_index = 0
+                    current_item_id = ""
+
+                # Handle tool calls
+                if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
+                    for tc_idx, tc in enumerate(ai_message.tool_calls):
+                        if not isinstance(tc, dict):
+                            logger.warning(
+                                "[RESPONSES %s] SKIPPING malformed tool_call[%d]"
+                                " - expected dict, got %s",
+                                response_id,
+                                tc_idx,
+                                type(tc).__name__,
+                            )
+                            continue
+
+                        item_id = generate_item_id("fc")
+                        tc_name = tc.get("name", "")
+                        tc_id = tc.get("id", "")
+                        tc_args = json.dumps(tc.get("args", {}))
+
+                        function_call_item = {
+                            "id": item_id,
+                            "type": "function_call",
+                            "status": "in_progress",
+                            "name": tc_name,
+                            "call_id": tc_id,
+                            "arguments": "",
+                        }
+
+                        # Emit item added
+                        added_seq = seq.next()
                         logger.debug(
-                            f"[RESPONSES {response_id}] "
-                            f"EMIT response.function_call_arguments."
-                            f"delta seq={delta_seq}, chunk_len={len(arg_chunk)}"
+                            "[RESPONSES %s] EMIT response.output_item.added "
+                            "seq=%d, output_index=%d, "
+                            "type=function_call, id=%s, name=%s",
+                            response_id,
+                            added_seq,
+                            output_index,
+                            item_id,
+                            tc_name,
                         )
                         yield format_sse_event(
-                            create_function_call_arguments_delta_event(
-                                delta_seq, output_index, item_id, arg_chunk
+                            create_output_item_added_event(
+                                added_seq, output_index, function_call_item
                             )
                         )
 
-                    # Emit args done
-                    args_done_seq = seq.next()
-                    logger.debug(
-                        f"[RESPONSES {response_id}] "
-                        f"EMIT response.function_call_arguments.done "
-                        f"seq={args_done_seq}, args_len={len(tc_args)}, "
-                        f"deltas_sent={delta_count}"
-                    )
-                    yield format_sse_event(
-                        create_function_call_arguments_done_event(
-                            args_done_seq, output_index, item_id, tc_args
-                        )
-                    )
+                        # Stream argument deltas
+                        arg_delta_count = 0
+                        for arg_chunk in chunk_json(tc_args):
+                            function_call_item["arguments"] += arg_chunk
+                            arg_delta_count += 1
+                            delta_seq = seq.next()
+                            yield format_sse_event(
+                                create_function_call_arguments_delta_event(
+                                    delta_seq, output_index, item_id, arg_chunk
+                                )
+                            )
 
-                    # Complete item
-                    function_call_item["status"] = "completed"
-                    item_done_seq = seq.next()
-                    logger.debug(
-                        f"[RESPONSES {response_id}] EMIT response.output_item.done "
-                        f"seq={item_done_seq}, output_index={output_index}, "
-                        f"type=function_call, id={item_id}, name={tc_name}"
-                    )
-                    yield format_sse_event(
-                        create_output_item_done_event(
-                            item_done_seq, output_index, function_call_item
+                        # Emit args done
+                        args_done_seq = seq.next()
+                        logger.debug(
+                            "[RESPONSES %s] EMIT response.function_call_arguments.done "
+                            "seq=%d, args_len=%d, deltas_sent=%d",
+                            response_id,
+                            args_done_seq,
+                            len(tc_args),
+                            arg_delta_count,
                         )
-                    )
+                        yield format_sse_event(
+                            create_function_call_arguments_done_event(
+                                args_done_seq, output_index, item_id, tc_args
+                            )
+                        )
 
-                    output_items.append(function_call_item)
-                    output_index += 1
+                        # Complete item
+                        function_call_item["status"] = "completed"
+                        item_done_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_item_done_event(
+                                item_done_seq, output_index, function_call_item
+                            )
+                        )
+
+                        output_items.append(function_call_item)
+                        output_index += 1
+
+            # ---- Tool result events ----
+            elif event_type == "tool_result":
+                tool_name = event["tool_name"]
+                tool_result_content = event["result"]
+                tool_call_id = event.get("tool_call_id", "")
+
+                item_id = generate_item_id("fco")
+                content_preview = (
+                    tool_result_content[:100]
+                    if len(tool_result_content) > 100
+                    else tool_result_content
+                )
+
+                logger.debug(
+                    "[RESPONSES %s] Tool result: tool=%s, call_id=%s, content_len=%d",
+                    response_id,
+                    tool_name,
+                    tool_call_id,
+                    len(tool_result_content),
+                )
+
+                function_call_output = {
+                    "id": item_id,
+                    "type": "function_call_output",
+                    "status": "completed",
+                    "call_id": tool_call_id,
+                    "output": [{"type": "input_text", "text": tool_result_content}],
+                }
+
+                # Emit item added
+                added_seq = seq.next()
+                yield format_sse_event(
+                    create_output_item_added_event(
+                        added_seq, output_index, function_call_output
+                    )
+                )
+
+                # Emit item done
+                function_call_output["status"] = "completed"
+                done_seq = seq.next()
+                yield format_sse_event(
+                    create_output_item_done_event(
+                        done_seq, output_index, function_call_output
+                    )
+                )
+
+                output_items.append(function_call_output)
+                output_index += 1
+
+            # ---- Context metadata (informational, not emitted as SSE) ----
+            elif event_type == "context_metadata":
+                logger.debug(
+                    "[RESPONSES %s] Context metadata: %s",
+                    response_id,
+                    event.get("metadata"),
+                )
+
+            # ---- Recursion error: emit response.failed ----
+            elif event_type == "recursion_error":
+                logger.error(
+                    "[RESPONSES %s] RECURSION_ERROR: %s",
+                    response_id,
+                    event["message"],
+                )
+                raise _RecursionLimitExceededError(event["message"])
 
         # Emit response.completed
         completed_seq = seq.next()
@@ -802,31 +811,56 @@ async def generate_responses_stream(
             for item in output_items
         ]
         logger.info(
-            f"[RESPONSES {response_id}] COMPLETED - "
-            f"events={event_counter}, output_items={len(output_items)}, "
-            f"items=[{', '.join(output_summary)}], final_seq={completed_seq}"
-        )
-
-        # Log inference stream completion
-        total_elapsed_ms = (time.perf_counter() - stream_start) * 1000
-        logger.debug(
-            f"[TIMING] {response_id} stream_complete | events={event_counter} items={len(output_items)}"  # noqa: E501
-        )
-        logger.debug(
-            "[INFERENCE] responses_stream_complete | response_id=%s | total_ms=%.2f | events=%d | output_items=%d",  # noqa: E501
+            "[RESPONSES %s] COMPLETED - events=%d, "
+            "output_items=%d, items=[%s], final_seq=%d",
             response_id,
-            total_elapsed_ms,
             event_counter,
             len(output_items),
+            ", ".join(output_summary),
+            completed_seq,
+        )
+
+        total_elapsed_ms = (time.perf_counter() - stream_start) * 1000
+        logger.debug(
+            "[TIMING] %s stream_complete | events=%d items=%d total_ms=%.2f",
+            response_id,
+            event_counter,
+            len(output_items),
+            total_elapsed_ms,
         )
         yield format_sse_event(
             create_response_completed_event(
-                completed_seq, response_id, model, output_items
+                completed_seq, response_id, model, output_items, usage=last_usage
             )
         )
 
+    except asyncio.TimeoutError:
+        logger.error(
+            "[RESPONSES %s] TIMEOUT after %ds", response_id, SSE_STREAM_TIMEOUT
+        )
+        yield format_sse_event(
+            create_response_failed_event(
+                seq.next(),
+                response_id,
+                model,
+                {
+                    "message": f"Response timed out after {SSE_STREAM_TIMEOUT} seconds",
+                    "type": "timeout",
+                },
+            )
+        )
+    except _RecursionLimitExceededError as e:
+        logger.error("[RESPONSES %s] RECURSION_LIMIT: %s", response_id, str(e))
+        yield format_sse_event(
+            create_response_failed_event(
+                seq.next(),
+                response_id,
+                model,
+                {"message": str(e), "type": "recursion_limit"},
+            )
+        )
     except Exception as e:
-        logger.exception(f"[RESPONSES {response_id}] ERROR: {e}")
+        logger.exception("[RESPONSES %s] ERROR: %s", response_id, e)
         yield format_sse_event(
             {
                 "type": "error",
@@ -967,131 +1001,111 @@ async def generate_responses_sync(
     sync_start = time.perf_counter()
 
     try:
-        # Collect all messages from agent
+        all_function_calls: list[dict[str, Any]] = []
         all_tool_results: list[dict[str, Any]] = []
-        all_ai_messages: list[AIMessage] = []
+        accumulated_text = ""
+        last_message_content = ""
+        had_recursion_error = False
 
-        async for event in agent.astream({"messages": lc_messages}):
+        async for event in astream_agent_events(agent, lc_messages):
             event_counter += 1
-            event_keys = list(event.keys())
-            logger.debug(
-                f"[RESPONSES {response_id}] SYNC EVENT #{event_counter} "
-                f"keys: {event_keys}"
-            )
+            event_type = event["type"]
 
-            # Collect tool results
-            tool_messages = extract_tool_messages_from_event(event)
-            if tool_messages:
-                logger.debug(
-                    f"[RESPONSES {response_id}] SYNC EVENT #{event_counter} "
-                    f"Found {len(tool_messages)} tool result(s)"
-                )
-                logger.debug(
-                    f"[TIMING] {response_id} sync_tool_result | event=#{event_counter} count={len(tool_messages)}"  # noqa: E501
-                )
-                for i, tool_msg in enumerate(tool_messages):
-                    call_id = tool_msg.get("tool_call_id", "")
-                    content_len = len(str(tool_msg.get("content", "")))
-                    logger.debug(
-                        f"[RESPONSES {response_id}] SYNC Tool result #{i}: "
-                        f"call_id={call_id}, content_len={content_len}"
-                    )
-                    all_tool_results.append(
-                        {
-                            "id": generate_item_id("fco"),
-                            "type": "function_call_output",
-                            "status": "completed",
-                            "call_id": call_id,
-                            "output": [
+            if event_type == "token" or event_type == "reasoning_token":
+                content = event["content"]
+                if content:
+                    accumulated_text += content
+
+            elif event_type == "message_complete":
+                ai_message = event["ai_message"]
+                has_tool_calls = bool(ai_message.tool_calls)
+
+                if has_tool_calls:
+                    for tc in ai_message.tool_calls:
+                        if isinstance(tc, dict):
+                            all_function_calls.append(
                                 {
-                                    "type": "input_text",
-                                    "text": str(tool_msg.get("content", "")),
+                                    "id": generate_item_id("fc"),
+                                    "type": "function_call",
+                                    "status": "completed",
+                                    "name": tc.get("name", ""),
+                                    "call_id": tc.get("id", ""),
+                                    "arguments": json.dumps(tc.get("args", {})),
                                 }
-                            ],
-                        }
-                    )
-                continue
+                            )
 
-            # Collect AI messages
-            ai_msg = extract_ai_message_from_event(event)
-            if ai_msg:
-                msg_id = getattr(ai_msg, "id", "no-id")
-                has_tool_calls = hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls
-                tool_call_count = len(ai_msg.tool_calls) if has_tool_calls else 0
-                logger.debug(
-                    f"[RESPONSES {response_id}] SYNC EVENT #{event_counter} "
-                    f"AIMessage: id={msg_id}, tool_calls={tool_call_count}"
+                if accumulated_text.strip():
+                    last_message_content = accumulated_text
+                    accumulated_text = ""
+
+            elif event_type == "tool_result":
+                tool_name = event.get("tool_name", "unknown")
+                tool_call_id = event.get("tool_call_id", "")
+                result_text = event.get("result", "")
+
+                all_tool_results.append(
+                    {
+                        "id": generate_item_id("fco"),
+                        "type": "function_call_output",
+                        "status": "completed",
+                        "call_id": tool_call_id,
+                        "output": [
+                            {
+                                "type": "input_text",
+                                "text": result_text,
+                            }
+                        ],
+                    }
                 )
-                all_ai_messages.append(ai_msg)
-
-        # Build output items
-        # First: all function_calls
-        for ai_msg in all_ai_messages:
-            if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
                 logger.debug(
-                    f"[RESPONSES {response_id}] SYNC tool_calls type: "
-                    f"{type(ai_msg.tool_calls)}, count: {len(ai_msg.tool_calls)}"
+                    "[RESPONSES %s] SYNC tool_result:"
+                    " tool=%s, call_id=%s, result_len=%d",
+                    response_id,
+                    tool_name,
+                    tool_call_id,
+                    len(result_text),
                 )
-                for tc_idx, tc in enumerate(ai_msg.tool_calls):
-                    # DIAGNOSTIC: Log type and value of each tool_call
-                    logger.debug(
-                        f"[RESPONSES {response_id}] SYNC tool_call[{tc_idx}] "
-                        f"type: {type(tc).__name__}, "
-                        f"value: {repr(tc)[:200]}"
-                    )
-                    # If it's not a dict, skip and log warning
-                    if not isinstance(tc, dict):
-                        logger.warning(
-                            f"[RESPONSES {response_id}] SYNC SKIPPING malformed "
-                            f"tool_call[{tc_idx}] - expected dict, got "
-                            f"{type(tc).__name__}: {repr(tc)[:100]}"
-                        )
-                        continue
-                    tc_name = tc.get("name", "")
-                    tc_id = tc.get("id", "")
-                    logger.debug(
-                        f"[RESPONSES {response_id}] SYNC Building function_call: "
-                        f"name={tc_name}, call_id={tc_id}"
-                    )
-                    output_items.append(
-                        {
-                            "id": generate_item_id("fc"),
-                            "type": "function_call",
-                            "status": "completed",
-                            "name": tc_name,
-                            "call_id": tc_id,
-                            "arguments": json.dumps(tc.get("args", {})),
-                        }
-                    )
 
-        # Second: all function_call_outputs
+            elif event_type == "recursion_error":
+                logger.error(
+                    "[RESPONSES %s] SYNC RECURSION_ERROR: %s",
+                    response_id,
+                    event["message"],
+                )
+                return create_non_streaming_response(
+                    response_id,
+                    model,
+                    [],
+                    error={"message": event["message"], "type": "recursion_limit"},
+                )
+
+            elif event_type == "context_metadata":
+                pass
+
+        output_items.extend(all_function_calls)
         output_items.extend(all_tool_results)
 
-        # Last: final message (if any AI message had content)
-        for ai_msg in reversed(all_ai_messages):
-            if ai_msg.content:
-                content_str = extract_content_str(ai_msg.content)
-                if content_str.strip():
-                    logger.debug(
-                        f"[RESPONSES {response_id}] SYNC Building message item: "
-                        f"content_len={len(content_str)}"
-                    )
-                    output_items.append(
+        if last_message_content.strip():
+            logger.debug(
+                "[RESPONSES %s] SYNC Building message item: content_len=%d",
+                response_id,
+                len(last_message_content),
+            )
+            output_items.append(
+                {
+                    "id": generate_item_id("msg"),
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
                         {
-                            "id": generate_item_id("msg"),
-                            "type": "message",
-                            "status": "completed",
-                            "role": "assistant",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": content_str,
-                                    "annotations": [],
-                                }
-                            ],
+                            "type": "output_text",
+                            "text": last_message_content,
+                            "annotations": [],
                         }
-                    )
-                break
+                    ],
+                }
+            )
 
         output_summary = [
             f"{item.get('type')}:{item.get('name', item.get('call_id', 'msg'))}"
@@ -1103,25 +1117,25 @@ async def generate_responses_sync(
             f"items=[{', '.join(output_summary)}]"
         )
 
-        # Log inference sync completion
         sync_elapsed_ms = (time.perf_counter() - sync_start) * 1000
         logger.debug(
-            f"[TIMING] {response_id} sync_complete | events={event_counter} items={len(output_items)}"  # noqa: E501
-        )
-        logger.debug(
-            "[INFERENCE] responses_sync_complete | response_id=%s | elapsed_ms=%.2f | events=%d | output_items=%d",  # noqa: E501
+            "[INFERENCE] responses_sync_complete"
+            " | response_id=%s | elapsed_ms=%.2f"
+            " | events=%d | output_items=%d"
+            " | recursion_error=%s",
             response_id,
             sync_elapsed_ms,
             event_counter,
             len(output_items),
+            had_recursion_error,
         )
         return create_non_streaming_response(response_id, model, output_items)
 
     except Exception as e:
-        # Log inference error
         error_elapsed_ms = (time.perf_counter() - sync_start) * 1000
         logger.debug(
-            "[INFERENCE] responses_sync_error | response_id=%s | elapsed_ms=%.2f | error=%s",  # noqa: E501
+            "[INFERENCE] responses_sync_error"
+            " | response_id=%s | elapsed_ms=%.2f | error=%s",
             response_id,
             error_elapsed_ms,
             str(e)[:100],
