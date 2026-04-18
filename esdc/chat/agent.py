@@ -199,6 +199,8 @@ def create_agent(
     tools: list | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     context_length: int | None = None,
+    external_tool_names: set[str] | None = None,
+    external_tools: list | None = None,
 ) -> Runnable:
     """Create a LangGraph agent with tools.
 
@@ -209,6 +211,12 @@ def create_agent(
         context_length: Maximum context length in tokens for messages.
             If None, auto-detected from the LLM model's context window.
             Explicit values (e.g. from TUI) take precedence.
+        external_tool_names: Set of tool names that are external (e.g. OpenTerminal).
+            External tool calls are not executed server-side; instead, a marker
+            is returned for the Responses API to pass through to the client.
+        external_tools: Optional list of LangChain tool objects for external tools.
+            These are bound to the LLM so it can call them, but their execution
+            is intercepted by tool_node and returned as markers.
 
     Returns:
         A compiled StateGraph agent
@@ -230,6 +238,11 @@ def create_agent(
             get_timeseries_columns,
             get_resources_columns,
         ]
+
+    if external_tools:
+        tools = tools + external_tools
+
+    _external_tool_names = external_tool_names or set()
 
     all_tools: dict[str, Any] = {tool.name: tool for tool in tools}
     tools_by_name = dict(all_tools)
@@ -438,6 +451,23 @@ def create_agent(
             tool_name = tool_call["name"]
             tool_args = tool_call.get("args", {})
             tool_id = tool_call.get("id", "unknown")
+
+            if tool_name in _external_tool_names:
+                logger.info(
+                    "🔧 TOOL_NODE: External tool call detected: %s (id=%s). "
+                    "Returning marker for passthrough.",
+                    tool_name,
+                    tool_id,
+                )
+                result.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": f"[EXTERNAL_TOOL_CALL:{tool_name}]",
+                    }
+                )
+                continue
 
             if tool_name not in allowed_tools:
                 logger.warning(
