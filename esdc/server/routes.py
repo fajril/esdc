@@ -186,6 +186,22 @@ async def chat_completions(
     use_native = should_use_native_format(headers, request.stream)
     logger.debug(f"[REQUEST {request_id}] use_native_format={use_native}")
 
+    # DEBUG: Log tools parameter if present (for OpenTerminal passthrough investigation)
+    request_tools = getattr(request, "tools", None)
+    if request_tools:
+        tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in request_tools
+        ]
+        logger.info(
+            "[REQUEST %s] CHAT_TOOLS_PRESENT: count=%d, names=%s",
+            request_id,
+            len(request_tools),
+            tool_names,
+        )
+
     try:
         if request.stream:
             # Return streaming response
@@ -332,6 +348,33 @@ async def create_response(
     logger.info(
         f"[RESPONSES {request_id}] START - stream={request.stream}, "
         f"input={input_type}, model={request.model}"
+    )
+
+    # DEBUG: Log raw tools parameter for OpenTerminal passthrough investigation
+    tools_raw_preview = "None"
+    if request.tools:
+        tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in request.tools
+        ]
+        tools_raw_preview = f"count={len(request.tools)}, names={tool_names}"
+    logger.debug(
+        "[RESPONSES %s] RAW_REQUEST: tools=%s, instructions_len=%d, "
+        "instructions_preview=%s, stream=%s, input_type=%s",
+        request_id,
+        tools_raw_preview,
+        len(request.instructions) if request.instructions else 0,
+        (request.instructions or "")[:200] if request.instructions else "None",
+        request.stream,
+        input_type,
+    )
+    logger.debug(
+        "[RESPONSES %s] RAW_REQUEST_HEADERS: content_type=%s, user_agent=%s",
+        request_id,
+        request_obj.headers.get("content-type", ""),
+        request_obj.headers.get("user-agent", ""),
     )
 
     try:

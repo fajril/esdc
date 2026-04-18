@@ -397,6 +397,29 @@ async def generate_responses_stream(
     ) = categorize_tools(tools)
     external_langchain_tools = convert_external_specs_to_langchain(external_tool_specs)
 
+    # DEBUG: Log tool categorization for OpenTerminal passthrough investigation
+    raw_tool_names = []
+    if tools:
+        raw_tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in tools
+        ]
+    logger.debug(
+        "[RESPONSES %s] TOOL_CATEGORIZATION: "
+        "tools_received=%d, raw_names=%s, "
+        "internal_count=%d, internal_names=%s, "
+        "external_count=%d, external_names=%s",
+        response_id,
+        len(tools) if tools else 0,
+        raw_tool_names[:20],
+        len(internal_tool_names),
+        sorted(internal_tool_names)[:5],
+        len(external_tool_names),
+        sorted(external_tool_names),
+    )
+
     if external_tool_names:
         logger.info(
             "[RESPONSES %s] External tools detected: %s",
@@ -410,6 +433,15 @@ async def generate_responses_stream(
         checkpointer=None,
         external_tool_names=external_tool_names,
         external_tools=external_langchain_tools if external_langchain_tools else None,
+    )
+
+    # DEBUG: Log agent creation params
+    logger.debug(
+        "[RESPONSES %s] AGENT_CREATED: external_tool_names=%s, "
+        "external_langchain_count=%d",
+        response_id,
+        sorted(external_tool_names),
+        len(external_langchain_tools) if external_langchain_tools else 0,
     )
 
     # Convert input to LangChain messages
@@ -1073,6 +1105,29 @@ async def generate_responses_sync(
         sync_external_tool_specs
     )
 
+    # DEBUG: Log tool categorization for OpenTerminal passthrough investigation
+    sync_raw_tool_names = []
+    if tools:
+        sync_raw_tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in tools
+        ]
+    logger.debug(
+        "[RESPONSES %s] SYNC TOOL_CATEGORIZATION: "
+        "tools_received=%d, raw_names=%s, "
+        "internal_count=%d, internal_names=%s, "
+        "external_count=%d, external_names=%s",
+        response_id,
+        len(tools) if tools else 0,
+        sync_raw_tool_names[:20],
+        len(sync_internal_tool_names),
+        sorted(sync_internal_tool_names)[:5],
+        len(sync_external_tool_names),
+        sorted(sync_external_tool_names),
+    )
+
     if sync_external_tool_names:
         logger.info(
             "[RESPONSES %s] SYNC External tools detected: %s",
@@ -1088,6 +1143,15 @@ async def generate_responses_sync(
         external_tools=sync_external_langchain_tools
         if sync_external_langchain_tools
         else None,
+    )
+
+    # DEBUG: Log sync agent creation params
+    logger.debug(
+        "[RESPONSES %s] SYNC AGENT_CREATED: external_tool_names=%s, "
+        "external_langchain_count=%d",
+        response_id,
+        sorted(sync_external_tool_names),
+        len(sync_external_langchain_tools) if sync_external_langchain_tools else 0,
     )
 
     # Convert input to LangChain messages

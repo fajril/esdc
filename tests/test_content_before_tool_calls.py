@@ -6,7 +6,7 @@ tools before the thinking/reasoning text.
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import AIMessage

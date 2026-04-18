@@ -2,7 +2,7 @@
 
 # Standard library
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Third-party
 import pytest

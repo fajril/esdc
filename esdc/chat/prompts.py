@@ -120,35 +120,41 @@ Call `get_schema(table_name)` for column details, or `get_recommended_table` if 
 
 ## Visualization Support
 
-When external tools are available (e.g., `run_command`, `write_file`, `read_file`), you can create charts and visualizations:
+When external tools are available (Compute Engine, File Processing, View File), you can create charts and visualizations that display inline in the chat.
+
+### Visualization Workflow
 
 1. **Get data**: Use `execute_sql` to retrieve the data
-2. **Create plot**: Use the `run_command` tool to execute a Python script that:
-   - Accepts data as inline variables (JSON-encoded in the command)
-   - Uses matplotlib with `matplotlib.use('Agg')` backend (required in terminal environments)
-   - Saves the output to `/home/user/output/` directory with a descriptive filename
-3. **Inform user**: After creating a plot, tell the user the filename so they can find it in the file browser
+2. **Save script**: Use the **File Processing** tool to save a Python script
+3. **Execute script**: Use the **Compute Engine** tool to run the script
+4. **Display result**: Use the **View File** tool to show the plot inline
 
-**Example pattern for creating a plot:**
-When calling `run_command`, structure the command like:
-```
-python3 << 'PYEOF'
+### Creating Plots
+
+```python
 import json
+import time
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+# Generate timestamped filename to avoid collisions
+timestamp = time.strftime('%Y%m%d_%H%M%S')
+output_path = f'/home/user/output/forecast_{timestamp}.png'
+
 data = json.loads('<JSON-encoded data from SQL result>')
 # ... create chart ...
-plt.savefig('/home/user/output/descriptive_name.png', dpi=150, bbox_inches='tight')
-print('Plot saved to /home/user/output/descriptive_name.png')
-PYEOF
+plt.savefig(output_path, dpi=150, bbox_inches='tight')
+print(f'Plot saved to {output_path}')
 ```
 
-**Important guidelines:**
-- Always use `matplotlib.use('Agg')` before importing pyplot in terminal environments
-- Save plots to `/home/user/output/` which is accessible via the file browser
-- Keep inline data small — aggregate data in SQL first, only pass summary statistics
+### Guidelines
+
+- Always use `import time; time.strftime('%Y%m%d_%H%M%S')` for unique filenames
+- Always save to `/home/user/output/` directory
+- Always use `matplotlib.use('Agg')` before importing pyplot
+- **Always use View File after creating a plot** — this displays it inline in the chat
+- Aggregate data in SQL first, only embed summary statistics in scripts
 - If data is too large for inline, suggest the user filter or summarize the query
 
 ## Context Management
@@ -448,5 +454,23 @@ def get_system_prompt() -> str:
 
     Schema is available on-demand via the get_schema tool.
     Column selection rules and table guide remain in the prompt.
+    Conditionally includes visualization guidance when OpenTerminal is configured.
     """
-    return SYSTEM_PROMPT
+    from esdc.configs import Config
+
+    ot_config = Config.get_openterminal_config()
+    if ot_config:
+        return SYSTEM_PROMPT
+
+    # Remove visualization section when OpenTerminal is not configured
+    vis_start = "## Visualization Support"
+    vis_end_marker = "## Context Management"
+
+    prompt = SYSTEM_PROMPT
+    vis_start_idx = prompt.find(vis_start)
+    vis_end_idx = prompt.find(vis_end_marker)
+
+    if vis_start_idx != -1 and vis_end_idx != -1:
+        return prompt[:vis_start_idx] + prompt[vis_end_idx:]
+
+    return prompt

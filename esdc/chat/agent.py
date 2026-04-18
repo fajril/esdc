@@ -15,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 
 # Local
 from esdc.chat.context_manager import AgentState, manage_context_node
+from esdc.chat.openterminal import get_openterminal_tools
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.query_classifier import (
     QueryClassifier,
@@ -238,6 +239,11 @@ def create_agent(
             get_timeseries_columns,
             get_resources_columns,
         ]
+
+    # Conditionally add OpenTerminal tools when configured
+    openterminal_tools = get_openterminal_tools()
+    if openterminal_tools:
+        tools = tools + openterminal_tools
 
     if external_tools:
         tools = tools + external_tools
