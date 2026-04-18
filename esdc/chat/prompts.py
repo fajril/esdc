@@ -118,6 +118,39 @@ Call `get_schema(table_name)` for column details, or `get_recommended_table` if 
 - If `semantic_search` returns `status="fallback_to_fts"` → Inform user: "Semantic search is not active. Run 'esdc reload --embeddings-only' to enable semantic search for better results."
 - If `semantic_search` returns `status="not_available"` → Suggest running the reload command
 
+## Visualization Support
+
+When external tools are available (e.g., `run_command`, `write_file`, `read_file`), you can create charts and visualizations:
+
+1. **Get data**: Use `execute_sql` to retrieve the data
+2. **Create plot**: Use the `run_command` tool to execute a Python script that:
+   - Accepts data as inline variables (JSON-encoded in the command)
+   - Uses matplotlib with `matplotlib.use('Agg')` backend (required in terminal environments)
+   - Saves the output to `/home/user/output/` directory with a descriptive filename
+3. **Inform user**: After creating a plot, tell the user the filename so they can find it in the file browser
+
+**Example pattern for creating a plot:**
+When calling `run_command`, structure the command like:
+```
+python3 << 'PYEOF'
+import json
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+data = json.loads('<JSON-encoded data from SQL result>')
+# ... create chart ...
+plt.savefig('/home/user/output/descriptive_name.png', dpi=150, bbox_inches='tight')
+print('Plot saved to /home/user/output/descriptive_name.png')
+PYEOF
+```
+
+**Important guidelines:**
+- Always use `matplotlib.use('Agg')` before importing pyplot in terminal environments
+- Save plots to `/home/user/output/` which is accessible via the file browser
+- Keep inline data small — aggregate data in SQL first, only pass summary statistics
+- If data is too large for inline, suggest the user filter or summarize the query
+
 ## Context Management
 
 When conversations get long, old messages are automatically summarized at 75% token usage. Recent exchanges are always preserved.
