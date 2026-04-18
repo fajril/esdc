@@ -25,7 +25,7 @@ from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger("esdc.server.event_streamer")
 
-DEFAULT_RECURSION_LIMIT = 25
+DEFAULT_RECURSION_LIMIT = 100
 
 
 async def astream_agent_events(
