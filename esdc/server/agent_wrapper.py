@@ -29,12 +29,23 @@ from langchain_core.messages import (
 )
 
 # Local
-from esdc.chat.agent import create_agent
+from esdc.chat.agent import (
+    create_agent,
+    generate_conversation_tags,
+    generate_conversation_title,
+)
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
 from esdc.server.constants import SSE_STREAM_TIMEOUT
 from esdc.server.event_streamer import astream_agent_events
+from esdc.server.title_detection import (
+    create_ancillary_chat_response,
+    create_ancillary_chat_stream_chunks,
+    extract_user_query,
+    get_ancillary_type,
+    is_ancillary_request,
+)
 
 logger = logging.getLogger("esdc.server.agent")
 
@@ -248,6 +259,48 @@ async def generate_streaming_response(
     if not request_id:
         request_id = f"chatcmpl-{stream_uuid}"
 
+    if is_ancillary_request(messages):
+        anc_type = get_ancillary_type(messages) or "other"
+        user_query = extract_user_query(messages)
+        logger.info(
+            "[%s] ANCILLARY: bypassing agent pipeline, type=%s, query=%r",
+            request_id,
+            anc_type,
+            user_query[:80],
+        )
+
+        provider_config = Config.get_provider_config()
+        if not provider_config:
+            for chunk in create_ancillary_chat_stream_chunks(
+                "Error: No provider configured."
+            ):
+                yield chunk
+            return
+
+        provider_config_obj = {
+            "provider_type": provider_config.get("provider_type", "ollama"),
+            "model": provider_config.get("model"),
+            "base_url": provider_config.get("base_url"),
+            "api_key": provider_config.get("api_key"),
+        }
+        llm = create_llm_from_config(provider_config_obj)
+
+        if anc_type == "tags":
+            result = await generate_conversation_tags(llm, user_query)
+        else:
+            result = await generate_conversation_title(llm, user_query)
+
+        logger.info(
+            "[%s] ANCILLARY: completed, type=%s, result=%r",
+            request_id,
+            anc_type,
+            result[:80],
+        )
+
+        for chunk in create_ancillary_chat_stream_chunks(result):
+            yield chunk
+        return
+
     chunk_counter = 0
 
     def next_chunk_id() -> str:
@@ -443,6 +496,41 @@ async def generate_response(
     """
     response_uuid = uuid.uuid4().hex[:12]
     inference_start = time.perf_counter()
+
+    if is_ancillary_request(messages):
+        anc_type = get_ancillary_type(messages) or "other"
+        user_query = extract_user_query(messages)
+        logger.info(
+            "[chatcmpl-%s] ANCILLARY: bypassing agent pipeline, type=%s, query=%r",
+            response_uuid,
+            anc_type,
+            user_query[:80],
+        )
+
+        provider_config = Config.get_provider_config()
+        if not provider_config:
+            return create_ancillary_chat_response("Error: No provider configured.")
+
+        provider_config_obj = {
+            "provider_type": provider_config.get("provider_type", "ollama"),
+            "model": provider_config.get("model"),
+            "base_url": provider_config.get("base_url"),
+            "api_key": provider_config.get("api_key"),
+        }
+        llm = create_llm_from_config(provider_config_obj)
+
+        if anc_type == "tags":
+            result = await generate_conversation_tags(llm, user_query)
+        else:
+            result = await generate_conversation_title(llm, user_query)
+
+        logger.info(
+            "[chatcmpl-%s] ANCILLARY: completed, type=%s, result=%r",
+            response_uuid,
+            anc_type,
+            result[:80],
+        )
+        return create_ancillary_chat_response(result)
 
     try:
         provider_config = Config.get_provider_config()

@@ -233,10 +233,21 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 
 | Entity | Table | Use For |
 |--------|-------|---------|
-| Project details | `project_resources` | Project-specific queries |
-| Field totals | `field_resources` | Pre-aggregated field queries |
-| Work area totals | `wa_resources` | Regional queries |
-| National totals | `nkri_resources` | Country-wide statistics |
+| Project details | `project_resources` | Project-specific queries, cumulative production |
+| Field totals | `field_resources` | Pre-aggregated field queries, cumulative production |
+| Work area totals | `wa_resources` | Regional queries, cumulative production |
+| National totals | `nkri_resources` | Country-wide statistics, cumulative production |
+
+### Resources Column Reference
+| Prefix | Full Name | Description |
+|--------|-----------|-------------|
+| res_* | Reserves | Commercial reserves per WAP snapshot |
+| rec_* | Resources (GRR) | Government Recoverable Resources per WAP snapshot |
+| cprd_grs_* | Cumulative Gross Production | Historical cumulative production per WAP |
+| cprd_sls_* | Cumulative Sales Production | Historical cumulative sales per WAP |
+| eur_res_* | EUR Reserves | Estimated Ultimate Recovery - reserves |
+| eur_rec_* | EUR Resources | Estimated Ultimate Recovery - resources |
+| prj_ioip/igip | In-Place | Initial oil/gas in place (project level only) |
 
 ### Timeseries Tables
 | Entity | Table | Use For |
@@ -245,6 +256,8 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | Field aggregate | `field_timeseries` | Field-level forecast |
 | WA aggregate | `wa_timeseries` | Regional forecast |
 | National aggregate | `nkri_timeseries` | National forecast |
+
+⚠️ **CRITICAL: `*_timeseries` tables are ONLY for forecast/profile data (`tpf_*`, `slf_*`, `rate_*`). NEVER query `cprd_grs_*` or `cprd_sls_*` from `*_timeseries` — always use `*_resources` instead.**
 
 ### Forecast Column Reference
 **CRITICAL: Use `tpf_*`, `slf_*` for forecasts (volumes). NEVER use `rate_*` for forecasts.**
@@ -258,8 +271,6 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | prf_* | Prospective Resources Forecast | Prospective only |
 | ciof_* | Consumed in Operation Forecast | Fuel, Flare, Shrinkage |
 | lossf_* | Loss Production Forecast | Production losses |
-| cprd_grs_* | Cumulative Gross Production | Historical cumulative |
-| cprd_sls_* | Cumulative Sales Production | Historical cumulative |
 | rate_* | Production Rate | **RATE per year, NOT volume** |
 
 ⚠️ Confusion warning: `rate_*` = MSTB/Y or BSCF/Y (rate), `tpf_*` = MSTB or BSCF (volume). Always call `get_timeseries_columns()` before timeseries queries.
@@ -311,6 +322,12 @@ WHERE wk_name ILIKE '%Rokan%'
 SELECT project_name, prj_ioip, prj_igip
 FROM project_resources
 WHERE project_name ILIKE '%Abadi%'
+
+-- Cumulative production (ALWAYS from *_resources, NEVER from *_timeseries)
+SELECT SUM(cprd_grs_oc) as cum_oil_mstb, SUM(cprd_grs_an) as cum_gas_bscf
+FROM field_resources
+WHERE field_name ILIKE '%Duri%'
+  AND report_year = (SELECT MAX(report_year) FROM field_resources)
 ```
 
 ### Timeseries
@@ -389,6 +406,22 @@ WHERE field_name ILIKE '%NAME%'
 ORDER BY year
 ```
 
+**For "produksi kumulatif" queries → Use `field_resources` with `cprd_grs_*` columns:**
+```sql
+SELECT SUM(cprd_grs_oc), SUM(cprd_grs_an)
+FROM field_resources
+WHERE field_name ILIKE '%NAME%'
+  AND report_year = (SELECT MAX(report_year) FROM field_resources)
+```
+
+**For "tren produksi kumulatif per WAP" queries → Use `field_resources` with `cprd_grs_*` across report_years:**
+```sql
+SELECT report_year, SUM(cprd_grs_oc)
+FROM field_resources
+WHERE field_name ILIKE '%NAME%'
+ORDER BY report_year
+```
+
 ### Common Mistakes to Avoid
 
 1. ❌ Calling `knowledge_traversal` for simple factual queries
@@ -396,6 +429,7 @@ ORDER BY year
 3. ❌ Calling `get_resources_columns` when columns are already listed
 4. ❌ Forgetting `report_year` filter in all queries
 5. ❌ Using `prj_ioip` in field_resources (only available in project_resources)
+6. ❌ Querying `cprd_grs_*` or `cprd_sls_*` from `*_timeseries` — use `*_resources` instead
 
 ### FTS Performance Note
 

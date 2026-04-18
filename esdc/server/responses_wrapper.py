@@ -25,7 +25,11 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 # Local
-from esdc.chat.agent import create_agent, generate_conversation_title
+from esdc.chat.agent import (
+    create_agent,
+    generate_conversation_tags,
+    generate_conversation_title,
+)
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
@@ -48,10 +52,13 @@ from esdc.server.responses_events import (
 from esdc.server.responses_models import ResponseInputItem
 from esdc.server.stream_utils import chunk_json
 from esdc.server.title_detection import (
+    create_tags_stream_events,
+    create_tags_sync_response,
     create_title_stream_events,
     create_title_sync_response,
-    extract_user_query_from_title_request,
-    is_title_generation_request,
+    extract_user_query,
+    get_ancillary_type,
+    is_ancillary_request,
 )
 
 logger = logging.getLogger("esdc.server.responses")
@@ -301,13 +308,16 @@ async def generate_responses_stream(
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
     seq = SequenceCounter()
 
-    # Bypass: Detect OpenWebUI title-generation requests
-    if is_title_generation_request(input_messages):
+    # Bypass: Detect OpenWebUI ancillary requests (title/tag generation)
+    if is_ancillary_request(input_messages):
+        anc_type = get_ancillary_type(input_messages) or "other"
+        user_query = extract_user_query(input_messages)
+
         logger.info(
-            "[RESPONSES %s] TITLE_GEN_STREAM: bypassing agent pipeline",
+            "[RESPONSES %s] ANCILLARY_STREAM: bypassing agent pipeline, type=%s",
             response_id,
+            anc_type,
         )
-        user_query = extract_user_query_from_title_request(input_messages)
 
         provider_config = Config.get_provider_config()
         if not provider_config:
@@ -326,15 +336,24 @@ async def generate_responses_stream(
         }
         llm = create_llm_from_config(provider_config_obj)
 
-        title = await generate_conversation_title(llm, user_query)
-        logger.info(
-            "[RESPONSES %s] TITLE_GEN_STREAM: completed, title=%r",
-            response_id,
-            title,
-        )
-
-        for event in create_title_stream_events(title, response_id, model):
-            yield event
+        if anc_type == "tags":
+            result = await generate_conversation_tags(llm, user_query)
+            logger.info(
+                "[RESPONSES %s] ANCILLARY_STREAM: completed, type=tags, result=%r",
+                response_id,
+                result,
+            )
+            for event in create_tags_stream_events(result, response_id, model):
+                yield event
+        else:
+            result = await generate_conversation_title(llm, user_query)
+            logger.info(
+                "[RESPONSES %s] ANCILLARY_STREAM: completed, type=title, result=%r",
+                response_id,
+                result,
+            )
+            for event in create_title_stream_events(result, response_id, model):
+                yield event
         return
 
     # DEBUG: Track execution
@@ -896,10 +915,16 @@ async def generate_responses_sync(
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
     output_items: list[dict[str, Any]] = []
 
-    # Bypass: Detect OpenWebUI title-generation requests
-    if is_title_generation_request(input_messages):
-        logger.info("[RESPONSES %s] TITLE_GEN: bypassing agent pipeline", response_id)
-        user_query = extract_user_query_from_title_request(input_messages)
+    # Bypass: Detect OpenWebUI ancillary requests (title/tag generation)
+    if is_ancillary_request(input_messages):
+        anc_type = get_ancillary_type(input_messages) or "other"
+        user_query = extract_user_query(input_messages)
+
+        logger.info(
+            "[RESPONSES %s] ANCILLARY: bypassing agent pipeline, type=%s",
+            response_id,
+            anc_type,
+        )
 
         provider_config = Config.get_provider_config()
         if not provider_config:
@@ -918,17 +943,27 @@ async def generate_responses_sync(
         }
         llm = create_llm_from_config(provider_config_obj)
 
-        title_start = time.perf_counter()
-        title = await generate_conversation_title(llm, user_query)
-        title_elapsed = (time.perf_counter() - title_start) * 1000
-        logger.info(
-            "[RESPONSES %s] TITLE_GEN: completed in %.0fms, title=%r",
-            response_id,
-            title_elapsed,
-            title,
-        )
-
-        return create_title_sync_response(title, response_id)
+        anc_start = time.perf_counter()
+        if anc_type == "tags":
+            result = await generate_conversation_tags(llm, user_query)
+            anc_elapsed = (time.perf_counter() - anc_start) * 1000
+            logger.info(
+                "[RESPONSES %s] ANCILLARY: completed in %.0fms, type=tags, result=%r",
+                response_id,
+                anc_elapsed,
+                result,
+            )
+            return create_tags_sync_response(result, response_id)
+        else:
+            result = await generate_conversation_title(llm, user_query)
+            anc_elapsed = (time.perf_counter() - anc_start) * 1000
+            logger.info(
+                "[RESPONSES %s] ANCILLARY: completed in %.0fms, type=title, result=%r",
+                response_id,
+                anc_elapsed,
+                result,
+            )
+            return create_title_sync_response(result, response_id)
 
     # Create LLM and agent
     provider_config = Config.get_provider_config()

@@ -767,14 +767,14 @@ def get_timeseries_columns(
        - Units: MSTB (oil), BSCF (gas) - these are VOLUMES, not rates
        - Example: tpf_oc = forecast oil+condensate volume in MSTB
 
-    2. Historical CUMULATIVE: cprd_grs_*, cprd_sls_*
-       - Units: MSTB (oil), BSCF (gas) - cumulative production volumes
-       - Example: cprd_grs_oc = cumulative gross oil+condensate in MSTB
-
-    3. Production RATES: rate_*
+    2. Production RATES: rate_*
        - Units: MSTB/Y (oil), BSCF/Y (gas) - RATES per year, NOT volumes
        - Example: rate_oc = production rate in MSTB per year
        - NEVER use for forecast queries!
+
+    ⚠️ CUMULATIVE PRODUCTION (cprd_grs_*, cprd_sls_*) are NOT available via this tool.
+    Use get_resources_columns(volume_type="cumulative_production") instead.
+    Cumulative production must ALWAYS be queried from *_resources, NEVER *_timeseries.
 
     UNIT DIFFERENCE:
     - tpf_oc = 1000 MSTB means 1 million barrels total volume
@@ -796,7 +796,7 @@ def get_timeseries_columns(
     Examples:
     - get_timeseries_columns("forecast", "tpf", "oc") → tpf_oc for forecast volumes
     - get_timeseries_columns("forecast", "slf", "an") → slf_an for sales forecast gas
-    - get_timeseries_columns("historical", substance="oc") → cprd_grs_oc for cumulative
+    - get_timeseries_columns("rate", substance="oc") → rate_oc for production rate
     - get_timeseries_columns("rate", substance="oc") → rate_oc for production rate
 
     IMPORTANT: For forecast queries, the model often incorrectly selects rate_* columns.

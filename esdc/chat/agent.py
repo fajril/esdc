@@ -45,7 +45,7 @@ from esdc.chat.tools import (
 # Logger is configured by app.py (runs first)
 logger = logging.getLogger("esdc.chat.agent")
 
-MAX_TOOL_CALLS = 12
+MAX_TOOL_CALLS = 50
 
 
 _context_length_cache: dict[str, int] = {}
@@ -200,6 +200,81 @@ async def generate_conversation_title(
         return query_clean
 
 
+async def generate_conversation_tags(
+    llm: BaseChatModel,
+    user_query: str,
+) -> str:
+    """Generate broad tags categorizing the conversation.
+
+    Args:
+        llm: Language model to use for generation
+        user_query: First user query
+
+    Returns:
+        Comma-separated tags (max 100 chars)
+    """
+    prompt = (
+        "Generate 1-3 broad tags categorizing this user query.\n"
+        "The tags should be general categories. "
+        "Respond with ONLY comma-separated tags,\n"
+        "no quotes, no explanation, no numbering.\n\n"
+        "Examples:\n"
+        '- "how much oil reserves in Rokan field" -> '
+        '"Reserves, Oil, Rokan"\n'
+        '- "list all working areas with gas production" -> '
+        '"Working Areas, Gas Production"\n'
+        '- "compare reserves between 2020 and 2023" -> '
+        '"Reserves, Comparison"\n\n'
+        "User query: {query}\n\n"
+        "Tags:"
+    )
+
+    try:
+        messages = [
+            SystemMessage(
+                content="You are a helpful assistant that generates broad categorization tags."  # noqa: E501
+            ),
+            HumanMessage(content=prompt.format(query=user_query)),
+        ]
+
+        total_chars = sum(len(str(m.content)) for m in messages)
+        logger.debug(
+            "[INFERENCE] tag_generation_start | messages=%d | total_chars=%d",
+            len(messages),
+            total_chars,
+        )
+        inference_start = time.perf_counter()
+
+        response = await llm.ainvoke(messages)
+
+        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+        response_content = (
+            response.content if hasattr(response, "content") else str(response)
+        )
+        content_len = len(response_content) if response_content else 0
+        logger.debug(
+            "[INFERENCE] tag_generation_complete | elapsed=%.2fms | response_len=%d",
+            inference_elapsed_ms,
+            content_len,
+        )
+        content = response.content
+        if isinstance(content, list):
+            tags = str(content[0]) if content else ""
+        else:
+            tags = str(content)
+        tags = tags.strip().strip("\"'")
+
+        if len(tags) > 100:
+            tags = tags[:97] + "..."
+
+        return tags
+    except Exception:
+        query_clean = user_query.strip()
+        if len(query_clean) > 100:
+            return query_clean[:97] + "..."
+        return query_clean
+
+
 def create_agent(
     llm: BaseChatModel,
     tools: list | None = None,
@@ -285,18 +360,27 @@ def create_agent(
         ]
 
         tool_call_count = state.get("tool_call_count", 0)
-        if tool_call_count >= 4:
+        if tool_call_count >= 35:
             nudge = (
                 f"CRITICAL: You have already made {tool_call_count} tool calls. "
-                "If you have enough data to answer the user's question, "
-                "do NOT make more tool calls. "
-                "Synthesize the data you already have and respond directly. "
-                "Only call another tool if you are absolutely "
-                "missing critical information."
+                "You are approaching the limit of 50. "
+                "You MUST synthesize the data you already have and respond directly. "
+                "Do NOT make more tool calls unless absolutely essential."
             )
             messages_with_system.append(SystemMessage(content=nudge))
             logger.info(
-                "[AGENT] synthesize_nudge_injected | tool_call_count=%d",
+                "[AGENT] strong_nudge_injected | tool_call_count=%d",
+                tool_call_count,
+            )
+        elif tool_call_count >= 20:
+            nudge = (
+                f"NOTE: You have made {tool_call_count} tool calls. "
+                "If you have enough data to answer the user's question, "
+                "consider synthesizing your findings rather than making more calls."
+            )
+            messages_with_system.append(SystemMessage(content=nudge))
+            logger.info(
+                "[AGENT] gentle_nudge_injected | tool_call_count=%d",
                 tool_call_count,
             )
 
@@ -661,7 +745,7 @@ async def run_agent_stream(
         Dict with 'type' (message/tool/error) and 'content' or 'token_usage'
     """
     config: RunnableConfig = {  # type: ignore[assignment]
-        "recursion_limit": 25,
+        "recursion_limit": 100,
         "configurable": {
             "thread_id": thread_id,
             "checkpoint_ns": "esdc_chat",

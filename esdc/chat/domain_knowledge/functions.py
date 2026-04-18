@@ -890,8 +890,12 @@ def get_timeseries_columns(
     forecast_type: str = "tpf",
     substance: str = "oc",
 ) -> dict[str, Any]:
-    """
-    Get the correct column names for timeseries queries.
+    """Get the correct column names for timeseries queries.
+
+    NOTE: Cumulative production columns (cprd_grs_*, cprd_sls_*)
+    should always be queried from *_resources tables, NOT *_timeseries.
+    If data_type is 'historical' or 'cumulative', this function returns
+    a redirect message pointing to get_resources_columns() instead.
     """
     valid_data_types = ["forecast", "historical", "cumulative", "rate"]
     valid_forecast_types = ["tpf", "slf", "spf", "crf", "prf", "ciof", "lossf"]
@@ -901,16 +905,37 @@ def get_timeseries_columns(
     forecast_type = forecast_type.lower().strip()
     substance = substance.lower().strip()
 
-    # Initialize variables that will be set in conditionals
-    category: str = ""
-    prefix: str = ""
-    unit_suffix: str = ""
-    description_base: str = ""
-
     if data_type not in valid_data_types:
         return {
             "error": f"Invalid data_type '{data_type}'. Must be one of: {valid_data_types}",  # noqa: E501
             "column": None,
+        }
+
+    if data_type in ["historical", "cumulative"]:
+        cprd_col = f"cprd_grs_{substance}"
+        cprd_sls_col = f"cprd_sls_{substance}"
+        return {
+            "error": (
+                f"Cumulative production columns ({cprd_col}, {cprd_sls_col}) "
+                f"must ALWAYS be queried from *_resources tables, NOT *_timeseries. "
+                f"Use get_resources_columns(volume_type='cumulative_production', "
+                f"substance='{substance}') instead."
+            ),
+            "column": cprd_col,
+            "tables": [
+                "project_resources",
+                "field_resources",
+                "wa_resources",
+                "nkri_resources",
+            ],
+            "category": "cumulative_production",
+            "redirect_to": "get_resources_columns",
+            "warning": (
+                "NEVER query cprd_grs_* or cprd_sls_* from *_timeseries. "
+                "Always use *_resources tables for cumulative production data."
+            ),
+            "data_type": data_type,
+            "substance": substance,
         }
 
     if data_type == "forecast" and forecast_type not in valid_forecast_types:
@@ -939,16 +964,16 @@ def get_timeseries_columns(
             "lossf": "Loss Production Forecast",
         }
         description_base = descriptions.get(forecast_type, "Forecast")
-    elif data_type in ["historical", "cumulative"]:
-        prefix = "cprd_grs"
-        category = "historical"
-        unit_suffix = ""
-        description_base = "Cumulative gross production"
     elif data_type == "rate":
         prefix = "rate"
         category = "rate"
         unit_suffix = "/Y"
         description_base = "Production rate"
+    else:
+        prefix = ""
+        category = ""
+        unit_suffix = ""
+        description_base = ""
 
     substance_descriptions = {
         "oil": "oil",
@@ -1010,10 +1035,6 @@ def get_timeseries_columns(
             "SELECT SUM(tpf_oc) FROM project_timeseries WHERE year = 2025",
             "SELECT year, tpf_oc FROM field_timeseries WHERE field_name LIKE '%Duri%' ORDER BY tpf_oc DESC LIMIT 1",  # noqa: E501
         ]
-    elif category == "historical":
-        examples = [
-            "SELECT MAX(cprd_grs_oc) FROM field_timeseries WHERE field_name LIKE '%Duri%'"  # noqa: E501
-        ]
     elif category == "rate":
         examples = [
             "SELECT year, rate_oc FROM project_timeseries WHERE project_name LIKE '%Duri%' AND year = 2024"  # noqa: E501
@@ -1042,7 +1063,13 @@ def get_resources_columns(
     """
     Get the correct column names for static resource tables.
     """
-    valid_volume_types = ["reserves", "resources", "risked"]
+    valid_volume_types = [
+        "reserves",
+        "resources",
+        "risked",
+        "cumulative_production",
+        "cumulative_sales",
+    ]
     valid_substances = ["oil", "con", "ga", "gn", "oc", "an"]
 
     volume_type = volume_type.lower().strip()
@@ -1050,13 +1077,15 @@ def get_resources_columns(
 
     if volume_type not in valid_volume_types:
         return {
-            "error": f"Invalid volume_type '{volume_type}'",
+            "error": f"Invalid volume_type '{volume_type}'. Must be one of: {valid_volume_types}",  # noqa: E501
             "column": None,
         }
 
     if substance not in valid_substances:
         return {
-            "error": f"Invalid substance '{substance}'",
+            "error": (
+                f"Invalid substance '{substance}'. Must be one of: {valid_substances}"
+            ),
             "column": None,
         }
 
@@ -1068,6 +1097,14 @@ def get_resources_columns(
         prefix = "rec"
         volume_desc = "Resources"
         category = "resources"
+    elif volume_type == "cumulative_production":
+        prefix = "cprd_grs"
+        volume_desc = "Cumulative Gross Production"
+        category = "cumulative_production"
+    elif volume_type == "cumulative_sales":
+        prefix = "cprd_sls"
+        volume_desc = "Cumulative Sales Production"
+        category = "cumulative_sales"
     else:
         prefix = "rec"
         volume_desc = "Risked Resources"
@@ -1108,6 +1145,12 @@ def get_resources_columns(
     elif volume_type == "risked":
         warning = "Use rec_*_risked for risked prospective resources."
         incorrect_alternatives = [f"res_{substance}", f"rec_{substance}"]
+    elif volume_type in ["cumulative_production", "cumulative_sales"]:
+        warning = (
+            f"ALWAYS query {prefix}_* from *_resources tables. "
+            f"NEVER use *_timeseries for cumulative production columns."
+        )
+        incorrect_alternatives = []
 
     examples = [
         f"SELECT SUM({column}) FROM field_resources WHERE field_name LIKE '%Duri%'",
@@ -1412,18 +1455,6 @@ def get_forecast_vs_historical_guide() -> dict[str, Any]:
     return {
         "historical": {
             "columns": [
-                "cprd_grs_oil",
-                "cprd_grs_con",
-                "cprd_grs_ga",
-                "cprd_grs_gn",
-                "cprd_grs_oc",
-                "cprd_grs_an",
-                "cprd_sls_oil",
-                "cprd_sls_con",
-                "cprd_sls_ga",
-                "cprd_sls_gn",
-                "cprd_sls_oc",
-                "cprd_sls_an",
                 "rate_oil",
                 "rate_con",
                 "rate_ga",
@@ -1431,9 +1462,15 @@ def get_forecast_vs_historical_guide() -> dict[str, Any]:
                 "rate_oc",
                 "rate_an",
             ],
-            "description": "Cumulative production (cprd_*) and production rates (rate_*)",  # noqa: E501
-            "data_type": "Actual/factual historical data",
+            "description": "Production rates (rate_*) from timeseries tables",
+            "data_type": "Actual/factual historical rate data",
             "year_logic": "year <= hist_year OR year <= report_year",
+            "note": (
+                "Cumulative production columns (cprd_grs_*, cprd_sls_*) are NOT "
+                "included here. They must ALWAYS be queried from *_resources tables, "
+                "NEVER from *_timeseries. Use get_resources_columns("
+                "volume_type='cumulative_production') for those."
+            ),
         },
         "forecast": {
             "columns": [
