@@ -78,9 +78,20 @@ class OpenAIProvider(Provider):
         api_key: str | None = None,
         config: ProviderConfig | None = None,
         temperature: float = 0.0,
+        reasoning_effort: str | None = None,
         **kwargs,
     ) -> ChatOpenAI:
-        """Create a ChatOpenAI instance."""
+        """Create a ChatOpenAI instance.
+
+        Args:
+            model: Model name (e.g. "gpt-4o-mini", "o3-mini")
+            api_key: API key or OAuth access token
+            config: Provider configuration (used for OAuth)
+            temperature: Sampling temperature
+            reasoning_effort: OpenAI reasoning effort level.
+                Supported values: "none", "minimal", "low", "medium", "high", "xhigh".
+                Only applicable to reasoning models (o-series, GPT-5).
+        """
         if not model:
             model = cls.get_default_model()
 
@@ -97,6 +108,12 @@ class OpenAIProvider(Provider):
                 config.oauth.update(new_tokens)
                 config.oauth["expires_at"] = int(new_tokens.get("expires_in", 3600))
                 effective_api_key = new_tokens.get("access_token")
+
+        if reasoning_effort is not None:
+            kwargs["extra_body"] = {
+                **kwargs.get("extra_body", {}),
+                "reasoning_effort": reasoning_effort,
+            }
 
         return ChatOpenAI(
             model=model,

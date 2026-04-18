@@ -281,6 +281,10 @@ class ResponsesRequest(BaseModel):
     temperature: float | None = Field(default=0.7, ge=0, le=2)
     max_output_tokens: int | None = Field(default=None, ge=1)
     top_p: float | None = Field(default=1, ge=0, le=1)
+    reasoning_effort: str | None = Field(
+        default=None,
+        description="Reasoning effort level: none, minimal, low, medium, high, xhigh",
+    )
 
 
 class Response(BaseModel):

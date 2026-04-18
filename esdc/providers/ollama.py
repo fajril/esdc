@@ -169,11 +169,29 @@ class OllamaProvider(Provider):
         model: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.0,
+        reasoning_effort: str | None = None,
         **kwargs,
     ) -> ChatOllama:
-        """Create a ChatOllama instance."""
+        """Create a ChatOllama instance.
+
+        Args:
+            model: Model name (e.g. "qwen3", "deepseek-r1")
+            base_url: Ollama server URL
+            temperature: Sampling temperature
+            reasoning_effort: Reasoning effort level. Maps to ChatOllama's
+                ``reasoning`` parameter:
+                - None: model default (no think tags captured)
+                - "none": reasoning=False (disable thinking)
+                - "low"/"medium"/"high": reasoning=True (enables thinking;
+                  string intensity only supported by gpt-oss cloud model)
+        """
         if not model:
             model = cls.get_default_model(base_url)
+
+        if reasoning_effort == "none":
+            kwargs["reasoning"] = False
+        elif reasoning_effort is not None:
+            kwargs["reasoning"] = reasoning_effort
 
         return ChatOllama(
             model=model,

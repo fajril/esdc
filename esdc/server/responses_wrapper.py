@@ -287,6 +287,7 @@ async def generate_responses_stream(
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     temperature: float = 0.7,
+    reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate Responses API streaming events from LangGraph agent.
 
@@ -302,6 +303,7 @@ async def generate_responses_stream(
             LLM calls an external tool, a function_call item is emitted for
             OpenWebUI to handle.
         temperature: Sampling temperature
+        reasoning_effort: Reasoning effort level (none/minimal/low/medium/high/xhigh)
 
     Yields:
         SSE-formatted event strings
@@ -331,6 +333,7 @@ async def generate_responses_stream(
             "model": provider_config.get("model"),
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
+            "reasoning_effort": reasoning_effort,
         }
         llm = create_llm_from_config(provider_config_obj)
 
@@ -387,6 +390,7 @@ async def generate_responses_stream(
         "model": provider_model,
         "base_url": base_url,
         "api_key": api_key,
+        "reasoning_effort": reasoning_effort,
     }
 
     # Categorize tools into internal (ESDC) and external (OpenTerminal etc.)
@@ -1010,6 +1014,7 @@ async def generate_responses_sync(
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     temperature: float = 0.7,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Generate non-streaming Responses API response.
 
@@ -1024,6 +1029,7 @@ async def generate_responses_sync(
             are executed server-side. External tools are returned as function_call
             items for OpenWebUI to handle.
         temperature: Sampling temperature
+        reasoning_effort: Reasoning effort level (none/minimal/low/medium/high/xhigh)
 
     Returns:
         Complete response object
@@ -1052,6 +1058,7 @@ async def generate_responses_sync(
             "model": provider_config.get("model"),
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
+            "reasoning_effort": reasoning_effort,
         }
         llm = create_llm_from_config(provider_config_obj)
 
@@ -1093,6 +1100,7 @@ async def generate_responses_sync(
         "model": provider_model,
         "base_url": base_url,
         "api_key": api_key,
+        "reasoning_effort": reasoning_effort,
     }
 
     # Categorize tools into internal and external

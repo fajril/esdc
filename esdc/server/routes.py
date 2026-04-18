@@ -215,6 +215,7 @@ async def chat_completions(
                         temperature=request.temperature or 0.7,
                         use_native_format=use_native,
                         request_id=request_id,
+                        reasoning_effort=request.reasoning_effort,
                     ):
                         yield f"data: {chunk}\n\n"
 
@@ -258,6 +259,7 @@ async def chat_completions(
                     model=request.model,
                     temperature=request.temperature or 0.7,
                     use_native_format=use_native,
+                    reasoning_effort=request.reasoning_effort,
                 )
 
                 logger.info(f"[REQUEST {request_id}] Non-streaming response completed")
@@ -390,6 +392,7 @@ async def create_response(
                         instructions=request.instructions,
                         tools=request.tools,
                         temperature=request.temperature or 0.7,
+                        reasoning_effort=request.reasoning_effort,
                     ):
                         yield event
 
@@ -420,6 +423,7 @@ async def create_response(
                     instructions=request.instructions,
                     tools=request.tools,
                     temperature=request.temperature or 0.7,
+                    reasoning_effort=request.reasoning_effort,
                 )
 
                 logger.info(
