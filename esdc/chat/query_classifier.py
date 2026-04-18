@@ -14,11 +14,12 @@ from enum import Enum, auto
 class QueryType(Enum):
     """Query classification types."""
 
-    SIMPLE_FACTUAL = auto()  # Direct SQL possible (80% of queries)
-    COMPLEX_FACTUAL = auto()  # May need entity resolution
-    CONCEPTUAL = auto()  # Semantic search needed
-    SPATIAL = auto()  # Spatial queries
-    AMBIGUOUS = auto()  # Fallback to full tool set
+    SIMPLE_FACTUAL = auto()
+    COMPLEX_FACTUAL = auto()
+    CONCEPTUAL = auto()
+    SPATIAL = auto()
+    YEAR_TRANSITION = auto()
+    AMBIGUOUS = auto()
 
 
 @dataclass
@@ -156,6 +157,15 @@ class QueryClassifier:
         ],
     }
 
+    # Year transition patterns (comparing data across years)
+    YEAR_TRANSITION_PATTERNS = [
+        r"tahun\s+\d{4}.*(?:namun|tetapi|tapi|namun\s+di)\s+(?:tahun\s+)?\d{4}",
+        r"dari\s+tahun\s+\d{4}.*(?:ke|menjadi)\s+(?:tahun\s+)?\d{4}",
+        r"di\s+\d{4}.*(?:menjadi|berubah|berpindah).*\d{4}",
+        r"in\s+\d{4}.*(?:became|changed|moved|transitioned).*\d{4}",
+        r"\d{4}\s+(?:to|vs|versus)\s+\d{4}",
+    ]
+
     def classify(self, query: str) -> QueryClassification:
         """Classify a query and return optimal tool configuration.
 
@@ -187,9 +197,20 @@ class QueryClassifier:
                 query_type=QueryType.SPATIAL,
                 confidence=0.85,
                 detected_entities=detected_entities,
-                suggested_table=None,  # resolve_spatial first
+                suggested_table=None,
                 suggested_columns=[],
                 reason=f"Spatial query detected: {spatial_match}",
+            )
+
+        # Check for year transition queries
+        if self._matches_year_transition(query_lower):
+            return QueryClassification(
+                query_type=QueryType.YEAR_TRANSITION,
+                confidence=0.85,
+                detected_entities=detected_entities,
+                suggested_table="project_resources",
+                suggested_columns=["project_class", "report_year"],
+                reason="Year-over-year transition/comparison query detected",
             )
 
         # Check for simple factual queries
@@ -256,59 +277,71 @@ class QueryClassifier:
 
     def _suggest_table(self, query_category: str, entities: dict[str, str]) -> str:
         """Suggest optimal table based on query type and entities."""
-        # Field-level queries
         if "field_name" in entities:
             if query_category in ("reserves", "resources", "inplace"):
                 return "field_resources"
             elif query_category == "production_profile":
                 return "field_timeseries"
 
-        # WA-level queries
         if "wk_name" in entities:
             if query_category in ("reserves", "resources"):
                 return "wa_resources"
             elif query_category == "production_profile":
                 return "wa_timeseries"
 
-        # National-level queries
         if query_category in ("reserves", "resources"):
-            return "field_resources"  # Most common
+            return "field_resources"
 
-        return "project_resources"  # Default fallback
+        return "project_resources"
+
+    def _matches_year_transition(self, query: str) -> bool:
+        """Check if query involves year-over-year transition or comparison."""
+        for pattern in self.YEAR_TRANSITION_PATTERNS:
+            if re.search(pattern, query, re.IGNORECASE):
+                return True
+        return False
+
+
+_SCHEMA_TOOLS = ["Schema Inspector", "Table Lister", "Table Selector"]
 
 
 def get_tools_for_classification(classification: QueryClassification) -> list[str]:
     """Get minimal tool set for query type.
 
+    Returns LangChain tool names (matching @tool decorator strings).
+    ALWAYS includes schema tools since these are lightweight and may be
+    needed for any query type.
+
     Args:
         classification: The query classification
 
     Returns:
-        List of tool names to bind for this query
+        List of LangChain tool names to bind for this query
     """
-    base_tools = ["execute_sql"]
+    base_tools = ["Knowledge Traversal", "SQL Executor"] + _SCHEMA_TOOLS
 
-    if classification.query_type == QueryType.SIMPLE_FACTUAL:
+    if classification.query_type in (
+        QueryType.SIMPLE_FACTUAL,
+        QueryType.YEAR_TRANSITION,
+    ):
         return base_tools
 
     elif classification.query_type == QueryType.CONCEPTUAL:
-        return ["semantic_search"] + base_tools
+        return ["Semantic Search"] + base_tools
 
     elif classification.query_type == QueryType.SPATIAL:
-        return ["resolve_spatial"] + base_tools
+        return ["Spatial Resolver"] + base_tools
 
     elif classification.query_type == QueryType.COMPLEX_FACTUAL:
-        # May need entity resolution
-        return ["knowledge_traversal"] + base_tools
+        return ["Uncertainty Resolver", "Problem Cluster Search"] + base_tools
 
     else:  # AMBIGUOUS
-        # Full tool set
         return [
-            "knowledge_traversal",
-            "semantic_search",
-            "resolve_spatial",
-            "execute_sql",
-        ]
+            "Semantic Search",
+            "Spatial Resolver",
+            "Uncertainty Resolver",
+            "Problem Cluster Search",
+        ] + base_tools
 
 
 def format_classification_for_prompt(classification: QueryClassification) -> str:
@@ -345,6 +378,20 @@ def format_classification_for_prompt(classification: QueryClassification) -> str
         lines.append("- DO NOT call get_resources_columns")
         lines.append("- Use suggested table and columns above")
         lines.append("- Default: report_year = MAX, uncert_level = '2. Middle Value'")
+
+    elif classification.query_type == QueryType.YEAR_TRANSITION:
+        lines.append("**This is a year-over-year transition/comparison query.**")
+        lines.append("- Write ONE SQL query using CASE WHEN or conditional aggregation")
+        lines.append(
+            "- Compare both years in a single query (avoid sequential queries)"
+        )
+        lines.append("- Use `report_year IN (year1, year2)` with GROUP BY report_year")
+        lines.append("- DO NOT query one year then another — combine them")
+        lines.append(
+            "- Example: `SUM(CASE WHEN report_year=2024 THEN rec_oc END)"
+            " as y2024, SUM(CASE WHEN report_year=2025 THEN rec_oc END)"
+            " as y2025`"
+        )
 
     elif classification.query_type == QueryType.CONCEPTUAL:
         lines.append("**This is a conceptual query about issues/problems.**")

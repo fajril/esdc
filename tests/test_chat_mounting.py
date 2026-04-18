@@ -28,10 +28,10 @@ class TestMountingOrder:
         panel = ChatPanel()
 
         # Create widgets
-        thinking = ThinkingIndicator()
-        sql_panel = SQLPanel("SELECT 1;")
-        results_panel = ResultsPanel("test data")
-        ai_msg = ChatMessage("ai", "AI response")
+        ThinkingIndicator()
+        SQLPanel("SELECT 1;")
+        ResultsPanel("test data")
+        ChatMessage("ai", "AI response")
 
         # All widgets should be mountable
         assert hasattr(panel, "mount")

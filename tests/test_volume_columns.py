@@ -221,7 +221,7 @@ class TestShouldUseRiskedColumns:
         assert not should_use_risked_columns("potensi proyek X?", "project_resources")
 
     def test_prospective_project_resources_not_risked(self):
-        """Prospective at project level should NOT use risked (no risked columns exist)."""
+        """Prospective at project level should NOT use risked (no risked columns exist)."""  # noqa: E501
         assert not should_use_risked_columns(
             "potensi eksplorasi proyek X?", "project_resources"
         )

@@ -1,6 +1,5 @@
 """Tests for EmbeddingManager."""
 
-import pytest
 from unittest.mock import Mock, patch
 
 from esdc.knowledge_graph.embedding_manager import EmbeddingManager
@@ -15,13 +14,15 @@ def test_embedding_manager_initialization():
 
 def test_embedding_manager_default_model():
     """Test EmbeddingManager uses default model."""
-    with patch("esdc.knowledge_graph.embedding_manager.ollama.Client"):
-        with patch(
+    with (
+        patch("esdc.knowledge_graph.embedding_manager.ollama.Client"),
+        patch(
             "esdc.knowledge_graph.embedding_manager.Config._load_config"
-        ) as mock_config:
-            mock_config.return_value = None
-            manager = EmbeddingManager()
-            assert manager.model == EmbeddingManager.DEFAULT_MODEL
+        ) as mock_config,
+    ):
+        mock_config.return_value = None
+        manager = EmbeddingManager()
+        assert manager.model == EmbeddingManager.DEFAULT_MODEL
 
 
 def test_generate_embedding_single():

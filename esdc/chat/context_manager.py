@@ -2,7 +2,7 @@
 
 # Standard library
 from collections.abc import Sequence
-from typing import Any
+from typing import Annotated, Any, TypedDict
 
 # Third-party
 from langchain_core.messages import (
@@ -12,7 +12,21 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langgraph.graph import MessagesState
+from langgraph.graph.message import add_messages
+
+
+class AgentState(TypedDict):
+    """LangGraph agent state with separate system_prompt field.
+
+    Stores the system prompt separately from messages to prevent
+    duplication across agent iterations via the add_messages reducer.
+    """
+
+    messages: Annotated[list[AnyMessage], add_messages]
+    system_prompt: str
+    context_metadata: dict
+    allowed_tools: list[str]
+    tool_call_count: int
 
 
 def _get_content_str(content: str | list[str | dict[str, Any]] | None) -> str:
@@ -98,7 +112,7 @@ class ContextManager:
         managed = [
             *system_messages,
             SystemMessage(
-                content=f"[Context automatically compacted to manage token usage. Previous conversation summary below:]\n\n{summary}\n\n[End of summary. Recent {len(recent)} messages follow verbatim:]"
+                content=f"[Context automatically compacted to manage token usage. Previous conversation summary below:]\n\n{summary}\n\n[End of summary. Recent {len(recent)} messages follow verbatim:]"  # noqa: E501
             ),
             *recent,
         ]
@@ -160,7 +174,7 @@ class ContextManager:
         total_chars = 0
 
         for m in messages:
-            # Count message content (applies to HumanMessage, AIMessage, ToolMessage, SystemMessage)
+            # Count message content (applies to HumanMessage, AIMessage, ToolMessage, SystemMessage)  # noqa: E501
             if m.content:
                 total_chars += len(str(m.content))
 
@@ -202,15 +216,18 @@ def estimate_tokens(messages: Sequence[AnyMessage]) -> int:
 
 
 def manage_context_node(
-    state: MessagesState, context_length: int = 6000
+    state: AgentState, context_length: int = 6000
 ) -> dict[str, Any]:
     """LangGraph node wrapper for context management.
 
     This node is called before the agent to proactively manage context.
+    The context_length parameter applies to the messages field only.
+    The system prompt is stored separately in AgentState and does not
+    compete with messages for the context budget.
 
     Args:
-        state: LangGraph state with 'messages' key
-        context_length: Maximum context length in tokens (default: 6000)
+        state: LangGraph state with 'messages' key (and 'system_prompt')
+        context_length: Maximum context length in tokens for messages (default: 6000)
 
     Returns:
         State dict with managed messages and context metadata

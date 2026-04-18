@@ -1,13 +1,17 @@
 # Standard library
+import logging
+import time
 from typing import Any
 
 # Third-party
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
 
+logger = logging.getLogger(__name__)
+
 # Local
-from esdc.auth import is_token_expired, start_oauth_flow
-from esdc.providers.base import Provider, ProviderConfig
+from esdc.auth import is_token_expired, start_oauth_flow  # noqa: E402
+from esdc.providers.base import Provider, ProviderConfig  # noqa: E402
 
 
 class OpenAIProvider(Provider):
@@ -37,9 +41,24 @@ class OpenAIProvider(Provider):
                 api_key=api_key or "",
                 base_url=cls.BASE_URL,
             )
+
+            logger.debug("[INFERENCE] openai_list_models | base_url=%s", cls.BASE_URL)
+            list_start = time.perf_counter()
+
             models = client.models.list()
-            return [m.id for m in models if "gpt" in m.id.lower()]  # type: ignore[union-attr]
-        except Exception:
+
+            elapsed_ms = (time.perf_counter() - list_start) * 1000
+            model_list = [m.id for m in models if "gpt" in m.id.lower()]  # type: ignore[union-attr]
+            logger.debug(
+                "[INFERENCE] openai_list_models_complete | elapsed=%.2fms | models=%d",
+                elapsed_ms,
+                len(model_list),
+            )
+            return model_list
+        except Exception as e:
+            logger.debug(
+                "[INFERENCE] openai_list_models_error | error=%s", str(e)[:100]
+            )
             return []
 
     @classmethod
@@ -50,11 +69,7 @@ class OpenAIProvider(Provider):
     @classmethod
     def is_configured(cls, config: ProviderConfig) -> bool:
         """Check if OpenAI is configured (OAuth or API key)."""
-        if config.api_key:
-            return True
-        if config.oauth and "access_token" in config.oauth:
-            return True
-        return False
+        return bool(config.api_key or (config.oauth and "access_token" in config.oauth))
 
     @classmethod
     def create_llm(
@@ -123,14 +138,28 @@ class OpenAIProvider(Provider):
             if not models:
                 return (
                     False,
-                    "Connected but no models available. Your account may not have access.",
+                    "Connected but no models available. Your account may not have access.",  # noqa: E501
                 )
 
             llm = cls.create_llm(
                 model=config.model or cls.DEFAULT_MODEL,
                 api_key=api_key,
             )
+
+            logger.debug(
+                "[INFERENCE] openai_test_connection_invoke | model=%s",
+                config.model or cls.DEFAULT_MODEL,
+            )
+            invoke_start = time.perf_counter()
+
             llm.invoke("Hello")
+
+            invoke_elapsed_ms = (time.perf_counter() - invoke_start) * 1000
+            logger.debug(
+                "[INFERENCE] openai_test_connection_complete | model=%s | elapsed=%.2fms",  # noqa: E501
+                config.model or cls.DEFAULT_MODEL,
+                invoke_elapsed_ms,
+            )
             return True, f"Connected. Available models: {len(models)} models"
         except Exception as e:
             return False, str(e)

@@ -178,7 +178,7 @@ class TestFullConversation:
         ]
 
         lc_messages = convert_messages_to_langchain(messages)
-        # User message + AIMessage(tool_call) + ToolMessage + AIMessage(response) + User message
+        # User message + AIMessage(tool_call) + ToolMessage + AIMessage(response) + User message  # noqa: E501
         assert len(lc_messages) == 5
         assert isinstance(lc_messages[0], HumanMessage)
         assert isinstance(lc_messages[1], AIMessage)

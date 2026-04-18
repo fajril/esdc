@@ -1,5 +1,6 @@
 # Standard library
 import logging
+import time
 from typing import Any
 
 # Third-party
@@ -53,9 +54,23 @@ class OllamaProvider(Provider):
         try:
             from ollama import list as ollama_list
 
+            logger.debug("[INFERENCE] ollama_list_models | base_url=%s", base_url)
+            list_start = time.perf_counter()
+
             result = ollama_list()
-            return [m.model for m in result.models]  # type: ignore[union-attr]
-        except Exception:
+
+            elapsed_ms = (time.perf_counter() - list_start) * 1000
+            models = [m.model for m in result.models if m.model is not None]
+            logger.debug(
+                "[INFERENCE] ollama_list_models_complete | elapsed=%.2fms | models=%d",
+                elapsed_ms,
+                len(models),
+            )
+            return models
+        except Exception as e:
+            logger.debug(
+                "[INFERENCE] ollama_list_models_error | error=%s", str(e)[:100]
+            )
             return []
 
     @classmethod
@@ -87,7 +102,22 @@ class OllamaProvider(Provider):
             import ollama
 
             client = ollama.Client(host=base_url or cls.DEFAULT_BASE_URL)
+
+            logger.debug(
+                "[INFERENCE] ollama_show_model | model=%s | base_url=%s",
+                model,
+                base_url,
+            )
+            show_start = time.perf_counter()
+
             info = client.show(model)
+
+            show_elapsed_ms = (time.perf_counter() - show_start) * 1000
+            logger.debug(
+                "[INFERENCE] ollama_show_model_complete | model=%s | elapsed=%.2fms",
+                model,
+                show_elapsed_ms,
+            )
 
             model_info = (
                 info.modelinfo
@@ -131,9 +161,7 @@ class OllamaProvider(Provider):
     @classmethod
     def is_configured(cls, config: ProviderConfig) -> bool:
         """Check if Ollama is configured and server is running."""
-        if not config.model and not cls.get_default_model(config.base_url or None):
-            return False
-        return True
+        return bool(config.model or cls.get_default_model(config.base_url or None))
 
     @classmethod
     def create_llm(
@@ -151,6 +179,8 @@ class OllamaProvider(Provider):
             model=model,
             base_url=base_url or cls.DEFAULT_BASE_URL,
             temperature=temperature,
+            sync_client_kwargs={"timeout": 120},
+            async_client_kwargs={"timeout": 120},
             **kwargs,
         )
 
@@ -167,7 +197,21 @@ class OllamaProvider(Provider):
                 model=config.model or default_model,
                 base_url=config.base_url,
             )
+
+            logger.debug(
+                "[INFERENCE] ollama_test_connection_invoke | model=%s",
+                config.model or default_model,
+            )
+            invoke_start = time.perf_counter()
+
             llm.invoke("Hello")
+
+            invoke_elapsed_ms = (time.perf_counter() - invoke_start) * 1000
+            logger.debug(
+                "[INFERENCE] ollama_test_connection_complete | model=%s | elapsed=%.2fms",  # noqa: E501
+                config.model or default_model,
+                invoke_elapsed_ms,
+            )
             return True, f"Connected. Available models: {', '.join(models)}"
         except Exception as e:
             error_msg = str(e)

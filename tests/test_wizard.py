@@ -113,7 +113,7 @@ class TestOpenAISetupScreen:
                         return auth_select
                     return MagicMock()
 
-                screen.query_one = query_one
+                screen.query_one = query_one  # type: ignore[assignment]
 
                 button = MagicMock()
                 button.id = "connect"
@@ -146,7 +146,7 @@ class TestOpenAISetupScreen:
                     return status
                 return MagicMock()
 
-            screen.query_one = query_one
+            screen.query_one = query_one  # type: ignore[assignment]
 
             button = MagicMock()
             button.id = "connect"
@@ -184,7 +184,7 @@ class TestOpenAICompatibleSetupScreen:
                     return status
                 return MagicMock()
 
-            screen.query_one = query_one
+            screen.query_one = query_one  # type: ignore[assignment]
 
             button = MagicMock()
             button.id = "save"
@@ -218,7 +218,7 @@ class TestOpenAICompatibleSetupScreen:
                     return status
                 return MagicMock()
 
-            screen.query_one = query_one
+            screen.query_one = query_one  # type: ignore[assignment]
 
             button = MagicMock()
             button.id = "save"

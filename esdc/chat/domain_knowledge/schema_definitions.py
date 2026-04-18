@@ -127,7 +127,14 @@ DATABASE_SCHEMA: dict[str, dict] = {
             },
             "pod_name": {
                 "type": "TEXT",
-                "description": "POD/Asset name. KEY FILTER COLUMN.",
+                "description": (
+                    "POD/Asset name. KEY FILTER COLUMN. Values include POD"
+                    " variants: POD (Plan of Development), POFD (Plan of"
+                    " Further Development), OPL (Optimasi Pengembangan"
+                    " Lapangan), OPLL (Optimasi Pengembangan Lapangan -"
+                    " Lapangan), POP (Put on Production), POD I (first POD"
+                    " in a working area, approved by Minister of ESDM)."
+                ),
             },
             "pod_date": {"type": "TEXT", "description": "POD date."},
             # === Project Classification ===
@@ -180,15 +187,23 @@ DATABASE_SCHEMA: dict[str, dict] = {
             },
             "is_ltp": {
                 "type": "INTEGER",
-                "description": "Whether project is LTP (Letter to President).",
+                "description": "Whether project has a Long Term Plan (LTP). LTP = Long Term Plan, a multi-year development plan for oil & gas projects.",
             },
             "is_pse_approved": {
                 "type": "INTEGER",
-                "description": "Whether PSE is approved (0 or 1).",
+                "description": (
+                    "Whether project has PSE (Penentuan Status Eksplorasi)"
+                    " approved (0 or 1). PSE = determination of exploration"
+                    " status for a project."
+                ),
             },
             "is_pod_approved": {
                 "type": "INTEGER",
-                "description": "Whether POD is approved (0 or 1).",
+                "description": (
+                    "Whether project has POD (Plan of Development) approved"
+                    " (0 or 1). POD = regulatory development plan for oil &"
+                    " gas projects. Variants: POFD, OPL, OPLL, POP, POD I."
+                ),
             },
             "is_report_accepted": {
                 "type": "INTEGER",
@@ -730,7 +745,13 @@ DATABASE_SCHEMA: dict[str, dict] = {
                 "description": "Forecast-related remarks.",
             },
             "pod_letter_num": {"type": "TEXT", "description": "POD letter/number."},
-            "pod_name": {"type": "TEXT", "description": "POD/Asset name."},
+            "pod_name": {
+                "type": "TEXT",
+                "description": (
+                    "POD/Asset name. Values include POD variants: POD, POFD,"
+                    " OPL, OPLL, POP, POD I."
+                ),
+            },
             "onstream_year": {
                 "type": "INTEGER",
                 "description": "Year project came onstream.",

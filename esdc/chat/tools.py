@@ -1,21 +1,24 @@
 # Standard library
 import asyncio
 import hashlib
+import json
 import logging
 import re
-from typing import Annotated, Any, Union
+import shutil
+from typing import Annotated, Any
 
 # Third-party
 import diskcache
 import duckdb
 from langchain.tools import tool
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("esdc.chat.tools")
 
 # Maximum rows to return to prevent context window overflow
 MAX_QUERY_ROWS = 50
 
 _sql_cache: diskcache.Cache | None = None
+_tool_cache: diskcache.Cache | None = None
 
 _FTS_TABLES: dict[str, str] = {
     "project_resources": "fts_main_project_resources",
@@ -133,12 +136,60 @@ def _get_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "sql_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _sql_cache = diskcache.Cache(str(cache_dir))
+        _sql_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
     return _sql_cache
 
 
 def _get_cache_key(sql: str) -> str:
     return hashlib.sha256(sql.encode()).hexdigest()
+
+
+def _get_tool_cache() -> diskcache.Cache:
+    """Get or create the tool results cache (for non-SQL tools).
+
+    Same pattern as SQL cache: permanent storage, invalidated on esdc reload.
+    """
+    global _tool_cache
+    if _tool_cache is None:
+        from esdc.configs import Config
+
+        cache_dir = Config.get_cache_dir() / "tool_results"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        _tool_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
+    return _tool_cache
+
+
+def _tool_cache_key(tool_name: str, **kwargs: Any) -> str:
+    """Generate a deterministic cache key from tool name and arguments."""
+    sorted_args = json.dumps(kwargs, sort_keys=True, default=str)
+    return f"{tool_name}:{hashlib.sha256(sorted_args.encode()).hexdigest()}"
+
+
+def invalidate_tool_cache() -> None:
+    """Clear the tool results cache directory."""
+    global _tool_cache
+    if _tool_cache is not None:
+        _tool_cache.clear()
+        _tool_cache = None
+    from esdc.configs import Config
+
+    cache_dir = Config.get_cache_dir() / "tool_results"
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+        logger.info("Tool cache invalidated: %s", cache_dir)
+
+
+def reset_sql_cache() -> None:
+    """Reset the SQL results cache (in-memory + on-disk).
+
+    Called by dbmanager after reload to ensure the stale diskcache.Cache
+    object doesn't serve outdated results.
+    """
+    global _sql_cache
+    if _sql_cache is not None:
+        _sql_cache.clear()
+        _sql_cache = None
+    logger.info("SQL cache reset (in-memory handle cleared)")
 
 
 def _validate_table_name(name: str | None) -> str | None:
@@ -193,7 +244,8 @@ async def execute_sql(
     ],
     db_path: Annotated[str | None, "Optional path to the database file."] = None,
 ) -> str:
-    """Execute a SQL query against the ESDC database and return results as a formatted table.
+    """Execute a SQL query against the ESDC database
+    and return results as a formatted table.
 
     Use this tool when the user wants to query data from the database.
     Only SELECT queries are allowed for safety.
@@ -201,10 +253,16 @@ async def execute_sql(
     This is an async tool that runs the query in a thread pool to avoid blocking
     the event loop, keeping the UI responsive during database operations.
     """
-    # Run the synchronous database query in a thread pool
-    return await asyncio.get_event_loop().run_in_executor(
-        None, _execute_sql_sync, query, db_path
-    )
+    try:
+        return await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(
+                None, _execute_sql_sync, query, db_path
+            ),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        logger.error("[SQL] Query timed out after 30s: %s", query[:80])
+        return "Error: Query timed out after 30 seconds. Try simplifying your query."
 
 
 def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
@@ -305,7 +363,7 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
 def get_schema(
     table_name: Annotated[
         str | None,
-        "The name of the table to get schema for. If not provided, returns schema for all tables.",
+        "The name of the table to get schema for. If not provided, returns schema for all tables.",  # noqa: E501
     ] = None,
 ) -> str:
     """Get the schema (column names and types) for tables in the ESDC database.
@@ -314,7 +372,15 @@ def get_schema(
     """
     safe_table_name = _validate_table_name(table_name)
     if table_name and not safe_table_name:
-        return f"Error: Invalid table name '{table_name}'. Only alphanumeric, underscore, and hyphen allowed."
+        return f"Error: Invalid table name '{table_name}'. Only alphanumeric, underscore, and hyphen allowed."  # noqa: E501
+
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key("get_schema", table_name=safe_table_name)
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=get_schema key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=get_schema key=%s", cache_key[:16])
 
     conn = None
     try:
@@ -336,6 +402,8 @@ def get_schema(
                 default_val = col[4] if col[4] is not None else ""
                 output += f"{col[0]} | {col[1]} | {nullable} | {default_val}\n"
 
+            cache.set(cache_key, output)
+            logger.debug("[CACHE] stored | tool=get_schema key=%s", cache_key[:16])
             return output
         else:
             result = conn.execute(
@@ -353,6 +421,8 @@ def get_schema(
                 col_names = ", ".join(col[0] for col in tbl_columns)
                 output += f"- {tbl_name}: {col_names}\n"
 
+            cache.set(cache_key, output)
+            logger.debug("[CACHE] stored | tool=get_schema key=%s", cache_key[:16])
             return output
 
     except FileNotFoundError as e:
@@ -372,6 +442,15 @@ def list_tables() -> str:
 
     Use this tool to see what data is available.
     """
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key("list_tables")
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=list_tables key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=list_tables key=%s", cache_key[:16])
+
+    conn = None
     try:
         conn = get_db_connection()
 
@@ -384,7 +463,6 @@ def list_tables() -> str:
         items = result.fetchall()
 
         if not items:
-            conn.close()
             return "No tables or views found in the database."
 
         output = "Available tables and views:\n\n"
@@ -405,7 +483,8 @@ def list_tables() -> str:
             for view in views:
                 output += f"  - {view[0]}\n"
 
-        conn.close()
+        cache.set(cache_key, output)
+        logger.debug("[CACHE] stored | tool=list_tables key=%s", cache_key[:16])
         return output
 
     except FileNotFoundError as e:
@@ -414,6 +493,9 @@ def list_tables() -> str:
         return f"SQL Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
 
 @tool("Model Checker")
@@ -433,7 +515,7 @@ def list_available_models(provider_type: str = "ollama") -> str:
         models = provider_class.list_models()
 
         if not models:
-            return f"No models available for {provider_type}. The provider may not be configured."
+            return f"No models available for {provider_type}. The provider may not be configured."  # noqa: E501
 
         result = f"Available models for {provider_type}:\n"
         for model in models:
@@ -449,14 +531,14 @@ def list_available_models(provider_type: str = "ollama") -> str:
 def get_recommended_table(
     entity_type: Annotated[
         str,
-        "Type of entity being queried: 'field', 'work_area', 'wa', 'national', 'nkri', or 'project'. "
-        "Use 'field' for field-level queries, 'work_area' or 'wa' for work area queries, "
-        "'national' or 'nkri' for national-level queries, 'project' for project-specific queries.",
+        "Type of entity being queried: 'field', 'work_area', 'wa', 'national', 'nkri', or 'project'. "  # noqa: E501
+        "Use 'field' for field-level queries, 'work_area' or 'wa' for work area queries, "  # noqa: E501
+        "'national' or 'nkri' for national-level queries, 'project' for project-specific queries.",  # noqa: E501
     ],
     needs_project_detail: Annotated[
         bool,
-        "Set to True if you need project-specific columns like project_name, project_remarks, "
-        "or project-level breakdowns. When False (default), uses pre-aggregated views for better performance.",
+        "Set to True if you need project-specific columns like project_name, project_remarks, "  # noqa: E501
+        "or project-level breakdowns. When False (default), uses pre-aggregated views for better performance.",  # noqa: E501
     ] = False,
 ) -> str:
     """Get the recommended database table or view for a query.
@@ -479,7 +561,8 @@ def get_recommended_table(
     - Field totals: entity_type='field' → {'table': 'field_resources', ...}
     - Work area summary: entity_type='work_area' → {'table': 'wa_resources', ...}
     - National statistics: entity_type='national' → {'table': 'nkri_resources', ...}
-    - Project breakdown: entity_type='field', needs_project_detail=True → {'table': 'project_resources', ...}
+    - Project breakdown: entity_type='field',
+    needs_project_detail=True → {'table': 'project_resources', ...}
     """
     import json
 
@@ -532,7 +615,7 @@ def get_recommended_table(
         return json.dumps(
             {
                 "table": "project_resources",
-                "explanation": f"Defaulting to project_resources due to error: {str(e)}",
+                "explanation": f"Defaulting to project_resources due to error: {str(e)}",  # noqa: E501
                 "hierarchy": "project-level (most detailed)",
             }
         )
@@ -542,27 +625,29 @@ def get_recommended_table(
 def resolve_uncertainty_level(
     level: Annotated[
         str,
-        "Uncertainty level from user query. Examples: '1P', '2P', '3P', 'proven', 'probable', 'possible', "
-        "'1C', '2C', '3C', '1R', '2R', '3R', '1U', '2U', '3U', 'terbukti' (proven), 'mungkin' (probable), "
+        "Uncertainty level from user query. Examples: '1P', '2P', '3P', 'proven', 'probable', 'possible', "  # noqa: E501
+        "'1C', '2C', '3C', '1R', '2R', '3R', '1U', '2U', '3U', 'terbukti' (proven), 'mungkin' (probable), "  # noqa: E501
         "'harapan' (possible). Case-insensitive.",
     ],
     volume_type: Annotated[
         str,
         "Type of volume being queried: 'reserves' or 'cadangan' for reserves, "
         "'resources' or 'sumber_daya' for resources, 'grr' for GRR, "
-        "'contingent' for Contingent Resources, 'prospective' for Prospective Resources.",
+        "'contingent' for Contingent Resources, 'prospective' for Prospective Resources.",  # noqa: E501
     ] = "reserves",
 ) -> str:
     """Resolve uncertainty level to database filter values and SQL conditions.
 
-    CRITICAL for 'probable' and 'possible' which are CALCULATED values (not in database):
+    CRITICAL for 'probable' and 'possible' which are
+    CALCULATED values (not in database):
     - 'probable' = 2P - 1P (Middle - Low) - REQUIRES CASE statements
     - 'possible' = 3P - 2P (High - Middle) - REQUIRES CASE statements
 
     These calculated values ONLY apply to RESERVES (not resources!).
 
     WHEN TO USE:
-    - Call this when user mentions uncertainty levels (1P/2P/3P, proven/probable/possible)
+    - Call this when user mentions uncertainty levels (1P/2P/3P,
+    proven/probable/possible)
     - Use the returned SQL fragment in WHERE clauses or CASE statements
     - Check 'warnings' field for validation errors
 
@@ -577,7 +662,8 @@ def resolve_uncertainty_level(
 
     Examples:
     - resolve_uncertainty_level('2P', 'reserves') → direct value '2. Middle Value'
-    - resolve_uncertainty_level('probable', 'reserves') → calculated, returns CASE template
+    - resolve_uncertainty_level('probable', 'reserves') → calculated,
+    returns CASE template
     - resolve_uncertainty_level('probable', 'resources') → ERROR, reserves only
     """
     import json
@@ -588,7 +674,7 @@ def resolve_uncertainty_level(
         spec = get_uncertainty_spec(level, volume_type=volume_type)
 
         if spec is None:
-            valid_levels = "1P, 2P, 3P, proven, probable, possible, 1C, 2C, 3C, 1R, 2R, 3R, 1U, 2U, 3U"
+            valid_levels = "1P, 2P, 3P, proven, probable, possible, 1C, 2C, 3C, 1R, 2R, 3R, 1U, 2U, 3U"  # noqa: E501
             return json.dumps(
                 {
                     "error": f"Unknown uncertainty level: '{level}'",
@@ -626,7 +712,7 @@ def resolve_uncertainty_level(
             "reserve",
         ]:
             result["warnings"].append(
-                f"'{level}' only applies to reserves. For {volume_type}, use 1C/2C/3C (contingent) or 1U/2U/3U (prospective)."
+                f"'{level}' only applies to reserves. For {volume_type}, use 1C/2C/3C (contingent) or 1U/2U/3U (prospective)."  # noqa: E501
             )
 
         return json.dumps(result, indent=2)
@@ -654,14 +740,14 @@ def get_timeseries_columns(
     forecast_type: Annotated[
         str,
         "Type of forecast when data_type='forecast': 'tpf' (Total Potential Forecast), "
-        "'slf' (Sales Forecast), 'spf' (Sales Potential Forecast), 'crf' (Contingent Resources Forecast), "
-        "'prf' (Prospective Resources Forecast), 'ciof' (Consumed in Operation Forecast), "
+        "'slf' (Sales Forecast), 'spf' (Sales Potential Forecast), 'crf' (Contingent Resources Forecast), "  # noqa: E501
+        "'prf' (Prospective Resources Forecast), 'ciof' (Consumed in Operation Forecast), "  # noqa: E501
         "or 'lossf' (Loss Production Forecast). Default is 'tpf'.",
     ] = "tpf",
     substance: Annotated[
         str,
-        "Substance suffix: 'oil' (oil only), 'con' (condensate only), 'ga' (associated gas), "
-        "'gn' (non-associated gas), 'oc' (oil + condensate combined), or 'an' (total gas). "
+        "Substance suffix: 'oil' (oil only), 'con' (condensate only), 'ga' (associated gas), "  # noqa: E501
+        "'gn' (non-associated gas), 'oc' (oil + condensate combined), or 'an' (total gas). "  # noqa: E501
         "Default is 'oc'.",
     ] = "oc",
 ) -> str:
@@ -673,7 +759,8 @@ def get_timeseries_columns(
     WHEN TO USE:
     - ALWAYS call this BEFORE writing SQL for timeseries/forecast queries
     - When user asks about "forecast", "perkiraan", "proyeksi", "peak production"
-    - When querying project_timeseries, field_timeseries, wa_timeseries, or nkri_timeseries
+    - When querying project_timeseries, field_timeseries, wa_timeseries,
+    or nkri_timeseries
 
     COLUMN CATEGORIES:
     1. Forecast VOLUMES (USE FOR FORECASTS): tpf_*, slf_*, spf_*, crf_*, prf_*
@@ -745,19 +832,20 @@ def get_timeseries_columns(
 def get_resources_columns(
     volume_type: Annotated[
         str,
-        "Type of volume: 'reserves' (commercial reserves only), 'resources' (GRR/Contingent/Prospective), "
-        "or 'risked' (prospective resources with geological chance factor applied). Default is 'reserves'.",
+        "Type of volume: 'reserves' (commercial reserves only), 'resources' (GRR/Contingent/Prospective), "  # noqa: E501
+        "or 'risked' (prospective resources with geological chance factor applied). Default is 'reserves'.",  # noqa: E501
     ] = "reserves",
     substance: Annotated[
         str,
-        "Substance suffix: 'oil' (oil only), 'con' (condensate only), 'ga' (associated gas), "
-        "'gn' (non-associated gas), 'oc' (oil + condensate combined), or 'an' (total gas). "
+        "Substance suffix: 'oil' (oil only), 'con' (condensate only), 'ga' (associated gas), "  # noqa: E501
+        "'gn' (non-associated gas), 'oc' (oil + condensate combined), or 'an' (total gas). "  # noqa: E501
         "Default is 'oc'.",
     ] = "oc",
 ) -> str:
     """Get the correct column names for static resource queries.
 
-    CRITICAL: This tool prevents confusion between res_* (reserves) and rec_* (resources) columns.
+    CRITICAL: This tool prevents confusion between
+    res_* (reserves) and rec_* (resources) columns.
     The model often confuses these two similar prefixes.
 
     WHEN TO USE:
@@ -830,11 +918,12 @@ def get_resources_columns(
 def search_problem_cluster(
     query: Annotated[
         str,
-        "Search term for problem cluster. Can be partial name (e.g., 'subsurface', 'uneconomic'), "
+        "Search term for problem cluster. Can be partial name (e.g., 'subsurface', 'uneconomic'), "  # noqa: E501
         "cluster code (e.g., '1.1.1', '2.2'), or keyword from the problem description.",
     ],
 ) -> str:
-    """Search for problem cluster definitions when user asks about project issues or specific cluster terms.
+    """Search for problem cluster definitions when user
+    asks about project issues or specific cluster terms.
 
     CRITICAL: Use this tool when user asks about:
     - Problem cluster definitions (e.g., "apa arti subsurface uncertainty?")
@@ -875,7 +964,7 @@ def search_problem_cluster(
             return json.dumps(
                 {
                     "error": f"No problem cluster found matching '{query}'",
-                    "suggestion": "Try searching for keywords like: subsurface, data, uneconomic, AMDAL, permit, etc.",
+                    "suggestion": "Try searching for keywords like: subsurface, data, uneconomic, AMDAL, permit, etc.",  # noqa: E501
                     "available_categories": [
                         "Technical > Subsurface (1.1.x)",
                         "Technical > Non Subsurface (1.2.x)",
@@ -977,6 +1066,16 @@ def knowledge_traversal(
 
     from esdc.knowledge_graph.resolver import KnowledgeTraversalResolver
 
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "knowledge_traversal", query=query, return_multiple=return_multiple
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=knowledge_traversal key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=knowledge_traversal key=%s", cache_key[:16])
+
     try:
         conn = get_db_connection()
         try:
@@ -989,7 +1088,13 @@ def knowledge_traversal(
             else:
                 result["cypher_available"] = False
 
-            return json.dumps(result, indent=2, ensure_ascii=False)
+            result_str = json.dumps(result, indent=2, ensure_ascii=False)
+            if result.get("status") in ("success", "ambiguous"):
+                cache.set(cache_key, result_str)
+                logger.debug(
+                    "[CACHE] stored | tool=knowledge_traversal key=%s", cache_key[:16]
+                )
+            return result_str
         finally:
             conn.close()
 
@@ -1037,13 +1142,18 @@ async def execute_cypher(
     - row_count: Number of rows returned
 
     Examples:
-    - execute_cypher("MATCH (f:Field {field_name: 'Duri'}) RETURN f.field_name, f.field_lat")
-    - execute_cypher("MATCH (f1:Field)-[:LOCATED_NEAR]->(f2:Field) WHERE f1.field_name = 'Duri' AND f2.distance_km < 20 RETURN f2.field_name, f2.distance_km")
+    - execute_cypher("MATCH (f:Field {field_name: 'Duri'})
+      RETURN f.field_name, f.field_lat")
+    - execute_cypher(
+        "MATCH (f1:Field)-[:LOCATED_NEAR]->(f2:Field) "
+        "WHERE f1.field_name = 'Duri' AND f2.distance_km < 20 "
+        "RETURN f2.field_name, f2.distance_km"
+    )
     """
     import json
 
     try:
-        return await asyncio.get_event_loop().run_in_executor(
+        return await asyncio.get_running_loop().run_in_executor(
             None, _execute_cypher_sync, query
         )
     except Exception as e:
@@ -1088,15 +1198,15 @@ def resolve_spatial(
         str,
         "Type of spatial query: 'proximity' (fields near a field), "
         "'working_area' (fields in a working area), 'distance' (between two fields), "
-        "'coordinates' (get field coordinates), 'nearest_from_coords' (find nearest from lat/long), "
-        "'field_clusters' (cluster fields by proximity), 'adjacent_wk' (find adjacent working areas), "
+        "'coordinates' (get field coordinates), 'nearest_from_coords' (find nearest from lat/long), "  # noqa: E501
+        "'field_clusters' (cluster fields by proximity), 'adjacent_wk' (find adjacent working areas), "  # noqa: E501
         "or 'average_distance' (average distance between multiple fields).",
     ],
     target: Annotated[
-        Union[str, dict],
+        str | dict,
         "For proximity: field name. For working_area: working area name. "
         "For distance: comma-separated 'field1, field2'. For coordinates: field name. "
-        "For nearest_from_coords: dict with 'lat', 'long', 'entity_type' ('field' or 'working_area'). "
+        "For nearest_from_coords: dict with 'lat', 'long', 'entity_type' ('field' or 'working_area'). "  # noqa: E501
         "For field_clusters: dict with 'max_distance_km', 'min_cluster_size'. "
         "For adjacent_wk: dict with 'wk_name', 'max_distance_km'. "
         "For average_distance: dict with 'field_names' as list.",
@@ -1109,6 +1219,13 @@ def resolve_spatial(
         int,
         "Maximum number of results to return (default: 10).",
     ] = 10,
+    wk_name: Annotated[
+        str | None,
+        "Optional working area name to scope results. "
+        "When provided, field lookups filter to the specified working area. "
+        "Use when the query mentions a working area context like "
+        "'lapangan X di WK Y' or 'field X in working area Y'.",
+    ] = None,
 ) -> str:
     """Execute spatial queries using DuckDB's native spatial capabilities.
 
@@ -1130,39 +1247,85 @@ def resolve_spatial(
     - resolve_spatial("working_area", "Rokan") -> All fields in Rokan working area
     - resolve_spatial("distance", "Duri, Bekapai") -> Distance between Duri and Bekapai
     - resolve_spatial("coordinates", "Duri") -> Lat/long of Duri field
-    - resolve_spatial("nearest_from_coords", '{"lat": 1.5, "long": 101.3, "entity_type": "field", "radius_km": 20}')
-    - resolve_spatial("field_clusters", '{"max_distance_km": 20, "min_cluster_size": 2}')
+    - resolve_spatial("nearest_from_coords", '{"lat": 1.5, "long": 101.3,
+    "entity_type": "field", "radius_km": 20}')
+    - resolve_spatial("field_clusters", '{"max_distance_km": 20,
+    "min_cluster_size": 2}')
     - resolve_spatial("adjacent_wk", '{"wk_name": "Rokan", "max_distance_km": 20}')
-    - resolve_spatial("average_distance", '{"field_names": ["Duri", "Rokan", "Belanak"]}')
+    - resolve_spatial("average_distance", '{"field_names": ["Duri", "Rokan",
+    "Belanak"]}')
     """
     import json
 
     from esdc.knowledge_graph.spatial_resolver import SpatialResolver
 
+    logger.debug(
+        "[SPATIAL_START] query_type=%s | target=%s | radius_km=%s | wk_name=%s",
+        query_type,
+        target,
+        radius_km,
+        wk_name,
+    )
+
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "resolve_spatial",
+        query_type=query_type,
+        target=str(target),
+        radius_km=radius_km,
+        limit=limit,
+        wk_name=wk_name,
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=resolve_spatial key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=resolve_spatial key=%s", cache_key[:16])
+
     resolver = SpatialResolver()
+
+    target_str: str = ""
+    target_dict: dict[str, Any] = {}
+    if isinstance(target, dict):
+        target_dict = target
+    else:
+        target_str = str(target)
 
     try:
         if query_type == "proximity":
             result = resolver.find_fields_near_field(
-                field_name=target, radius_km=radius_km, limit=limit
+                field_name=target_str,
+                radius_km=radius_km,
+                limit=limit,
+                wk_name=wk_name,
             )
         elif query_type == "working_area":
-            result = resolver.find_fields_in_working_area(wk_name=target, limit=limit)
+            result = resolver.find_fields_in_working_area(
+                wk_name=target_str, limit=limit
+            )
         elif query_type == "distance":
-            parts = [p.strip() for p in target.split(",")]
+            parts = [p.strip() for p in target_str.split(",")]
             if len(parts) != 2:
+                logger.debug("[SPATIAL_ERR] error=invalid_format")
                 return json.dumps(
                     {
                         "status": "error",
                         "message": "Distance query requires 'field1, field2' format",
                     }
                 )
-            result = resolver.calculate_distance(from_field=parts[0], to_field=parts[1])
+            result = resolver.calculate_distance(
+                from_field=parts[0],
+                to_field=parts[1],
+                wk_name=wk_name,
+            )
         elif query_type == "coordinates":
-            result = resolver.get_field_coordinates(field_name=target)
+            result = resolver.get_field_coordinates(
+                field_name=target_str,
+                wk_name=wk_name,
+            )
         elif query_type == "nearest_from_coords":
             try:
-                params = target if isinstance(target, dict) else json.loads(target)
+                params = target_dict or json.loads(target_str)
                 result = resolver.find_nearest_from_coordinates(
                     lat=float(params.get("lat", 0.0)),
                     long=float(params.get("long", 0.0)),
@@ -1171,74 +1334,96 @@ def resolve_spatial(
                     limit=int(params.get("limit", limit)),
                 )
             except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.debug("[SPATIAL_ERR] error=invalid_params")
                 return json.dumps(
                     {
                         "status": "error",
-                        "message": f"Invalid format for nearest_from_coords: {e}. Expected dict with lat, long, entity_type",
+                        "message": f"Invalid format for nearest_from_coords: {e}. Expected dict with lat, long, entity_type",  # noqa: E501
                     }
                 )
         elif query_type == "field_clusters":
             try:
-                params = target if isinstance(target, dict) else json.loads(target)
+                params = target_dict or json.loads(target_str)
                 result = resolver.find_field_clusters(
                     max_distance_km=float(params.get("max_distance_km", radius_km)),
                     min_cluster_size=int(params.get("min_cluster_size", 2)),
                 )
             except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.debug("[SPATIAL_ERR] error=invalid_params")
                 return json.dumps(
                     {
                         "status": "error",
-                        "message": f"Invalid format for field_clusters: {e}. Expected dict with max_distance_km, min_cluster_size",
+                        "message": f"Invalid format for field_clusters: {e}. Expected dict with max_distance_km, min_cluster_size",  # noqa: E501
                     }
                 )
         elif query_type == "adjacent_wk":
             try:
-                params = target if isinstance(target, dict) else json.loads(target)
+                params = target_dict or json.loads(target_str)
                 result = resolver.find_adjacent_working_areas(
                     wk_name=params.get("wk_name", ""),
                     max_distance_km=float(params.get("max_distance_km", radius_km)),
                     limit=int(params.get("limit", limit)),
                 )
             except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.debug("[SPATIAL_ERR] error=invalid_params")
                 return json.dumps(
                     {
                         "status": "error",
-                        "message": f"Invalid format for adjacent_wk: {e}. Expected dict with wk_name, max_distance_km",
+                        "message": f"Invalid format for adjacent_wk: {e}. Expected dict with wk_name, max_distance_km",  # noqa: E501
                     }
                 )
         elif query_type == "average_distance":
             try:
-                params = target if isinstance(target, dict) else json.loads(target)
+                params = target_dict or json.loads(target_str)
                 field_names = params.get("field_names", [])
                 if not isinstance(field_names, list) or len(field_names) < 2:
+                    logger.debug("[SPATIAL_ERR] error=insufficient_fields")
                     return json.dumps(
                         {
                             "status": "error",
-                            "message": "average_distance requires at least 2 field names in 'field_names' list",
+                            "message": "average_distance requires at least 2 field names in 'field_names' list",  # noqa: E501
                         }
                     )
                 result = resolver.calculate_average_distance(field_names=field_names)
             except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.debug("[SPATIAL_ERR] error=invalid_params")
                 return json.dumps(
                     {
                         "status": "error",
-                        "message": f"Invalid format for average_distance: {e}. Expected dict with field_names list",
+                        "message": f"Invalid format for average_distance: {e}. Expected dict with field_names list",  # noqa: E501
                     }
                 )
         else:
+            logger.debug("[SPATIAL_ERR] error=unknown_query_type")
             return json.dumps(
                 {
                     "status": "error",
                     "message": f"Unknown query_type: {query_type}. "
-                    "Use: proximity, working_area, distance, coordinates, nearest_from_coords, field_clusters, adjacent_wk, or average_distance",
+                    "Use: proximity, working_area, distance, coordinates, nearest_from_coords, field_clusters, adjacent_wk, or average_distance",  # noqa: E501
                 }
             )
 
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        result_count = (
+            len(result.get("nearby_fields", [])) if isinstance(result, dict) else 0
+        )
+        logger.debug(
+            "[SPATIAL_OK] query_type=%s | results=%d", query_type, result_count
+        )
+        result_str = json.dumps(result, indent=2, ensure_ascii=False)
+        if isinstance(result, dict) and result.get("status") in (
+            "success",
+            "no_results",
+        ):
+            cache.set(cache_key, result_str)
+            logger.debug("[CACHE] stored | tool=resolve_spatial key=%s", cache_key[:16])
+        return result_str
 
     except Exception as e:
         logger.error(
-            "[Spatial] query_failed | type=%s target=%s error=%s", query_type, target, e
+            "[SPATIAL_ERR] query_failed | type=%s target=%s error=%s",
+            query_type,
+            target,
+            e,
         )
         return json.dumps(
             {
@@ -1308,7 +1493,7 @@ def semantic_search(
     ] = None,
     wk_subgroup: Annotated[
         str | None,
-        "Filter by working area subgroup (ILIKE pattern, e.g., '%Upstream%'). Optional.",
+        "Filter by working area subgroup (ILIKE pattern, e.g., '%Upstream%'). Optional.",  # noqa: E501
     ] = None,
     wk_regionisasi_ngi: Annotated[
         str | None,
@@ -1335,16 +1520,16 @@ def semantic_search(
     - message: Additional information (e.g., fallback explanation)
 
     Examples:
-    - semantic_search("proyek dengan reservoir kompleks") -> Find projects with complex reservoir
+    - semantic_search("proyek dengan reservoir kompleks") ->
+    Find projects with complex reservoir
     - semantic_search("masalah produksi", 5) -> Top 5 production issues
     - semantic_search("tidak ekonomis", report_year=2024) -> Economic issues in 2024
-    - semantic_search("kendala teknis", field_name="%Duri%") -> Technical issues in Duri field
+    - semantic_search("kendala teknis", field_name="%Duri%") ->
+    Technical issues in Duri field
     """
     import json
 
     from esdc.knowledge_graph.semantic_resolver import SemanticResolver
-
-    resolver = SemanticResolver()
 
     # Build filters dict from optional parameters
     filters: dict[str, Any] = {}
@@ -1377,6 +1562,16 @@ def semantic_search(
     if wk_area_perwakilan_skkmigas is not None:
         filters["wk_area_perwakilan_skkmigas"] = wk_area_perwakilan_skkmigas
 
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key("semantic_search", query=query, limit=limit, **filters)
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=semantic_search key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=semantic_search key=%s", cache_key[:16])
+
+    resolver = SemanticResolver()
+
     try:
         result = resolver.search_by_text(
             query=query,
@@ -1387,11 +1582,21 @@ def semantic_search(
         # If embeddings not available, fallback to FTS search
         if result.get("status") == "not_available":
             logger.info("[Semantic] embeddings not available, falling back to FTS")
-            # For FTS fallback, we can't apply all filters, but we can try with basic ones
             fallback_result = _search_remarks_via_fts(query, limit, "project_resources")
-            return json.dumps(fallback_result, indent=2, ensure_ascii=False)
+            fallback_str = json.dumps(fallback_result, indent=2, ensure_ascii=False)
+            if fallback_result.get("status") in ("success", "no_results"):
+                cache.set(cache_key, fallback_str)
+                logger.debug(
+                    "[CACHE] stored | tool=semantic_search key=%s (fts fallback)",
+                    cache_key[:16],
+                )
+            return fallback_str
 
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        result_str = json.dumps(result, indent=2, ensure_ascii=False)
+        if result.get("status") in ("success", "no_results"):
+            cache.set(cache_key, result_str)
+            logger.debug("[CACHE] stored | tool=semantic_search key=%s", cache_key[:16])
+        return result_str
 
     except Exception as e:
         logger.error("[Semantic] tool failed | query=%s error=%s", query, e)

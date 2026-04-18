@@ -1,0 +1,646 @@
+# KSMI Schema Definitions
+# Standar Klasifikasi Sumber Daya dan Cadangan Indonesia
+# https://github.com/fajril/esdc
+
+# =============================================================================
+# Waktu Acuan Pelaporan (WAP)
+# =============================================================================
+WaktuAcuanPelaporan:
+  name: Waktu Acuan Pelaporan
+  code: WAP
+  aliases:
+    - WAP
+    - Waktu Referensi
+    - Official Report
+  definition: >-
+    Waktu Acuan Pelaporan (WAP) adalah waktu referensi tahunan yang ditetapkan
+    pada setiap tanggal 31 Desember Pukul 23.59. Status WAP ditulis dalam bentuk
+    31.12.20XX dengan XX merupakan tahun status data ditetapkan. Untuk penulisan
+    yang lebih singkat, status WAP dapat ditulis bagian tahun saja (20XX).
+    Sebelum penetapan dokumen ini, waktu referensi yang digunakan adalah setiap
+    tanggal 1 Januari Pukul 00.00 tahun setelahnya, atau biasa ditulis dalam
+    format 1.1.20XY dengan XY merupakan XX + 1.
+  description: >-
+    Proses evaluasi terhadap data yang ada pada proyek dihitung pada saat WAP.
+    Waktu referensi ini menjadi acuan dalam berbagai definisi yang ada pada dokumen ini.
+  key_concepts:
+    - Merupakan acuan resmi
+    - Dikenal juga sebagai waktu referensi official report
+    - Data "tahun 2024" = WAP 31.12.2024
+
+# =============================================================================
+# Project Classification
+# =============================================================================
+ProjectClassification:
+  name: Project Classification
+  aliases:
+    - Project Classification
+    - Classification
+    - Kelas Proyek
+  description: >-
+    Klasifikasi dalam standar ini bisa dibagi menjadi tiga kelas, yaitu
+    cadangan & GRR, contingent resources, dan prospective resources. Setiap proyek
+    hanya dapat memiliki satu kategori kelas.
+
+  # ---------------------------------------------------------------------------
+  # Reserves & GRR
+  # ---------------------------------------------------------------------------
+  Reserves:
+    name: Reserves & GRR
+    code: "1. Reserves & GRR"
+    aliases:
+      - Reserves
+      - GRR
+      - Cadangan
+      - Cadangan & GRR
+    definitions:
+      reserves: >-
+        Cadangan (Reserves) adalah bagian volume IPIP yang diperkirakan dapat
+        diambil secara komersial melalui kegiatan dalam proyek pengembangan yang
+        telah ditetapkan. Penetapan jumlah cadangan ditentukan berdasarkan sisa
+        akumulasi petroleum yang dapat diambil saat WAP. Faktor komersial yang
+        menjadi batas adalah faktor teknis, keekonomian, regulasi dan legal,
+        serta faktor sosial dan lingkungan.
+      grr: >-
+        GOI Recoverable Resources (GRR) merupakan bagian volume IPIP yang
+        diperkirakan dapat diambil dengan dibatasi hanya faktor teknis saja.
+        Faktor teknis didasarkan pada kemampuan maksimal sumur dan fasilitas
+        produksi yang sudah terpasang sesuai dengan skenario teknis yang digunakan
+        pada definisi cadangan dengan tetap memperhatikan prinsip-prinsip good
+        engineering practices. Selisih volume GRR dan cadangan merupakan volume
+        yang memiliki potensi untuk menjadi cadangan apabila kendala komersial
+        dapat diatasi.
+    definition_code: "II.9 and II.10"
+    description: >-
+      Konsep GRR analog dengan konsep Technically Recoverable Resources (TRR)
+      yang diperkenalkan dalam PRMS 2018. Karena GRR berada dalam kelas yang
+      sama dengan cadangan, maka volume GRR tidak dapat dilaporkan sendiri
+      tanpa nilai cadangan. Pencatatan angka cadangan selalu disertai dengan angka GRR.
+    key_concepts:
+      - Reserves dibatasi faktor komersial (biasanya batas kontrak PSC)
+      - GRR dibatasi oleh faktor teknis (batas kemampuan reservoir dan fasilitas)
+      - GRR analog dengan TRR (Technically Recoverable Resources) di PRMS 2018
+      - Tidak bisa melaporkan GRR tanpa Reserves
+
+  # ---------------------------------------------------------------------------
+  # Contingent Resources
+  # ---------------------------------------------------------------------------
+  ContingentResources:
+    name: Contingent Resources
+    code: "2. Contingent Resources"
+    aliases:
+      - Contingent Resources
+      - Sumber Daya Kontingen
+    definition: >-
+      Contingent Resources merupakan bagian volume IPIP yang diperkirakan dapat
+      diambil berdasarkan proyek yang ditetapkan dengan dibatasi oleh faktor teknis.
+      Proyek yang berada dalam kelas contingent resources mengalami kendala dari
+      sisi komersial. Umumnya, masalah utama terletak pada faktor keekonomian,
+      regulasi dan legal.
+    definition_code: "II.11"
+    key_concepts:
+      - Kendala dari sisi komersial (bukan teknis)
+      - Masalah utama: keekonomian, regulasi, legal
+      - Bisa naik ke Reserves jika kendala komersial teratasi
+
+  # ---------------------------------------------------------------------------
+  # Prospective Resources
+  # ---------------------------------------------------------------------------
+  ProspectiveResources:
+    name: Prospective Resources
+    code: "3. Prospective Resources"
+    aliases:
+      - Prospective Resources
+      - Sumber Daya Prospektif
+    definition: >-
+      Prospective Resources merupakan bagian volume undiscovered IPIP yang
+      diperkirakan dapat diambil. Volume ini diidentifikasi saat kegiatan eksplorasi.
+      Memiliki asosiasi dengan geological chance factor - keberadaan akumulasi
+      petroleum belum dapat ditentukan secara pasti.
+    definition_code: "II.12"
+    key_concepts:
+      - Undiscovered resources (belum ditemukan)
+      - Memiliki geological chance factor
+      - Naik ke Contingent setelah Discovery under Evaluation
+
+# =============================================================================
+# Project Maturity Levels
+# =============================================================================
+ProjectLevel:
+  name: Project Maturity Level
+  aliases:
+    - Project Maturity Level
+    - Maturity Level
+    - Level Kematangan Proyek
+  description: >-
+    Level Kematangan Proyek adalah sub klasifikasi dalam kelas yang menggambarkan
+    kematangan proyek dari sisi komersial. Untuk tiap level kematangan proyek
+    terdapat risiko komersial yang berbeda-beda. Evaluasi dilakukan pada WAP.
+
+  # ===========================================================================
+  # E Levels: Reserves & GRR / Contingent
+  # ===========================================================================
+  E0_OnProduction:
+    code: E0
+    name: On Production
+    aliases:
+      - E0
+      - On Production
+      - Produksi
+      - Berproduksi
+    project_classification: Reserves & GRR
+    definition: >-
+      Proyek sedang dalam keadaan berproduksi saat dievaluasi pada WAP. Dalam kasus
+      proyek sedang mengalami kendala sehingga berhenti produksi ketika dievaluasi
+      pada WAP, maka proyek tersebut masih dapat diberikan level On Production hingga
+      evaluasi di WAP selanjutnya. Apabila pada WAP selanjutnya masih belum berproduksi
+      sama sekali, maka proyek tidak lagi berada pada level On Production.
+    definition_code: "II.18"
+    description: >-
+      Proyek dituntut harus berproduksi secara komersial apabila menyandang level
+      On Production. Artinya dari satu WAP hingga ke WAP selanjutnya proyek harus
+      berproduksi secara komersial walau tidak berproduksi secara penuh sepanjang tahun.
+    key_concepts:
+      - Sedang berproduksi secara komersial
+      - rate_sls > 0 (ada produksi sales)
+    rule: "IF rate_sls_oil + rate_sls_con + rate_sls_ga + rate_sls_gn > 0 THEN True ELSE False"
+    is_pod_approved: null  # Can be True or False
+    is_pse_approved: null  # Can be True or False
+
+  E1_ProductionOnHold:
+    code: E1
+    name: Production on Hold
+    aliases:
+      - E1
+      - Production on Hold
+      - Berhenti Produksi
+    project_classification: Reserves & GRR
+    definition: >-
+      Proyek memiliki level On Production pada WAP sebelumnya. Namun sama sekali
+      tidak berproduksi secara komersial hingga evaluasi di WAP. Pada WAP selanjutnya,
+      proyek harus pindah ke level lain kecuali jika proyek aktif terdaftar dalam dokumen
+      rencana kerja pengembangan lapangan jangka panjang 3 tahun ke depan.
+    definition_code: "II.19"
+    key_concepts:
+      - Setahun tidak berproduksi secara komersial, atau
+      - 1-3 tahun tidak berproduksi tapi masih ada rencana jangka panjang
+    rule: null
+    is_pod_approved: null
+    is_pse_approved: null
+
+  E2_UnderDevelopment:
+    code: E2
+    name: Under Development
+    aliases:
+      - E2
+      - Under Development
+      - Dalam Pembangunan
+      - EPCI
+    project_classification: Reserves & GRR
+    definition: >-
+      Proyek sedang dalam fase pembangunan fasilitas produksi. Level ini didapat
+      setelah izin berproduksi dan Financial Investment Decision (FID) disetujui.
+      Level ini hanya dapat bertahan paling lama tiga WAP kecuali dapat dibuktikan
+      bahwa proyek sedang dalam pembangunan secara fisik.
+    definition_code: "II.20"
+    description: >-
+      Pembangunan yang dimaksud harus merupakan kegiatan yang berkontribusi langsung
+      dalam upaya pembangunan fasilitas sesuai rencana yang telah ditetapkan.
+    key_concepts:
+      - Memiliki Final Investment Decision (FID)
+      - Fase EPCI (Engineering, Procurement, Construction, Installation)
+      - Maksimal 3 WAP
+    rule: null
+    is_pod_approved: true
+    is_pse_approved: true
+
+  E3_JustifiedForDevelopment:
+    code: E3
+    name: Justified for Development
+    aliases:
+      - E3
+      - Justified for Development
+      - Layak Dikembangkan
+      - FEED
+    project_classification: Reserves & GRR
+    definition: >-
+      Proyek sudah memiliki izin berproduksi dari pihak yang berwenang. Level ini
+      hanya dapat bertahan selama tiga WAP. Jika setelah batasan waktu yang ditetapkan
+      masih belum mendapatkan FID, maka proyek turun kelas ke Contingent Resources.
+    definition_code: "II.21"
+    description: >-
+      Untuk proyek yang berasal dari eksplorasi, setelah mendapatkan level ini proyek
+      mengalami perubahan dari fase eksplorasi menjadi fase eksploitasi.
+    key_concepts:
+      - Memiliki Plan of Development (POD) approved
+      - Fase Front End Engineering Design (FEED)
+      - Transisi dari eksplorasi ke eksploitasi
+    rule: null
+    is_pod_approved: true
+    is_pse_approved: true
+
+  E4_ProductionPending:
+    code: E4
+    name: Production Pending
+    aliases:
+      - E4
+      - Production Pending
+      - Menunggu Produksi
+    project_classification: Contingent Resources
+    definition: >-
+      Proyek pada WAP sebelumnya berada pada level Production on Hold, tetapi saat
+      dievaluasi pada WAP, persyaratan untuk tetap pada level tersebut sudah tidak lagi
+      terpenuhi. Proyek dapat bertahan pada level ini maksimal sebanyak tiga WAP.
+      Setelah melewati batas tersebut, proyek diharuskan pindah ke level Production Not Viable.
+    definition_code: "II.22"
+    description: >-
+      Proyek yang berpindah ke level Production Pending menandakan bahwa proyek tersebut
+      turun kelas ke Contingent Resources.
+    key_concepts:
+      - Turun kelas ke Contingent Resources
+      - Tidak berproduksi 3-6 WAP, atau >6 WAP tapi masih ada rencana
+      - Risiko komersial sangat tinggi
+    rule: null
+    is_pod_approved: null
+    is_pse_approved: null
+
+  E5_DevelopmentUnclarified:
+    code: E5
+    name: Development Unclarified
+    aliases:
+      - E5
+      - Development Unclarified
+      - Pengembangan Tidak Jelas
+    project_classification: Contingent Resources
+    definition: >-
+      Proyek tidak mendapatkan keputusan investasi setelah durasi waktu yang ditetapkan
+      dalam level Justified for Development terlewati atau tanggal rencana on-stream
+      tidak tercapai pada WAP sebelumnya sehingga mengakibatkan rencana kerja
+      pengembangan lapangan jangka panjang tidak berlaku lagi.
+    definition_code: "II.23"
+    rule: null
+    is_pod_approved: true
+    is_pse_approved: true
+
+  E6_FurtherDevelopment:
+    code: E6
+    name: Further Development
+    aliases:
+      - E6
+      - Further Development
+      - Pengembangan Lanjut
+      - EOR
+      - IOR
+    project_classification: Contingent Resources
+    definition: >-
+      Proyek pengembangan lanjut yang baru didefinisikan untuk meningkatkan produksi
+      dalam lapangan. Proyek ini dapat berupa tambahan sumur hingga pengembangan
+      Enhanced Oil Recovery atau Improved Oil Recovery. Proyek hanya dapat berada
+      pada level ini selama satu WAP.
+    definition_code: "II.24"
+    description: >-
+      Level ini merupakan titik awal bagi proyek pengembangan lanjut yang baru didesain.
+      Volume perkiraan yang bisa diambil dari proyek ini berasal dari bagian Unrecoverable.
+    key_concepts:
+      - Pengembangan lanjut (infill drilling, EOR, IOR)
+      - Hanya 1 WAP
+      - Volume berasal dari Unrecoverable
+      - Harus memiliki izin berproduksi terpisah
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: false
+
+  E7_ProductionNotViable:
+    code: E7
+    name: Production Not Viable
+    aliases:
+      - E7
+      - Production Not Viable
+      - Tidak Ekonomis
+      - Uneconomic
+      - Marginal
+    project_classification: Contingent Resources
+    definition: >-
+      Proyek pada WAP sebelumnya berada Production Pending, tetapi saat dievaluasi
+      pada WAP, persyaratan untuk tetap pada level tersebut sudah tidak lagi terpenuhi.
+      Proyek dapat langsung diklasifikasikan dalam level ini apabila tidak ada sama
+      sekali rencana untuk berproduksi secara komersial.
+    definition_code: "II.25"
+    description: >-
+      Proyek dikategorikan uneconomic (revenue < cost) atau marginal (IRR < MARR).
+      Level ini merupakan level terendah dari sisi komersial dalam fase pengembangan.
+    key_concepts:
+      - Tidak ada rencana produksi sama sekali
+      - Uneconomic: revenue < cost
+      - Marginal: IRR < Minimum Attractive Rate of Return (MARR)
+      - Level terendah dari sisi komersial
+    rule: null
+    is_pod_approved: null
+    is_pse_approved: null
+
+  E8_FurtherDevelopmentNotViable:
+    code: E8
+    name: Further Development not Viable
+    aliases:
+      - E8
+      - Further Development not Viable
+      - Pengembangan Lanjut Tidak Ekonomis
+    project_classification: Contingent Resources
+    definition: >-
+      Proyek pada WAP sebelumnya telah berada pada level Further Development, tetapi
+      saat dievaluasi pada WAP, proyek tersebut tidak mendapatkan izin berproduksi.
+      Apabila proyek dinyatakan tidak dapat dikembangkan karena sudah tidak relevan lagi,
+      maka nilai sumber daya dibuat nol.
+    definition_code: "II.26"
+    description: >-
+      Level ini merupakan level terendah dari sisi komersial dalam fase pengembangan.
+      Proyek dalam level ini merupakan proyek konseptual yang bisa jadi tidak dapat
+      direalisasikan karena faktor komersial.
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: false
+
+  # ===========================================================================
+  # X Levels: Exploration
+  # ===========================================================================
+  X0_DevelopmentPending:
+    code: X0
+    name: Development Pending
+    aliases:
+      - X0
+      - Development Pending
+      - Menunggu Pengembangan
+    project_classification: Contingent Resources
+    definition: >-
+      Proyek telah memiliki persetujuan pengakhiran kegiatan eksplorasi. Pada fase ini
+      penyusunan dan evaluasi strategi pengembangan lapangan sedang dilakukan.
+    definition_code: "II.27"
+    description: null
+    key_concepts:
+      - Pengakhiran kegiatan eksplorasi approved
+      - Penyusunan strategi pengembangan sedang dilakukan
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: true
+
+  X1_DiscoveryUnderEvaluation:
+    code: X1
+    name: Discovery under Evaluation
+    aliases:
+      - X1
+      - Discovery under Evaluation
+      - Discovery
+      - Ditemukan
+      - Delineasi
+    project_classification: Contingent Resources
+    definition: >-
+      Akumulasi petroleum ditemukan secara konklusif dari pengeboran satu atau beberapa
+      sumur eksplorasi yang ditandai dengan adanya keyakinan yang tinggi bahwa tekanan
+      reservoir cukup untuk mengalirkan fluida secara terus-menerus ke permukaan.
+      Proyek hanya dapat berada pada level ini maksimum selama dua WAP.
+    definition_code: "II.28"
+    description: >-
+      Umumnya keyakinan dikonfirmasi melalui uji sumur. Pada level ini biasanya
+      dilakukan pengeboran delineasi untuk mengkonfirmasi batasan akumulasi petroleum.
+    key_concepts:
+      - Discovery (ditemukan)
+      - Pengeboran delineasi untuk konfirmasi batasan
+      - Maksimal 2 WAP
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: false
+
+  X2_DevelopmentUndetermined:
+    code: X2
+    name: Development Undetermined
+    aliases:
+      - X2
+      - Development Undetermined
+      - Pengembangan Belum Ditentukan
+    project_classification: Contingent Resources
+    definition: >-
+      Proyek telah melewati masa waktu persyaratan dalam Discovery under Evaluation.
+      Proyek juga berada pada level ini apabila izin berproduksi tidak dapat diperoleh
+      dari pihak yang berwenang akibat adanya kebutuhan untuk menambah data.
+    definition_code: "II.29"
+    description: >-
+      Pada level ini biasanya evaluasi untuk penyusunan strategi pengembangan lapangan
+      sudah dilakukan. Dari evaluasi tersebut dinyatakan ada kebutuhan tambahan data baru.
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: false
+
+  X3_DevelopmentNotViable:
+    code: X3
+    name: Development Not Viable
+    aliases:
+      - X3
+      - Development Not Viable
+      - Pengembangan Tidak Ekonomis
+    project_classification: Contingent Resources
+    definition: >-
+      Persetujuan strategi pengembangan lapangan ditolak oleh pihak yang berwenang.
+      Proyek dapat pindah ke fase eksploitasi apabila memperoleh izin berproduksi.
+    definition_code: "II.30"
+    description: >-
+      Proyek dikategorikan uneconomic (revenue < cost) atau marginal (IRR < MARR).
+    key_concepts:
+      - Pengembangan ditolak
+      - Uneconomic atau marginal
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: false
+
+  X4_InconclusiveFlow:
+    code: X4
+    name: Inconclusive Flow
+    aliases:
+      - X4
+      - Inconclusive Flow
+      - Aliran Tidak Konklusif
+    project_classification: Prospective Resources
+    definition: >-
+      Akumulasi petroleum ditemukan melalui sumur eksplorasi namun tidak ada keyakinan
+      yang cukup bahwa fluida dapat mengalir ke permukaan secara terus-menerus.
+    definition_code: "II.31"
+    description: >-
+      Situasi ini biasanya terjadi apabila tidak ada uji sumur yang dilakukan, atau
+      durasi pengujian yang terlalu singkat. Untuk heavy oil/non-konvensional, keyakinan
+      didasari pada kemampuan teknologi yang bisa diterapkan.
+    key_concepts:
+      - Ditemukan tapi tidak pasti bisa mengalir
+      - Butuh uji sumur lebih lanjut
+      - Untuk heavy oil perlu evaluasi teknologi
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: false
+
+  X5_Prospect:
+    code: X5
+    name: Prospect
+    aliases:
+      - X5
+      - Prospect
+      - Prospek
+    project_classification: Prospective Resources
+    definition: >-
+      Proyek dengan potensi akumulasi petroleum yang belum pernah dibor namun sudah
+      memiliki data yang cukup untuk menentukan target pengeboran sumur eksplorasi.
+    definition_code: "II.32"
+    description: >-
+      Apabila persetujuan pengakhiran kegiatan eksplorasi tidak diberikan pada keseluruhan
+      area yang menjadi target pengembangan, maka area yang tidak mendapatkan persetujuan
+      tersebut dapat dibuat proyek baru dengan level Prospect.
+    key_concepts:
+      - Belum pernah dibor, atau ada ada sumur eksplorasi namun tidak ada data yang diambil di zona dalam lingkup proyek
+      - siap untuk dilakukan pengeboran eksplorasi
+      - studi subsurface sudah dilakukan secara tuntas untuk menentukan target pengeboran, perkiraan akumulasi petroleum, dan risiko geologis
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: false
+
+  X6_Lead:
+    code: X6
+    name: Lead
+    aliases:
+      - X6
+      - Lead
+      - Potensi
+    project_classification: Prospective Resources
+    definition: >-
+      Proyek dengan potensi akumulasi petroleum yang belum pernah dibor dan belum
+      memiliki data yang cukup untuk menentukan target pengeboran sumur eksplorasi.
+      Pada level ini proyek masih memerlukan data dan evaluasi tambahan.
+    definition_code: "II.33"
+    description: >-
+      Level ini merupakan level terendah dalam klasifikasi dan menjadi titik masuk
+      (entrypoint) proyek dalam kegiatan eksplorasi.
+    key_concepts:
+      - Belum pernah dibor, atau ada ada sumur eksplorasi namun tidak ada data yang diambil di zona dalam lingkup proyek
+      - Belum ada data cukup untuk target pengeboran
+      - Entrypoint eksplorasi
+      - Level terendah
+    rule: null
+    is_pod_approved: false
+    is_pse_approved: false
+
+GeologicalChanceFactor:
+  name: Geological Chance Factor
+  code: GCF
+  definition: >-
+    Geological Chance Factor (GCF) adalah kuantifikasi risiko
+    keberadaan elemen dalam play. Tiap elemen akan memiliki probabilitas
+    kehadiran masing-masing. Perkalian keseluruhan probabilitas untuk tiap
+    elemen merepresentasikan probabilitas ada atau tidaknya akumulasi
+    petroleum.
+  definition_code: III.6
+  description: >-
+    Dalam kegiatan eksplorasi, keberadaan elemen-elemen tersebut secara terintegrasi
+    belum dapat ditentukan secara pasti karena belum terdapat sumur eksplorasi. Risiko
+    ini dikuantifikasi dengan probabilitas ada atau tidaknya elemen tersebut. Tiap elemen
+    diberikan nilai probabilitas keberadaan sesuai dengan hasil evaluasi dan ketersediaan
+    data. Probabilitas 0% berarti dapat dipastikan bahwa elemen sistem petroleum tidak
+    tersedia. Sebaliknya, probabilitas 100% berarti dapat dipastikan bahwa elemen
+    petroleum sistem tersedia. Untuk mendapatkan probabilitas sistem petroleum secara
+    keseluruhan, maka probabilitas tiap elemen dikalikan. 
+    Untuk kondisi yang sudah berproduksi, maka otomatis sistem petroleum tersebut
+    memiliki probabilitas sebesar 100%. Adapun pada kondisi awal tanpa memiliki data,
+    peluang keberadaan elemen sistem petroleum memiliki nilai sebesar 50%. Dengan
+    demikian, probabilitas keberadaan sistem petroleum secara keseluruhan sebesar
+    50% × 50% × 50% × 50% = 6.25%. Seiring dengan bertambahnya data, maka nilai
+    probabilitas ini dapat berubah. Perlu ditekankan bahwa data yang semakin banyak
+    tidak selalu berarti probabilitas sistem petroleum menjadi bertambah besar. Bisa saja
+    data yang semakin banyak justru malah mengkonfirmasi bahwa elemen sistem
+    petroleum tidak tersedia pada area tersebut.
+  elements:
+     - source rock
+     - reservoir
+     - trap and seal
+     - migration
+     - 
+
+WorkingArea:
+  code: WK
+  aliases: 
+    - Wilayah Kerja
+    - Working Area
+  definition: >-
+    Wilayah kerja merupakan area yang ditetapkan dalam izin
+    pengelolaan sumber daya migas. Izin ini diberikan pemerintah kepada
+    kontraktor untuk kurun waktu tertentu. Batas wilayah kerja merupakan batas
+    yang bersifat legal dan ditetapkan dalam kontrak atau perizinan.
+    
+Field:
+  code: FIELD
+  aliases:
+    - Lapangan
+  definition: >-
+    Lapangan (Field) adalah sekelompok akumulasi petroleum yang
+    dibatasi secara konseptual berdasarkan perangkap geologi, wilayah
+    administratif, atau area yang dilingkupi oleh rencana kerja dalam proyek. Istilah
+    lapangan digunakan dalam fase eksplorasi dan eksploitasi.
+    
+Project:
+  code: PROJECT
+  aliases:
+    - Proyek
+  definition: >-
+    Proyek didefinisikan sebagai kerangka kegiatan yang antara lain
+    mencakup proses pencarian dan evaluasi akumulasi petroleum, penentuan
+    strategi pengembangan yang dapat memproduksikan sejumlah volume
+    petroleum secara komersial, penetapan keputusan investasi yang perlu
+    diambil, hingga seluruh kegiatan produksi.
+  description: >-
+    Proyek dapat dimulai dari kegiatan eksplorasi yang berupaya meningkatkan
+    geological chance factor (lihat Definisi III.6) yang bertujuan untuk menemukan
+    sumber daya migas baru, pembuatan strategi pengembangan lapangan tertentu, atau
+    aktivitas eksploitasi maupun enhanced oil recovery (EOR) yang dapat meningkatkan
+    produksi. Terlepas dari berbagai jenis kegiatan yang ada, setiap proyek harus memiliki
+    tujuan akhir berupa produksi. Dengan demikian, lingkup kegiatan dalam proyek
+    merupakan kerangka kegiatan yang membutuhkan izin berproduksi dari pihak yang
+    berwenang.
+  definition_code: II.1
+  key_concepts:
+    - satu proyek hanya dapat memiliki satu field
+    - satu field bisa memiliki banyak proyek
+    - satu proyek tidak dapat memiliki lebih dari satu project_level
+    - secara umum, lingkup kegiatan dalam proyek saat pengembangan didefinisikan dalam izin berproduksi
+
+ProducingLicense:
+  name: Izin Berproduksi
+  type:
+    pod_1: 
+      name: Plan of Development I (POD I)
+      approved_by: Ministry of Energy and Mineral Resources
+    pod: 
+      name: Plan of Development (POD)
+      approved_by: Head of SKK Migas
+    pofd: 
+      name: Plan of Further Development (POFD)
+      approved_by: Head of SKK Migas
+    opl: 
+      name: Optimasi Pengembangan Lapangan (OPL)
+      approved_by: Deputy of SKK Migas
+    opll: 
+      name: Optimasi Pengembangan Lapangan-Lapangan (OPLL)
+      approved_by: Deputy of SKK Migas
+    pop: 
+      name: Put on Production (POP)
+      approved_by: Deputy of SKK Migas
+  definition: >-
+    Izin berproduksi adalah istilah umum yang digunakan dalam
+    dokumen ini untuk merujuk pada berbagai izin yang diberikan oleh pihak yang
+    berwenang kepada KKKS agar dapat berproduksi. Izin berproduksi dapat
+    berupa Persetujuan POD, POP, Surat Keputusan Menteri, dan sebagainya.
+  definition_code: II.2
+  description: >-
+    Pada tahapan eksplorasi, apabila area proyek tersebut tidak seluruhnya mendapatkan
+    izin berproduksi, maka proyek tambahan terpisah dapat dibuat untuk melanjutkan
+    kegiatan eksplorasi di area yang belum mendapatkan izin berproduksi. 
+    Proyek tambahan ini nantinya akan dievaluasi untuk mendapatkan izin berproduksi yang baru
+    sebelum bisa dikembangkan.
+    Proyek juga dapat dibentuk sebagai pengembangan lanjutan atas proyek yang telah
+    ada. Konsep kerangka kegiatan yang terdapat dalam proyek lanjutan ini juga harus
+    berujung pada permintaan izin berproduksi yang baru. Apabila kerangka kegiatan
+    tersebut tidak membutuhkan izin berproduksi yang baru, maka cukup merevisi proyek
+    yang sudah ada.

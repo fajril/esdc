@@ -19,7 +19,7 @@ log_file = log_dir / "esdc_chat.log"
 
 # Import Config for logging configuration
 # Note: This is safe because configs.py doesn't import from chat/
-from esdc.configs import Config
+from esdc.configs import Config  # noqa: E402
 
 # Get logging configuration
 log_config = Config.get_logging_config()
@@ -272,7 +272,7 @@ class ContextUsageWidget(Static):
             new_count = self.compaction_info.get("new_count", 0)
             summarized_count = self.compaction_info.get("summarized_count", 0)
             lines.append(
-                f"[context-compacted]📦 Compacted: {original_count} → {new_count} messages ({summarized_count} summarized)[/]"
+                f"[context-compacted]📦 Compacted: {original_count} → {new_count} messages ({summarized_count} summarized)[/]"  # noqa: E501
             )
 
         self.update("\n".join(lines))
@@ -434,26 +434,26 @@ class ContextPanel(Vertical):
         background: $surface;
         border: none;
     }
-    
+
     ContextPanel > * {
         border: none;
     }
-    
+
     .tool-status {
         margin-top: 1;
         padding: 0;
         color: $text-muted;
         background: transparent;
     }
-    
+
     .tool-status.querying {
         color: $warning;
     }
-    
+
     .tool-status.completed {
         color: $success;
     }
-    
+
     .tool-status.idle {
         color: $text-muted;
     }
@@ -521,7 +521,7 @@ class ContextPanel(Vertical):
         self._current_directory = os.getcwd()
 
         logger.debug(
-            f"ContextPanel mounted, provider={self._provider_name!r}, model={self._model_name!r}"
+            f"ContextPanel mounted, provider={self._provider_name!r}, model={self._model_name!r}"  # noqa: E501
         )
         self.refresh()
 
@@ -570,7 +570,7 @@ class ContextPanel(Vertical):
             session_content = self.query_one("#session-content", Static)
             thread_display = str(thread_id)[:8] if thread_id else "N/A"
             session_content.update(
-                f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"
+                f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"  # noqa: E501
             )
         except Exception:
             pass
@@ -760,7 +760,7 @@ class Footer(Vertical):
         super().__init__()
         self.status_bar = StatusBar()
         self.user_input = ChatInput(
-            placeholder="Ask about your data... (Enter to send, Shift+Enter for new line)",
+            placeholder="Ask about your data... (Enter to send, Shift+Enter for new line)",  # noqa: E501
             id="user_input",
             show_line_numbers=False,
             soft_wrap=True,
@@ -795,7 +795,7 @@ class ChatPanel(ScrollableContainer):
         if len(self.messages) > MAX_MESSAGE_HISTORY:
             self.messages = self.messages[-MAX_MESSAGE_HISTORY:]
 
-        # Always scroll to bottom when adding new message (after DOM update + small delay)
+        # Always scroll to bottom when adding new message (after DOM update + small delay)  # noqa: E501
         self.call_after_refresh(
             lambda: self.set_timer(
                 0.1, lambda: self.scroll_end(animate=False, immediate=True)
@@ -1071,7 +1071,7 @@ class ESDCChatApp(App):
        Law of Prägnanz: Simple, clear visual hierarchy
        Aesthetic-Usability: Clean = usable
     ================================================================ */
-    
+
     Screen {
         layout: vertical;
         background: $background;
@@ -1213,7 +1213,7 @@ class ESDCChatApp(App):
         background: $background;
         border-top: solid $surface;
     }
-    
+
     /* TextArea Chat Input - Plain styling, no color box */
     .chat-input {
         height: 3;
@@ -1513,7 +1513,7 @@ class ESDCChatApp(App):
                 self._accumulated_content += token
                 self._streaming_message.update(self._accumulated_content)
 
-                # Always scroll to bottom on new content (after DOM update + delay for Markdown)
+                # Always scroll to bottom on new content (after DOM update + delay for Markdown)  # noqa: E501
                 if self.chat_panel:
                     chat_panel = self.chat_panel
                     self.call_after_refresh(
@@ -1532,7 +1532,7 @@ class ESDCChatApp(App):
                 if self._streaming_message:
                     self._streaming_message.update(self._accumulated_content)
 
-                # Always scroll to bottom on new content (after DOM update + delay for Markdown)
+                # Always scroll to bottom on new content (after DOM update + delay for Markdown)  # noqa: E501
                 if self.chat_panel:
                     chat_panel = self.chat_panel
                     self.call_after_refresh(
@@ -1549,7 +1549,7 @@ class ESDCChatApp(App):
             tool_args = chunk.get("args", {})
 
             # Tool-specific status messages
-            TOOL_STATUS_MAP = {
+            TOOL_STATUS_MAP = {  # noqa: N806
                 "execute_sql": "⏳ Executing SQL query...",
                 "SQL Executor": "🛠️ Using SQL Executor...",
                 "get_schema": "⏳ Getting table schema...",
@@ -1596,7 +1596,7 @@ class ESDCChatApp(App):
                 self._accumulated_content += indicator_text
                 self._streaming_message.update(self._accumulated_content)
 
-                # Always scroll to bottom when adding tool indicator (after DOM update + delay for Markdown)
+                # Always scroll to bottom when adding tool indicator (after DOM update + delay for Markdown)  # noqa: E501
                 if self.chat_panel:
                     chat_panel = self.chat_panel
                     self.call_after_refresh(
@@ -1619,7 +1619,7 @@ class ESDCChatApp(App):
             )
 
             # Tool-specific completion messages
-            TOOL_COMPLETED_MAP = {
+            TOOL_COMPLETED_MAP = {  # noqa: N806
                 "execute_sql": "✅ SQL query completed",
                 "SQL Executor": "✅ SQL Executor completed",
                 "get_schema": "✅ Schema retrieved",
@@ -1771,7 +1771,8 @@ class ESDCChatApp(App):
         """Save screenshot of the current screen.
 
         Args:
-            filename: Optional filename for the screenshot. Defaults to timestamped filename.
+            filename: Optional filename for the screenshot.
+            Defaults to timestamped filename.
         """
         from pathlib import Path
 

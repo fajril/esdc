@@ -122,16 +122,9 @@ def detect_native_format(headers: dict[str, str], stream: bool) -> bool:
     """
     accept = headers.get("accept", "").lower()
 
-    # Streaming clients with SSE support native
-    if "text/event-stream" in accept:
-        return True
-
-    # Non-streaming with JSON accept support native
-    if "application/json" in accept and not stream:
-        return True
-
-    # Default to markdown for unknown/legacy clients
-    return False
+    return ("text/event-stream" in accept) or (
+        "application/json" in accept and not stream
+    )
 
 
 def create_tool_role_chunk(

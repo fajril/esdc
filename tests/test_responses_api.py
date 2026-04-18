@@ -23,10 +23,10 @@ from esdc.server.responses_models import (
 from esdc.server.responses_wrapper import (
     SequenceCounter,
     chunk_json,
-    chunk_text,
     convert_responses_input_to_langchain,
     generate_item_id,
 )
+from esdc.server.stream_utils import chunk_text
 
 
 class TestResponsesModels:
@@ -111,13 +111,17 @@ class TestResponsesModels:
             output=[],
         )
         # Bypass Pydantic validation to test defensive code
-        response.output = [
-            "invalid string",
-            {
-                "type": "message",
-                "content": [{"type": "output_text", "text": "World"}],
-            },
-        ]
+        object.__setattr__(
+            response,
+            "output",
+            [  # type: ignore[assignment]
+                "invalid string",
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "World"}],
+                },
+            ],
+        )
         assert response.output_text == "World"
 
     def test_response_output_text_with_malformed_content(self):

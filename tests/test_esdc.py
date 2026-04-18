@@ -135,7 +135,7 @@ class TestLoadFileAsJson:
         json_file.write_text("[]")
 
         with patch("esdc.esdc.load_data_to_db") as mock_load:
-            result = _load_file_as_json(str(json_file), "test_table")
+            _load_file_as_json(str(json_file), "test_table")
             mock_load.assert_not_called()  # Should not call load_data_to_db
 
 

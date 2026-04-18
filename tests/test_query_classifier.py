@@ -1,6 +1,5 @@
 """Tests for query classifier."""
 
-
 from esdc.chat.query_classifier import (
     QueryClassification,
     QueryClassifier,
@@ -23,7 +22,8 @@ class TestQueryClassifier:
 
         assert result.query_type == QueryType.SIMPLE_FACTUAL
         assert result.confidence == 0.9
-        assert result.detected_entities.get("field_name").lower() == "duri"
+        assert result.detected_entities.get("field_name") is not None
+        assert result.detected_entities.get("field_name", "").lower() == "duri"
         assert result.detected_entities.get("report_year") == "2024"
         assert result.suggested_table == "field_resources"
         assert "res_oc" in result.suggested_columns
@@ -91,9 +91,44 @@ class TestQueryClassifier:
 
     def test_ambiguous_query(self):
         """Test classification of ambiguous query."""
-        result = self.classifier.classify("info tentang minyak")  # Very vague
+        result = self.classifier.classify("info tentang minyak")
 
         assert result.query_type == QueryType.AMBIGUOUS
+
+    def test_year_transition_indonesian(self):
+        """Test classification of year transition query (Indonesian)."""
+        result = self.classifier.classify(
+            "ada berapa banyak project yang tahun 2024 prospective resources "
+            "namun di 2025 menjadi contingent resources atau reserves"
+        )
+
+        assert result.query_type == QueryType.YEAR_TRANSITION
+        assert result.confidence >= 0.85
+        assert "project_resources" in result.suggested_table
+
+    def test_year_transition_dari_ke(self):
+        """Test classification of dari...ke year transition query."""
+        result = self.classifier.classify(
+            "project yang dari tahun 2023 ke tahun 2025 berubah project class"
+        )
+
+        assert result.query_type == QueryType.YEAR_TRANSITION
+
+    def test_year_transition_menjadi(self):
+        """Test classification of 'menjadi' year transition query."""
+        result = self.classifier.classify(
+            "project di 2024 yang menjadi reserves di 2025"
+        )
+
+        assert result.query_type == QueryType.YEAR_TRANSITION
+
+    def test_year_transition_english(self):
+        """Test classification of English year transition query."""
+        result = self.classifier.classify(
+            "projects in 2024 that became reserves in 2025"
+        )
+
+        assert result.query_type == QueryType.YEAR_TRANSITION
 
     def test_detect_entities_multiple(self):
         """Test detection of multiple entities."""
@@ -101,7 +136,7 @@ class TestQueryClassifier:
             "berapa cadangan lapangan Duri wk rokan tahun 2024 provinsi Riau?"
         )
 
-        assert result.detected_entities.get("field_name").lower() == "duri"
+        assert result.detected_entities.get("field_name", "").lower() == "duri"
         assert result.detected_entities.get("wk_name") == "rokan"
         assert result.detected_entities.get("report_year") == "2024"
 
@@ -121,7 +156,12 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert tools == ["execute_sql"]
+        assert "SQL Executor" in tools
+        assert "Schema Inspector" in tools
+        assert "Table Lister" in tools
+        assert "Table Selector" in tools
+        assert "Spatial Resolver" not in tools
+        assert "Semantic Search" not in tools
 
     def test_conceptual_tools(self):
         """Test tools for conceptual queries."""
@@ -135,8 +175,9 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "semantic_search" in tools
-        assert "execute_sql" in tools
+        assert "Semantic Search" in tools
+        assert "SQL Executor" in tools
+        assert "Spatial Resolver" not in tools
 
     def test_spatial_tools(self):
         """Test tools for spatial queries."""
@@ -150,8 +191,9 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "resolve_spatial" in tools
-        assert "execute_sql" in tools
+        assert "Spatial Resolver" in tools
+        assert "SQL Executor" in tools
+        assert "Semantic Search" not in tools
 
     def test_ambiguous_tools(self):
         """Test full tool set for ambiguous queries."""
@@ -165,8 +207,25 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "knowledge_traversal" in tools
-        assert "execute_sql" in tools
+        assert "Knowledge Traversal" in tools
+        assert "SQL Executor" in tools
+
+    def test_year_transition_tools(self):
+        """Test minimal tools for year transition queries."""
+        classification = QueryClassification(
+            query_type=QueryType.YEAR_TRANSITION,
+            confidence=0.85,
+            detected_entities={},
+            suggested_table="project_resources",
+            suggested_columns=["project_class", "report_year"],
+            reason="Year transition query",
+        )
+
+        tools = get_tools_for_classification(classification)
+        assert "SQL Executor" in tools
+        assert "Knowledge Traversal" in tools
+        assert "Semantic Search" not in tools
+        assert "Spatial Resolver" not in tools
 
 
 class TestPromptFormatting:
@@ -222,3 +281,21 @@ class TestPromptFormatting:
         formatted = format_classification_for_prompt(classification)
 
         assert "resolve_spatial" in formatted
+
+    def test_year_transition_formatting(self):
+        """Test formatting of year transition classification."""
+        classification = QueryClassification(
+            query_type=QueryType.YEAR_TRANSITION,
+            confidence=0.85,
+            detected_entities={"report_year": "2024"},
+            suggested_table="project_resources",
+            suggested_columns=["project_class", "report_year"],
+            reason="Year-over-year transition detected",
+        )
+
+        formatted = format_classification_for_prompt(classification)
+
+        assert "Year Transition" in formatted
+        assert "CASE WHEN" in formatted
+        assert "ONE SQL query" in formatted
+        assert "project_resources" in formatted

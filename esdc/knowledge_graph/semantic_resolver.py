@@ -6,6 +6,7 @@ using vector embeddings and HNSW index for fast similarity search.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -45,14 +46,24 @@ class SemanticResolver:
         self._embedding_manager = EmbeddingManager(model=model)
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
-        """Get or create DuckDB connection with VSS extension loaded."""
+        """Get or create DuckDB connection with VSS extension loaded.
+
+        Includes health check to detect stale connections after DB file
+        replacement (e.g. during esdc fetch).
+        """
+        if self._conn is not None:
+            try:
+                self._conn.execute("SELECT 1")
+            except Exception:
+                logger.info("[Semantic] Stale connection detected, reconnecting")
+                with contextlib.suppress(Exception):
+                    self._conn.close()
+                self._conn = None
+
         if self._conn is None:
             self._conn = duckdb.connect(str(self._db_path))
-            # Load VSS extension for vector similarity search
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.execute("INSTALL vss")
-            except Exception:
-                pass  # Already installed
             self._conn.execute("LOAD vss")
             logger.debug("[Semantic] DuckDB connection established with VSS extension")
         return self._conn
@@ -73,8 +84,8 @@ class SemanticResolver:
             # Check if old table exists with uuid column (migration from old schema)
             try:
                 table_info = conn.execute(f"""
-                    SELECT column_name 
-                    FROM information_schema.columns 
+                    SELECT column_name
+                    FROM information_schema.columns
                     WHERE table_name = '{self.EMBEDDING_TABLE}'
                 """).fetchall()
 
@@ -99,7 +110,7 @@ class SemanticResolver:
             logger.info(f"[Semantic] detected embedding dimension: {embedding_dim}")
 
             # Create table for embeddings with contextual columns
-            # Primary key is (project_id, report_year) - one embedding per project per year
+            # Primary key is (project_id, report_year) - one embedding per project per year  # noqa: E501
             # embedding column uses fixed-size array FLOAT[N] required by HNSW index
             conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.EMBEDDING_TABLE} (
@@ -179,7 +190,7 @@ class SemanticResolver:
 
         try:
             # Fetch documents with remarks and contextual data
-            # DISTINCT to handle cases where same project appears in multiple rows (e.g., different uncert_levels)
+            # DISTINCT to handle cases where same project appears in multiple rows (e.g., different uncert_levels)  # noqa: E501
             result = conn.execute(f"""
                 SELECT DISTINCT
                     project_id,
@@ -221,12 +232,15 @@ class SemanticResolver:
                 embeddings = self._embedding_manager.generate_embeddings_batch(texts)
 
                 # Store in DuckDB with all contextual columns
-                for j, (row, embedding) in enumerate(zip(batch, embeddings)):
+                for _j, (row, embedding) in enumerate(
+                    zip(batch, embeddings, strict=True)
+                ):
                     conn.execute(
                         f"""
                         INSERT OR REPLACE INTO {self.EMBEDDING_TABLE}
                         (project_id, report_year, table_name, field_name, project_name,
-                         pod_name, wk_name, province, basin128, project_class, project_stage,
+                         pod_name, wk_name, province, basin128, project_class,
+                         project_stage,
                          project_level, operator_name, operator_group, wk_subgroup,
                          wk_regionisasi_ngi, wk_area_perwakilan_skkmigas,
                          project_remarks, embedding)
@@ -324,7 +338,8 @@ class SemanticResolver:
                 - operator_group: Filter by operator group (ILIKE pattern)
                 - wk_subgroup: Filter by working area subgroup (ILIKE pattern)
                 - wk_regionisasi_ngi: Filter by NGI region (ILIKE pattern)
-                - wk_area_perwakilan_skkmigas: Filter by SKK Migas region (ILIKE pattern)
+                -
+                wk_area_perwakilan_skkmigas: Filter by SKK Migas region (ILIKE pattern)
 
         Returns:
             Dict with status and results including all contextual columns
@@ -359,7 +374,8 @@ class SemanticResolver:
                 - operator_group: Filter by operator group (ILIKE pattern)
                 - wk_subgroup: Filter by working area subgroup (ILIKE pattern)
                 - wk_regionisasi_ngi: Filter by NGI region (ILIKE pattern)
-                - wk_area_perwakilan_skkmigas: Filter by SKK Migas region (ILIKE pattern)
+                -
+                wk_area_perwakilan_skkmigas: Filter by SKK Migas region (ILIKE pattern)
 
         Returns:
             Dict with status and results including all contextual columns
@@ -375,7 +391,7 @@ class SemanticResolver:
             if check is None or check[0] == 0:
                 return {
                     "status": "not_available",
-                    "message": "No embeddings found. Run 'esdc reload' to generate embeddings.",
+                    "message": "No embeddings found. Run 'esdc reload' to generate embeddings.",  # noqa: E501
                     "results": [],
                 }
 
@@ -452,7 +468,10 @@ class SemanticResolver:
                     wk_area_perwakilan_skkmigas,
                     project_remarks,
                     list_dot_product(embedding, ?::FLOAT[]) /
-                    (sqrt(list_dot_product(embedding, embedding)) * sqrt(list_dot_product(?::FLOAT[], ?::FLOAT[]))) as similarity
+                    (sqrt(list_dot_product(embedding,
+                    embedding))
+                    * sqrt(list_dot_product(?::FLOAT[], ?::FLOAT[]))
+                    as similarity
                 FROM {self.EMBEDDING_TABLE}
                 WHERE {where_clause}
                 ORDER BY similarity DESC

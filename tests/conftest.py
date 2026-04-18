@@ -17,6 +17,30 @@ def reset_config_cache():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_provider_config(request):
+    """Prevent accidental real LLM calls in tests.
+
+    Patches get_provider_config in agent_wrapper where
+    generate_response/generate_streaming_response call it. Does NOT
+    patch esdc.configs globally so that config tests still work.
+
+    Skip this fixture with @pytest.mark.allow_provider_config marker.
+    """
+    from unittest.mock import patch
+
+    marker = request.node.get_closest_marker("allow_provider_config")
+    if marker is not None:
+        yield
+        return
+
+    with patch(
+        "esdc.server.agent_wrapper.Config.get_provider_config",
+        return_value=None,
+    ):
+        yield
+
+
 @pytest.fixture
 def isolated_config(tmp_path, monkeypatch):
     """Create isolated config directory for integration tests.
@@ -110,7 +134,7 @@ def seeded_database(isolated_config):
             );
         """)
         conn.executemany(
-            "INSERT INTO project_resources (report_date, report_year, report_status, project_name, project_stage, project_class, project_level, uncert_level, wk_name, field_name, rec_oc_risked, rec_an_risked, res_oc, res_an, prj_ioip, prj_igip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO project_resources (report_date, report_year, report_status, project_name, project_stage, project_class, project_level, uncert_level, wk_name, field_name, rec_oc_risked, rec_an_risked, res_oc, res_an, prj_ioip, prj_igip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",  # noqa: E501
             [
                 (
                     "2024-01-01",

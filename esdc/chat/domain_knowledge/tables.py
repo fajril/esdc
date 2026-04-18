@@ -225,14 +225,18 @@ def get_table_for_query(
     Get the recommended table/view for a query.
 
     Uses pre-aggregated views for efficiency at field/work_area/national levels.
-    For timeseries: uses views for aggregation, project_timeseries for detail per project.
-    For static resources: uses views for aggregation, project_resources for detail per project.
+    For timeseries: uses views for aggregation,
+    project_timeseries for detail per project.
+    For static resources: uses views for aggregation,
+    project_resources for detail per project.
 
     Args:
         entity_type: Type of entity (field, work_area, wa, national, nkri, project)
         entity_name: Name of specific entity
-        require_detail: If True, use base table (project_resources) for detailed static analysis
-        timeseries_detail: If True, use project_timeseries for detail; False for aggregated views
+        require_detail: If True,
+        use base table (project_resources) for detailed static analysis
+        timeseries_detail: If True,
+        use project_timeseries for detail; False for aggregated views
         prefer_aggregation: If True, prefer aggregated views over detail tables
 
     Returns:

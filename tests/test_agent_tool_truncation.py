@@ -20,7 +20,7 @@ class TestToolResultTruncation:
         if len(observation_str) > MAX_TOOL_RESULT_CHARS:
             truncated = (
                 observation_str[:MAX_TOOL_RESULT_CHARS]
-                + "\n\n[Result truncated to first 10000 characters for context efficiency]"
+                + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
             )
         else:
             truncated = observation_str
@@ -44,7 +44,7 @@ class TestToolResultTruncation:
         if len(observation_str) > MAX_TOOL_RESULT_CHARS:
             truncated = (
                 observation_str[:MAX_TOOL_RESULT_CHARS]
-                + "\n\n[Result truncated to first 10000 characters for context efficiency]"
+                + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
             )
         else:
             truncated = observation_str
@@ -62,7 +62,7 @@ class TestToolResultTruncation:
         if len(observation_str) > MAX_TOOL_RESULT_CHARS:
             truncated = (
                 observation_str[:MAX_TOOL_RESULT_CHARS]
-                + "\n\n[Result truncated to first 10000 characters for context efficiency]"
+                + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
             )
         else:
             truncated = observation_str
@@ -80,7 +80,7 @@ class TestToolResultTruncation:
         if len(observation_str) > MAX_TOOL_RESULT_CHARS:
             truncated = (
                 observation_str[:MAX_TOOL_RESULT_CHARS]
-                + "\n\n[Result truncated to first 10000 characters for context efficiency]"
+                + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
             )
         else:
             truncated = observation_str

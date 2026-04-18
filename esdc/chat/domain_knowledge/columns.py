@@ -319,7 +319,7 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
     # Classification
     "project_class": ColumnMetadata(
         "project_class",
-        "Project classification (Reserves & GRR, Contingent Resources, Prospective Resources)",
+        "Project classification (Reserves & GRR, Contingent Resources, Prospective Resources)",  # noqa: E501
         None,
         "classification",
     ),

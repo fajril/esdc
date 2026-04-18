@@ -6,12 +6,14 @@ native spatial capabilities without requiring LadybugDB.
 
 from __future__ import annotations
 
-import json
+import contextlib
 import logging
 from pathlib import Path
 from typing import Any
 
 import duckdb
+import numpy as np
+from sklearn.cluster import DBSCAN
 
 from esdc.configs import Config
 
@@ -35,14 +37,24 @@ class SpatialResolver:
         self._conn: duckdb.DuckDBPyConnection | None = None
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
-        """Get or create DuckDB connection with spatial extension loaded."""
+        """Get or create DuckDB connection with spatial extension loaded.
+
+        Includes health check to detect stale connections after DB file
+        replacement (e.g. during esdc fetch).
+        """
+        if self._conn is not None:
+            try:
+                self._conn.execute("SELECT 1")
+            except Exception:
+                logger.info("[Spatial] Stale connection detected, reconnecting")
+                with contextlib.suppress(Exception):
+                    self._conn.close()
+                self._conn = None
+
         if self._conn is None:
             self._conn = duckdb.connect(str(self._db_path), read_only=True)
-            # Load spatial extension
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.execute("INSTALL spatial")
-            except Exception:
-                pass  # Already installed
             self._conn.execute("LOAD spatial")
             logger.debug(
                 "[Spatial] DuckDB connection established with spatial extension"
@@ -54,6 +66,7 @@ class SpatialResolver:
         field_name: str,
         radius_km: float = 20.0,
         limit: int = 10,
+        wk_name: str | None = None,
     ) -> dict[str, Any]:
         """Find fields within specified radius of a target field.
 
@@ -61,30 +74,37 @@ class SpatialResolver:
             field_name: Name of the reference field
             radius_km: Search radius in kilometers (default: 20)
             limit: Maximum results (default: 10)
+            wk_name: Optional working area name to scope results
 
         Returns:
             Dict with status and list of nearby fields with distances
         """
         conn = self._get_connection()
 
-        query = """
+        wk_filter_ref = "AND wk_name ILIKE ?" if wk_name else ""
+        wk_filter_cand = "AND p.wk_name ILIKE ?" if wk_name else ""
+
+        query = f"""
             WITH reference AS (
                 SELECT DISTINCT
                     field_id,
                     field_name,
                     field_lat,
                     field_long,
+                    wk_name,
                     ST_Point(field_lat, field_long)::POINT_2D as geom
                 FROM project_resources
                 WHERE field_name ILIKE ?
                     AND field_lat IS NOT NULL
                     AND field_long IS NOT NULL
+                    {wk_filter_ref}
                 LIMIT 1
             ),
             candidates AS (
                 SELECT DISTINCT
                     p.field_id,
                     p.field_name,
+                    p.wk_name,
                     p.field_lat,
                     p.field_long,
                     ST_Point(p.field_lat, p.field_long)::POINT_2D as geom
@@ -92,14 +112,16 @@ class SpatialResolver:
                 WHERE p.field_lat IS NOT NULL
                     AND p.field_long IS NOT NULL
                     AND p.field_id NOT IN (SELECT field_id FROM reference)
+                    {wk_filter_cand}
             )
             SELECT
                 c.field_id,
                 c.field_name,
+                c.wk_name,
                 ST_Distance_Spheroid(
                     r.geom,
                     c.geom
-                ) / 1000.0 as distance_km  -- Convert meters to km
+                ) / 1000.0 as distance_km
             FROM reference r
             CROSS JOIN candidates c
             WHERE ST_Distance_Spheroid(r.geom, c.geom) / 1000.0 <= ?
@@ -107,9 +129,12 @@ class SpatialResolver:
             LIMIT ?
         """
 
+        ref_params = [f"%{field_name}%"] + ([f"%{wk_name}%"] if wk_name else [])
+        cand_params = [f"%{wk_name}%"] if wk_name else []
+
         try:
             result = conn.execute(
-                query, [f"%{field_name}%", radius_km, limit]
+                query, ref_params + cand_params + [radius_km, limit]
             ).fetchall()
 
             if not result:
@@ -123,14 +148,22 @@ class SpatialResolver:
                 {
                     "field_id": row[0],
                     "field_name": row[1],
-                    "distance_km": round(row[2], 2),
+                    "wk_name": row[2],
+                    "distance_km": round(row[3], 2),
                 }
                 for row in result
             ]
 
+            query_info: dict[str, Any] = {
+                "field": field_name,
+                "radius_km": radius_km,
+            }
+            if wk_name:
+                query_info["wk_name"] = wk_name
+
             return {
                 "status": "success",
-                "query": {"field": field_name, "radius_km": radius_km},
+                "query": query_info,
                 "nearby_fields": nearby,
                 "count": len(nearby),
             }
@@ -203,19 +236,23 @@ class SpatialResolver:
         self,
         from_field: str,
         to_field: str,
+        wk_name: str | None = None,
     ) -> dict[str, Any]:
         """Calculate distance between two fields.
 
         Args:
             from_field: Name of origin field
             to_field: Name of destination field
+            wk_name: Optional working area name to scope field lookup
 
         Returns:
             Dict with distance in km
         """
         conn = self._get_connection()
 
-        query = """
+        wk_filter = "AND wk_name ILIKE ?" if wk_name else ""
+
+        query = f"""
             WITH coords1 AS (
                 SELECT DISTINCT
                     field_name,
@@ -225,6 +262,7 @@ class SpatialResolver:
                 WHERE field_name ILIKE ?
                     AND field_lat IS NOT NULL
                     AND field_long IS NOT NULL
+                    {wk_filter}
                 LIMIT 1
             ),
             coords2 AS (
@@ -236,6 +274,7 @@ class SpatialResolver:
                 WHERE field_name ILIKE ?
                     AND field_lat IS NOT NULL
                     AND field_long IS NOT NULL
+                    {wk_filter}
                 LIMIT 1
             )
             SELECT
@@ -245,7 +284,6 @@ class SpatialResolver:
                 c2.field_name as to_name,
                 c2.field_lat as to_lat,
                 c2.field_long as to_long,
-                -- Haversine formula for distance calculation
                 6371.0 * 2 * ASIN(SQRT(
                     POWER(SIN(RADIANS(c2.field_lat - c1.field_lat) / 2), 2) +
                     COS(RADIANS(c1.field_lat)) * COS(RADIANS(c2.field_lat)) *
@@ -255,18 +293,20 @@ class SpatialResolver:
             CROSS JOIN coords2 c2
         """
 
+        params1 = [f"%{from_field}%"] + ([f"%{wk_name}%"] if wk_name else [])
+        params2 = [f"%{to_field}%"] + ([f"%{wk_name}%"] if wk_name else [])
+
         try:
-            result = conn.execute(
-                query, [f"%{from_field}%", f"%{to_field}%"]
-            ).fetchone()
+            result = conn.execute(query, params1 + params2).fetchone()
 
             if not result or result[0] is None or result[3] is None:
                 return {
                     "status": "not_found",
-                    "message": f"Could not find both fields: {from_field}, {to_field}",
+                    "message": f"Could not find both fields: {from_field}, {to_field}"
+                    + (f" in WK {wk_name}" if wk_name else ""),
                 }
 
-            return {
+            response: dict[str, Any] = {
                 "status": "success",
                 "from_field": result[0],
                 "from_lat": result[1],
@@ -276,6 +316,10 @@ class SpatialResolver:
                 "to_long": result[5],
                 "distance_km": round(result[6], 2),
             }
+            if wk_name:
+                response["wk_name"] = wk_name
+
+            return response
 
         except Exception as e:
             logger.error("[Spatial] distance_calculation_failed | error=%s", e)
@@ -287,18 +331,22 @@ class SpatialResolver:
     def get_field_coordinates(
         self,
         field_name: str,
+        wk_name: str | None = None,
     ) -> dict[str, Any]:
         """Get coordinates for a field.
 
         Args:
             field_name: Name of the field
+            wk_name: Optional working area name to scope lookup
 
         Returns:
             Dict with lat/long coordinates
         """
         conn = self._get_connection()
 
-        query = """
+        wk_filter = "AND wk_name ILIKE ?" if wk_name else ""
+
+        query = f"""
             SELECT DISTINCT
                 field_id,
                 field_name,
@@ -309,11 +357,14 @@ class SpatialResolver:
             WHERE field_name ILIKE ?
                 AND field_lat IS NOT NULL
                 AND field_long IS NOT NULL
+                {wk_filter}
             LIMIT 1
         """
 
+        params = [f"%{field_name}%"] + ([f"%{wk_name}%"] if wk_name else [])
+
         try:
-            result = conn.execute(query, [f"%{field_name}%"]).fetchone()
+            result = conn.execute(query, params).fetchone()
 
             if not result:
                 return {
@@ -422,7 +473,7 @@ class SpatialResolver:
         else:
             return {
                 "status": "error",
-                "message": f"Invalid entity_type: {entity_type}. Use 'field' or 'working_area'",
+                "message": f"Invalid entity_type: {entity_type}. Use 'field' or 'working_area'",  # noqa: E501
             }
 
         try:
@@ -500,7 +551,8 @@ class SpatialResolver:
         of each other are grouped together.
 
         Args:
-            max_distance_km: Maximum distance between fields in same cluster (default: 20)
+            max_distance_km: Maximum distance between fields
+                in same cluster (default: 20)
             min_cluster_size: Minimum number of fields to form a cluster (default: 2)
 
         Returns:
@@ -527,73 +579,87 @@ class SpatialResolver:
             if not result or len(result) < min_cluster_size:
                 return {
                     "status": "no_results",
-                    "message": f"Insufficient fields with coordinates (found {len(result)})",
+                    "message": f"Insufficient fields with coordinates (found {len(result)})",  # noqa: E501
                     "clusters": [],
                     "unclustered": [],
                 }
 
-            # Build distance matrix using spatial query
+            # Limit check - prevent memory issues with very large datasets
+            MAX_FIELDS = 10000  # noqa: N806
+            if len(result) > MAX_FIELDS:
+                return {
+                    "status": "error",
+                    "message": f"Too many fields ({len(result)}). Maximum supported: {MAX_FIELDS}",  # noqa: E501
+                }
+
+            # Build field data
             fields_data = [
-                {"field_id": row[0], "field_name": row[1], "lat": row[2], "long": row[3]}
+                {
+                    "field_id": row[0],
+                    "field_name": row[1],
+                    "lat": row[2],
+                    "long": row[3],
+                }
                 for row in result
             ]
 
-            # Simple clustering: group fields where each field is within max_distance_km
-            # of at least one other field in the cluster
-            clusters = []
+            # Convert to numpy arrays for sklearn
+            # Coordinates in radians for haversine metric
+            coords_rad = (
+                np.array([[f["lat"], f["long"]] for f in fields_data]) * np.pi / 180.0
+            )
+
+            # Convert max_distance_km to radians (eps parameter for DBSCAN)
+            # Earth's radius = 6371 km
+            eps_radians = max_distance_km / 6371.0
+
+            # Apply DBSCAN clustering
+            # haversine metric is optimized for geographic coordinates
+            clustering = DBSCAN(
+                eps=eps_radians,
+                min_samples=min_cluster_size,
+                metric="haversine",
+                algorithm="ball_tree",
+            )
+            cluster_labels = clustering.fit_predict(coords_rad)
+
+            # Process results
+            clusters_dict = {}
             unclustered = []
-            assigned = set()
 
-            for i, field1 in enumerate(fields_data):
-                if field1["field_id"] in assigned:
-                    continue
+            for i, label in enumerate(cluster_labels):
+                field = fields_data[i]
+                if label == -1:
+                    # Noise point (unclustered)
+                    unclustered.append(field["field_name"])
+                else:
+                    if label not in clusters_dict:
+                        clusters_dict[label] = []
+                    clusters_dict[label].append(field)
 
-                # Check distance to all other unassigned fields
-                cluster_fields = [field1]
-                assigned.add(field1["field_id"])
+            # Format clusters
+            clusters = []
+            for label, cluster_fields in clusters_dict.items():
+                # Calculate cluster center
+                avg_lat = sum(f["lat"] for f in cluster_fields) / len(cluster_fields)
+                avg_long = sum(f["long"] for f in cluster_fields) / len(cluster_fields)
 
-                for j, field2 in enumerate(fields_data[i + 1 :], start=i + 1):
-                    if field2["field_id"] in assigned:
-                        continue
-
-                    # Calculate distance using spatial query
-                    dist_query = """
-                        SELECT ST_Distance_Spheroid(
-                            ST_Point(?, ?)::POINT_2D,
-                            ST_Point(?, ?)::POINT_2D
-                        ) / 1000.0 as distance_km
-                    """
-                    dist_result = conn.execute(
-                        dist_query,
-                        [field1["lat"], field1["long"], field2["lat"], field2["long"]],
-                    ).fetchone()
-
-                    if dist_result and dist_result[0] <= max_distance_km:
-                        cluster_fields.append(field2)
-                        assigned.add(field2["field_id"])
-
-                if len(cluster_fields) >= min_cluster_size:
-                    # Calculate cluster center
-                    avg_lat = sum(f["lat"] for f in cluster_fields) / len(cluster_fields)
-                    avg_long = sum(f["long"] for f in cluster_fields) / len(cluster_fields)
-
-                    clusters.append({
-                        "cluster_id": len(clusters) + 1,
+                clusters.append(
+                    {
+                        "cluster_id": int(label) + 1,
                         "fields": [f["field_name"] for f in cluster_fields],
                         "field_count": len(cluster_fields),
                         "center_lat": round(avg_lat, 4),
                         "center_long": round(avg_long, 4),
-                    })
-                else:
-                    # Add to unclustered
-                    unclustered.extend([f["field_name"] for f in cluster_fields])
-                    for f in cluster_fields:
-                        assigned.discard(f["field_id"])
+                    }
+                )
 
-            # Collect remaining unassigned fields
-            for field in fields_data:
-                if field["field_id"] not in assigned:
-                    unclustered.append(field["field_name"])
+            # Sort clusters by field count (largest first)
+            clusters.sort(key=lambda x: x["field_count"], reverse=True)
+
+            # Reassign cluster IDs after sorting
+            for i, cluster in enumerate(clusters):
+                cluster["cluster_id"] = i + 1
 
             return {
                 "status": "success",
@@ -731,15 +797,14 @@ class SpatialResolver:
 
         conn = self._get_connection()
 
-        # Get coordinates for all fields
-        placeholders = ", ".join(["?"] * len(field_names))
+        where_clauses = " OR ".join(["field_name ILIKE ?" for _ in field_names])
         query = f"""
             SELECT DISTINCT
                 field_name,
                 field_lat,
                 field_long
             FROM project_resources
-            WHERE field_name ILIKE ANY (ARRAY[{placeholders}])
+            WHERE ({where_clauses})
                 AND field_lat IS NOT NULL
                 AND field_long IS NOT NULL
         """
@@ -754,8 +819,7 @@ class SpatialResolver:
                 }
 
             fields = [
-                {"field_name": row[0], "lat": row[1], "long": row[2]}
-                for row in result
+                {"field_name": row[0], "lat": row[1], "long": row[2]} for row in result
             ]
 
             # Calculate pairwise distances
@@ -775,11 +839,13 @@ class SpatialResolver:
 
                     if dist_result:
                         distance = round(dist_result[0], 2)
-                        pairwise_distances.append({
-                            "from": field1["field_name"],
-                            "to": field2["field_name"],
-                            "distance_km": distance,
-                        })
+                        pairwise_distances.append(
+                            {
+                                "from": field1["field_name"],
+                                "to": field2["field_name"],
+                                "distance_km": distance,
+                            }
+                        )
 
             if not pairwise_distances:
                 return {

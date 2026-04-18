@@ -138,10 +138,8 @@ class TestAgentWrapperIntegration:
 
     @pytest.mark.asyncio
     async def test_generate_response_mock(self):
-        """Test generate_response with mocked agent."""
+        """Test generate_response with mocked astream_agent_events."""
         from esdc.server.agent_wrapper import generate_response
-
-        mock_event = {"messages": [MagicMock(spec=AIMessage, content="Test response")]}
 
         with patch(
             "esdc.server.agent_wrapper.Config.get_provider_config"
@@ -154,25 +152,27 @@ class TestAgentWrapperIntegration:
                     }
                     mock_llm.return_value = MagicMock()
                     mock_agent.return_value = MagicMock()
-                    mock_agent.return_value.astream = AsyncMock(
-                        return_value=[mock_event]
-                    )
 
-                    result = await generate_response(
-                        messages=[MagicMock(role="user", content="Hello")],
-                        model="iris",
-                    )
+                    async def _astream_events(*args, **kwargs):
+                        yield {"type": "token", "content": "Test response"}
 
-                    assert result["role"] == "assistant"
-                    assert result["finish_reason"] == "stop"
+                    with patch(
+                        "esdc.server.agent_wrapper.astream_agent_events",
+                        _astream_events,
+                    ):
+                        result = await generate_response(
+                            messages=[MagicMock(role="user", content="Hello")],
+                            model="iris",
+                        )
+
+                        assert isinstance(result, dict)
+                        assert "choices" in result
+                        assert result["choices"][0]["message"]["role"] == "assistant"
+                        assert result["choices"][0]["finish_reason"] == "stop"
 
     @pytest.mark.asyncio
     async def test_generate_streaming_response_mock(self):
-        """Test generate_streaming_response with mocked agent."""
-        from esdc.server.agent_wrapper import generate_streaming_response
-
-        mock_event = {"messages": [MagicMock(spec=AIMessage, content="Test")]}
-
+        """Test generate_streaming_response with mocked astream_agent_events."""
         with patch(
             "esdc.server.agent_wrapper.Config.get_provider_config"
         ) as mock_config:
@@ -184,40 +184,39 @@ class TestAgentWrapperIntegration:
                     }
                     mock_llm.return_value = MagicMock()
                     mock_agent.return_value = MagicMock()
-                    mock_agent.return_value.astream = AsyncMock(
-                        return_value=[mock_event]
-                    )
 
-                    chunks = []
-                    async for chunk in generate_streaming_response(
-                        messages=[MagicMock(role="user", content="Hello")],
-                        model="iris",
+                    async def _astream_events(*args, **kwargs):
+                        yield {"type": "token", "content": "Test"}
+
+                    with patch(
+                        "esdc.server.agent_wrapper.astream_agent_events",
+                        _astream_events,
                     ):
-                        chunks.append(json.loads(chunk))
+                        chunks = []
+                        async for chunk in generate_streaming_response(
+                            messages=[MagicMock(role="user", content="Hello")],
+                            model="iris",
+                        ):
+                            chunks.append(json.loads(chunk))
 
-                    assert len(chunks) > 0
-                    assert all("choices" in c for c in chunks)
+                        assert len(chunks) > 0
+                        assert all("choices" in c for c in chunks)
 
+    @pytest.mark.asyncio
+    async def test_generate_response_no_provider(self):
         """Test generate_response when no provider configured."""
         from esdc.server.agent_wrapper import generate_response
 
-        with patch(
-            "esdc.server.agent_wrapper.Config.get_provider_config"
-        ) as mock_config:
-            mock_config.return_value = None
+        result = await generate_response(
+            messages=[MagicMock(role="user", content="Hello")],
+        )
 
-            result = await generate_response(
-                messages=[MagicMock(role="user", content="Hello")],
-            )
-
-            assert "Error" in result["content"]
-            assert result["finish_reason"] == "stop"
+        assert "Error" in result["content"]
+        assert result["finish_reason"] == "stop"
 
     @pytest.mark.asyncio
     async def test_generate_streaming_response_no_provider(self):
         """Test generate_streaming_response when no provider configured."""
-        from esdc.server.agent_wrapper import generate_streaming_response
-
         with patch(
             "esdc.server.agent_wrapper.Config.get_provider_config"
         ) as mock_config:
@@ -233,20 +232,80 @@ class TestAgentWrapperIntegration:
             assert "Error" in chunks[0]["choices"][0]["delta"]["content"]
 
 
-async def test_generate_streaming_response_character_level():
-    """Test that content is streamed character-by-character (3 chars at a time)."""
-    messages = [{"role": "user", "content": "hello"}]
+@pytest.mark.asyncio
+async def test_generate_streaming_response_real_token_streaming():
+    """Test that content is streamed token-by-token, not in a burst."""
+    from esdc.server.models import Message
 
+    messages = [Message(role="user", content="hello")]
     content_chunks = []
 
-    async for chunk in generate_streaming_response(messages):
-        data = json.loads(chunk)
-        delta = data["choices"][0]["delta"]
-        if content := delta.get("content"):
-            content_chunks.append(content)
+    async def mock_astream_agent_events(*args, **kwargs):
+        yield {"type": "token", "content": "Hello"}
+        yield {"type": "token", "content": " world"}
+        yield {"type": "token", "content": "!"}
 
-    # Each chunk should be small (<= 3 chars)
-    # Exception: tool call chunks can be larger
-    for chunk in content_chunks:
-        # Allow small chunks (3 chars) or header/markdown constructs
-        assert len(chunk) <= 10, f"Chunk too large: {len(chunk)} chars: {chunk!r}"
+    with (
+        patch(
+            "esdc.server.agent_wrapper.Config.get_provider_config",
+            return_value={
+                "provider_type": "ollama",
+                "model": "test-model",
+                "base_url": "http://localhost:11434",
+            },
+        ),
+        patch("esdc.server.agent_wrapper.create_llm_from_config"),
+        patch("esdc.server.agent_wrapper.create_agent", return_value=MagicMock()),
+        patch(
+            "esdc.server.agent_wrapper.astream_agent_events",
+            mock_astream_agent_events,
+        ),
+    ):
+        async for chunk in generate_streaming_response(
+            messages=messages, use_native_format=True
+        ):
+            data = json.loads(chunk)
+            delta = data.get("choices", [{}])[0].get("delta", {})
+            if content := delta.get("content"):
+                content_chunks.append(content)
+
+    assert content_chunks == ["Hello", " world", "!"]
+
+
+@pytest.mark.asyncio
+async def test_generate_streaming_response_recursion_error():
+    """Test that recursion_error event produces user-friendly error."""
+    from esdc.server.models import Message
+
+    messages = [Message(role="user", content="complex query")]
+    content_chunks = []
+
+    async def mock_astream_agent_events(*args, **kwargs):
+        yield {"type": "token", "content": "Partial "}
+        yield {"type": "recursion_error", "message": "Too many steps"}
+
+    with (
+        patch(
+            "esdc.server.agent_wrapper.Config.get_provider_config",
+            return_value={
+                "provider_type": "ollama",
+                "model": "test-model",
+                "base_url": "http://localhost:11434",
+            },
+        ),
+        patch("esdc.server.agent_wrapper.create_llm_from_config"),
+        patch("esdc.server.agent_wrapper.create_agent", return_value=MagicMock()),
+        patch(
+            "esdc.server.agent_wrapper.astream_agent_events",
+            mock_astream_agent_events,
+        ),
+    ):
+        async for chunk in generate_streaming_response(
+            messages=messages, use_native_format=True
+        ):
+            data = json.loads(chunk)
+            delta = data.get("choices", [{}])[0].get("delta", {})
+            if content := delta.get("content"):
+                content_chunks.append(content)
+
+    assert "Too many steps" in content_chunks

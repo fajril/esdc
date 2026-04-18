@@ -27,10 +27,10 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "1.1.1": {
         "category": "Technical > Subsurface",
         "name": "Subsurface Uncertainty",
-        "definition": "Ketidakpastian dari reservoir yang berdampak pada penentuan atau perhitungan volume maupun recovery factor",
+        "definition": "Ketidakpastian dari reservoir yang berdampak pada penentuan atau perhitungan volume maupun recovery factor",  # noqa: E501
         "examples": [
             "Fluid Contact tidak terdefinisi dengan jelas",
-            "sebaran reservoir properties tidak dapat ditentukan dengan baik karena berada di carbonate",
+            "sebaran reservoir properties tidak dapat ditentukan dengan baik karena berada di carbonate",  # noqa: E501
         ],
         "keywords": [
             "fluid contact",
@@ -43,7 +43,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "1.1.2": {
         "category": "Technical > Subsurface",
         "name": "Data Availability",
-        "definition": "Tidak adanya ketersediaan data yang cukup untuk melakukan evaluasi lebih lanjut",
+        "definition": "Tidak adanya ketersediaan data yang cukup untuk melakukan evaluasi lebih lanjut",  # noqa: E501
         "examples": [
             "Data seismik 3D tidak tersedia",
             "Data Well Test tidak tersedia",
@@ -54,10 +54,10 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "1.1.3": {
         "category": "Technical > Subsurface",
         "name": "Recovery Technology",
-        "definition": "Belum tersedianya teknologi yang mampu mengalirkan fluida dari reservoir ke permukaan",
+        "definition": "Belum tersedianya teknologi yang mampu mengalirkan fluida dari reservoir ke permukaan",  # noqa: E501
         "examples": [
-            "Belum terdapat teknologi fabrikasi surfactant yang tersedia untuk keperluan EOR",
-            "Belum tersedia teknologi multi stage horizontal well untuk pengembangan shale oil",
+            "Belum terdapat teknologi fabrikasi surfactant yang tersedia untuk keperluan EOR",  # noqa: E501
+            "Belum tersedia teknologi multi stage horizontal well untuk pengembangan shale oil",  # noqa: E501
         ],
         "keywords": [
             "teknologi",
@@ -81,7 +81,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "1.2.1": {
         "category": "Technical > Non Subsurface",
         "name": "Well Interventions",
-        "definition": "Kendala di sumur yang memerlukan kegiatan workover atau well service",
+        "definition": "Kendala di sumur yang memerlukan kegiatan workover atau well service",  # noqa: E501
         "examples": [
             "Sumur mengalami skin problem sehingga memerlukan acidizing",
             "Low Quality Reservoir yang memerlukan hydraulic fracturing",
@@ -97,7 +97,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "1.2.2": {
         "category": "Technical > Non Subsurface",
         "name": "Production Facilities",
-        "definition": "Kendala produksi yang memerlukan perubahan atau penambahan fasilitas produksi",
+        "definition": "Kendala produksi yang memerlukan perubahan atau penambahan fasilitas produksi",  # noqa: E501
         "examples": [
             "Fasilitas produksi yang ada belum dapat menangani kadar CO2 yang tinggi",
             "Proyek memerlukan water treatment facility untuk dapat berproduksi",
@@ -113,7 +113,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "1.2.3": {
         "category": "Technical > Non Subsurface",
         "name": "Flow Assurance",
-        "definition": "Kendala aliran fluida dalam jaringan pipa yang memerlukan penanganan khusus namun tidak memerlukan penambahan fasilitas produksi baru atau perubahan fasilitas produksi yang signifikan",
+        "definition": "Kendala aliran fluida dalam jaringan pipa yang memerlukan penanganan khusus namun tidak memerlukan penambahan fasilitas produksi baru atau perubahan fasilitas produksi yang signifikan",  # noqa: E501
         "examples": [
             "Implementasi heater untuk mencegah pembentukan hydrate atau wax",
             "Penambahan solvent untuk meminimalisir dampak dari H2S",
@@ -124,9 +124,9 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "2.1": {
         "category": "Economics",
         "name": "Marginal",
-        "definition": "Kondisi keekonomian yang secara proyek masih positif namun setelah diterapkan fiscal term menjadi tidak menarik bagi kontraktor",
+        "definition": "Kondisi keekonomian yang secara proyek masih positif namun setelah diterapkan fiscal term menjadi tidak menarik bagi kontraktor",  # noqa: E501
         "examples": [
-            "Proyek terkena skema perpajakan yang membuat indikator keekonomian tidak menarik bagi kontraktor"
+            "Proyek terkena skema perpajakan yang membuat indikator keekonomian tidak menarik bagi kontraktor"  # noqa: E501
         ],
         "keywords": [
             "marginal",
@@ -139,7 +139,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "2.2": {
         "category": "Economics",
         "name": "Uneconomic",
-        "definition": "Kondisi keekonomian yang secara proyek sudah memiliki indikator keekonomian yang negatif sebelum diterapkan fiscal term",
+        "definition": "Kondisi keekonomian yang secara proyek sudah memiliki indikator keekonomian yang negatif sebelum diterapkan fiscal term",  # noqa: E501
         "examples": [
             "Proyek memiliki sumber daya yang sangat kecil sehingga NPV < 0",
             "Proyek memerlukan investasi yang sangat besar sehingga NPV < 0",
@@ -155,10 +155,10 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "2.3": {
         "category": "Economics",
         "name": "Portfolio Priority",
-        "definition": "Kondisi proyek yang belum mendapatkan persetujuan investasi dari stakeholder internal kontraktor akibat evaluasi perbandingan portfolio proyek dengan proyek lain yang dikelola kontraktor",
+        "definition": "Kondisi proyek yang belum mendapatkan persetujuan investasi dari stakeholder internal kontraktor akibat evaluasi perbandingan portfolio proyek dengan proyek lain yang dikelola kontraktor",  # noqa: E501
         "examples": [
             "Proyek LNG belum mendapatkan pinjaman dari lender",
-            "Portfolio di negara lain lebih menjanjikan dibanding proyek yang akan dikerjakan",
+            "Portfolio di negara lain lebih menjanjikan dibanding proyek yang akan dikerjakan",  # noqa: E501
         ],
         "keywords": ["portfolio", "prioritas", "pinjaman", "lender", "investasi"],
     },
@@ -172,7 +172,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "2.5": {
         "category": "Economics",
         "name": "Transportation Facilities",
-        "definition": "Hasil produksi tidak dapat diserap oleh market akibat tidak ada fasilitas transmisi yang mengantarkan ke lokasi pembeli",
+        "definition": "Hasil produksi tidak dapat diserap oleh market akibat tidak ada fasilitas transmisi yang mengantarkan ke lokasi pembeli",  # noqa: E501
         "examples": ["Lokasi buyer terlalu jauh", "Tidak ada pipeline ke lokasi buyer"],
         "keywords": ["transportasi", "transmisi", "pipeline", "lokasi", "jauh"],
     },
@@ -180,7 +180,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "3.1.1": {
         "category": "Legal > Law and Regulations",
         "name": "Regulations",
-        "definition": "Proyek tidak dapat berproduksi karena terkendala aturan atau regulasi yang ada, baik dari sisi pemerintah pusat maupun pemerintah daerah",
+        "definition": "Proyek tidak dapat berproduksi karena terkendala aturan atau regulasi yang ada, baik dari sisi pemerintah pusat maupun pemerintah daerah",  # noqa: E501
         "examples": [
             "Proyek berada pada area konservasi",
             "Proyek berada di area tumpang tindih lahan dengan kegiatan pertambangan",
@@ -203,18 +203,18 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "3.1.3": {
         "category": "Legal > Law and Regulations",
         "name": "Permit",
-        "definition": "Proyek belum mendapatkan segala perizinan yang diperlukan diluar AMDAL",
+        "definition": "Proyek belum mendapatkan segala perizinan yang diperlukan diluar AMDAL",  # noqa: E501
         "examples": [
-            "Proyek belum mendapatkan izin untuk beroperasi karena berada di area latihan Angkatan Laut"
+            "Proyek belum mendapatkan izin untuk beroperasi karena berada di area latihan Angkatan Laut"  # noqa: E501
         ],
         "keywords": ["permit", "izin", "beroperasi", "latihan militer"],
     },
     "3.1.4": {
         "category": "Legal > Law and Regulations",
         "name": "Geopolitics",
-        "definition": "Proyek berada pada area yang mengalami perselisihan antar negara atau adanya hambatan pengembangan akibat faktor kepentingan negara tertentu",
+        "definition": "Proyek berada pada area yang mengalami perselisihan antar negara atau adanya hambatan pengembangan akibat faktor kepentingan negara tertentu",  # noqa: E501
         "examples": [
-            "Proyek berada pada perbatasan negara Indonesia dan Malaysia yang batas negaranya belum disepakati kedua belah pihak"
+            "Proyek berada pada perbatasan negara Indonesia dan Malaysia yang batas negaranya belum disepakati kedua belah pihak"  # noqa: E501
         ],
         "keywords": ["geopolitik", "perbatasan", "perselisihan", "negara"],
     },
@@ -222,18 +222,18 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "3.2.1": {
         "category": "Legal > T&C Contracts",
         "name": "PSC",
-        "definition": "Proyek mengalami kendala produksi akibat adanya batasan dalam PSC",
+        "definition": "Proyek mengalami kendala produksi akibat adanya batasan dalam PSC",  # noqa: E501
         "examples": [
-            "Proyek tidak dapat berproduksi karena durasi produksi akan sangat singkat karena tahun onstream dekat dengan batas PSC"
+            "Proyek tidak dapat berproduksi karena durasi produksi akan sangat singkat karena tahun onstream dekat dengan batas PSC"  # noqa: E501
         ],
         "keywords": ["PSC", "batasan kontrak", "durasi", "kontrak"],
     },
     "3.2.2": {
         "category": "Legal > T&C Contracts",
         "name": "Sales Agreement",
-        "definition": "Proyek mengalami kendala produksi akibat adanya batasan dalam Sales Agreement",
+        "definition": "Proyek mengalami kendala produksi akibat adanya batasan dalam Sales Agreement",  # noqa: E501
         "examples": [
-            "Proyek tidak dapat berproduksi karena adanya ketidaksepakatan atas T&C dalam Sales Agreement yang ada"
+            "Proyek tidak dapat berproduksi karena adanya ketidaksepakatan atas T&C dalam Sales Agreement yang ada"  # noqa: E501
         ],
         "keywords": ["sales agreement", "ketidaksepakatan", "T&C", "kontrak jual beli"],
     },
@@ -241,7 +241,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "4.1": {
         "category": "Social and Environment",
         "name": "Land Acquisition",
-        "definition": "Proyek mengalami kendala produksi akibat masalah dalam pengadaan lahan",
+        "definition": "Proyek mengalami kendala produksi akibat masalah dalam pengadaan lahan",  # noqa: E501
         "examples": [
             "Terdapat penolakan dari masyarakat yang terdampak",
             "Harga tanah yang sudah diluar kewajaran",
@@ -251,7 +251,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "4.2": {
         "category": "Social and Environment",
         "name": "Social Problems",
-        "definition": "Proyek mengalami kendala produksi akibat adanya gejolak sosial di area operasi",
+        "definition": "Proyek mengalami kendala produksi akibat adanya gejolak sosial di area operasi",  # noqa: E501
         "examples": [
             "Proyek berada di area konflik",
             "Masyarakat menolak kegiatan hulu migas",
@@ -261,7 +261,7 @@ PROBLEM_CLUSTERS: dict[str, dict] = {
     "4.3": {
         "category": "Social and Environment",
         "name": "Local Customs",
-        "definition": "Proyek mengalami kendala produksi akibat dari dinamika kondisi sosial masyarakat",
+        "definition": "Proyek mengalami kendala produksi akibat dari dinamika kondisi sosial masyarakat",  # noqa: E501
         "examples": [
             "Proyek berada di tanah adat",
             "Proyek memerlukan persetujuan dari kepala adat",

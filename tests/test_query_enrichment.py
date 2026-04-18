@@ -173,7 +173,7 @@ class TestEnrichSqlQuery:
 
     def test_enrich_preserves_where_conditions(self):
         """Test that WHERE conditions are preserved."""
-        sql = "SELECT SUM(rec_oc) FROM field_resources WHERE field_name = 'Duri' AND report_year = 2024"
+        sql = "SELECT SUM(rec_oc) FROM field_resources WHERE field_name = 'Duri' AND report_year = 2024"  # noqa: E501
         result = enrich_sql_query(sql)
 
         assert "field_name = 'Duri'" in result.enriched_sql
@@ -208,7 +208,7 @@ class TestIsAlreadyEnriched:
         """Test detection when model enriched with all required columns."""
         from esdc.chat.domain_knowledge.functions import is_already_enriched
 
-        sql = "SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources"
+        sql = "SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources"  # noqa: E501
         is_enriched, source = is_already_enriched(sql)
 
         assert is_enriched is True
@@ -242,7 +242,7 @@ class TestHybridEnrichmentBehavior:
 
     def test_skips_when_model_already_enriched(self):
         """Test enrichment is skipped when model already added context."""
-        sql = "SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources"
+        sql = "SELECT field_remarks, project_class, project_stage, SUM(rec_oc) FROM field_resources"  # noqa: E501
         result = enrich_sql_query(sql)
 
         assert result.was_already_enriched is True

@@ -73,7 +73,9 @@ class TestFetchJsonToDatabase:
 
         conn = duckdb.connect(str(db_file))
         cursor = conn.execute("SELECT COUNT(*) FROM project_resources")
-        count = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        assert row is not None, "No rows returned"
+        count = row[0]
         conn.close()
 
         assert count == 1, "Data should be persisted to project_resources table"
@@ -104,7 +106,9 @@ class TestFetchCsvToDatabase:
 
         conn = duckdb.connect(str(db_file))
         cursor = conn.execute("SELECT COUNT(*) FROM project_resources")
-        count = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        assert row is not None, "No rows returned"
+        count = row[0]
         conn.close()
 
         assert count == 1, "Data should be persisted to project_resources table"
@@ -125,7 +129,7 @@ class TestFetchAuthFailure:
         monkeypatch.setenv("ESDC_USER", "baduser")
         monkeypatch.setenv("ESDC_PASS", "badpass")
 
-        result = runner.invoke(app, ["fetch", "--filetype", "json"])
+        runner.invoke(app, ["fetch", "--filetype", "json"])
 
         # Check logs for warning messages
         log_messages = caplog.text

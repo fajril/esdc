@@ -326,7 +326,7 @@ class SummaryScreen(Screen):
         summary += f"Default Provider: {default_provider}\n\n"
         summary += "Providers:\n"
         for name, config in providers.items():
-            summary += f"  - {name}: {config.get('provider_type')} ({config.get('model', 'N/A')})\n"
+            summary += f"  - {name}: {config.get('provider_type')} ({config.get('model', 'N/A')})\n"  # noqa: E501
         summary += f"\nDatabase: {db_path}"
 
         yield Container(
@@ -360,7 +360,7 @@ class WizardApp:
        Hick's Law: Minimize choices
        Law of Prägnanz: Simple, clear forms
     ================================================================ */
-    
+
     Screen {
         background: $background;
         align: center middle;

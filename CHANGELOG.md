@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-04-17
+
+### Added
+
+- **Domain Knowledge Corrections**:
+  - Clarified R=GRR suffix in 1R/2R/3R uncertainty level descriptions and system prompt
+  - Corrected LTP from "Letter to President" to "Long Term Plan" in schema_definitions
+  - Added WAP (Waktu Acuan Pelaporan) concept, synonyms, and system prompt definition
+  - Added document type concepts: POD (Plan of Development), POFD (Plan of Further Development), OPL (Optimasi Pengembangan Lapangan), OPLL (Optimasi Pengembangan Lapangan - Lapangan), POP (Put on Production), POD I (first POD in a working area), PSE (Penentuan Status Eksplorasi)
+  - Enriched schema descriptions for `pod_name`, `is_pod_approved`, `is_pse_approved` columns
+  - Added synonyms for POD, POFD, OPL, OPLL, POP, POD I, PSE, LTP, WAP
+
+- **Domain Knowledge Architecture**:
+  - Added `document_types` section to `DOMAIN_CONCEPTS` with `resolve_concept()` support
+  - Added `report_terms` section to `DOMAIN_CONCEPTS` with `resolve_concept()` support
+  - System prompt now includes Report Timing (WAP) section and POD/PSE/LTP in Indonesian Terms table
+
+### Fixed
+
+- **Test Suite Stability**: Full `pytest` suite now completes in ~6s (previously hung indefinitely)
+  - Added autouse `_mock_provider_config` fixture to prevent accidental real LLM calls
+  - Added `allow_provider_config` marker for tests that intentionally test provider config
+  - Fixed unmocked `generate_streaming_response()` test that triggered real LLM calls
+  - Moved module-level `TestClient` into pytest fixture in `test_routes_nonstreaming.py`
+  - Extracted dead code from `test_generate_streaming_response_mock` into proper test
+  - Updated `test_thinking_wrapped_with_tags` to match current behavior (thinking tags removed)
+- **Linting (Ruff F/E/W)**: Resolved all 272 violations across production and test code
+  - E501 (line too long): 231 fixed via formatting and string wrapping
+  - F841 (unused variables): 12 fixed via removal or underscore-prefix
+  - E712 (== True/False): 6 fixed via direct bool checks
+  - E402 (import not at top): 8 fixed via `# noqa: E402` for circular import workarounds
+  - F401, F405, F541, F601, W291, W293: all resolved
+- **Linting (Ruff SIM/B/N)**: Resolved 14 production code violations
+  - SIM102 (collapsible if): 3 fixed
+  - SIM103 (return bool directly): 5 fixed
+  - SIM108 (ternary): 1 fixed
+  - B904 (raise...from): 1 fixed in `configs.py`
+  - B905 (zip strict=): 1 fixed in `semantic_resolver.py`
+  - N806 (uppercase vars): 3 marked `# noqa: N806` for deliberate constants
+- **Type Checking (Basedpyright)**: Resolved all 19 type errors in test files
+  - `test_context_manager.py`: Added full `AgentState` dicts (7 occurrences)
+  - `test_query_classifier.py`: Added default empty string to `.get()` calls
+  - `test_wizard.py`: Added `# type: ignore[assignment]` for mock overrides
+  - Integration tests: Added None-guards for `fetchone()` results
+  - `test_responses_api.py`, `test_spatial_wk_scoping.py`, `test_responses_input.py`: Type fixes
+
+### Changed
+
+- System prompt uncertainty levels table now explains suffix letters (P/R/C/U)
+
 ## [0.5.3] - 2025-04-14
 
 ### Added
