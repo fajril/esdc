@@ -8,7 +8,13 @@ from typing import Any, cast
 
 # Third-party
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
@@ -39,7 +45,7 @@ from esdc.chat.tools import (
 # Logger is configured by app.py (runs first)
 logger = logging.getLogger("esdc.chat.agent")
 
-MAX_TOOL_CALLS = 6
+MAX_TOOL_CALLS = 12
 
 
 _context_length_cache: dict[str, int] = {}
@@ -372,14 +378,6 @@ def create_agent(
 
     def should_continue(state: AgentState) -> str:
         """Determine if we should continue to tools or end."""
-        tool_call_count = state.get("tool_call_count", 0)
-        if tool_call_count >= MAX_TOOL_CALLS:
-            logger.warning(
-                "🔧 TOOL_LIMIT: Reached %d tool calls, forcing end",
-                tool_call_count,
-            )
-            return END
-
         messages = state["messages"]
         if not messages:
             logger.warning("[AGENT] should_continue: empty messages, ending")
@@ -389,6 +387,28 @@ def create_agent(
 
         ai_message = cast(AIMessage, last_message)
         if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
+            tool_call_count = state.get("tool_call_count", 0)
+            if tool_call_count >= MAX_TOOL_CALLS:
+                # Check if we already sent a "limit reached" response
+                # (ToolMessage with the limit-reached message). If so, the
+                # LLM ignored it and tried to call tools again — force END.
+                for msg in reversed(messages):
+                    if isinstance(
+                        msg, ToolMessage
+                    ) and _max_tool_calls_reached_msg.format(
+                        limit=MAX_TOOL_CALLS
+                    ) in str(msg.content):
+                        logger.warning(
+                            "🔧 TOOL_LIMIT: LLM still calling tools after "
+                            "limit-reached message, forcing END"
+                        )
+                        return END
+
+                logger.warning(
+                    "🔧 TOOL_LIMIT: Reached %d tool calls, routing to tool_node "
+                    "for limit-reached response before final synthesis",
+                    tool_call_count,
+                )
             return "tools"
 
         return END
