@@ -353,8 +353,16 @@ async def generate_streaming_response(
                 )
                 if tool_call_count > 0:
                     logger.debug(
-                        f"[{request_id}] Skipping message_complete with "
+                        f"[{request_id}] Injecting paragraph break after "
                         f"{tool_call_count} tool_calls (server-side execution)"
+                    )
+                    yield_counter += 1
+                    yield json.dumps(
+                        create_openai_chunk(
+                            content="\n\n",
+                            model=model,
+                            chunk_id=next_chunk_id(),
+                        )
                     )
 
             elif event_type == "tool_result":
@@ -496,7 +504,15 @@ async def generate_response(
                 if content:
                     accumulated_content += content
 
-            elif event_type in ("message_complete", "tool_result"):
+            elif event_type == "message_complete":
+                ai_message = event["ai_message"]
+                tool_call_count = (
+                    len(ai_message.tool_calls) if ai_message.tool_calls else 0
+                )
+                if tool_call_count > 0:
+                    accumulated_content += "\n\n"
+
+            elif event_type == "tool_result":
                 pass
 
             elif event_type == "recursion_error":
