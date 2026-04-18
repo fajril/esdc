@@ -394,7 +394,7 @@ def create_agent(
         tool_call_count = state.get("tool_call_count", 0)
         if tool_call_count >= MAX_TOOL_CALLS:
             logger.warning(
-                "🔧 TOOL_LIMIT: Reached %d tool calls, forcing end",
+                "[TOOL] TOOL_LIMIT: Reached %d tool calls, forcing end",
                 tool_call_count,
             )
             return END
@@ -450,7 +450,7 @@ def create_agent(
             }
 
         logger.info(
-            "🔧 TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
+            "[TOOL] TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
         )
 
         for tool_call in ai_message.tool_calls:
@@ -460,7 +460,7 @@ def create_agent(
 
             if tool_name in _external_tool_names:
                 logger.info(
-                    "🔧 TOOL_NODE: External tool call detected: %s (id=%s). "
+                    "[TOOL] TOOL_NODE: External tool call detected: %s (id=%s). "
                     "Returning marker for passthrough.",
                     tool_name,
                     tool_id,
@@ -477,7 +477,7 @@ def create_agent(
 
             if tool_name not in allowed_tools:
                 logger.warning(
-                    "🔧 TOOL_NODE: Blocked disallowed tool %s (allowed: %s)",
+                    "[TOOL] TOOL_NODE: Blocked disallowed tool %s (allowed: %s)",
                     tool_name,
                     sorted(allowed_tools),
                 )
@@ -501,11 +501,13 @@ def create_agent(
                     if isinstance(tool_args, str):
                         tool_args = json.loads(tool_args)
 
-                    logger.info("🔧 TOOL_NODE: Invoking %s (id=%s)", tool_name, tool_id)
+                    logger.info(
+                        "[TOOL] TOOL_NODE: Invoking %s (id=%s)", tool_name, tool_id
+                    )
                     observation = await tool.ainvoke(tool_args)
                     observation_str = str(observation)
                     logger.info(
-                        "🔧 TOOL_NODE: %s returned %d chars",
+                        "[TOOL] TOOL_NODE: %s returned %d chars",
                         tool_name,
                         len(observation_str),
                     )
@@ -516,13 +518,13 @@ def create_agent(
                             + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
                         )
                         logger.info(
-                            "🔧 TOOL_NODE: %s result truncated from %d to %d chars",
+                            "[TOOL] TOOL_NODE: %s result truncated from %d to %d chars",
                             tool_name,
                             len(observation_str),
                             MAX_TOOL_RESULT_CHARS,
                         )
                 except Exception as e:
-                    logger.error("🔧 TOOL_NODE: %s failed: %s", tool_name, e)
+                    logger.error("[TOOL] TOOL_NODE: %s failed: %s", tool_name, e)
                     observation = f"Error: {str(e)}"
 
                 result.append(
@@ -535,7 +537,7 @@ def create_agent(
                 )
             else:
                 logger.warning(
-                    "🔧 TOOL_NODE: Unknown tool %s (not in tools_by_name: %s)",
+                    "[TOOL] TOOL_NODE: Unknown tool %s (not in tools_by_name: %s)",
                     tool_name,
                     sorted(tools_by_name.keys()),
                 )
@@ -548,7 +550,7 @@ def create_agent(
                     }
                 )
 
-        logger.info("🔧 TOOL_NODE: Returning %d tool results", len(result))
+        logger.info("[TOOL] TOOL_NODE: Returning %d tool results", len(result))
         return {
             "messages": result,
             "tool_call_count": current_tool_count + len(ai_message.tool_calls),
@@ -877,7 +879,7 @@ async def run_agent_stream(
                 )
 
             logger.info(
-                "🔧 AGENT_TOOL_END: tool=%s, result_len=%d",
+                "[TOOL] AGENT_TOOL_END: tool=%s, result_len=%d",
                 tool_name,
                 len(str(tool_result)),
             )
