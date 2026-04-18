@@ -114,7 +114,9 @@ async def astream_agent_events(
                     token_count += 1
                     yield {"type": "token", "content": content}
 
-                reasoning_content = getattr(chunk, "reasoning_content", None)
+                reasoning_content = chunk.additional_kwargs.get(
+                    "reasoning_content"
+                ) or getattr(chunk, "reasoning_content", None)
                 if reasoning_content:
                     token_count += 1
                     yield {"type": "reasoning_token", "content": reasoning_content}

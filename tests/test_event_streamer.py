@@ -24,14 +24,19 @@ class AsyncEventIterator:
 
 
 def make_chunk(content, reasoning_content=None):
-    """Create a mock AIMessageChunk with content and optional reasoning_content."""
-    chunk = MagicMock()
-    chunk.content = content
+    """Create a mock AIMessageChunk with content and optional reasoning_content.
+
+    ChatOllama places reasoning_content in additional_kwargs,
+    not as a direct attribute on the chunk.
+    """
+    from langchain_core.messages import AIMessageChunk
+
     if reasoning_content is not None:
-        chunk.reasoning_content = reasoning_content
-    else:
-        del chunk.reasoning_content
-    return chunk
+        return AIMessageChunk(
+            content=content,
+            additional_kwargs={"reasoning_content": reasoning_content},
+        )
+    return AIMessageChunk(content=content)
 
 
 class TestAstreamAgentEvents:
