@@ -26,6 +26,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 # Local
 from esdc.chat.agent import create_agent, generate_conversation_title
+from esdc.chat.external_tools import (
+    categorize_tools,
+    convert_external_specs_to_langchain,
+)
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
@@ -292,7 +296,11 @@ async def generate_responses_stream(
         input_messages: Input (string or list of items)
         model: Model ID
         instructions: System message / instructions
-        tools: Tools available to the model (not used by ESDC, tools are internal)
+        tools: Tools available to the model. If provided, tools are categorized
+            into internal (ESDC) and external (e.g. OpenTerminal). Internal tools
+            are executed server-side. External tools are not executed; when the
+            LLM calls an external tool, a function_call item is emitted for
+            OpenWebUI to handle.
         temperature: Sampling temperature
 
     Yields:
@@ -381,8 +389,28 @@ async def generate_responses_stream(
         "api_key": api_key,
     }
 
+    # Categorize tools into internal (ESDC) and external (OpenTerminal etc.)
+    (
+        internal_tool_names,
+        external_tool_names,
+        external_tool_specs,
+    ) = categorize_tools(tools)
+    external_langchain_tools = convert_external_specs_to_langchain(external_tool_specs)
+
+    if external_tool_names:
+        logger.info(
+            "[RESPONSES %s] External tools detected: %s",
+            response_id,
+            sorted(external_tool_names),
+        )
+
     llm = create_llm_from_config(provider_config_obj)
-    agent = create_agent(llm, checkpointer=None)
+    agent = create_agent(
+        llm,
+        checkpointer=None,
+        external_tool_names=external_tool_names,
+        external_tools=external_langchain_tools if external_langchain_tools else None,
+    )
 
     # Convert input to LangChain messages
     lc_messages = convert_responses_input_to_langchain(input_messages, instructions)
@@ -437,6 +465,10 @@ async def generate_responses_stream(
     delta_count = 0
     content_index = 0
     last_usage: dict[str, Any] | None = None
+
+    # Track external tool call arguments for streaming in function_call items
+    # Maps tool_call_id -> JSON args string
+    pending_external_tool_args: dict[str, str] = {}
 
     try:
         stream_deadline = time.perf_counter() + SSE_STREAM_TIMEOUT
@@ -671,6 +703,10 @@ async def generate_responses_stream(
                         tc_id = tc.get("id", "")
                         tc_args = json.dumps(tc.get("args", {}))
 
+                        # Track args for external tool calls
+                        if tc_name in external_tool_names:
+                            pending_external_tool_args[tc_id] = tc_args
+
                         function_call_item = {
                             "id": item_id,
                             "type": "function_call",
@@ -787,6 +823,72 @@ async def generate_responses_stream(
                 output_items.append(function_call_output)
                 output_index += 1
 
+            # ---- External tool call events (passthrough to OpenWebUI) ----
+            elif event_type == "external_tool_call":
+                tool_name = event.get("tool_name", "unknown")
+                tool_call_id = event.get("tool_call_id", "")
+                marker_tool_name = event.get("marker_tool_name", tool_name)
+
+                # Get stored args for this external tool call
+                args_str = pending_external_tool_args.pop(tool_call_id, "{}")
+
+                logger.info(
+                    "[RESPONSES %s] EXTERNAL_TOOL_CALL: name=%s, "
+                    "call_id=%s, args_len=%d",
+                    response_id,
+                    marker_tool_name,
+                    tool_call_id,
+                    len(args_str),
+                )
+
+                # Emit function_call output item for OpenWebUI to execute
+                item_id = generate_item_id("fc")
+                function_call_item = {
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "name": marker_tool_name,
+                    "call_id": tool_call_id,
+                    "arguments": "",
+                }
+
+                added_seq = seq.next()
+                yield format_sse_event(
+                    create_output_item_added_event(
+                        added_seq, output_index, function_call_item
+                    )
+                )
+
+                # Stream argument deltas
+                for arg_chunk in chunk_json(args_str):
+                    function_call_item["arguments"] += arg_chunk
+                    delta_seq = seq.next()
+                    yield format_sse_event(
+                        create_function_call_arguments_delta_event(
+                            delta_seq, output_index, item_id, arg_chunk
+                        )
+                    )
+
+                # Emit args done
+                args_done_seq = seq.next()
+                yield format_sse_event(
+                    create_function_call_arguments_done_event(
+                        args_done_seq, output_index, item_id, args_str
+                    )
+                )
+
+                # Complete item — external tools are completed immediately
+                function_call_item["status"] = "completed"
+                item_done_seq = seq.next()
+                yield format_sse_event(
+                    create_output_item_done_event(
+                        item_done_seq, output_index, function_call_item
+                    )
+                )
+
+                output_items.append(function_call_item)
+                output_index += 1
+
             # ---- Context metadata (informational, not emitted as SSE) ----
             elif event_type == "context_metadata":
                 logger.debug(
@@ -885,7 +987,10 @@ async def generate_responses_sync(
         input_messages: Input (string or list of items)
         model: Model ID
         instructions: System message / instructions
-        tools: Tools available to the model (not used by ESDC)
+        tools: Tools available to the model. If provided, tools are categorized
+            into internal (ESDC) and external (e.g. OpenTerminal). Internal tools
+            are executed server-side. External tools are returned as function_call
+            items for OpenWebUI to handle.
         temperature: Sampling temperature
 
     Returns:
@@ -958,8 +1063,32 @@ async def generate_responses_sync(
         "api_key": api_key,
     }
 
+    # Categorize tools into internal and external
+    (
+        sync_internal_tool_names,
+        sync_external_tool_names,
+        sync_external_tool_specs,
+    ) = categorize_tools(tools)
+    sync_external_langchain_tools = convert_external_specs_to_langchain(
+        sync_external_tool_specs
+    )
+
+    if sync_external_tool_names:
+        logger.info(
+            "[RESPONSES %s] SYNC External tools detected: %s",
+            response_id,
+            sorted(sync_external_tool_names),
+        )
+
     llm = create_llm_from_config(provider_config_obj)
-    agent = create_agent(llm, checkpointer=None)
+    agent = create_agent(
+        llm,
+        checkpointer=None,
+        external_tool_names=sync_external_tool_names,
+        external_tools=sync_external_langchain_tools
+        if sync_external_langchain_tools
+        else None,
+    )
 
     # Convert input to LangChain messages
     lc_messages = convert_responses_input_to_langchain(input_messages, instructions)
@@ -1064,6 +1193,29 @@ async def generate_responses_sync(
                     tool_name,
                     tool_call_id,
                     len(result_text),
+                )
+
+            elif event_type == "external_tool_call":
+                tool_name = event.get("tool_name", "unknown")
+                tool_call_id = event.get("tool_call_id", "")
+                marker_tool_name = event.get("marker_tool_name", tool_name)
+
+                logger.info(
+                    "[RESPONSES %s] SYNC EXTERNAL_TOOL_CALL: name=%s, call_id=%s",
+                    response_id,
+                    marker_tool_name,
+                    tool_call_id,
+                )
+
+                all_function_calls.append(
+                    {
+                        "id": generate_item_id("fc"),
+                        "type": "function_call",
+                        "status": "completed",
+                        "name": marker_tool_name,
+                        "call_id": tool_call_id,
+                        "arguments": "{}",
+                    }
                 )
 
             elif event_type == "recursion_error":
