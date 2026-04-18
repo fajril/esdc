@@ -239,6 +239,7 @@ async def generate_streaming_response(
     model: str = "iris",
     temperature: float = 0.7,
     request_id: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate streaming chat completion response with real token-level streaming.
 
@@ -251,6 +252,7 @@ async def generate_streaming_response(
         model: Model ID
         temperature: Sampling temperature
         request_id: Optional request ID for tracking (auto-generated if not provided)
+        reasoning_effort: Reasoning effort level (none/minimal/low/medium/high/xhigh)
 
     Yields:
         OpenAI-compatible streaming chunks as SSE formatted strings
@@ -338,6 +340,7 @@ async def generate_streaming_response(
             "model": provider_model,
             "base_url": base_url,
             "api_key": api_key,
+            "reasoning_effort": reasoning_effort,
         }
 
         llm = create_llm_from_config(provider_config_obj)
@@ -479,6 +482,8 @@ async def generate_response(
     messages: list,
     model: str = "iris",
     temperature: float = 0.7,
+    use_native_format: bool = True,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Generate non-streaming chat completion response.
 
@@ -490,6 +495,8 @@ async def generate_response(
         messages: List of conversation messages
         model: Model ID
         temperature: Sampling temperature
+        use_native_format: Whether to use native tool_calls format or markdown
+        reasoning_effort: Reasoning effort level (none/minimal/low/medium/high/xhigh)
 
     Returns:
         OpenAI-compatible response dictionary
@@ -562,6 +569,7 @@ async def generate_response(
             "model": provider_model,
             "base_url": base_url,
             "api_key": api_key,
+            "reasoning_effort": reasoning_effort,
         }
 
         llm = create_llm_from_config(provider_config_obj)

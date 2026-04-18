@@ -79,6 +79,10 @@ def setup_server_logging(config: dict[str, Any] | None = None) -> logging.Logger
         file_handler.setFormatter(logging.Formatter(log_format))
         logger.addHandler(file_handler)
 
+    # Reconfigure stdout to UTF-8 on Windows (cp1252 can't encode emojis)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(getattr(logging, global_level.upper(), logging.INFO))

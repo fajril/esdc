@@ -30,6 +30,10 @@ class ChatCompletionRequest(BaseModel):
     user: str | None = Field(
         default=None, description="Unique identifier for the end-user"
     )
+    reasoning_effort: str | None = Field(
+        default=None,
+        description="Reasoning effort level: none, minimal, low, medium, high, xhigh",
+    )
 
 
 class Choice(BaseModel):

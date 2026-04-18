@@ -1613,7 +1613,7 @@ class ESDCChatApp(App):
             tool_name = chunk.get("tool", "")
 
             logger.info(
-                "🔧 TOOL_RESULT: tool=%s, result_len=%d",
+                "[TOOL] TOOL_RESULT: tool=%s, result_len=%d",
                 tool_name,
                 len(result),
             )

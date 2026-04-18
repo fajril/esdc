@@ -515,3 +515,76 @@ class Config:
         config = cls._load_config() or {}
         semantic_config = config.get("semantic_search", {})
         return semantic_config.get("embedding_batch_size", 100)
+
+    # Default packages available in OpenTerminal
+    OPENTERM_DEFAULT_PACKAGES = (
+        "matplotlib, seaborn, pandas, numpy, scipy, statsmodels, scikit-learn, plotly"
+    )
+
+    @classmethod
+    def get_openwebui_config(cls) -> dict[str, Any] | None:
+        """Get OpenWebUI configuration for inline file rendering.
+
+        Returns None if OpenWebUI is not configured.
+        When configured, returns dict with keys: url, terminal_server_id.
+
+        Priority:
+        1. Environment variables (OPENWEBUI_URL, OPENWEBUI_TERMINAL_SERVER_ID)
+        2. config.yaml: openwebui section
+        3. None (not configured)
+        """
+        env_url = os.environ.get("OPENWEBUI_URL")
+        env_server_id = os.environ.get("OPENWEBUI_TERMINAL_SERVER_ID")
+
+        config = cls._load_config() or {}
+        ow_config = config.get("openwebui", {})
+
+        url = env_url or ow_config.get("url")
+        if not url:
+            return None
+
+        server_id = env_server_id or ow_config.get("terminal_server_id", "openterminal")
+
+        return {
+            "url": url.rstrip("/"),
+            "terminal_server_id": server_id,
+        }
+
+    @classmethod
+    def get_openterminal_config(cls) -> dict[str, Any] | None:
+        """Get OpenTerminal configuration.
+
+        Returns None if OpenTerminal is not configured (tools will not be registered).
+        When configured, returns dict with keys: url, api_key, packages, timeout.
+
+        Priority:
+        1. Environment variables (OPEN_TERMINAL_URL, OPEN_TERMINAL_API_KEY)
+        2. config.yaml: openterminal section
+        3. None (not configured)
+        """
+        env_url = os.environ.get("OPEN_TERMINAL_URL")
+        env_api_key = os.environ.get("OPEN_TERMINAL_API_KEY")
+
+        config = cls._load_config() or {}
+        ot_config = config.get("openterminal", {})
+
+        url = env_url or ot_config.get("url")
+        if not url:
+            return None
+
+        api_key = env_api_key or ot_config.get("api_key", "")
+        packages = ot_config.get("packages", cls.OPENTERM_DEFAULT_PACKAGES)
+        timeout = int(os.environ.get("OPEN_TERMINAL_TIMEOUT", "0")) or ot_config.get(
+            "timeout", 120
+        )
+        write_timeout = int(
+            os.environ.get("OPEN_TERMINAL_WRITE_TIMEOUT", "0")
+        ) or ot_config.get("write_timeout", 30)
+
+        return {
+            "url": url.rstrip("/"),
+            "api_key": api_key,
+            "packages": packages,
+            "timeout": timeout,
+            "write_timeout": write_timeout,
+        }

@@ -21,6 +21,7 @@ from langgraph.graph import END, START, StateGraph
 
 # Local
 from esdc.chat.context_manager import AgentState, manage_context_node
+from esdc.chat.openterminal import get_openterminal_tools
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.query_classifier import (
     QueryClassifier,
@@ -280,6 +281,8 @@ def create_agent(
     tools: list | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     context_length: int | None = None,
+    external_tool_names: set[str] | None = None,
+    external_tools: list | None = None,
 ) -> Runnable:
     """Create a LangGraph agent with tools.
 
@@ -290,6 +293,12 @@ def create_agent(
         context_length: Maximum context length in tokens for messages.
             If None, auto-detected from the LLM model's context window.
             Explicit values (e.g. from TUI) take precedence.
+        external_tool_names: Set of tool names that are external (e.g. OpenTerminal).
+            External tool calls are not executed server-side; instead, a marker
+            is returned for the Responses API to pass through to the client.
+        external_tools: Optional list of LangChain tool objects for external tools.
+            These are bound to the LLM so it can call them, but their execution
+            is intercepted by tool_node and returned as markers.
 
     Returns:
         A compiled StateGraph agent
@@ -311,6 +320,16 @@ def create_agent(
             get_timeseries_columns,
             get_resources_columns,
         ]
+
+    # Conditionally add OpenTerminal tools when configured
+    openterminal_tools = get_openterminal_tools()
+    if openterminal_tools:
+        tools = tools + openterminal_tools
+
+    if external_tools:
+        tools = tools + external_tools
+
+    _external_tool_names = external_tool_names or set()
 
     all_tools: dict[str, Any] = {tool.name: tool for tool in tools}
     tools_by_name = dict(all_tools)
@@ -462,6 +481,13 @@ def create_agent(
 
     def should_continue(state: AgentState) -> str:
         """Determine if we should continue to tools or end."""
+        tool_call_count = state.get("tool_call_count", 0)
+        if tool_call_count >= MAX_TOOL_CALLS:
+            logger.warning(
+                "[TOOL] TOOL_LIMIT: Reached %d tool calls, forcing end",
+                tool_call_count,
+            )
+            return END
         messages = state["messages"]
         if not messages:
             logger.warning("[AGENT] should_continue: empty messages, ending")
@@ -535,7 +561,7 @@ def create_agent(
             }
 
         logger.info(
-            "🔧 TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
+            "[TOOL] TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
         )
 
         for tool_call in ai_message.tool_calls:
@@ -543,9 +569,26 @@ def create_agent(
             tool_args = tool_call.get("args", {})
             tool_id = tool_call.get("id", "unknown")
 
+            if tool_name in _external_tool_names:
+                logger.info(
+                    "[TOOL] TOOL_NODE: External tool call detected: %s (id=%s). "
+                    "Returning marker for passthrough.",
+                    tool_name,
+                    tool_id,
+                )
+                result.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": f"[EXTERNAL_TOOL_CALL:{tool_name}]",
+                    }
+                )
+                continue
+
             if tool_name not in allowed_tools:
                 logger.warning(
-                    "🔧 TOOL_NODE: Blocked disallowed tool %s (allowed: %s)",
+                    "[TOOL] TOOL_NODE: Blocked disallowed tool %s (allowed: %s)",
                     tool_name,
                     sorted(allowed_tools),
                 )
@@ -569,11 +612,13 @@ def create_agent(
                     if isinstance(tool_args, str):
                         tool_args = json.loads(tool_args)
 
-                    logger.info("🔧 TOOL_NODE: Invoking %s (id=%s)", tool_name, tool_id)
+                    logger.info(
+                        "[TOOL] TOOL_NODE: Invoking %s (id=%s)", tool_name, tool_id
+                    )
                     observation = await tool.ainvoke(tool_args)
                     observation_str = str(observation)
                     logger.info(
-                        "🔧 TOOL_NODE: %s returned %d chars",
+                        "[TOOL] TOOL_NODE: %s returned %d chars",
                         tool_name,
                         len(observation_str),
                     )
@@ -584,13 +629,13 @@ def create_agent(
                             + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
                         )
                         logger.info(
-                            "🔧 TOOL_NODE: %s result truncated from %d to %d chars",
+                            "[TOOL] TOOL_NODE: %s result truncated from %d to %d chars",
                             tool_name,
                             len(observation_str),
                             MAX_TOOL_RESULT_CHARS,
                         )
                 except Exception as e:
-                    logger.error("🔧 TOOL_NODE: %s failed: %s", tool_name, e)
+                    logger.error("[TOOL] TOOL_NODE: %s failed: %s", tool_name, e)
                     observation = f"Error: {str(e)}"
 
                 result.append(
@@ -603,7 +648,7 @@ def create_agent(
                 )
             else:
                 logger.warning(
-                    "🔧 TOOL_NODE: Unknown tool %s (not in tools_by_name: %s)",
+                    "[TOOL] TOOL_NODE: Unknown tool %s (not in tools_by_name: %s)",
                     tool_name,
                     sorted(tools_by_name.keys()),
                 )
@@ -616,7 +661,7 @@ def create_agent(
                     }
                 )
 
-        logger.info("🔧 TOOL_NODE: Returning %d tool results", len(result))
+        logger.info("[TOOL] TOOL_NODE: Returning %d tool results", len(result))
         return {
             "messages": result,
             "tool_call_count": current_tool_count + len(ai_message.tool_calls),
@@ -945,7 +990,7 @@ async def run_agent_stream(
                 )
 
             logger.info(
-                "🔧 AGENT_TOOL_END: tool=%s, result_len=%d",
+                "[TOOL] AGENT_TOOL_END: tool=%s, result_len=%d",
                 tool_name,
                 len(str(tool_result)),
             )

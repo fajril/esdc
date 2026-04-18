@@ -27,6 +27,7 @@ from esdc.server.responses_wrapper import (
     generate_responses_stream,
     generate_responses_sync,
 )
+from esdc.server.tool_formatter import should_use_native_format
 
 router = APIRouter()
 logger = logging.getLogger("esdc.server.routes")
@@ -180,6 +181,27 @@ async def chat_completions(
         f"time={time.time():.3f}"
     )
 
+    # Detect format preference from headers
+    headers = dict(request_obj.headers)
+    use_native = should_use_native_format(headers, request.stream)
+    logger.debug(f"[REQUEST {request_id}] use_native_format={use_native}")
+
+    # DEBUG: Log tools parameter if present (for OpenTerminal passthrough investigation)
+    request_tools = getattr(request, "tools", None)
+    if request_tools:
+        tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in request_tools
+        ]
+        logger.info(
+            "[REQUEST %s] CHAT_TOOLS_PRESENT: count=%d, names=%s",
+            request_id,
+            len(request_tools),
+            tool_names,
+        )
+
     try:
         if request.stream:
             # Return streaming response
@@ -192,6 +214,7 @@ async def chat_completions(
                         model=request.model,
                         temperature=request.temperature or 0.7,
                         request_id=request_id,
+                        reasoning_effort=request.reasoning_effort,
                     ):
                         yield f"data: {chunk}\n\n"
 
@@ -234,6 +257,8 @@ async def chat_completions(
                     messages=request.messages,
                     model=request.model,
                     temperature=request.temperature or 0.7,
+                    use_native_format=use_native,
+                    reasoning_effort=request.reasoning_effort,
                 )
 
                 logger.info(f"[REQUEST {request_id}] Non-streaming response completed")
@@ -305,6 +330,33 @@ async def create_response(
         f"input={input_type}, model={request.model}"
     )
 
+    # DEBUG: Log raw tools parameter for OpenTerminal passthrough investigation
+    tools_raw_preview = "None"
+    if request.tools:
+        tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in request.tools
+        ]
+        tools_raw_preview = f"count={len(request.tools)}, names={tool_names}"
+    logger.debug(
+        "[RESPONSES %s] RAW_REQUEST: tools=%s, instructions_len=%d, "
+        "instructions_preview=%s, stream=%s, input_type=%s",
+        request_id,
+        tools_raw_preview,
+        len(request.instructions) if request.instructions else 0,
+        (request.instructions or "")[:200] if request.instructions else "None",
+        request.stream,
+        input_type,
+    )
+    logger.debug(
+        "[RESPONSES %s] RAW_REQUEST_HEADERS: content_type=%s, user_agent=%s",
+        request_id,
+        request_obj.headers.get("content-type", ""),
+        request_obj.headers.get("user-agent", ""),
+    )
+
     try:
         if request.stream:
             # Return streaming response
@@ -318,6 +370,7 @@ async def create_response(
                         instructions=request.instructions,
                         tools=request.tools,
                         temperature=request.temperature or 0.7,
+                        reasoning_effort=request.reasoning_effort,
                     ):
                         yield event
 
@@ -348,6 +401,7 @@ async def create_response(
                     instructions=request.instructions,
                     tools=request.tools,
                     temperature=request.temperature or 0.7,
+                    reasoning_effort=request.reasoning_effort,
                 )
 
                 logger.info(

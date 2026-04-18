@@ -23,6 +23,8 @@ from typing import Any
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 
+from esdc.chat.external_tools import is_external_tool_marker, parse_external_tool_name
+
 logger = logging.getLogger("esdc.server.event_streamer")
 
 DEFAULT_RECURSION_LIMIT = 100
@@ -53,6 +55,13 @@ async def astream_agent_events(
           Tool execution result from on_tool_end.
           tool_call_id is correlated from the preceding message_complete
           event's tool_calls via a FIFO queue.
+
+      {"type": "external_tool_call", "tool_name": "...",
+       "tool_call_id": "...", "marker_tool_name": "..."}
+          External tool call detected (e.g. OpenTerminal run_command).
+          The tool was not executed server-side; instead, a marker was
+          returned. The Responses API wrapper converts this to a
+          function_call output item for OpenWebUI to handle.
 
       {"type": "context_metadata", "metadata": {...}}
           Context management metadata from on_chain_end.
@@ -146,10 +155,28 @@ async def astream_agent_events(
                         tool_name,
                     )
 
+                result_str = str(tool_result) if tool_result else ""
+
+                # Check if this is an external tool call marker
+                if is_external_tool_marker(result_str):
+                    external_tool_name = parse_external_tool_name(result_str)
+                    logger.info(
+                        "[STREAM] External tool call detected: %s (call_id=%s)",
+                        external_tool_name,
+                        tool_call_id,
+                    )
+                    yield {
+                        "type": "external_tool_call",
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "marker_tool_name": external_tool_name or tool_name,
+                    }
+                    continue
+
                 yield {
                     "type": "tool_result",
                     "tool_name": tool_name,
-                    "result": str(tool_result) if tool_result else "",
+                    "result": result_str,
                     "tool_call_id": tool_call_id,
                 }
 

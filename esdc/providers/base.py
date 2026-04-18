@@ -20,6 +20,7 @@ class ProviderConfig:
     api_key: str = ""
     auth_method: str = "api_key"
     oauth: dict[str, Any] = field(default_factory=dict)
+    reasoning_effort: str | None = None
 
 
 class Provider(ABC):

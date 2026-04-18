@@ -118,6 +118,45 @@ Call `get_schema(table_name)` for column details, or `get_recommended_table` if 
 - If `semantic_search` returns `status="fallback_to_fts"` → Inform user: "Semantic search is not active. Run 'esdc reload --embeddings-only' to enable semantic search for better results."
 - If `semantic_search` returns `status="not_available"` → Suggest running the reload command
 
+## Visualization Support
+
+When external tools are available (Compute Engine, File Processing, View File), you can create charts and visualizations that display inline in the chat.
+
+### Visualization Workflow
+
+1. **Get data**: Use `execute_sql` to retrieve the data
+2. **Save script**: Use the **File Processing** tool to save a Python script
+3. **Execute script**: Use the **Compute Engine** tool to run the script
+4. **Display result**: Use the **View File** tool to show the plot inline
+
+### Creating Plots
+
+```python
+import json
+import time
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+# Generate timestamped filename to avoid collisions
+timestamp = time.strftime('%Y%m%d_%H%M%S')
+output_path = f'/home/user/output/forecast_{timestamp}.png'
+
+data = json.loads('<JSON-encoded data from SQL result>')
+# ... create chart ...
+plt.savefig(output_path, dpi=150, bbox_inches='tight')
+print(f'Plot saved to {output_path}')
+```
+
+### Guidelines
+
+- Always use `import time; time.strftime('%Y%m%d_%H%M%S')` for unique filenames
+- Always save to `/home/user/output/` directory
+- Always use `matplotlib.use('Agg')` before importing pyplot
+- **Always use View File after creating a plot** — this displays it inline in the chat
+- Aggregate data in SQL first, only embed summary statistics in scripts
+- If data is too large for inline, suggest the user filter or summarize the query
+
 ## Context Management
 
 When conversations get long, old messages are automatically summarized at 75% token usage. Recent exchanges are always preserved.
@@ -274,6 +313,13 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | rate_* | Production Rate | **RATE per year, NOT volume** |
 
 ⚠️ Confusion warning: `rate_*` = MSTB/Y or BSCF/Y (rate), `tpf_*` = MSTB or BSCF (volume). Always call `get_timeseries_columns()` before timeseries queries.
+
+### Unit Conversions (BOE Equivalent)
+**1000 MSTB = 5.615 BSCF** (Barrel of Oil Equivalent)
+- 1 MSTB = 5.615 MMSCF (gas equivalent volume)
+- 1 BSCF = 178.1 MSTB (oil equivalent volume)
+- When comparing or combining oil & gas volumes, convert to common units first (MBOE = MSTB + BSCF/5.615×1000)
+- Example: 2000 MSTB oil + 5.615 BSCF gas = 3000 MBOE total
 
 ## Report Year Handling
 
@@ -449,5 +495,23 @@ def get_system_prompt() -> str:
 
     Schema is available on-demand via the get_schema tool.
     Column selection rules and table guide remain in the prompt.
+    Conditionally includes visualization guidance when OpenTerminal is configured.
     """
-    return SYSTEM_PROMPT
+    from esdc.configs import Config
+
+    ot_config = Config.get_openterminal_config()
+    if ot_config:
+        return SYSTEM_PROMPT
+
+    # Remove visualization section when OpenTerminal is not configured
+    vis_start = "## Visualization Support"
+    vis_end_marker = "## Context Management"
+
+    prompt = SYSTEM_PROMPT
+    vis_start_idx = prompt.find(vis_start)
+    vis_end_idx = prompt.find(vis_end_marker)
+
+    if vis_start_idx != -1 and vis_end_idx != -1:
+        return prompt[:vis_start_idx] + prompt[vis_end_idx:]
+
+    return prompt
