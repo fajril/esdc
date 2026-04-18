@@ -303,6 +303,13 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 
 ⚠️ Confusion warning: `rate_*` = MSTB/Y or BSCF/Y (rate), `tpf_*` = MSTB or BSCF (volume). Always call `get_timeseries_columns()` before timeseries queries.
 
+### Unit Conversions (BOE Equivalent)
+**1000 MSTB = 5.615 BSCF** (Barrel of Oil Equivalent)
+- 1 MSTB = 5.615 MMSCF (gas equivalent volume)
+- 1 BSCF = 178.1 MSTB (oil equivalent volume)
+- When comparing or combining oil & gas volumes, convert to common units first (MBOE = MSTB + BSCF/5.615×1000)
+- Example: 2000 MSTB oil + 5.615 BSCF gas = 3000 MBOE total
+
 ## Report Year Handling
 
 **ALWAYS filter by report_year.** Default to MAX(report_year) with fallback.
