@@ -24,6 +24,7 @@ def setup_phoenix_tracing() -> bool:
     from phoenix.otel import register
 
     register(
+        endpoint=config.collector_endpoint,
         project_name=config.project_name,
         auto_instrument=True,
     )

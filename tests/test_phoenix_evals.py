@@ -137,3 +137,30 @@ class TestResetJudgeLLM:
             reset_judge_llm()
             llm2 = _create_judge_llm()
             assert llm1 is not llm2
+
+
+class TestESDCToolsDescription:
+    def test_tools_description_is_non_empty_string(self):
+        from esdc.phoenix.phoenix_evals import ESDC_TOOLS_DESCRIPTION
+
+        assert isinstance(ESDC_TOOLS_DESCRIPTION, str)
+        assert len(ESDC_TOOLS_DESCRIPTION) > 0
+        assert "SQL Executor" in ESDC_TOOLS_DESCRIPTION
+        assert "Knowledge Traversal" in ESDC_TOOLS_DESCRIPTION
+        assert "Semantic Search" in ESDC_TOOLS_DESCRIPTION
+
+
+class TestRunEvaluations:
+    def test_run_evaluations_invalid_evaluator(self, mock_provider_config_ollama):
+        with patch("esdc.configs.Config.get_provider_config") as mock_get:
+            mock_get.return_value = mock_provider_config_ollama
+            with patch("esdc.configs.Config.init_config"):
+                import pandas as pd
+
+                from esdc.phoenix.phoenix_evals import run_evaluations
+
+                df = pd.DataFrame(
+                    {"input": ["test"], "tool_selection": ["SQL Executor"]}
+                )
+                with pytest.raises(ValueError, match="No valid evaluators"):
+                    run_evaluations(df, evaluators=["nonexistent"])
