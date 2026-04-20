@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 # Local
 from esdc.configs import Config
+from esdc.phoenix import setup_phoenix_tracing
 from esdc.server.logging_config import setup_server_logging
 from esdc.server.routes import router
 
@@ -80,6 +81,7 @@ def run_server(
     """
     # Initialize configuration
     Config.init_config()
+    setup_phoenix_tracing()
 
     # Setup proper logging configuration
     setup_server_logging(

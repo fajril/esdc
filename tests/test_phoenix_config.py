@@ -22,7 +22,7 @@ def clean_env():
 
 
 def test_phoenix_config_defaults():
-    from esdc.chat.phoenix_config import PhoenixConfig
+    from esdc.phoenix.phoenix_config import PhoenixConfig
 
     config = PhoenixConfig.from_env()
     assert config.enabled is False
@@ -32,7 +32,7 @@ def test_phoenix_config_defaults():
 
 def test_phoenix_config_enabled_via_env():
     os.environ["PHOENIX_ENABLED"] = "true"
-    from esdc.chat.phoenix_config import PhoenixConfig
+    from esdc.phoenix.phoenix_config import PhoenixConfig
 
     config = PhoenixConfig.from_env()
     assert config.enabled is True
@@ -42,7 +42,7 @@ def test_phoenix_config_custom_endpoint():
     os.environ["PHOENIX_ENABLED"] = "true"
     os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = "http://phoenix:4317"
     os.environ["PHOENIX_PROJECT_NAME"] = "esdc-prod"
-    from esdc.chat.phoenix_config import PhoenixConfig
+    from esdc.phoenix.phoenix_config import PhoenixConfig
 
     config = PhoenixConfig.from_env()
     assert config.collector_endpoint == "http://phoenix:4317"

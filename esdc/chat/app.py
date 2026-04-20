@@ -1355,7 +1355,10 @@ class ESDCChatApp(App):
         from esdc.chat.agent import create_agent
         from esdc.chat.memory import create_checkpointer, create_thread_id
         from esdc.configs import Config
+        from esdc.phoenix import setup_phoenix_tracing
         from esdc.providers import create_llm_from_config
+
+        setup_phoenix_tracing()
 
         provider_config = Config.get_provider_config()
         if not provider_config:
