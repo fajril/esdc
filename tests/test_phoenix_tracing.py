@@ -31,58 +31,101 @@ def clean_env_and_state():
 
 
 def test_setup_phoenix_tracing_disabled():
-    import esdc.phoenix.phoenix_tracing as pt
+    with patch("esdc.configs.Config._load_config") as mock_load:
+        mock_load.return_value = {}
+        import esdc.phoenix.phoenix_tracing as pt
 
-    result = pt.setup_phoenix_tracing()
-    assert result is False
+        result = pt.setup_phoenix_tracing()
+        assert result is False
 
 
 def test_setup_phoenix_tracing_enabled():
-    os.environ["PHOENIX_ENABLED"] = "true"
+    with patch("esdc.configs.Config._load_config") as mock_load:
+        mock_load.return_value = {
+            "phoenix": {
+                "enabled": True,
+                "collector_endpoint": "http://localhost:4317",
+                "project_name": "iris",
+            },
+        }
+        with patch("phoenix.otel.register") as mock_register:
+            mock_register.return_value = MagicMock()
 
-    with patch("phoenix.otel.register") as mock_register:
-        mock_register.return_value = MagicMock()
+            import esdc.phoenix.phoenix_tracing as pt
 
-        import esdc.phoenix.phoenix_tracing as pt
-
-        result = pt.setup_phoenix_tracing()
-        assert result is True
-        mock_register.assert_called_once_with(
-            endpoint="http://localhost:4317",
-            project_name="esdc-agent",
-            auto_instrument=True,
-        )
+            result = pt.setup_phoenix_tracing()
+            assert result is True
+            mock_register.assert_called_once_with(
+                endpoint="http://localhost:4317",
+                project_name="iris",
+                auto_instrument=True,
+            )
 
 
 def test_setup_phoenix_tracing_idempotent():
-    os.environ["PHOENIX_ENABLED"] = "true"
+    with patch("esdc.configs.Config._load_config") as mock_load:
+        mock_load.return_value = {
+            "phoenix": {
+                "enabled": True,
+                "collector_endpoint": "http://localhost:4317",
+                "project_name": "iris",
+            },
+        }
+        with patch("phoenix.otel.register") as mock_register:
+            mock_register.return_value = MagicMock()
 
-    with patch("phoenix.otel.register") as mock_register:
-        mock_register.return_value = MagicMock()
+            from esdc.phoenix.phoenix_tracing import setup_phoenix_tracing
 
-        from esdc.phoenix.phoenix_tracing import setup_phoenix_tracing
-
-        result1 = setup_phoenix_tracing()
-        result2 = setup_phoenix_tracing()
-        assert result1 is True
-        assert result2 is True
-        assert mock_register.call_count == 1
+            result1 = setup_phoenix_tracing()
+            result2 = setup_phoenix_tracing()
+            assert result1 is True
+            assert result2 is True
+            assert mock_register.call_count == 1
 
 
 def test_setup_phoenix_tracing_custom_endpoint():
+    with patch("esdc.configs.Config._load_config") as mock_load:
+        mock_load.return_value = {
+            "phoenix": {
+                "enabled": True,
+                "collector_endpoint": "http://phoenix-server:4317",
+                "project_name": "iris-prod",
+            },
+        }
+        with patch("phoenix.otel.register") as mock_register:
+            mock_register.return_value = MagicMock()
+
+            import esdc.phoenix.phoenix_tracing as pt
+
+            result = pt.setup_phoenix_tracing()
+            assert result is True
+            mock_register.assert_called_once_with(
+                endpoint="http://phoenix-server:4317",
+                project_name="iris-prod",
+                auto_instrument=True,
+            )
+
+
+def test_setup_phoenix_tracing_env_overrides_yaml():
     os.environ["PHOENIX_ENABLED"] = "true"
-    os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = "http://phoenix-server:4317"
-    os.environ["PHOENIX_PROJECT_NAME"] = "esdc-prod"
+    os.environ["PHOENIX_PROJECT_NAME"] = "iris-from-env"
+    with patch("esdc.configs.Config._load_config") as mock_load:
+        mock_load.return_value = {
+            "phoenix": {
+                "enabled": True,
+                "collector_endpoint": "http://yaml:4317",
+                "project_name": "iris-from-yaml",
+            },
+        }
+        with patch("phoenix.otel.register") as mock_register:
+            mock_register.return_value = MagicMock()
 
-    with patch("phoenix.otel.register") as mock_register:
-        mock_register.return_value = MagicMock()
+            import esdc.phoenix.phoenix_tracing as pt
 
-        import esdc.phoenix.phoenix_tracing as pt
-
-        result = pt.setup_phoenix_tracing()
-        assert result is True
-        mock_register.assert_called_once_with(
-            endpoint="http://phoenix-server:4317",
-            project_name="esdc-prod",
-            auto_instrument=True,
-        )
+            result = pt.setup_phoenix_tracing()
+            assert result is True
+            mock_register.assert_called_once_with(
+                endpoint="http://yaml:4317",
+                project_name="iris-from-env",
+                auto_instrument=True,
+            )

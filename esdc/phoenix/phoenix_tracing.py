@@ -12,9 +12,9 @@ _initialized = False
 def setup_phoenix_tracing() -> bool:
     global _initialized
 
-    config = PhoenixConfig.from_env()
+    config = PhoenixConfig.from_config()
     if not config.enabled:
-        logger.info("Phoenix tracing disabled (PHOENIX_ENABLED not set)")
+        logger.info("Phoenix tracing disabled (phoenix.enabled is false)")
         return False
 
     if _initialized:

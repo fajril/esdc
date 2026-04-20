@@ -109,6 +109,11 @@ class Config:
                 "semantic_search": {
                     "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)  # noqa: E501
                 },
+                "phoenix": {
+                    "enabled": False,
+                    "collector_endpoint": "http://localhost:4317",
+                    "project_name": "iris",
+                },
             }
             with open(config_file, "w") as f:
                 yaml.dump(default_config, f, default_flow_style=False)
@@ -546,6 +551,37 @@ class Config:
         config = cls._load_config() or {}
         semantic_config = config.get("semantic_search", {})
         return semantic_config.get("embedding_batch_size", 100)
+
+    @classmethod
+    def get_phoenix_config(cls) -> dict[str, Any]:
+        """Get Phoenix observability configuration.
+
+        Priority:
+        1. Environment variables (PHOENIX_ENABLED, PHOENIX_COLLECTOR_ENDPOINT,
+           PHOENIX_PROJECT_NAME)
+        2. config.yaml: phoenix.enabled, phoenix.collector_endpoint,
+           phoenix.project_name
+        3. Defaults: enabled=False, collector_endpoint="http://localhost:4317",
+           project_name="iris"
+        """
+        config = cls._load_config() or {}
+        phoenix_config = config.get("phoenix", {})
+
+        enabled_env = os.environ.get("PHOENIX_ENABLED")
+        endpoint_env = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT")
+        project_env = os.environ.get("PHOENIX_PROJECT_NAME")
+
+        if enabled_env is not None:
+            enabled = enabled_env.lower() in ("true", "1", "yes")
+        else:
+            enabled = phoenix_config.get("enabled", False)
+
+        return {
+            "enabled": enabled,
+            "collector_endpoint": endpoint_env
+            or phoenix_config.get("collector_endpoint", "http://localhost:4317"),
+            "project_name": project_env or phoenix_config.get("project_name", "iris"),
+        }
 
     # Default packages available in OpenTerminal
     OPENTERM_DEFAULT_PACKAGES = (

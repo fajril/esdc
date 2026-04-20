@@ -4,7 +4,7 @@
 Fetches spans from a Phoenix server and runs tool evaluators against them.
 
 Usage:
-    python -m esdc.phoenix.run_evals [--project esdc-agent]
+    python -m esdc.phoenix.run_evals [--project iris]
         [--evaluators tool_selection,tool_invocation,tool_response_handling]
     python -m esdc.phoenix.run_evals --spans-file spans.csv
 """
@@ -29,8 +29,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--project",
-        default="esdc-agent",
-        help="Phoenix project name (default: esdc-agent)",
+        default="iris",
+        help="Phoenix project name (default: iris)",
     )
     parser.add_argument(
         "--endpoint",
