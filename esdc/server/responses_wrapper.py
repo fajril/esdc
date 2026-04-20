@@ -48,6 +48,8 @@ from esdc.server.responses_events import (
     create_output_item_done_event,
     create_output_text_delta_event,
     create_output_text_done_event,
+    create_reasoning_summary_text_delta_event,
+    create_reasoning_summary_text_done_event,
     create_response_completed_event,
     create_response_created_event,
     create_response_failed_event,
@@ -521,6 +523,13 @@ async def generate_responses_stream(
     content_index = 0
     last_usage: dict[str, Any] | None = None
 
+    # Reasoning state
+    in_reasoning = False
+    reasoning_item_id = ""
+    reasoning_output_index = 0
+    accumulated_reasoning = ""
+    reasoning_content_index = 0
+
     # Track external tool call arguments for streaming in function_call items
     # Maps tool_call_id -> JSON args string
     pending_external_tool_args: dict[str, str] = {}
@@ -541,6 +550,79 @@ async def generate_responses_stream(
                 content = event["content"]
                 if not content:
                     continue
+
+                # Close reasoning if transitioning from reasoning to regular content
+                if in_reasoning:
+                    # Emit </thinking> closing tag in message stream
+                    think_close = "\n</thinking>\n\n"
+                    if current_item_id:
+                        accumulated_text += think_close
+                        close_delta_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_text_delta_event(
+                                close_delta_seq,
+                                output_index,
+                                content_index,
+                                current_item_id,
+                                think_close,
+                            )
+                        )
+
+                    # Close reasoning summary text part
+                    rs_done_seq = seq.next()
+                    yield format_sse_event(
+                        create_reasoning_summary_text_done_event(
+                            rs_done_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            accumulated_reasoning,
+                        )
+                    )
+                    # Close content part in reasoning item
+                    rs_content_done = {
+                        "type": "reasoning_summary_text",
+                        "text": accumulated_reasoning,
+                    }
+                    rs_part_done_seq = seq.next()
+                    yield format_sse_event(
+                        create_content_part_done_event(
+                            rs_part_done_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            rs_content_done,
+                        )
+                    )
+                    # Close reasoning output item
+                    reasoning_item_done = {
+                        "id": reasoning_item_id,
+                        "type": "reasoning",
+                        "status": "completed",
+                        "summary": [rs_content_done],
+                    }
+                    rs_item_done_seq = seq.next()
+                    logger.debug(
+                        "[RESPONSES %s] EMIT response.output_item.done "
+                        "seq=%d, output_index=%d, type=reasoning, id=%s",
+                        response_id,
+                        rs_item_done_seq,
+                        reasoning_output_index,
+                        reasoning_item_id,
+                    )
+                    yield format_sse_event(
+                        create_output_item_done_event(
+                            rs_item_done_seq,
+                            reasoning_output_index,
+                            reasoning_item_done,
+                        )
+                    )
+                    output_items.append(reasoning_item_done)
+
+                    # Reset reasoning state (content_started remains True)
+                    in_reasoning = False
+                    accumulated_reasoning = ""
+                    reasoning_item_id = ""
 
                 # First token for this message → emit item.added + content_part.added
                 if not content_started:
@@ -606,20 +688,109 @@ async def generate_responses_stream(
 
             # ---- Reasoning token events ----
             elif event_type == "reasoning_token":
-                # Models that emit reasoning_content field get a reasoning output item
                 reasoning_content = event["content"]
                 if not reasoning_content:
                     continue
 
-                # For now, emit reasoning tokens as text deltas in the same
-                # content stream. OpenWebUI detects thinking tags natively.
-                # TODO: Emit as proper reasoning output item per Open Responses spec.
-                if not content_started:
+                if not in_reasoning:
+                    # If currently in a content message, close it first
+                    if content_started and accumulated_text:
+                        text_done_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_text_done_event(
+                                text_done_seq,
+                                output_index,
+                                content_index,
+                                current_item_id,
+                                accumulated_text,
+                            )
+                        )
+                        content_part_done = {
+                            "type": "output_text",
+                            "text": accumulated_text,
+                        }
+                        part_done_seq = seq.next()
+                        yield format_sse_event(
+                            create_content_part_done_event(
+                                part_done_seq,
+                                output_index,
+                                content_index,
+                                current_item_id,
+                                content_part_done,
+                            )
+                        )
+                        message_item_done = {
+                            "id": current_item_id,
+                            "type": "message",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [content_part_done],
+                        }
+                        item_done_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_item_done_event(
+                                item_done_seq, output_index, message_item_done
+                            )
+                        )
+                        output_items.append(message_item_done)
+                        output_index += 1
+                    elif content_started:
+                        output_index += 1
+
+                    # Reset content state for new output items
+                    content_started = False
+                    accumulated_text = ""
+                    delta_count = 0
+                    content_index = 0
+                    current_item_id = ""
+
+                    # --- Start reasoning output item (spec-compliant) ---
+                    reasoning_item_id = generate_item_id("rs")
+                    reasoning_output_index = output_index
+                    reasoning_content_index = 0
+                    accumulated_reasoning = ""
+                    reasoning_item = {
+                        "id": reasoning_item_id,
+                        "type": "reasoning",
+                        "status": "in_progress",
+                        "summary": [],
+                    }
+                    rs_added_seq = seq.next()
+                    logger.debug(
+                        "[RESPONSES %s] EMIT response.output_item.added "
+                        "seq=%d, output_index=%d, type=reasoning, id=%s",
+                        response_id,
+                        rs_added_seq,
+                        reasoning_output_index,
+                        reasoning_item_id,
+                    )
+                    yield format_sse_event(
+                        create_output_item_added_event(
+                            rs_added_seq, reasoning_output_index, reasoning_item
+                        )
+                    )
+                    rs_content_part = {
+                        "type": "reasoning_summary_text",
+                        "text": "",
+                    }
+                    rs_part_seq = seq.next()
+                    yield format_sse_event(
+                        create_content_part_added_event(
+                            rs_part_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            rs_content_part,
+                        )
+                    )
+
+                    # --- Start message output item (OpenWebUI fallback) ---
+                    output_index += 1
                     current_item_id = generate_item_id("msg")
                     content_started = True
                     accumulated_text = ""
                     delta_count = 0
-
+                    content_index = 0
                     message_item = {
                         "id": current_item_id,
                         "type": "message",
@@ -627,18 +798,25 @@ async def generate_responses_stream(
                         "role": "assistant",
                         "content": [],
                     }
-                    added_seq = seq.next()
+                    msg_added_seq = seq.next()
+                    logger.debug(
+                        "[RESPONSES %s] EMIT response.output_item.added "
+                        "seq=%d, output_index=%d, type=message, id=%s",
+                        response_id,
+                        msg_added_seq,
+                        output_index,
+                        current_item_id,
+                    )
                     yield format_sse_event(
                         create_output_item_added_event(
-                            added_seq, output_index, message_item
+                            msg_added_seq, output_index, message_item
                         )
                     )
-
                     content_part = {"type": "output_text", "text": ""}
-                    part_added_seq = seq.next()
+                    msg_part_seq = seq.next()
                     yield format_sse_event(
                         create_content_part_added_event(
-                            part_added_seq,
+                            msg_part_seq,
                             output_index,
                             content_index,
                             current_item_id,
@@ -646,17 +824,47 @@ async def generate_responses_stream(
                         )
                     )
 
-                if not current_item_id:
-                    continue
+                    # Emit <thinking> opening tag in message stream
+                    think_open = "<thinking>\n"
+                    accumulated_text += think_open
+                    delta_seq = seq.next()
+                    yield format_sse_event(
+                        create_output_text_delta_event(
+                            delta_seq,
+                            output_index,
+                            content_index,
+                            current_item_id,
+                            think_open,
+                        )
+                    )
+
+                    in_reasoning = True
+
+                # Emit reasoning as text delta and
+                # reasoning_summary_text_delta
                 accumulated_text += reasoning_content
+                accumulated_reasoning += reasoning_content
                 delta_count += 1
-                delta_seq = seq.next()
+                # Text delta in message stream (<thinking> tags fallback)
+                if current_item_id:
+                    delta_seq = seq.next()
+                    yield format_sse_event(
+                        create_output_text_delta_event(
+                            delta_seq,
+                            output_index,
+                            content_index,
+                            current_item_id,
+                            reasoning_content,
+                        )
+                    )
+                # Reasoning summary text delta (spec-compliant)
+                rs_delta_seq = seq.next()
                 yield format_sse_event(
-                    create_output_text_delta_event(
-                        delta_seq,
-                        output_index,
-                        content_index,
-                        current_item_id,
+                    create_reasoning_summary_text_delta_event(
+                        rs_delta_seq,
+                        reasoning_output_index,
+                        reasoning_content_index,
+                        reasoning_item_id,
                         reasoning_content,
                     )
                 )
@@ -668,6 +876,80 @@ async def generate_responses_stream(
                 # Track usage from last LLM response
                 if hasattr(ai_message, "usage_metadata") and ai_message.usage_metadata:
                     last_usage = ai_message.usage_metadata
+
+                # Close reasoning if still active when message completes
+                if in_reasoning:
+                    # Emit </thinking> closing tag in message stream
+                    think_close = "\n</thinking>\n\n"
+                    if current_item_id:
+                        accumulated_text += think_close
+                        close_delta_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_text_delta_event(
+                                close_delta_seq,
+                                output_index,
+                                content_index,
+                                current_item_id,
+                                think_close,
+                            )
+                        )
+
+                    # Close reasoning summary text part
+                    rs_done_seq = seq.next()
+                    yield format_sse_event(
+                        create_reasoning_summary_text_done_event(
+                            rs_done_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            accumulated_reasoning,
+                        )
+                    )
+                    # Close content part in reasoning item
+                    rs_content_done = {
+                        "type": "reasoning_summary_text",
+                        "text": accumulated_reasoning,
+                    }
+                    rs_part_done_seq = seq.next()
+                    yield format_sse_event(
+                        create_content_part_done_event(
+                            rs_part_done_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            rs_content_done,
+                        )
+                    )
+                    # Close reasoning output item
+                    reasoning_item_done = {
+                        "id": reasoning_item_id,
+                        "type": "reasoning",
+                        "status": "completed",
+                        "summary": [rs_content_done],
+                    }
+                    rs_item_done_seq = seq.next()
+                    logger.debug(
+                        "[RESPONSES %s] EMIT response.output_item.done "
+                        "seq=%d, output_index=%d, type=reasoning, id=%s",
+                        response_id,
+                        rs_item_done_seq,
+                        reasoning_output_index,
+                        reasoning_item_id,
+                    )
+                    yield format_sse_event(
+                        create_output_item_done_event(
+                            rs_item_done_seq,
+                            reasoning_output_index,
+                            reasoning_item_done,
+                        )
+                    )
+                    output_items.append(reasoning_item_done)
+
+                    # Reset reasoning state (but NOT content_started --
+                    # the text close block below will handle that)
+                    in_reasoning = False
+                    accumulated_reasoning = ""
+                    reasoning_item_id = ""
 
                 # Close any open text content
                 if content_started and accumulated_text:
@@ -1240,6 +1522,7 @@ async def generate_responses_sync(
         all_function_calls: list[dict[str, Any]] = []
         all_tool_results: list[dict[str, Any]] = []
         accumulated_text = ""
+        accumulated_reasoning = ""
         last_message_content = ""
         had_recursion_error = False
 
@@ -1247,10 +1530,15 @@ async def generate_responses_sync(
             event_counter += 1
             event_type = event["type"]
 
-            if event_type == "token" or event_type == "reasoning_token":
+            if event_type == "token":
                 content = event["content"]
                 if content:
                     accumulated_text += content
+
+            elif event_type == "reasoning_token":
+                content = event["content"]
+                if content:
+                    accumulated_reasoning += content
 
             elif event_type == "message_complete":
                 ai_message = event["ai_message"]
@@ -1343,6 +1631,26 @@ async def generate_responses_sync(
 
         output_items.extend(all_function_calls)
         output_items.extend(all_tool_results)
+
+        # Add reasoning output item if reasoning was accumulated
+        if accumulated_reasoning.strip():
+            output_items.append(
+                {
+                    "id": generate_item_id("rs"),
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [
+                        {
+                            "type": "reasoning_summary_text",
+                            "text": accumulated_reasoning,
+                        }
+                    ],
+                }
+            )
+            last_message_content = (
+                f"\n\n<thinking>\n{accumulated_reasoning}"
+                f"\n</thinking>\n\n{last_message_content}"
+            )
 
         if last_message_content.strip():
             logger.debug(

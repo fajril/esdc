@@ -234,6 +234,42 @@ def create_openai_chunk(
     }
 
 
+def create_reasoning_chunk(
+    content: str = "",
+    model: str = "iris",
+    finish_reason: str | None = None,
+    chunk_id: str | None = None,
+) -> dict:
+    """Create OpenAI-compatible streaming chunk with reasoning_content.
+
+    Used for LLM reasoning/thinking tokens that should be displayed
+    separately from the main response content (e.g. collapsible
+    "Thinking" sections in OpenWebUI).
+
+    Args:
+        content: Reasoning content for this chunk
+        model: Model ID
+        finish_reason: Finish reason (stop, tool_calls, etc.)
+        chunk_id: Optional chunk ID (generated if not provided)
+
+    Returns:
+        OpenAI-compatible chunk dict with reasoning_content in delta
+    """
+    return {
+        "id": chunk_id or f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"reasoning_content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+
+
 async def generate_streaming_response(
     messages: list,
     model: str = "iris",
@@ -392,12 +428,22 @@ async def generate_streaming_response(
 
             event_type = event["type"]
 
-            if event_type == "token" or event_type == "reasoning_token":
+            if event_type == "token":
                 content = event["content"]
                 if content:
                     yield_counter += 1
                     yield json.dumps(
                         create_openai_chunk(
+                            content=content, model=model, chunk_id=next_chunk_id()
+                        )
+                    )
+
+            elif event_type == "reasoning_token":
+                content = event["content"]
+                if content:
+                    yield_counter += 1
+                    yield json.dumps(
+                        create_reasoning_chunk(
                             content=content, model=model, chunk_id=next_chunk_id()
                         )
                     )
@@ -590,15 +636,21 @@ async def generate_response(
         )
 
         accumulated_content = ""
+        accumulated_reasoning = ""
         had_recursion_error = False
 
         async for event in astream_agent_events(agent, lc_messages):
             event_type = event["type"]
 
-            if event_type == "token" or event_type == "reasoning_token":
+            if event_type == "token":
                 content = event["content"]
                 if content:
                     accumulated_content += content
+
+            elif event_type == "reasoning_token":
+                content = event["content"]
+                if content:
+                    accumulated_reasoning += content
 
             elif event_type == "message_complete":
                 ai_message = event["ai_message"]
@@ -625,6 +677,13 @@ async def generate_response(
             had_recursion_error,
         )
 
+        message_dict: dict[str, Any] = {
+            "role": "assistant",
+            "content": accumulated_content if accumulated_content else None,
+        }
+        if accumulated_reasoning:
+            message_dict["reasoning_content"] = accumulated_reasoning
+
         return {
             "id": f"chatcmpl-{response_uuid}",
             "object": "chat.completion",
@@ -633,10 +692,7 @@ async def generate_response(
             "choices": [
                 {
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": accumulated_content if accumulated_content else None,
-                    },
+                    "message": message_dict,
                     "finish_reason": "stop",
                 }
             ],

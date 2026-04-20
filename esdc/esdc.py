@@ -63,6 +63,7 @@ from tabulate import tabulate
 console = Console()
 
 from esdc.chat.app import ESDCChatApp  # noqa: E402
+from esdc.commands.configs import configs_app  # noqa: E402
 from esdc.commands.provider import provider_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
 from esdc.dbmanager import load_data_to_db, run_query  # noqa: E402
@@ -75,6 +76,7 @@ TABLES: tuple[TableName, TableName] = (
 
 app = typer.Typer(no_args_is_help=False)
 app.add_typer(provider_app, name="provider")
+app.add_typer(configs_app, name="configs")
 
 
 @app.callback()

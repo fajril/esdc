@@ -233,7 +233,9 @@ def get_db_connection(db_path: str | None = None) -> duckdb.DuckDBPyConnection:
                     f"Run 'esdc fetch --save' to rebuild in DuckDB format."
                 )
 
-    conn = duckdb.connect(str(db_path), read_only=True)
+    from esdc.dbmanager import get_duckdb_connection
+
+    conn = get_duckdb_connection(db_path, read_only=True)
     return conn
 
 
@@ -1620,8 +1622,6 @@ def _search_remarks_via_fts(
 
     Searches project_remarks using FTS match_bm25 for keyword-based results.
     """
-    import duckdb
-
     from esdc.configs import Config
 
     target_table = table_name or "project_resources"
@@ -1656,7 +1656,9 @@ def _search_remarks_via_fts(
             LIMIT {limit}
         """
 
-        conn = duckdb.connect(str(db_file), read_only=True)
+        from esdc.dbmanager import get_duckdb_connection
+
+        conn = get_duckdb_connection(db_file, read_only=True)
         try:
             df = conn.execute(sql).fetchdf()
         finally:

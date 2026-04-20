@@ -5,12 +5,43 @@ from typing import Any
 
 import yaml
 
+# Sensitive key suffixes to mask in the config UI.
+SENSITIVE_KEYS = frozenset({"api_key"})
+
+ENUM_CHOICES: dict[str, list[str]] = {
+    "tool_format": ["native", "markdown", "auto"],
+    "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    "logging.server.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    "logging.agent.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    "logging.chat.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+}
+
+KEY_DESCRIPTIONS: dict[str, str] = {
+    "api_url": "Base URL for the ESDC API",
+    "api.verify_ssl": "Verify SSL certificates for API requests",
+    "database_path": "Path to the SQLite database file",
+    "tool_format": "Format for tool results (native, markdown, or auto)",
+    "default_provider": "Default LLM provider name",
+    "cache.sql_ttl": "SQL cache time-to-live in seconds",
+    "logging.level": "Global logging level",
+    "logging.file.enabled": "Enable logging to file",
+    "logging.file.path": "Log file path",
+    "logging.file.max_size": "Maximum log file size before rotation",
+    "logging.file.backup_count": "Number of rotated log files to keep",
+    "logging.server.level": "Log level for the server component",
+    "logging.agent.level": "Log level for the agent component",
+    "logging.chat.level": "Log level for the chat component",
+    "semantic_search.embedding_batch_size": ("Number of embeddings per batch (10-500)"),
+}
+
 
 # Note: frozen=True was removed to allow method-based configuration updates
 # (e.g., update_provider_config). The Config class uses classmethods for
 # configuration management, so immutability is handled at the application level.
 @dataclass
 class Config:
+    """ESDC application configuration manager."""
+
     APP_NAME: str = "esdc"
     BASE_API_URL_V2: str = "https://esdc.skkmigas.go.id/"
     _config_cache: dict[str, Any] | None = None
@@ -588,3 +619,148 @@ class Config:
             "timeout": timeout,
             "write_timeout": write_timeout,
         }
+
+    @classmethod
+    def get_defaults(cls) -> dict[str, Any]:
+        """Return the default configuration dict."""
+        config_dir = cls.get_config_dir()
+        return {
+            "api_url": cls.BASE_API_URL_V2,
+            "api": {"verify_ssl": True},
+            "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
+            "tool_format": "native",
+            "cache": {"sql_ttl": 604800},
+            "logging": {
+                "level": "INFO",
+                "file": {
+                    "enabled": True,
+                    "path": "logs/esdc.log",
+                    "max_size": "10MB",
+                    "backup_count": 5,
+                },
+                "server": {"level": "INFO"},
+                "agent": {"level": "DEBUG"},
+                "chat": {"level": "WARNING"},
+            },
+            "semantic_search": {
+                "embedding_batch_size": 100,
+            },
+        }
+
+    @classmethod
+    def get_all_config_flat(cls) -> dict[str, Any]:
+        """Return all config values as a flat dict with dot-notation keys.
+
+        Merges current config with defaults so all keys are present.
+        """
+        config = cls._load_config() or {}
+        defaults = cls.get_defaults()
+        merged = cls._deep_merge(defaults, config)
+        return cls._flatten(merged)
+
+    @classmethod
+    def set_config_value(cls, key: str, value: Any) -> None:
+        """Set a config value by dot-notation key and save.
+
+        Args:
+            key: Dot-notation key (e.g. 'logging.level', 'api.verify_ssl')
+            value: New value. Strings 'true'/'false' are converted to bool
+                   for known boolean keys. Numeric strings are converted to int.
+        """
+        config = cls._load_config() or {}
+        value = cls._coerce_value(key, value)
+        keys = key.split(".")
+        d = config
+        for k in keys[:-1]:
+            if k not in d or not isinstance(d[k], dict):
+                d[k] = {}
+            d = d[k]
+        d[keys[-1]] = value
+        cls._save_config(config)
+
+    @classmethod
+    def reset_config(cls, key: str | None = None) -> None:
+        """Reset config to defaults, or reset a specific key.
+
+        Args:
+            key: Dot-notation key to reset, or None to reset all.
+        """
+        if key is None:
+            defaults = cls.get_defaults()
+            cls._save_config(defaults)
+            return
+
+        defaults = cls.get_defaults()
+        default_flat = cls._flatten(defaults)
+        if key not in default_flat:
+            raise KeyError(f"Unknown config key: {key}")
+
+        config = cls._load_config() or {}
+        keys = key.split(".")
+        d = config
+        for k in keys[:-1]:
+            if k not in d or not isinstance(d[k], dict):
+                d = d.setdefault(k, {})
+            else:
+                d = d[k]
+
+        default_value = default_flat[key]
+        d[keys[-1]] = default_value
+        cls._save_config(config)
+
+    @classmethod
+    def _flatten(cls, d: dict[str, Any], parent_key: str = "") -> dict[str, Any]:
+        """Flatten a nested dict into dot-notation keys."""
+        items: dict[str, Any] = {}
+        for k, v in d.items():
+            new_key = f"{parent_key}.{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.update(cls._flatten(v, new_key))
+            else:
+                items[new_key] = v
+        return items
+
+    @classmethod
+    def _deep_merge(
+        cls, base: dict[str, Any], override: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Deep merge override into base dict."""
+        result = base.copy()
+        for k, v in override.items():
+            if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+                result[k] = cls._deep_merge(result[k], v)
+            else:
+                result[k] = v
+        return result
+
+    BOOLEAN_KEYS = frozenset(
+        {
+            "api.verify_ssl",
+            "logging.file.enabled",
+        }
+    )
+
+    INT_KEYS = frozenset(
+        {
+            "cache.sql_ttl",
+            "logging.file.backup_count",
+            "semantic_search.embedding_batch_size",
+        }
+    )
+
+    @classmethod
+    def _coerce_value(cls, key: str, value: Any) -> Any:
+        """Coerce string values to appropriate types based on key."""
+        if not isinstance(value, str):
+            return value
+        if key in cls.BOOLEAN_KEYS:
+            if value.lower() in ("true", "1", "yes"):
+                return True
+            if value.lower() in ("false", "0", "no"):
+                return False
+        if key in cls.INT_KEYS:
+            try:
+                return int(value)
+            except ValueError:
+                pass
+        return value
