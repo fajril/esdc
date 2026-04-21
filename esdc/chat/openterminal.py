@@ -288,17 +288,21 @@ async def run_python(
         str,
         (
             "Python code to execute. Visible in OpenWebUI tool panel. "
-            "For visualizations, use the pre-defined `output_image_path` variable "
-            "to save images. When this tool returns image markdown, copy it "
-            "into your final response so the user can see the image inline."
+            "For visualizations, use the pre-defined `output_image_path` variable. "
+            "For database queries, use the pre-defined `DB_PATH` variable (DuckDB at /home/user/esdc.db). "
+            "When this tool returns image markdown, copy it into your final response."
         ),
     ],
 ) -> str:
     """Execute Python code with automatic script cleanup and image display.
 
     The code is written to a temporary file, executed, and the file is
-    automatically deleted. Images saved to `output_image_path` are displayed
-    inline via OpenWebUI proxy.
+    automatically deleted. Pre-defined variables: `output_image_path` for saving
+    plots, `DB_PATH` for connecting to the DuckDB database (read-only at
+    /home/user/esdc.db).
+
+    Pre-installed libraries: pandas, scikit-learn, seaborn, statsmodels, xgboost,
+    duckdb, matplotlib, numpy, scipy, plotly.
 
     IMPORTANT: When this tool result contains "![Generated Plot](http://...)",
     include that image markdown directly in your final response so the image
@@ -316,8 +320,11 @@ async def run_python(
     img_uuid = str(uuid.uuid4())
     output_path = f"/home/user/img/{img_uuid}.png"
 
-    # Inject output_image_path variable into the code
-    injected_code = f'output_image_path = "{output_path}"\n{code}'
+    # Inject pre-defined variables into the code
+    db_path = "/home/user/esdc.db"
+    injected_code = (
+        f'output_image_path = "{output_path}"\nDB_PATH = "{db_path}"\n{code}'
+    )
 
     # Generate UUID for temp script
     script_uuid = str(uuid.uuid4())
