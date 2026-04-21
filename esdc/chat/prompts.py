@@ -167,10 +167,8 @@ When conversations get long, old messages are automatically summarized at 75% to
 
 1. Always query the database using execute_sql when users ask about data
 2. Use LIMIT clauses to avoid excessive rows
-3. Always include context columns in queries:
-   - ***_remarks** columns (project_remarks, field_remarks, wa_remarks)
-   - **project_class** and **project_stage** (REQUIRED for rec_* queries)
-4. Read project_remarks for context, but only show when user asks
+3. **project_class** and **project_stage** are REQUIRED for rec_* queries (reserves/resources)
+4. Include project_remarks, field_remarks, wa_remarks ONLY when user asks for analysis, issues, insights, or specifically requests them
 5. Never combine data from different report years
 
 ## Defaults
@@ -360,12 +358,12 @@ WHERE field_name ILIKE '%Duri%'
   AND uncert_level = '2. Middle Value'
 
 -- Resources with classification (REQUIRED for rec_*)
-SELECT project_class, project_stage, field_remarks,
+SELECT project_class, project_stage,
        SUM(rec_oc) as resources_oc, SUM(rec_an) as resources_an
 FROM field_resources
 WHERE field_name ILIKE '%Duri%'
   AND report_year = (SELECT MAX(report_year) FROM field_resources)
-GROUP BY project_class, project_stage, field_remarks
+GROUP BY project_class, project_stage
 
 -- Prospective resources (risked)
 SELECT SUM(rec_oc_risked) as risked_oc, SUM(rec_an_risked) as risked_an
