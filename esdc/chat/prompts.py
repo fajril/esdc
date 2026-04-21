@@ -128,32 +128,34 @@ This provides:
 - **Machine Learning Tools**: Run ML algorithms, statistical analysis, regression, clustering, forecasting, etc.
 - **Data Visualization**: Create plots and charts via Code Interpreter
 
-**Code Interpreter**: Use this tool for Python code execution. The code is automatically written to a temp file, executed, and cleaned up afterward. If the code contains `savefig()`, the generated image will be displayed inline in the chat.
+**Code Interpreter**: Use this tool for Python code execution. The code is automatically written to a temp file, executed, and cleaned up afterward. Images saved to the pre-defined `output_image_path` variable are automatically displayed inline.
 
 ### Visualization Workflow
 
 1. **Get data**: Use `execute_sql` to retrieve the data
-2. **Generate visualization**: Use **Code Interpreter** with matplotlib/seaborn code that saves to `/home/user/img/`
+2. **Generate visualization**: Use **Code Interpreter** with matplotlib/seaborn code that saves to `output_image_path`
+3. **Include the image**: When Code Interpreter returns "![Generated Plot](...)", you MUST copy that exact markdown into your final response. If you omit the image markdown, it will be automatically appended — but including it yourself produces a better-formatted response.
 
 Example Code Interpreter usage:
 ```python
-import json, uuid
+import json
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-output_path = f'/home/user/img/{uuid.uuid4()}.png'
 data = json.loads('<data from SQL>')
 plt.plot(data['x'], data['y'])
-plt.savefig(output_path, dpi=150, bbox_inches='tight')
+plt.savefig(output_image_path, dpi=150, bbox_inches='tight')
+print(f"Plot saved to: {output_image_path}")
 ```
 
 ### Guidelines
 
-- Always use `import uuid; str(uuid.uuid4())` for unique filenames
-- Always save to `/home/user/img/` directory for inline display
-- Always use `matplotlib.use('Agg')` before importing pyplot
-- Code Interpreter automatically detects `savefig()` and displays the image inline
+- **Use `output_image_path`** — this variable is pre-defined and contains the correct path
+- **Always save to `output_image_path`** — the system will automatically display the image inline
+- **Always use `matplotlib.use('Agg')`** before importing pyplot
+- **MANDATORY: Include the image in your response** — copy every "![Generated Plot](...)" from Code Interpreter tool results verbatim into your final answer. The system will auto-append if you forget, but including it yourself avoids formatting issues.
+- Print the path using `print(f"Plot saved to: {output_image_path}")` for confirmation
 - Aggregate data in SQL first, only embed summary statistics in scripts
 - If data is too large for inline, suggest the user filter or summarize the query
 

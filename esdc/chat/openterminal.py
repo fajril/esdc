@@ -288,25 +288,36 @@ async def run_python(
         str,
         (
             "Python code to execute. Visible in OpenWebUI tool panel. "
-            "For visualizations, save to /home/user/img/ with UUID filenames."
+            "For visualizations, use the pre-defined `output_image_path` variable "
+            "to save images. When this tool returns image markdown, copy it "
+            "into your final response so the user can see the image inline."
         ),
     ],
 ) -> str:
-    """Execute Python code with automatic script cleanup.
+    """Execute Python code with automatic script cleanup and image display.
 
     The code is written to a temporary file, executed, and the file is
-    automatically deleted. If the code generates images in /home/user/img/,
-    they will be displayed inline via OpenWebUI proxy.
+    automatically deleted. Images saved to `output_image_path` are displayed
+    inline via OpenWebUI proxy.
+
+    IMPORTANT: When this tool result contains "![Generated Plot](http://...)",
+    include that image markdown directly in your final response so the image
+    renders inline for the user.
 
     Example:
         code="import matplotlib.pyplot as plt; plt.plot([1,2,3]); "
-             "plt.savefig('/home/user/img/' + str(uuid.uuid4()) + "
-             "'.png'); print('Done')"
+             "plt.savefig(output_image_path); print('Done')"
     """
-    import re
     from urllib.parse import quote
 
     config = _get_config()
+
+    # Generate UUID for this execution
+    img_uuid = str(uuid.uuid4())
+    output_path = f"/home/user/img/{img_uuid}.png"
+
+    # Inject output_image_path variable into the code
+    injected_code = f'output_image_path = "{output_path}"\n{code}'
 
     # Generate UUID for temp script
     script_uuid = str(uuid.uuid4())
@@ -324,41 +335,10 @@ async def run_python(
     except Exception:
         pass  # Directory might already exist
 
-    # Try to detect potential image paths from code
-    # 1. Direct savefig with literal path: plt.savefig('/path')
-    # 2. Variable assignment patterns:
-    #    output_path = f'/home/user/img/{uuid.uuid4()}.png'
-    potential_img_dirs = set()
-    savefig_matches = re.findall(
-        r"plt\.savefig\([fF]?['\"]([^'\"]+)['\"]",
-        code,
-    )
-    for m in savefig_matches:
-        if m.startswith("/home/user/img"):
-            potential_img_dirs.add("/home/user/img")
-        else:
-            potential_img_dirs.add(m)
-
-    # Also look for variable assignments like: output_path = f'/home/user/img/...'
-    var_assignments = re.findall(
-        r"[a-zA-Z_]\w*\s*=\s*[fF]?['\"](/home/user/img[^'\"]+)['\"]",
-        code,
-    )
-    if var_assignments:
-        potential_img_dirs.add("/home/user/img")
-
-    if potential_img_dirs:
-        logger.info(
-            "[OPENTERM] run_python detected potential image dirs: %s",
-            potential_img_dirs,
-        )
-    else:
-        logger.debug("[OPENTERM] run_python no image paths detected in code")
-
     try:
         async with httpx.AsyncClient(timeout=150) as client:
             # Step 1: Write code to temp file
-            write_payload = {"path": script_path, "content": code}
+            write_payload = {"path": script_path, "content": injected_code}
             write_response = await client.post(
                 f"{config['url']}/files/write",
                 json=write_payload,
@@ -412,103 +392,34 @@ async def run_python(
                         "[OPENTERM] Failed to cleanup temp script: %s", script_path
                     )
 
-            # Step 4: Detect and display any images generated
-            # Look for image paths in stdout, then scan the image directory
-            img_paths_found = []
+            # Step 4: Check if image was generated and display it
+            if output_path in output:
+                # Image was saved — build proxy URL
+                try:
+                    ow_config = _get_ow_config()
+                    proxy_url = ow_config.get("proxy_url", ow_config["url"]).rstrip("/")
+                    server_id = ow_config["terminal_server_id"]
+                except ValueError:
+                    # OWUI not configured — fall back to direct OT URL
+                    proxy_url = config["url"].rstrip("/")
+                    server_id = ""
 
-            # Try to find image paths in stdout
-            stdout_paths = re.findall(r"/home/user/img/[^\s\n]+\.png", output)
-            for p in stdout_paths:
-                img_paths_found.append(p)
-                logger.info("[OPENTERM] run_python found image path in stdout: %s", p)
-
-            # Also scan the image directory for recently created files
-            # Get the newest PNG files in /home/user/img/
-            try:
-                list_response = await client.get(
-                    f"{config['url']}/files/read",
-                    params={"path": "/home/user/img"},
-                    headers=_get_headers(),
-                )
-                if list_response.status_code == 200:
-                    listing = list_response.json()
-                    if isinstance(listing, dict) and "entries" in listing:
-                        png_files = [
-                            e["name"]
-                            for e in listing["entries"]
-                            if e.get("name", "").endswith(".png")
-                        ]
-                        # Take the most recent files (usually the ones we just created)
-                        for fname in png_files[:5]:  # Limit to 5 images
-                            full_path = f"/home/user/img/{fname}"
-                            if full_path not in img_paths_found:
-                                img_paths_found.append(full_path)
-                                logger.info(
-                                    "[OPENTERM] run_python found image in dir: %s",
-                                    full_path,
-                                )
-            except Exception as e:
-                logger.debug("[OPENTERM] run_python error listing image dir: %s", e)
-
-            # Build markdown for discovered images
-            if img_paths_found:
-                image_markdowns = []
-                for img_path in img_paths_found:
-                    try:
-                        # Verify file exists via HEAD check
-                        head_response = await client.head(
-                            f"{config['url']}/files/read",
-                            params={"path": img_path},
-                            headers=_get_headers(),
-                        )
-                        if head_response.status_code == 200:
-                            # Build OpenWebUI proxy URL
-                            try:
-                                ow_config = _get_ow_config()
-                                proxy_url = ow_config.get(
-                                    "proxy_url", ow_config["url"]
-                                ).rstrip("/")
-                                server_id = ow_config["terminal_server_id"]
-                                encoded_path = quote(img_path, safe="/")
-                                file_url = (
-                                    f"{proxy_url}/api/v1/terminals/{server_id}"
-                                    f"/files/read?path={encoded_path}"
-                                )
-                            except ValueError:
-                                # OWUI not configured — fall back to direct OT URL
-                                encoded_path = quote(img_path, safe="/")
-                                file_url = (
-                                    f"{config['url']}/files/read?path={encoded_path}"
-                                )
-
-                            image_markdowns.append(f"![Generated Plot]({file_url})")
-                            logger.info(
-                                "[OPENTERM] run_python added image: %s -> %s",
-                                img_path,
-                                file_url,
-                            )
-                        else:
-                            logger.warning(
-                                "[OPENTERM] run_python image not found (status %d): %s",
-                                head_response.status_code,
-                                img_path,
-                            )
-                    except Exception as e:
-                        logger.error(
-                            "[OPENTERM] run_python error processing image %s: %s",
-                            img_path,
-                            e,
-                        )
-
-                if image_markdowns:
-                    images_section = "\n\n".join(image_markdowns)
-                    return (
-                        f"Execution complete (exit code: {exit_code}):\n\n"
-                        f"```\n{output}\n```\n\n"
-                        f"{images_section}"
+                encoded_path = quote(output_path, safe="/")
+                if server_id:
+                    file_url = (
+                        f"{proxy_url}/api/v1/terminals/{server_id}"
+                        f"/files/read?path={encoded_path}"
                     )
+                else:
+                    file_url = f"{proxy_url}/files/read?path={encoded_path}"
 
-            # Return without image if none found
+                return (
+                    f"Execution complete (exit code: {exit_code}):\n\n"
+                    f"```\n{output}\n```\n\n"
+                    f"![Generated Plot]({file_url})"
+                )
+
+            # Return without image if output_path not found in stdout
             return f"Execution complete (exit code: {exit_code}):\n\n```\n{output}\n```"
 
     except httpx.TimeoutException:
