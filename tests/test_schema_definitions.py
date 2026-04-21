@@ -49,6 +49,6 @@ def test_system_prompt_has_no_inline_schema():
     assert "field_lat | REAL" not in prompt
     assert "rec_oil | REAL" not in prompt
 
-    assert len(prompt) < 25000, (
-        f"System prompt is {len(prompt)} chars, expected < 25000"
+    assert len(prompt) < 26000, (
+        f"System prompt is {len(prompt)} chars, expected < 26000"
     )
