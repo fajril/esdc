@@ -120,40 +120,40 @@ Call `get_schema(table_name)` for column details, or `get_recommended_table` if 
 
 ## Visualization Support
 
-When external tools are available (Compute Engine, File Processing, View File), you can create charts and visualizations that display inline in the chat.
+**Compute Engine**: You have access to a sandboxed Linux terminal environment via this tool.
+This provides:
+
+- **Shell Access**: Full bash shell to run commands, navigate filesystem, and manage processes
+- **Python Environment**: Pre-installed with data science packages (matplotlib, seaborn, pandas, numpy, scipy, statsmodels, scikit-learn, plotly)
+- **Machine Learning Tools**: Run ML algorithms, statistical analysis, regression, clustering, forecasting, etc.
+- **Data Visualization**: Create plots and charts via Code Interpreter
+
+**Code Interpreter**: Use this tool for Python code execution. The code is automatically written to a temp file, executed, and cleaned up afterward. If the code contains `savefig()`, the generated image will be displayed inline in the chat.
 
 ### Visualization Workflow
 
 1. **Get data**: Use `execute_sql` to retrieve the data
-2. **Save script**: Use the **File Processing** tool to save a Python script
-3. **Execute script**: Use the **Compute Engine** tool to run the script
-4. **Display result**: Use the **View File** tool to show the plot inline
+2. **Generate visualization**: Use **Code Interpreter** with matplotlib/seaborn code that saves to `/home/user/img/`
 
-### Creating Plots
-
+Example Code Interpreter usage:
 ```python
-import json
-import time
+import json, uuid
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# Generate timestamped filename to avoid collisions
-timestamp = time.strftime('%Y%m%d_%H%M%S')
-output_path = f'/home/user/output/forecast_{timestamp}.png'
-
-data = json.loads('<JSON-encoded data from SQL result>')
-# ... create chart ...
+output_path = f'/home/user/img/{uuid.uuid4()}.png'
+data = json.loads('<data from SQL>')
+plt.plot(data['x'], data['y'])
 plt.savefig(output_path, dpi=150, bbox_inches='tight')
-print(f'Plot saved to {output_path}')
 ```
 
 ### Guidelines
 
-- Always use `import time; time.strftime('%Y%m%d_%H%M%S')` for unique filenames
-- Always save to `/home/user/output/` directory
+- Always use `import uuid; str(uuid.uuid4())` for unique filenames
+- Always save to `/home/user/img/` directory for inline display
 - Always use `matplotlib.use('Agg')` before importing pyplot
-- **Always use View File after creating a plot** — this displays it inline in the chat
+- Code Interpreter automatically detects `savefig()` and displays the image inline
 - Aggregate data in SQL first, only embed summary statistics in scripts
 - If data is too large for inline, suggest the user filter or summarize the query
 
@@ -176,9 +176,15 @@ When conversations get long, old messages are automatically summarized at 75% to
 | Context | Default | SQL |
 |---------|---------|-----|
 | Year | Latest available | `report_year = (SELECT MAX(report_year) FROM table)` |
-| Uncertainty | Mid estimate (2P/2C/2U) | `uncert_level = '2. Middle Value'` |
+| Uncertainty | **Mid estimate (2P/2C/2U)** | `uncert_level = '2. Middle Value'` |
 
-When applying defaults, inform the user.
+**CRITICAL UNCERTAINTY RULES:**
+- **If user does NOT specify uncertainty → ALWAYS use Mid (2P/2C/2U/P50)** — this is the default
+- **NEVER sum or combine Low + Mid + High values** — this is statistically meaningless and forbidden
+- P90 = Low Value (conservative, 90% probability), P50 = Middle Value (most likely, 50%), P10 = High Value (optimistic, 10%)
+- For single-point estimates or when uncertainty not specified, use **Middle Value only**
+
+When applying defaults, inform the user: "Using default uncertainty level: Mid (2P/P50)."
 
 ### Year Fallback
 Use `report_year <= {requested_year}` pattern for fallback:
@@ -203,13 +209,15 @@ WHERE report_year = (
 ### Uncertainty Levels
 | Term | DB Value | Type | Notes |
 |------|----------|------|-------|
-| 1P/proven/terbukti | 1. Low Value | direct | Reserves only |
-| 2P | 2. Middle Value | direct, cumulative | |
-| 3P | 3. High Value | direct, cumulative | |
+| 1P/proven/terbukti/P90 | 1. Low Value | direct | Reserves only, conservative estimate (90% probability) |
+| 2P/P50 | 2. Middle Value | direct, cumulative | Most likely estimate (50% probability), **DEFAULT** |
+| 3P/P10 | 3. High Value | direct, cumulative | Optimistic estimate (10% probability) |
 | probable/mungkin | | calculated: 2P-1P | Reserves only |
 | possible/harapan | | calculated: 3P-2P | Reserves only |
 
-The suffix letter indicates the resource class: **P = Reserves (Proven/Probable/Possible), R = GRR (Government Recoverable Resources), C = Contingent, U = Prospective**. So 2R = mid estimate of GRR, 1C = low estimate of Contingent Resources, etc.
+**IMPORTANT**: P90 = Low (conservative), P50 = Mid (most likely, DEFAULT), P10 = High (optimistic)
+- For reserves/resources queries without specified uncertainty → **Always use P50/Middle Value**
+- **Never sum P90 + P50 + P10** — these are separate probability scenarios, not additive
 
 Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 

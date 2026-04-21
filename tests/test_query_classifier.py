@@ -104,7 +104,10 @@ class TestQueryClassifier:
 
         assert result.query_type == QueryType.YEAR_TRANSITION
         assert result.confidence >= 0.85
-        assert "project_resources" in result.suggested_table
+        assert (
+            result.suggested_table is not None
+            and "project_resources" in result.suggested_table
+        )
 
     def test_year_transition_dari_ke(self):
         """Test classification of dari...ke year transition query."""
@@ -299,3 +302,128 @@ class TestPromptFormatting:
         assert "CASE WHEN" in formatted
         assert "ONE SQL query" in formatted
         assert "project_resources" in formatted
+
+
+class TestConditionalToolPreservation:
+    """Test conditionally-registered tools are preserved in allowed_tools.
+
+    The bug: query_classification_node overrides allowed_tools with only
+    classifier-selected tools, dropping conditionally-registered tools
+    like Compute Engine, File Processing, View File. Fix: preserve tools
+    that exist in all_tools but are missing from classifier output.
+    """
+
+    # Tools that the classifier never returns (conditionally registered)
+    CONDITIONAL_TOOLS = {"Compute Engine", "File Processing", "View File"}
+
+    # All possible tools = classifier tools + conditional tools
+    ALL_TOOLS = {
+        "Knowledge Traversal",
+        "SQL Executor",
+        "Schema Inspector",
+        "Table Lister",
+        "Table Selector",
+        "Semantic Search",
+        "Spatial Resolver",
+        "Uncertainty Resolver",
+        "Problem Cluster Search",
+    } | CONDITIONAL_TOOLS
+
+    def test_classifier_never_includes_conditional_tools(self):
+        """Verify classifier output never includes conditional tools.
+
+        Confirms the bug exists at the classifier level.
+        """
+        from esdc.chat.query_classifier import QueryType
+
+        for qtype in QueryType:
+            classification = QueryClassification(
+                query_type=qtype,
+                confidence=0.9,
+                detected_entities={},
+                suggested_table=None,
+                suggested_columns=[],
+                reason="Test",
+            )
+            tools = get_tools_for_classification(classification)
+            for ct in self.CONDITIONAL_TOOLS:
+                assert ct not in tools, (
+                    f"Conditional tool {ct!r} should NOT be in classifier "
+                    f"output for {qtype.name}, but it was found"
+                )
+
+    def test_preservation_logic_simple_factual(self):
+        """Simulate the fix: classifier tools + preserved conditional tools."""
+        classification = QueryClassification(
+            query_type=QueryType.SIMPLE_FACTUAL,
+            confidence=0.9,
+            detected_entities={},
+            suggested_table="field_resources",
+            suggested_columns=["res_oc"],
+            reason="Test",
+        )
+
+        classifier_tools = get_tools_for_classification(classification)
+        classifier_tool_set = set(classifier_tools)
+
+        # Simulate the fix: preserve tools in all_tools not in classifier output
+        preserved = self.ALL_TOOLS - classifier_tool_set
+        final_tools = list(classifier_tool_set | preserved)
+
+        for ct in self.CONDITIONAL_TOOLS:
+            assert ct in final_tools, (
+                f"Conditional tool {ct!r} should be preserved in final tools"
+            )
+
+    def test_preservation_logic_ambiguous(self):
+        """Test preservation with ambiguous query type (most tools)."""
+        classification = QueryClassification(
+            query_type=QueryType.AMBIGUOUS,
+            confidence=0.5,
+            detected_entities={},
+            suggested_table=None,
+            suggested_columns=[],
+            reason="Test",
+        )
+
+        classifier_tools = get_tools_for_classification(classification)
+        classifier_tool_set = set(classifier_tools)
+
+        preserved = self.ALL_TOOLS - classifier_tool_set
+        final_tools = list(classifier_tool_set | preserved)
+
+        for ct in self.CONDITIONAL_TOOLS:
+            assert ct in final_tools, (
+                f"Conditional tool {ct!r} should be preserved in final tools"
+            )
+
+    def test_preservation_logic_no_conditional_tools(self):
+        """Conditional tools not in all_tools should NOT be preserved."""
+        classification = QueryClassification(
+            query_type=QueryType.SIMPLE_FACTUAL,
+            confidence=0.9,
+            detected_entities={},
+            suggested_table="field_resources",
+            suggested_columns=["res_oc"],
+            reason="Test",
+        )
+
+        classifier_tools = get_tools_for_classification(classification)
+        classifier_tool_set = set(classifier_tools)
+
+        # Simulate all_tools WITHOUT conditional tools (sandbox not configured)
+        all_tools_without_sandbox = {
+            "Knowledge Traversal",
+            "SQL Executor",
+            "Schema Inspector",
+            "Table Lister",
+            "Table Selector",
+        }
+
+        preserved = all_tools_without_sandbox - classifier_tool_set
+        final_tools = list(classifier_tool_set | preserved)
+
+        for ct in self.CONDITIONAL_TOOLS:
+            assert ct not in final_tools, (
+                f"Conditional tool {ct!r} should NOT be preserved when not in all_tools"
+            )

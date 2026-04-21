@@ -696,6 +696,23 @@ def create_agent(
             strategy_text = format_classification_for_prompt(classification)
             allowed_tools = get_tools_for_classification(classification)
 
+            # Preserve conditionally-registered tools (e.g. OpenTerminal
+            # Compute Engine, File Processing, View File) that exist in
+            # all_tools but are not returned by the classifier. Without
+            # this, query_classification_node would override allowed_tools
+            # with only classifier-selected tools, dropping any tools that
+            # were added by create_agent conditionally (like sandbox tools),
+            # making the LLM unable to call them.
+            classifier_tool_set = set(allowed_tools)
+            preserved = set(all_tools.keys()) - classifier_tool_set
+            if preserved:
+                logger.debug(
+                    "[CLASSIFICATION] Preserving conditionally-registered "
+                    "tools not in classifier output: %s",
+                    sorted(preserved),
+                )
+                allowed_tools = list(classifier_tool_set | preserved)
+
             strategy_msg = SystemMessage(content=strategy_text)
             logger.info(
                 "query_classification: type=%s confidence=%.2f tools=%s query='%s...'",
