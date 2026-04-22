@@ -24,6 +24,7 @@ logger = logging.getLogger("esdc.phoenix.run_evals")
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the eval runner."""
     parser = argparse.ArgumentParser(
         description="Run Phoenix evaluations on ESDC traces"
     )
@@ -56,6 +57,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def fetch_spans_from_phoenix(project: str, endpoint: str) -> pd.DataFrame:
+    """Fetch LLM spans from a Phoenix server."""
     from phoenix.client import Client
     from phoenix.client.types.spans import SpanQuery
 
@@ -69,12 +71,14 @@ def fetch_spans_from_phoenix(project: str, endpoint: str) -> pd.DataFrame:
 
 
 def load_spans_from_file(path: str) -> pd.DataFrame:
+    """Load spans from a CSV or Parquet file."""
     df = pd.read_parquet(path) if path.endswith(".parquet") else pd.read_csv(path)
     logger.info("Loaded %d spans from %s", len(df), path)
     return df
 
 
 def main() -> None:
+    """Entry point for the eval runner CLI."""
     args = parse_args()
     evaluators = [e.strip() for e in args.evaluators.split(",")]
 

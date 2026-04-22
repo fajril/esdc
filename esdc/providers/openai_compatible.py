@@ -7,6 +7,8 @@ from esdc.providers.base import Provider, ProviderConfig
 
 
 class OpenAICompatibleProvider(Provider):
+    """Provider for OpenAI-compatible API servers."""
+
     NAME = "OpenAI-Compatible"
 
     @classmethod
@@ -53,6 +55,7 @@ class OpenAICompatibleProvider(Provider):
             temperature: Sampling temperature
             reasoning_effort: Reasoning effort level passed as extra_body
                 parameter. Supported by some OpenAI-compatible backends.
+            **kwargs: Additional keyword arguments passed to ChatOpenAI.
         """
         if not model:
             raise ValueError("model is required for OpenAI-Compatible provider")

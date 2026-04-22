@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import pandas as pd
-    from phoenix.evals import LLM as PhoenixLLM
+    from phoenix.evals import LLM as PhoenixLLM  # noqa: N811
     from phoenix.evals.metrics import (
         ToolInvocationEvaluator,
         ToolResponseHandlingEvaluator,
@@ -100,6 +100,7 @@ def _create_judge_llm() -> PhoenixLLM:
 def get_tool_selection_evaluator(
     temperature: float = 0.0,
 ) -> ToolSelectionEvaluator:
+    """Return a tool selection evaluator using the judge LLM."""
     from phoenix.evals.metrics import ToolSelectionEvaluator
 
     return ToolSelectionEvaluator(llm=_create_judge_llm(), temperature=temperature)
@@ -108,6 +109,7 @@ def get_tool_selection_evaluator(
 def get_tool_invocation_evaluator(
     temperature: float = 0.0,
 ) -> ToolInvocationEvaluator:
+    """Return a tool invocation evaluator using the judge LLM."""
     from phoenix.evals.metrics import ToolInvocationEvaluator
 
     return ToolInvocationEvaluator(llm=_create_judge_llm(), temperature=temperature)
@@ -116,6 +118,7 @@ def get_tool_invocation_evaluator(
 def get_tool_response_handling_evaluator(
     temperature: float = 0.0,
 ) -> ToolResponseHandlingEvaluator:
+    """Return a tool response handling evaluator using the judge LLM."""
     from phoenix.evals.metrics import ToolResponseHandlingEvaluator
 
     return ToolResponseHandlingEvaluator(
@@ -128,6 +131,7 @@ def run_evaluations(
     evaluators: list[str] | None = None,
     project_name: str | None = None,
 ) -> dict[str, pd.DataFrame]:
+    """Run selected evaluators against a spans DataFrame."""
     from phoenix.evals import evaluate_dataframe
     from phoenix.trace import suppress_tracing
 
@@ -178,5 +182,6 @@ def run_evaluations(
 
 
 def reset_judge_llm() -> None:
+    """Reset the cached judge LLM instance."""
     global _judge_llm
     _judge_llm = None

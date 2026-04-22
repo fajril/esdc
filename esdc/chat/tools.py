@@ -924,8 +924,7 @@ def search_problem_cluster(
         "cluster code (e.g., '1.1.1', '2.2'), or keyword from the problem description.",
     ],
 ) -> str:
-    """Search for problem cluster definitions when user
-    asks about project issues or specific cluster terms.
+    """Search for problem cluster definitions when user asks about project issues.
 
     CRITICAL: Use this tool when user asks about:
     - Problem cluster definitions (e.g., "apa arti subsurface uncertainty?")

@@ -289,7 +289,8 @@ async def run_python(
         (
             "Python code to execute. Visible in OpenWebUI tool panel. "
             "For visualizations, use the pre-defined `output_image_path` variable. "
-            "For database queries, use the pre-defined `DB_PATH` variable (DuckDB at /home/user/esdc.db). "
+            "For database queries, use the pre-defined `DB_PATH` variable "
+            "(DuckDB at /home/user/esdc.db). "
             "When this tool returns image markdown, copy it into your final response."
         ),
     ],

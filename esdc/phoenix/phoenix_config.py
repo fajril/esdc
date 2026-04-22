@@ -6,12 +6,15 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PhoenixConfig:
+    """Configuration for Arize Phoenix observability integration."""
+
     enabled: bool
     collector_endpoint: str
     project_name: str
 
     @classmethod
     def from_config(cls) -> PhoenixConfig:
+        """Create PhoenixConfig from the saved config file."""
         from esdc.configs import Config
 
         cfg = Config.get_phoenix_config()
@@ -23,6 +26,7 @@ class PhoenixConfig:
 
     @classmethod
     def from_env(cls) -> PhoenixConfig:
+        """Create PhoenixConfig from environment variables."""
         enabled = os.environ.get("PHOENIX_ENABLED", "").lower() in ("true", "1", "yes")
         collector_endpoint = os.environ.get(
             "PHOENIX_COLLECTOR_ENDPOINT",

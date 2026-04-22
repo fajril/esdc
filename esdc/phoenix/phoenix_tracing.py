@@ -12,6 +12,7 @@ _tracer_provider = None
 
 
 def setup_phoenix_tracing() -> bool:
+    """Initialize Phoenix OpenTelemetry tracing for LangChain."""
     global _initialized, _tracer_provider
 
     config = PhoenixConfig.from_config()

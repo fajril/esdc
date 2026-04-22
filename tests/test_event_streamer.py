@@ -14,13 +14,15 @@ class AsyncEventIterator:
         self._events = iter(events)
 
     def __aiter__(self):
+        """Return self as the async iterator."""
         return self
 
     async def __anext__(self):
+        """Return next item or raise StopAsyncIteration."""
         try:
             return next(self._events)
         except StopIteration:
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
 
 def make_chunk(content, reasoning_content=None):
@@ -92,7 +94,7 @@ class TestAstreamAgentEvents:
 
     @pytest.mark.asyncio
     async def test_message_complete_content_is_unfiltered(self):
-        """Test that message_complete content is NOT SQL-filtered (streamer is passthrough)."""
+        """Test message_complete content NOT SQL-filtered (streamer passthrough)."""
         from langchain_core.messages import AIMessage
 
         content = "Here:\n```sql\nSELECT 1;\n```\nDone."
@@ -195,7 +197,7 @@ class TestAstreamAgentEvents:
 
     @pytest.mark.asyncio
     async def test_tool_result_without_pending_call(self):
-        """Test that tool_result with no pending tool_call gets empty call_id + warning."""
+        """Test that tool_result with no pending tool_call gets empty call_id + warning."""  # noqa: E501
         events = [
             {
                 "event": "on_tool_end",
@@ -408,7 +410,7 @@ class TestAstreamAgentEvents:
 
         async def _raise_value_error(*args, **kwargs):
             raise ValueError("test error")
-            yield  # noqa: unreachable — makes this an async generator
+            yield  # noqa: B012 — makes this an async generator
 
         mock_agent = MagicMock()
         mock_agent.astream_events = _raise_value_error
@@ -438,7 +440,12 @@ class TestImageMarkdownFallback:
             {
                 "event": "on_tool_end",
                 "data": {
-                    "output": "Execution complete (exit code: 0):\n\n```\nPlot saved to: /home/user/img/test.png\n```\n\n![Generated Plot](http://localhost:3000/api/v1/terminals/server1/files/read?path=/home/user/img/test.png)"  # noqa: E501
+                    "output": (
+                        "Execution complete (exit code: 0):\n\n```\n"
+                        "Plot saved to: /home/user/img/test.png\n```\n\n"
+                        "![Generated Plot](http://localhost:3000/api/v1/terminals/"
+                        "server1/files/read?path=/home/user/img/test.png)"
+                    )
                 },
                 "name": "Code Interpreter",
             },
@@ -460,10 +467,11 @@ class TestImageMarkdownFallback:
         assert len(msg_events) == 1
         # Image markdown should be appended
         assert "![Generated Plot]" in msg_events[0]["ai_message"].content
-        assert (
-            "http://localhost:3000/api/v1/terminals/server1/files/read?path=/home/user/img/test.png"
-            in msg_events[0]["ai_message"].content
-        )  # noqa: E501
+        img_url = (
+            "http://localhost:3000/api/v1/terminals/server1/files/read?path="
+            "/home/user/img/test.png"
+        )
+        assert img_url in msg_events[0]["ai_message"].content
 
     @pytest.mark.asyncio
     async def test_image_not_duplicated_when_already_present(self):
@@ -471,16 +479,18 @@ class TestImageMarkdownFallback:
         from langchain_core.messages import AIMessage
 
         # LLM already includes the image
+        img_url = (
+            "http://localhost:3000/api/v1/terminals/server1/files/read?path="
+            "/home/user/img/test.png"
+        )
         ai_message_final = AIMessage(
-            content="Here is the plot:\n\n![Generated Plot](http://localhost:3000/api/v1/terminals/server1/files/read?path=/home/user/img/test.png)"  # noqa: E501
+            content=f"Here is the plot:\n\n![Generated Plot]({img_url})"
         )
 
         events = [
             {
                 "event": "on_tool_end",
-                "data": {
-                    "output": "![Generated Plot](http://localhost:3000/api/v1/terminals/server1/files/read?path=/home/user/img/test.png)"  # noqa: E501
-                },
+                "data": {"output": f"![Generated Plot]({img_url})"},
                 "name": "Code Interpreter",
             },
             {

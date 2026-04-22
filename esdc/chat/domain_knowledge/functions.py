@@ -672,9 +672,7 @@ def get_resources_columns(
     volume_type: str = "reserves",
     substance: str = "oc",
 ) -> dict[str, Any]:
-    """
-    Get the correct column names for static resource tables.
-    """
+    """Get the correct column names for static resource tables."""
     valid_volume_types = [
         "reserves",
         "resources",

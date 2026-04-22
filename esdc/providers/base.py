@@ -13,6 +13,8 @@ DEFAULT_CONTEXT_LENGTH = 4096
 
 @dataclass
 class ProviderConfig:
+    """Data class holding provider connection configuration."""
+
     name: str
     provider_type: ProviderType
     model: str = ""
@@ -24,6 +26,8 @@ class ProviderConfig:
 
 
 class Provider(ABC):
+    """Abstract base class for LLM provider implementations."""
+
     NAME: str = ""
     DEFAULT_MODEL: str = ""
     CONTEXT_LENGTHS: dict[str, int] = {}

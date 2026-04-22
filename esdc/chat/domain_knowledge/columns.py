@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 @dataclass
 class ColumnMetadata:
+    """Metadata descriptor for a database column."""
+
     column_name: str
     description: str
     units: str | None = None

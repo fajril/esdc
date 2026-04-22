@@ -152,9 +152,9 @@ class TestWithKeepalive:
     async def test_empty_stream(self):
         """Empty stream completes without error."""
 
-    async def empty():
-        return
-        yield
+        async def empty():
+            return
+            yield
 
         request = FakeRequest()
         results = []
