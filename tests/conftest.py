@@ -57,7 +57,7 @@ def isolated_config(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_esdc_api():
-    """Factory to add mock ESDC API responses.
+    r"""Factory to add mock ESDC API responses.
 
     Usage:
         mock = mock_esdc_api()

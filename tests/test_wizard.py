@@ -113,8 +113,7 @@ class TestOpenAISetupScreen:
                         return auth_select
                     return MagicMock()
 
-                # type: ignore[assignment]
-                screen.query_one = query_one
+                screen.query_one = query_one  # type: ignore[assignment]
 
                 button = MagicMock()
                 button.id = "connect"

@@ -59,6 +59,7 @@ class TestSetConfigValue:
             Config.set_config_value("logging.level", "DEBUG")
             Config._config_cache = None
             config = Config._load_config()
+            assert config is not None
             assert config["logging"]["level"] == "DEBUG"
 
     def test_set_boolean_key(self, tmp_path):
@@ -70,6 +71,7 @@ class TestSetConfigValue:
             Config.set_config_value("api.verify_ssl", "false")
             Config._config_cache = None
             config = Config._load_config()
+            assert config is not None
             assert config["api"]["verify_ssl"] is False
 
     def test_set_int_key(self, tmp_path):
@@ -81,6 +83,7 @@ class TestSetConfigValue:
             Config.set_config_value("cache.sql_ttl", "300")
             Config._config_cache = None
             config = Config._load_config()
+            assert config is not None
             assert config["cache"]["sql_ttl"] == 300
 
     def test_creates_nested_structure(self, tmp_path):
@@ -92,6 +95,7 @@ class TestSetConfigValue:
             Config.set_config_value("logging.level", "WARNING")
             Config._config_cache = None
             config = Config._load_config()
+            assert config is not None
             assert config["logging"]["level"] == "WARNING"
 
 

@@ -246,10 +246,10 @@ async def execute_sql(
     ],
     db_path: Annotated[str | None, "Optional path to the database file."] = None,
 ) -> str:
-    """Execute a SQL query against the ESDC database
-    and return results as a formatted table.
+    """Execute a SQL query against the ESDC database.
 
-    Use this tool when the user wants to query data from the database.
+    Returns results as a formatted table. Use this tool when the user wants
+    to query data from the database.
     Only SELECT queries are allowed for safety.
 
     This is an async tool that runs the query in a thread pool to avoid blocking
