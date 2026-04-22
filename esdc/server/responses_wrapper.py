@@ -53,6 +53,7 @@ from esdc.server.responses_events import (
     create_response_completed_event,
     create_response_created_event,
     create_response_failed_event,
+    create_response_incomplete_event,
     format_sse_event,
 )
 from esdc.server.responses_models import ResponseInputItem
@@ -68,6 +69,30 @@ from esdc.server.title_detection import (
 )
 
 logger = logging.getLogger("esdc.server.responses")
+
+# Tool source metadata mapping for OpenWebUI citation rendering
+_TOOL_SOURCE_MAP: dict[str, dict[str, str]] = {
+    "execute_sql": {"resource_type": "sql_query", "resource_id": "project_resources"},
+    "execute_cypher": {"resource_type": "cypher_query", "resource_id": "knowledge_graph"},
+    "semantic_search": {"resource_type": "semantic_search", "resource_id": "project_embeddings"},
+    "get_schema": {"resource_type": "schema_lookup", "resource_id": "project_resources"},
+    "list_tables": {"resource_type": "schema_lookup", "resource_id": "project_resources"},
+    "get_recommended_table": {"resource_type": "schema_lookup", "resource_id": "project_resources"},
+    "resolve_spatial": {"resource_type": "spatial_query", "resource_id": "spatial_index"},
+    "resolve_uncertainty_level": {"resource_type": "domain_lookup", "resource_id": "uncertainty_levels"},
+    "search_problem_cluster": {"resource_type": "domain_lookup", "resource_id": "problem_clusters"},
+    "get_timeseries_columns": {"resource_type": "schema_lookup", "resource_id": "project_timeseries"},
+    "get_resources_columns": {"resource_type": "schema_lookup", "resource_id": "project_resources"},
+}
+
+
+def _build_source_metadata(tool_name: str) -> dict[str, str] | None:
+    """Build source context metadata for a tool result.
+
+    OpenWebUI v0.9.0 emits citation sources with resource_type and resource_id.
+    This maps our internal tool names to source metadata.
+    """
+    return _TOOL_SOURCE_MAP.get(tool_name)
 
 
 class SequenceCounter:
@@ -196,7 +221,16 @@ def convert_responses_input_to_langchain(
             if role == "user":
                 messages.append(HumanMessage(content=text))
             elif role == "assistant":
-                messages.append(AIMessage(content=text))
+                # Preserve reasoning_content from previous assistant turn
+                reasoning_content = (
+                    item.get("reasoning_content")
+                    if isinstance(item, dict)
+                    else getattr(item, "reasoning_content", None)
+                )
+                ai_msg = AIMessage(content=text)
+                if reasoning_content:
+                    ai_msg.reasoning_content = reasoning_content
+                messages.append(ai_msg)
             elif role == "system":
                 messages.append(SystemMessage(content=text))
 
@@ -223,17 +257,25 @@ def convert_responses_input_to_langchain(
 
             args = get_parsed_json(args_str)
 
+            # Preserve reasoning_content from previous assistant turn
+            reasoning_content = (
+                item.get("reasoning_content")
+                if isinstance(item, dict)
+                else getattr(item, "reasoning_content", None)
+            )
+
             logger.debug(
                 f"[convert_responses_input] Item {idx}: function_call, "
                 f"call_id={call_id}, name={name}"
             )
 
-            messages.append(
-                AIMessage(
-                    content="",
-                    tool_calls=[{"name": name, "args": args, "id": call_id}],
-                )
-            )
+            ai_msg_kwargs = {
+                "content": "",
+                "tool_calls": [{"name": name, "args": args, "id": call_id}],
+            }
+            if reasoning_content:
+                ai_msg_kwargs["reasoning_content"] = reasoning_content
+            messages.append(AIMessage(**ai_msg_kwargs))
 
         elif item_type == "function_call_output":
             # Tool result from client (for multi-turn conversations)
@@ -492,6 +534,9 @@ async def generate_responses_stream(
     output_items: list[dict[str, Any]] = []
     output_index = 0
 
+    # Collect source annotations from tool results for citations
+    collected_sources: list[dict[str, str]] = []
+
     logger.info(
         f"[RESPONSES {response_id}] START - "
         f"input_type={input_type}, messages={len(lc_messages)}"
@@ -708,6 +753,7 @@ async def generate_responses_stream(
                         content_part_done = {
                             "type": "output_text",
                             "text": accumulated_text,
+                            "annotations": collected_sources if collected_sources else [],
                         }
                         part_done_seq = seq.next()
                         yield format_sse_event(
@@ -977,6 +1023,7 @@ async def generate_responses_stream(
                     content_part_done = {
                         "type": "output_text",
                         "text": accumulated_text,
+                        "annotations": collected_sources if collected_sources else [],
                     }
                     part_done_seq = seq.next()
                     yield format_sse_event(
@@ -1140,6 +1187,12 @@ async def generate_responses_stream(
                     "output": [{"type": "input_text", "text": tool_result_content}],
                 }
 
+                # Add source metadata for OpenWebUI citation rendering
+                source = _build_source_metadata(event.get("tool_name", ""))
+                if source:
+                    function_call_output["source"] = source
+                    collected_sources.append({"type": "source_citation", **source})
+
                 # Emit item added
                 added_seq = seq.next()
                 yield format_sse_event(
@@ -1277,36 +1330,73 @@ async def generate_responses_stream(
         logger.error(
             "[RESPONSES %s] TIMEOUT after %ds", response_id, SSE_STREAM_TIMEOUT
         )
-        yield format_sse_event(
-            create_response_failed_event(
-                seq.next(),
-                response_id,
-                model,
-                {
-                    "message": f"Response timed out after {SSE_STREAM_TIMEOUT} seconds",
-                    "type": "timeout",
-                },
+        if output_items:
+            yield format_sse_event(
+                create_response_incomplete_event(
+                    seq.next(),
+                    response_id,
+                    model,
+                    output_items,
+                    {
+                        "message": f"Response timed out after {SSE_STREAM_TIMEOUT} seconds",
+                        "type": "timeout",
+                    },
+                )
             )
-        )
+        else:
+            yield format_sse_event(
+                create_response_failed_event(
+                    seq.next(),
+                    response_id,
+                    model,
+                    {
+                        "message": f"Response timed out after {SSE_STREAM_TIMEOUT} seconds",
+                        "type": "timeout",
+                    },
+                )
+            )
     except _RecursionLimitExceededError as e:
         logger.error("[RESPONSES %s] RECURSION_LIMIT: %s", response_id, str(e))
-        yield format_sse_event(
-            create_response_failed_event(
-                seq.next(),
-                response_id,
-                model,
-                {"message": str(e), "type": "recursion_limit"},
+        if output_items:
+            yield format_sse_event(
+                create_response_incomplete_event(
+                    seq.next(),
+                    response_id,
+                    model,
+                    output_items,
+                    {"message": str(e), "type": "recursion_limit"},
+                )
             )
-        )
+        else:
+            yield format_sse_event(
+                create_response_failed_event(
+                    seq.next(),
+                    response_id,
+                    model,
+                    {"message": str(e), "type": "recursion_limit"},
+                )
+            )
     except Exception as e:
         logger.exception("[RESPONSES %s] ERROR: %s", response_id, e)
-        yield format_sse_event(
-            {
-                "type": "error",
-                "sequence_number": seq.next(),
-                "error": {"message": str(e), "type": "server_error"},
-            }
-        )
+        if output_items:
+            yield format_sse_event(
+                create_response_incomplete_event(
+                    seq.next(),
+                    response_id,
+                    model,
+                    output_items,
+                    {"message": str(e), "type": "server_error"},
+                )
+            )
+        else:
+            yield format_sse_event(
+                create_response_failed_event(
+                    seq.next(),
+                    response_id,
+                    model,
+                    {"message": str(e), "type": "server_error"},
+                )
+            )
 
 
 async def generate_responses_sync(
@@ -1521,6 +1611,7 @@ async def generate_responses_sync(
     try:
         all_function_calls: list[dict[str, Any]] = []
         all_tool_results: list[dict[str, Any]] = []
+        all_sources: list[dict[str, str]] = []
         accumulated_text = ""
         accumulated_reasoning = ""
         last_message_content = ""
@@ -1567,20 +1658,23 @@ async def generate_responses_sync(
                 tool_call_id = event.get("tool_call_id", "")
                 result_text = event.get("result", "")
 
-                all_tool_results.append(
-                    {
-                        "id": generate_item_id("fco"),
-                        "type": "function_call_output",
-                        "status": "completed",
-                        "call_id": tool_call_id,
-                        "output": [
-                            {
-                                "type": "input_text",
-                                "text": result_text,
-                            }
-                        ],
-                    }
-                )
+                fco_item = {
+                    "id": generate_item_id("fco"),
+                    "type": "function_call_output",
+                    "status": "completed",
+                    "call_id": tool_call_id,
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": result_text,
+                        }
+                    ],
+                }
+                source = _build_source_metadata(tool_name)
+                if source:
+                    fco_item["source"] = source
+                    all_sources.append({"type": "source_citation", **source})
+                all_tool_results.append(fco_item)
                 logger.debug(
                     "[RESPONSES %s] SYNC tool_result:"
                     " tool=%s, call_id=%s, result_len=%d",
@@ -1668,7 +1762,7 @@ async def generate_responses_sync(
                         {
                             "type": "output_text",
                             "text": last_message_content,
-                            "annotations": [],
+                            "annotations": all_sources if all_sources else [],
                         }
                     ],
                 }
@@ -1708,6 +1802,16 @@ async def generate_responses_sync(
             str(e)[:100],
         )
         logger.exception(f"[RESPONSES {response_id}] SYNC ERROR: {e}")
+        if output_items:
+            return {
+                "id": response_id,
+                "object": "response",
+                "created_at": time.time(),
+                "model": model,
+                "status": "incomplete",
+                "output": output_items,
+                "error": {"message": str(e), "type": "server_error"},
+            }
         return create_non_streaming_response(
             response_id,
             model,
