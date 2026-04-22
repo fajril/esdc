@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-22
+
+### Added
+
+- **OpenWebUI v0.9.0 Compatibility Features**:
+  - Source context metadata in `function_call_output` items — enables OpenWebUI inline citations for tool results
+  - Incomplete status handling — emits `response.incomplete` with partial output on interrupted/timed-out responses
+  - Reasoning content preservation in multi-turn input — preserves `reasoning_content` from previous assistant turns
+  - Responses citation visibility — populates `annotations` in `output_text` content parts for source citations
+  - Hybrid search (vector + BM25 with RRF) — combines semantic similarity with keyword scoring for improved recall
+  - Richer tool result content types — JSON-serializes dict/list tool results instead of Python repr
+
+### Changed
+
+- `semantic_search` tool now uses hybrid search by default instead of pure vector similarity
+- Error handlers in Responses API now emit `incomplete` status when partial output exists
+
 ## [0.5.4] - 2026-04-17
 
 ### Added
