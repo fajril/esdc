@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added config descriptions and enums
   - Added reasoning_content detection from ChatOllama `additional_kwargs`
 
+- **OpenWebUI v0.9.0 Compatibility**:
+  - Source context metadata in `function_call_output` items — enables OpenWebUI inline citations for tool results
+  - Incomplete status handling — emits `response.incomplete` with partial output on interrupted/timed-out responses
+  - Reasoning content preservation in multi-turn input — preserves `reasoning_content` from previous assistant turns via `additional_kwargs`
+  - Responses citation visibility — populates `annotations` in `output_text` content parts for source citations
+  - Hybrid search (vector + BM25 with RRF) — combines semantic similarity with keyword scoring for improved recall
+  - Richer tool result content types — JSON-serializes dict/list tool results instead of Python repr
+
 ### Changed
 
 - Removed SQL enrichment; `project_remarks` column is now user-requested only (not auto-enriched)
