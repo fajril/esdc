@@ -53,6 +53,7 @@ class ConfigEditScreen(Screen):
     BINDINGS = [Binding("escape", "back", "Back")]
 
     def __init__(self, key: str) -> None:
+        """Initialize the config command group."""
         super().__init__()
         self.key = key
 
@@ -216,6 +217,7 @@ Button { margin: 0 1; }
 """
 
     def __init__(self, config_flat: dict | None = None) -> None:
+        """Initialize the config setup interactive wizard."""
         super().__init__()
         self.config_flat: dict = config_flat or {}
 

@@ -9,18 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **OpenWebUI v0.9.0 Compatibility Features**:
-  - Source context metadata in `function_call_output` items — enables OpenWebUI inline citations for tool results
-  - Incomplete status handling — emits `response.incomplete` with partial output on interrupted/timed-out responses
-  - Reasoning content preservation in multi-turn input — preserves `reasoning_content` from previous assistant turns
-  - Responses citation visibility — populates `annotations` in `output_text` content parts for source citations
-  - Hybrid search (vector + BM25 with RRF) — combines semantic similarity with keyword scoring for improved recall
-  - Richer tool result content types — JSON-serializes dict/list tool results instead of Python repr
+- **Arize Phoenix Observability**:
+  - Added Phoenix observability dependencies (arize-phoenix-otel, openinference-instrumentation-langchain, opentelemetry-*)
+  - Added Phoenix observability configuration module with project name "iris"
+  - Integrated Phoenix config into `configs.py` with environment variable support
+  - Added Phoenix evals with judge LLM from provider config
+  - Added eval runner for running evaluations
+
+- **Hybrid External Tool Passthrough**:
+  - Added external tool categorization module for distinguishing internal vs external tools
+  - Modified `create_agent` to accept and handle external tools
+  - Added external tool call marker detection in event streamer
+  - Handle external tool calls in Responses API streaming
+  - Added visualization instructions to system prompt for external tools
+  - Added View File tool and branded tool names for inline plot rendering
+  - Added integration tests for hybrid tool passthrough flow
+
+- **Code Interpreter Enhancements**:
+  - Persist Code Interpreter images via OpenWebUI file upload
+  - Detect images from stdout and directory scan (not just inline savefig)
+  - Auto-append image markdown when LLM omits it from final response
+
+- **System Prompt & Domain Knowledge**:
+  - Added MSTB↔BSCF (BOE) unit conversions to system prompt
+  - Added reasoning_effort parameter to enable thinking mode from OpenWebUI
+  - Added database access via `DB_PATH` environment variable
+  - Clarified uncertainty rules for all volume types
+  - Updated prompt length limit from 25000 to 26000 for expanded uncertainty rules
+
+- **Config System**:
+  - Added config descriptions and enums
+  - Added reasoning_content detection from ChatOllama `additional_kwargs`
 
 ### Changed
 
-- `semantic_search` tool now uses hybrid search by default instead of pure vector similarity
-- Error handlers in Responses API now emit `incomplete` status when partial output exists
+- Removed SQL enrichment; `project_remarks` column is now user-requested only (not auto-enriched)
+- Tool execution details hidden from Chat Completions API responses
+- Switched Responses API streaming from `agent.astream()` to `agent.astream_events()` for real token-level streaming
+
+### Fixed
+
+- **Streaming**: Repaired async generator destruction in SSE keepalive; added stream timeout (120s→300s); ported to real streaming
+- **Streaming**: Resolved streaming bugs — tool_call_id, text mismatch, timeout, usage tracking
+- **Agent**: Raise recursion limit from 25 to 100 for complex multi-step queries
+- **Agent**: Increase MAX_TOOL_CALLS to 12 and force synthesis on limit hit
+- **Agent**: Inject paragraph break between LLM turns with tool calls
+- **Agent**: Enforce `cprd_*` columns always from `*_resources` tables; add title/tag generation bypass
+- **Phoenix**: Use `BatchSpanProcessor` + `set_global_tracer_provider=False` for production stability
+- **Windows**: Resolve `UnicodeEncodeError` on Windows consoles that use cp1252
+- **HNSW**: Fix HNSW checkpoint crash on config load
 
 ## [0.5.4] - 2026-04-17
 

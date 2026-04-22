@@ -94,26 +94,32 @@ class TestFetchCommand:
 
     def test_fetch_requires_credentials(self):
         """Test fetch prompts for credentials when not in env."""
-        with patch.dict(os.environ, {}, clear=True):
-            with patch("esdc.esdc.Config.get_credentials") as mock_creds:
-                mock_creds.return_value = ("user", "pass")
-                with patch("esdc.esdc.load_esdc_data"):
-                    result = runner.invoke(app, ["fetch", "--filetype", "json"])
-                    assert result.exit_code == 0
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("esdc.esdc.Config.get_credentials") as mock_creds,
+            patch("esdc.esdc.load_esdc_data"),
+        ):
+            mock_creds.return_value = ("user", "pass")
+            result = runner.invoke(app, ["fetch", "--filetype", "json"])
+            assert result.exit_code == 0
 
     def test_fetch_with_csv(self):
         """Test fetch with csv filetype."""
-        with patch.dict(os.environ, {"ESDC_USER": "test", "ESDC_PASS": "test"}):
-            with patch("esdc.esdc.load_esdc_data"):
-                result = runner.invoke(app, ["fetch", "--filetype", "csv"])
-                assert result.exit_code == 0
+        with (
+            patch.dict(os.environ, {"ESDC_USER": "test", "ESDC_PASS": "test"}),
+            patch("esdc.esdc.load_esdc_data"),
+        ):
+            result = runner.invoke(app, ["fetch", "--filetype", "csv"])
+            assert result.exit_code == 0
 
     def test_fetch_with_invalid_filetype(self):
         """Test fetch with invalid filetype."""
-        with patch.dict(os.environ, {"ESDC_USER": "test", "ESDC_PASS": "test"}):
-            with patch("esdc.esdc.load_esdc_data"):
-                result = runner.invoke(app, ["fetch", "--filetype", "invalid"])
-                assert result.exit_code == 0
+        with (
+            patch.dict(os.environ, {"ESDC_USER": "test", "ESDC_PASS": "test"}),
+            patch("esdc.esdc.load_esdc_data"),
+        ):
+            result = runner.invoke(app, ["fetch", "--filetype", "invalid"])
+            assert result.exit_code == 0
 
 
 class TestReloadCommand:

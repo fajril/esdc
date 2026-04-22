@@ -1,0 +1,109 @@
+import os
+from unittest.mock import patch
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def clean_env():
+    phoenix_keys = [
+        "PHOENIX_ENABLED",
+        "PHOENIX_COLLECTOR_ENDPOINT",
+        "PHOENIX_PROJECT_NAME",
+    ]
+    old = {k: os.environ.get(k) for k in phoenix_keys}
+    for k in phoenix_keys:
+        os.environ.pop(k, None)
+    yield
+    for k, v in old.items():
+        if v is not None:
+            os.environ[k] = v
+        else:
+            os.environ.pop(k, None)
+
+
+def test_phoenix_config_defaults():
+    from esdc.phoenix.phoenix_config import PhoenixConfig
+
+    config = PhoenixConfig.from_env()
+    assert config.enabled is False
+    assert config.collector_endpoint == "http://localhost:4317"
+    assert config.project_name == "iris"
+
+
+def test_phoenix_config_enabled_via_env():
+    os.environ["PHOENIX_ENABLED"] = "true"
+    from esdc.phoenix.phoenix_config import PhoenixConfig
+
+    config = PhoenixConfig.from_env()
+    assert config.enabled is True
+
+
+def test_phoenix_config_custom_endpoint():
+    os.environ["PHOENIX_ENABLED"] = "true"
+    os.environ["PHOENIX_COLLECTOR_ENDPOINT"] = "http://phoenix:4317"
+    os.environ["PHOENIX_PROJECT_NAME"] = "iris-prod"
+    from esdc.phoenix.phoenix_config import PhoenixConfig
+
+    config = PhoenixConfig.from_env()
+    assert config.collector_endpoint == "http://phoenix:4317"
+    assert config.project_name == "iris-prod"
+
+
+class TestFromConfig:
+    def test_from_config_defaults(self):
+        with patch("esdc.configs.Config._load_config") as mock_load:
+            mock_load.return_value = {}
+            from esdc.phoenix.phoenix_config import PhoenixConfig
+
+            config = PhoenixConfig.from_config()
+            assert config.enabled is False
+            assert config.collector_endpoint == "http://localhost:4317"
+            assert config.project_name == "iris"
+
+    def test_from_config_yaml_values(self):
+        with patch("esdc.configs.Config._load_config") as mock_load:
+            mock_load.return_value = {
+                "phoenix": {
+                    "enabled": True,
+                    "collector_endpoint": "http://phoenix:4317",
+                    "project_name": "iris-staging",
+                },
+            }
+            from esdc.phoenix.phoenix_config import PhoenixConfig
+
+            config = PhoenixConfig.from_config()
+            assert config.enabled is True
+            assert config.collector_endpoint == "http://phoenix:4317"
+            assert config.project_name == "iris-staging"
+
+    def test_from_config_env_overrides_yaml(self):
+        os.environ["PHOENIX_ENABLED"] = "false"
+        os.environ["PHOENIX_PROJECT_NAME"] = "iris-from-env"
+        with patch("esdc.configs.Config._load_config") as mock_load:
+            mock_load.return_value = {
+                "phoenix": {
+                    "enabled": True,
+                    "collector_endpoint": "http://yaml:4317",
+                    "project_name": "iris-from-yaml",
+                },
+            }
+            from esdc.phoenix.phoenix_config import PhoenixConfig
+
+            config = PhoenixConfig.from_config()
+            assert config.enabled is False
+            assert config.project_name == "iris-from-env"
+
+    def test_from_config_partial_yaml(self):
+        with patch("esdc.configs.Config._load_config") as mock_load:
+            mock_load.return_value = {
+                "phoenix": {
+                    "enabled": True,
+                },
+            }
+            from esdc.phoenix.phoenix_config import PhoenixConfig
+
+            config = PhoenixConfig.from_config()
+            assert config.enabled is True
+            assert config.collector_endpoint == "http://localhost:4317"
+            assert config.project_name == "iris"

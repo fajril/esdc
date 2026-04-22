@@ -108,7 +108,7 @@ class TestOpenAISetupScreen:
                 auth_select = MagicMock()
                 auth_select.value = "oauth"
 
-                def query_one(selector, cls=None):
+                def query_one(selector, cls=None):  # noqa: SIM116
                     if selector == "#auth-method":
                         return auth_select
                     return MagicMock()
@@ -137,16 +137,16 @@ class TestOpenAISetupScreen:
             api_key_input.value = ""
             status = MagicMock()
 
-            def query_one(selector, cls=None):
-                if selector == "#auth-method":
+            def query_one(selector, cls=None):  # pyright: ignore [reportUnusedParameter]
+                if selector == "#auth-method":  # noqa: SIM116
                     return auth_select
-                elif selector == "#api-key":
+                elif selector == "#api-key":  # noqa: SIM116
                     return api_key_input
-                elif selector == "#status":
+                elif selector == "#status":  # noqa: SIM116
                     return status
                 return MagicMock()
 
-            screen.query_one = query_one  # type: ignore[assignment]
+            screen.query_one = query_one  # type: ignore[assignment]  # noqa: SIM116
 
             button = MagicMock()
             button.id = "connect"
@@ -175,16 +175,16 @@ class TestOpenAICompatibleSetupScreen:
             model_input.value = "test-model"
             status = MagicMock()
 
-            def query_one(selector, cls=None):
-                if selector == "#base-url":
+            def query_one(selector, cls=None):  # pyright: ignore [reportUnusedParameter]
+                if selector == "#base-url":  # noqa: SIM116
                     return base_url_input
-                elif selector == "#model-name":
+                elif selector == "#model-name":  # noqa: SIM116
                     return model_input
-                elif selector == "#status":
+                elif selector == "#status":  # noqa: SIM116
                     return status
                 return MagicMock()
 
-            screen.query_one = query_one  # type: ignore[assignment]
+            screen.query_one = query_one  # type: ignore[assignment]  # noqa: SIM116
 
             button = MagicMock()
             button.id = "save"
@@ -209,16 +209,16 @@ class TestOpenAICompatibleSetupScreen:
             model_input.value = ""
             status = MagicMock()
 
-            def query_one(selector, cls=None):
-                if selector == "#base-url":
+            def query_one(selector, cls=None):  # pyright: ignore [reportUnusedParameter]
+                if selector == "#base-url":  # noqa: SIM116
                     return base_url_input
-                elif selector == "#model-name":
+                elif selector == "#model-name":  # noqa: SIM116
                     return model_input
-                elif selector == "#status":
+                elif selector == "#status":  # noqa: SIM116
                     return status
                 return MagicMock()
 
-            screen.query_one = query_one  # type: ignore[assignment]
+            screen.query_one = query_one  # type: ignore[assignment]  # noqa: SIM116
 
             button = MagicMock()
             button.id = "save"

@@ -7,10 +7,10 @@ import pytest
 from esdc.chat.openterminal import (
     _DEFAULT_PACKAGES,
     _build_file_url,
+    _upload_image_to_openwebui,
     get_openterminal_tools,
     run_command,
-    view_file,
-    write_file,
+    run_python,
 )
 
 
@@ -23,8 +23,8 @@ class TestGetOpenterminalTools:
             result = get_openterminal_tools()
             assert result is None
 
-    def test_returns_tools_when_configured_without_openwebui(self):
-        """Should return Compute Engine and File Processing when no openwebui config."""
+    def test_returns_tools_when_configured(self):
+        """Should return Compute Engine and Code Interpreter when configured."""
         mock_config = {
             "url": "http://open-terminal:8000",
             "api_key": "test-key",
@@ -44,37 +44,7 @@ class TestGetOpenterminalTools:
             assert result is not None
             assert len(result) == 2
             tool_names = {t.name for t in result}
-            assert tool_names == {"Compute Engine", "File Processing"}
-
-    def test_returns_three_tools_with_openwebui(self):
-        """Should include View File when openwebui config is set."""
-        mock_ot_config = {
-            "url": "http://open-terminal:8000",
-            "api_key": "test-key",
-            "packages": "matplotlib, seaborn, pandas",
-            "timeout": 120,
-            "write_timeout": 30,
-        }
-        mock_ow_config = {
-            "url": "http://localhost:3000",
-            "terminal_server_id": "openterminal",
-        }
-        with (
-            patch(
-                "esdc.configs.Config.get_openterminal_config",
-                return_value=mock_ot_config,
-            ),
-            patch(
-                "esdc.configs.Config.get_openwebui_config",
-                return_value=mock_ow_config,
-            ),
-        ):
-            result = get_openterminal_tools()
-
-            assert result is not None
-            assert len(result) == 3
-            tool_names = {t.name for t in result}
-            assert tool_names == {"Compute Engine", "File Processing", "View File"}
+            assert tool_names == {"Compute Engine", "Code Interpreter"}
 
     def test_updates_run_command_description_with_packages(self):
         """run_command description should include the configured packages."""
@@ -125,8 +95,7 @@ class TestGetOpenterminalTools:
     def test_tool_display_names(self):
         """Tools should have branded display names."""
         assert run_command.name == "Compute Engine"
-        assert write_file.name == "File Processing"
-        assert view_file.name == "View File"
+        assert run_python.name == "Code Interpreter"
 
 
 class TestRunCommandTool:
@@ -146,13 +115,20 @@ class TestRunCommandTool:
             yield
 
     @pytest.mark.asyncio
-    async def test_successful_command(self):
-        """Should return output on successful command."""
+    async def test_successful_command_v2_sync(self):
+        """Should return output on successful command (v2 API with wait param)."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "output": "Plot saved to /home/user/output/test.png",
+            "id": "2026-test-12345",
+            "command": "echo hello",
+            "status": "done",
             "exit_code": 0,
+            "output": [
+                {"type": "output", "data": "Plot saved to /home/user/output/test.png"}
+            ],
+            "truncated": False,
+            "next_offset": 1,
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -167,14 +143,16 @@ class TestRunCommandTool:
             assert "Plot saved" in result
 
     @pytest.mark.asyncio
-    async def test_failed_command(self):
-        """Should return error message for non-zero exit code."""
+    async def test_failed_command_v2(self):
+        """Should return error message for non-zero exit code (v2 API)."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "output": "",
+            "id": "2026-test-12345",
+            "command": "invalid_cmd",
+            "status": "done",
             "exit_code": 1,
-            "error": "command not found",
+            "output": [{"type": "output", "data": ""}],
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -187,6 +165,46 @@ class TestRunCommandTool:
 
             result = await run_command.ainvoke({"command": "invalid_cmd"})
             assert "exited with code 1" in result
+
+    @pytest.mark.asyncio
+    async def test_polling_when_still_running(self):
+        """Should poll status endpoint when command still running after wait."""
+        # First response: still running
+        mock_post_response = MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {
+            "id": "2026-test-12345",
+            "command": "sleep 2",
+            "status": "running",
+            "exit_code": None,
+            "output": [],
+        }
+        mock_post_response.raise_for_status = MagicMock()
+
+        # Second response: done
+        mock_get_response = MagicMock()
+        mock_get_response.status_code = 200
+        mock_get_response.json.return_value = {
+            "id": "2026-test-12345",
+            "command": "sleep 2",
+            "status": "done",
+            "exit_code": 0,
+            "output": [{"type": "output", "data": "finished"}],
+            "next_offset": 1,
+        }
+        mock_get_response.raise_for_status = MagicMock()
+
+        with patch("esdc.chat.openterminal.httpx.AsyncClient") as mock_client:
+            mock_instance = AsyncMock()
+            mock_client.return_value = mock_instance
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_instance.post = AsyncMock(return_value=mock_post_response)
+            mock_instance.get = AsyncMock(return_value=mock_get_response)
+            mock_instance.delete = AsyncMock()
+
+            result = await run_command.ainvoke({"command": "sleep 2"})
+            assert "finished" in result
 
     @pytest.mark.asyncio
     async def test_connection_error(self):
@@ -241,228 +259,6 @@ class TestRunCommandTool:
 
             result = await run_command.ainvoke({"command": "echo hello"})
             assert result == "ok"
-
-
-class TestWriteFileTool:
-    """Tests for write_file tool."""
-
-    @pytest.fixture(autouse=True)
-    def setup_config(self):
-        """Set up mock config for each test."""
-        self.config = {
-            "url": "http://open-terminal:8000",
-            "api_key": "test-key",
-            "packages": "matplotlib",
-            "timeout": 120,
-            "write_timeout": 30,
-        }
-        with patch("esdc.chat.openterminal._get_config", return_value=self.config):
-            yield
-
-    @pytest.mark.asyncio
-    async def test_successful_write(self):
-        """Should return success message on successful write."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-
-        with patch("esdc.chat.openterminal.httpx.AsyncClient") as mock_client:
-            mock_instance = AsyncMock()
-            mock_client.return_value = mock_instance
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock(return_value=False)
-            mock_instance.post = AsyncMock(return_value=mock_response)
-
-            result = await write_file.ainvoke(
-                {"path": "/home/user/plot.py", "content": "print('hello')"}
-            )
-            assert "success" in result.lower()
-            assert "/home/user/plot.py" in result
-
-    @pytest.mark.asyncio
-    async def test_connection_error(self):
-        """Should return error when Compute Engine is unreachable."""
-        import httpx
-
-        with patch("esdc.chat.openterminal.httpx.AsyncClient") as mock_client:
-            mock_instance = AsyncMock()
-            mock_client.return_value = mock_instance
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock(return_value=False)
-            mock_instance.post = AsyncMock(
-                side_effect=httpx.ConnectError("Connection refused")
-            )
-
-            result = await write_file.ainvoke(
-                {"path": "/home/user/test.py", "content": "test"}
-            )
-            assert "Cannot connect to Compute Engine" in result
-
-
-class TestViewFileTool:
-    """Tests for view_file tool."""
-
-    @pytest.fixture(autouse=True)
-    def setup_config(self):
-        """Set up mock configs for each test."""
-        self.ot_config = {
-            "url": "http://open-terminal:8000",
-            "api_key": "test-key",
-            "packages": "matplotlib",
-            "timeout": 120,
-            "write_timeout": 30,
-        }
-        self.ow_config = {
-            "url": "http://localhost:3000",
-            "terminal_server_id": "my-terminal",
-        }
-
-    @pytest.mark.asyncio
-    async def test_returns_markdown_image_with_proxy_url(self):
-        """Should return markdown image with OpenWebUI proxy URL."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-
-        with (
-            patch("esdc.chat.openterminal._get_config", return_value=self.ot_config),
-            patch("esdc.chat.openterminal._get_ow_config", return_value=self.ow_config),
-            patch("esdc.chat.openterminal.httpx.AsyncClient") as mock_client,
-        ):
-            mock_instance = AsyncMock()
-            mock_client.return_value = mock_instance
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock(return_value=False)
-            mock_instance.head = AsyncMock(return_value=mock_response)
-
-            result = await view_file.ainvoke(
-                {"path": "/home/user/output/forecast.png", "description": "Forecast"}
-            )
-            assert "![Forecast]" in result
-            assert "/api/v1/terminals/my-terminal/files/read" in result
-            assert "forecast.png" in result
-
-    @pytest.mark.asyncio
-    async def test_file_not_found(self):
-        """Should return error when file does not exist."""
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-
-        with (
-            patch("esdc.chat.openterminal._get_config", return_value=self.ot_config),
-            patch("esdc.chat.openterminal._get_ow_config", return_value=self.ow_config),
-            patch("esdc.chat.openterminal.httpx.AsyncClient") as mock_client,
-        ):
-            mock_instance = AsyncMock()
-            mock_client.return_value = mock_instance
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock(return_value=False)
-            mock_instance.head = AsyncMock(return_value=mock_response)
-
-            result = await view_file.ainvoke({"path": "/home/user/output/missing.png"})
-            assert "not found" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_default_description_from_filename(self):
-        """Should use filename as description when not provided."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-
-        with (
-            patch("esdc.chat.openterminal._get_config", return_value=self.ot_config),
-            patch("esdc.chat.openterminal._get_ow_config", return_value=self.ow_config),
-            patch("esdc.chat.openterminal.httpx.AsyncClient") as mock_client,
-        ):
-            mock_instance = AsyncMock()
-            mock_client.return_value = mock_instance
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock(return_value=False)
-            mock_instance.head = AsyncMock(return_value=mock_response)
-
-            result = await view_file.ainvoke({"path": "/home/user/output/forecast.png"})
-            assert "![forecast.png]" in result
-
-    @pytest.mark.asyncio
-    async def test_connection_error(self):
-        """Should return error when Compute Engine is unreachable."""
-        import httpx
-
-        with (
-            patch("esdc.chat.openterminal._get_config", return_value=self.ot_config),
-            patch("esdc.chat.openterminal._get_ow_config", return_value=self.ow_config),
-            patch("esdc.chat.openterminal.httpx.AsyncClient") as mock_client,
-        ):
-            mock_instance = AsyncMock()
-            mock_client.return_value = mock_instance
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock(return_value=False)
-            mock_instance.head = AsyncMock(
-                side_effect=httpx.ConnectError("Connection refused")
-            )
-
-            result = await view_file.ainvoke({"path": "/home/user/output/test.png"})
-            assert "Cannot connect to Compute Engine" in result
-
-    @pytest.mark.asyncio
-    async def test_url_encoding_for_paths(self):
-        """Should URL-encode file paths with special characters."""
-        from esdc.chat.openterminal import _build_file_url
-
-        ow_config = {
-            "url": "http://localhost:3000",
-            "terminal_server_id": "openterminal",
-        }
-        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
-            url = _build_file_url("/home/user/output/forecast 2024.png", "Chart")
-            assert "forecast%202024.png" in url
-            assert "![Chart]" in url
-
-
-class TestBuildFileUrl:
-    """Tests for _build_file_url helper."""
-
-    def test_builds_proxy_url(self):
-        """Should build correct proxy URL."""
-        ow_config = {
-            "url": "http://localhost:3000",
-            "terminal_server_id": "my-terminal",
-        }
-        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
-            url = _build_file_url("/home/user/output/test.png", "Test Image")
-            assert (
-                url
-                == "![Test Image](http://localhost:3000/api/v1/terminals/my-terminal/files/read?path=/home/user/output/test.png)"
-            )
-
-    def test_uses_filename_as_default_description(self):
-        """Should use filename when description is empty."""
-        ow_config = {
-            "url": "http://localhost:3000",
-            "terminal_server_id": "openterminal",
-        }
-        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
-            url = _build_file_url("/home/user/output/forecast.png")
-            assert "![forecast.png]" in url
-
-    def test_strips_trailing_slash_from_url(self):
-        """Should strip trailing slash from OpenWebUI URL."""
-        ow_config = {
-            "url": "http://localhost:3000/",
-            "terminal_server_id": "openterminal",
-        }
-        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
-            url = _build_file_url("/home/user/output/test.png", "Test")
-            assert url.startswith("![Test](http://localhost:3000/api/")
-
-    def test_raises_when_ow_config_missing(self):
-        """Should raise ValueError when OpenWebUI not configured."""
-        with (
-            patch(
-                "esdc.chat.openterminal._get_ow_config",
-                side_effect=ValueError("OpenWebUI not configured"),
-            ),
-            pytest.raises(ValueError, match="OpenWebUI not configured"),
-        ):
-            _build_file_url("/home/user/test.png")
 
 
 class TestConfig:
@@ -653,6 +449,87 @@ class TestConfig:
             assert result is not None
             assert result["terminal_server_id"] == "openterminal"
 
+    def test_get_openwebui_config_includes_proxy_url(self):
+        """Should include proxy_url in config when set."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+                "proxy_url": "https://iris.skkmigas.go.id",
+                "terminal_server_id": "my-terminal",
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["url"] == "http://localhost:3000"
+            assert result["proxy_url"] == "https://iris.skkmigas.go.id"
+            assert result["terminal_server_id"] == "my-terminal"
+
+    def test_proxy_url_defaults_to_url(self):
+        """proxy_url should fall back to url when not set."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+                "terminal_server_id": "my-terminal",
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["proxy_url"] == "http://localhost:3000"
+
+    def test_proxy_url_env_overrides_config(self):
+        """OPENWEBUI_PROXY_URL env var should override config."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+                "proxy_url": "https://config-url.example.com",
+            }
+        }
+        env = {"OPENWEBUI_PROXY_URL": "https://env-url.example.com"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["proxy_url"] == "https://env-url.example.com"
+
+    def test_proxy_url_strips_trailing_slash(self):
+        """proxy_url should strip trailing slash."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000/",
+                "proxy_url": "https://iris.skkmigas.go.id/",
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert not result["url"].endswith("/")
+            assert not result["proxy_url"].endswith("/")
+
     def test_openwebui_strips_trailing_slash(self):
         """Should strip trailing slash from openwebui URL."""
         config_data = {
@@ -675,3 +552,348 @@ class TestConfig:
 
             assert result is not None
             assert result["url"] == "http://localhost:3000"
+
+
+class TestBuildFileUrl:
+    """Tests for _build_file_url helper."""
+
+    def test_builds_url_with_proxy_url(self):
+        """Should use proxy_url when available."""
+        ow_config = {
+            "url": "http://localhost:3000",
+            "proxy_url": "https://iris.skkmigas.go.id",
+            "terminal_server_id": "my-terminal",
+        }
+        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
+            url = _build_file_url("/home/user/output/test.png", "Test Image")
+            assert (
+                url
+                == "![Test Image](https://iris.skkmigas.go.id/api/v1/terminals/my-terminal/files/read?path=/home/user/output/test.png)"
+            )
+
+    def test_falls_back_to_url_when_no_proxy_url(self):
+        """Should fall back to url when proxy_url is not set."""
+        ow_config = {
+            "url": "http://localhost:3000",
+            "terminal_server_id": "my-terminal",
+        }
+        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
+            url = _build_file_url("/home/user/output/test.png", "Test Image")
+            assert (
+                url
+                == "![Test Image](http://localhost:3000/api/v1/terminals/my-terminal/files/read?path=/home/user/output/test.png)"
+            )
+
+    def test_uses_filename_as_default_description(self):
+        """Should use filename when description is empty."""
+        ow_config = {
+            "url": "http://localhost:3000",
+            "proxy_url": "https://iris.skkmigas.go.id",
+            "terminal_server_id": "openterminal",
+        }
+        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
+            url = _build_file_url("/home/user/output/forecast.png")
+            assert "![forecast.png]" in url
+            assert "https://iris.skkmigas.go.id" in url
+
+    def test_strips_trailing_slash_from_proxy_url(self):
+        """Should strip trailing slash from proxy_url."""
+        ow_config = {
+            "url": "http://localhost:3000",
+            "proxy_url": "https://iris.skkmigas.go.id/",
+            "terminal_server_id": "openterminal",
+        }
+        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
+            url = _build_file_url("/home/user/output/test.png", "Test")
+            assert url.startswith("![Test](https://iris.skkmigas.go.id/api/")
+
+    def test_url_encodes_paths_with_special_characters(self):
+        """Should URL-encode file paths with special characters."""
+        ow_config = {
+            "url": "http://localhost:3000",
+            "proxy_url": "https://iris.skkmigas.go.id",
+            "terminal_server_id": "openterminal",
+        }
+        with patch("esdc.chat.openterminal._get_ow_config", return_value=ow_config):
+            url = _build_file_url("/home/user/output/forecast 2024.png", "Chart")
+            assert "forecast%202024.png" in url
+            assert "![Chart]" in url
+
+    def test_raises_when_ow_config_missing(self):
+        """Should raise ValueError when OpenWebUI not configured."""
+        with (
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                side_effect=ValueError("OpenWebUI not configured"),
+            ),
+            pytest.raises(ValueError, match="OpenWebUI not configured"),
+        ):
+            _build_file_url("/home/user/test.png")
+
+    def test_api_key_in_openwebui_config(self):
+        """Should include api_key in OpenWebUI config when set."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+                "api_key": "sk-test-key",
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["api_key"] == "sk-test-key"
+
+    def test_api_key_env_overrides_config(self):
+        """OPENWEBUI_API_KEY env var should override config."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+                "api_key": "sk-config-key",
+            }
+        }
+        env = {"OPENWEBUI_API_KEY": "sk-env-key"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["api_key"] == "sk-env-key"
+
+    def test_api_key_defaults_to_none(self):
+        """api_key should be None when not configured."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["api_key"] is None
+
+
+class TestUploadImageToOpenWebUI:
+    """Tests for _upload_image_to_openwebui function."""
+
+    @pytest.fixture(autouse=True)
+    def setup_config(self):
+        self.ot_config = {
+            "url": "http://localhost:8000",
+            "api_key": "ot-key",
+        }
+        self.ow_config = {
+            "url": "http://localhost:3000",
+            "proxy_url": "https://iris.ambia.id",
+            "terminal_server_id": "my-terminal",
+            "api_key": "sk-admin-key",
+        }
+
+    @pytest.mark.asyncio
+    async def test_upload_success_returns_persistent_url(self):
+        mock_dl = MagicMock()
+        mock_dl.raise_for_status = MagicMock()
+        mock_dl.content = b"\x89PNG" + b"\x00" * 100
+
+        mock_ul = MagicMock()
+        mock_ul.raise_for_status = MagicMock()
+        mock_ul.json.return_value = {"id": "file-abc123"}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_dl)
+        mock_client.post = AsyncMock(return_value=mock_ul)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        assert result == "https://iris.ambia.id/api/v1/files/file-abc123/content"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_api_key(self):
+        self.ow_config["api_key"] = ""  # type: ignore[assignment]
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_download_failure(self):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=Exception("connection error"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_upload_returns_no_id(self):
+        mock_dl = MagicMock()
+        mock_dl.raise_for_status = MagicMock()
+        mock_dl.content = b"\x89PNG" + b"\x00" * 100
+
+        mock_ul = MagicMock()
+        mock_ul.raise_for_status = MagicMock()
+        mock_ul.json.return_value = {}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_dl)
+        mock_client.post = AsyncMock(return_value=mock_ul)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_uploads_with_process_false(self):
+        mock_dl = MagicMock()
+        mock_dl.raise_for_status = MagicMock()
+        mock_dl.content = b"\x89PNG" + b"\x00" * 100
+
+        mock_ul = MagicMock()
+        mock_ul.raise_for_status = MagicMock()
+        mock_ul.json.return_value = {"id": "file-xyz"}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_dl)
+        mock_client.post = AsyncMock(return_value=mock_ul)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            await _upload_image_to_openwebui("/home/user/img/test.png", "test.png")
+
+        post_call = mock_client.post.call_args
+        assert post_call.kwargs.get("params") == {"process": "false"}
+
+    @pytest.mark.asyncio
+    async def test_uses_server_url_for_upload_not_proxy_url(self):
+        mock_dl = MagicMock()
+        mock_dl.raise_for_status = MagicMock()
+        mock_dl.content = b"\x89PNG" + b"\x00" * 100
+
+        mock_ul = MagicMock()
+        mock_ul.raise_for_status = MagicMock()
+        mock_ul.json.return_value = {"id": "file-xyz"}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_dl)
+        mock_client.post = AsyncMock(return_value=mock_ul)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        post_call = mock_client.post.call_args
+        upload_url_used = post_call.args[0] if post_call.args else ""
+        assert "localhost:3000" in upload_url_used
+        assert "iris.ambia.id" not in upload_url_used
+        assert result is not None and "iris.ambia.id" in result

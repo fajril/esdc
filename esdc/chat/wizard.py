@@ -12,12 +12,15 @@ from esdc.providers import PROVIDER_NAMES
 
 
 class WelcomeScreen(Screen):
+    """Welcome screen for the setup wizard."""
+
     BINDINGS = [
         Binding("enter", "next", "Next"),
         Binding("escape", "cancel", "Cancel"),
     ]
 
     def compose(self) -> ComposeResult:
+        """Build the welcome screen UI."""
         yield Container(
             Static("Welcome to ESDC Chat Setup!", classes="title"),
             Static(
@@ -29,13 +32,17 @@ class WelcomeScreen(Screen):
         )
 
     def action_next(self) -> None:
+        """Navigate to the provider selection screen."""
         self.app.push_screen("provider_select")
 
     def action_cancel(self) -> None:
+        """Exit the setup wizard."""
         self.app.exit()
 
 
 class ProviderSelectScreen(Screen):
+    """Screen for selecting the chat provider."""
+
     BINDINGS = [
         Binding("enter", "next", "Next"),
         Binding("escape", "back", "Back"),
@@ -44,6 +51,7 @@ class ProviderSelectScreen(Screen):
     selected_provider: str | None = None
 
     def compose(self) -> ComposeResult:
+        """Build the provider selection UI."""
         yield Container(
             Static("Select Provider", classes="title"),
             Static("Choose a provider for your chat:"),
@@ -61,6 +69,7 @@ class ProviderSelectScreen(Screen):
     def on_selection_list_selected_changed(
         self, event: SelectionList.SelectedChanged
     ) -> None:
+        """Capture the selected provider from the list."""
         self.selected_provider = (
             event.selection_list.selected[0] if event.selection_list.selected else None
         )
@@ -77,6 +86,7 @@ class ProviderSelectScreen(Screen):
         self.app.pop_screen()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation and provider selection."""
         if event.button.id == "back":
             self.app.pop_screen()
         elif event.button.id == "next":
@@ -87,15 +97,23 @@ class ProviderSelectScreen(Screen):
 
 
 class OllamaSetupScreen(Screen):
+    """Screen for configuring Ollama provider."""
+
     BINDINGS = [
         Binding("escape", "back", "Back"),
     ]
 
     def __init__(self, provider_type: str = "ollama"):
+        """Initialize Ollama setup screen.
+
+        Args:
+            provider_type: The type of provider to configure (default "ollama").
+        """
         super().__init__()
         self.provider_type = provider_type
 
     def compose(self) -> ComposeResult:
+        """Build the Ollama configuration UI."""
         from esdc.providers.ollama import OllamaProvider
 
         models = OllamaProvider.list_models()
@@ -125,6 +143,7 @@ class OllamaSetupScreen(Screen):
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation and saving configuration."""
         if event.button.id == "back":
             self.app.pop_screen()
         elif event.button.id == "save":
@@ -143,15 +162,23 @@ class OllamaSetupScreen(Screen):
 
 
 class OpenAISetupScreen(Screen):
+    """Screen for configuring OpenAI provider."""
+
     BINDINGS = [
         Binding("escape", "back", "Back"),
     ]
 
     def __init__(self, provider_type: str = "openai"):
+        """Initialize OpenAI setup screen.
+
+        Args:
+            provider_type: The type of provider to configure (default "openai").
+        """
         super().__init__()
         self.provider_type = provider_type
 
     def compose(self) -> ComposeResult:
+        """Build the OpenAI configuration UI."""
         yield Container(
             Static("Configure OpenAI", classes="title"),
             Static("Choose authentication method:"),
@@ -174,6 +201,7 @@ class OpenAISetupScreen(Screen):
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation and connection."""
         if event.button.id == "back":
             self.app.pop_screen()
         elif event.button.id == "connect":
@@ -212,15 +240,24 @@ class OpenAISetupScreen(Screen):
 
 
 class OpenAICompatibleSetupScreen(Screen):
+    """Screen for configuring OpenAI-compatible provider."""
+
     BINDINGS = [
         Binding("escape", "back", "Back"),
     ]
 
     def __init__(self, provider_type: str = "openai_compatible"):
+        """Initialize OpenAI-compatible setup screen.
+
+        Args:
+            provider_type: The type of provider to configure
+                (default "openai_compatible").
+        """
         super().__init__()
         self.provider_type = provider_type
 
     def compose(self) -> ComposeResult:
+        """Build the OpenAI-compatible configuration UI."""
         yield Container(
             Static("Configure OpenAI-Compatible Server", classes="title"),
             Static("Server URL:", classes="label"),
@@ -239,6 +276,7 @@ class OpenAICompatibleSetupScreen(Screen):
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation, testing, and saving."""
         if event.button.id == "back":
             self.app.pop_screen()
         elif event.button.id == "test":
@@ -284,11 +322,14 @@ class OpenAICompatibleSetupScreen(Screen):
 
 
 class DatabasePathScreen(Screen):
+    """Screen for configuring the database path."""
+
     BINDINGS = [
         Binding("escape", "back", "Back"),
     ]
 
     def compose(self) -> ComposeResult:
+        """Build the database path configuration UI."""
         db_path = Config.get_chat_db_path()
 
         yield Container(
@@ -304,6 +345,7 @@ class DatabasePathScreen(Screen):
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation and saving the database path."""
         if event.button.id == "back":
             self.app.pop_screen()
         elif event.button.id == "save":
@@ -313,11 +355,14 @@ class DatabasePathScreen(Screen):
 
 
 class SummaryScreen(Screen):
+    """Screen displaying the configuration summary."""
+
     BINDINGS = [
         Binding("escape", "quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
+        """Build the configuration summary UI."""
         providers = Config.get_providers()
         default_provider = Config.get_default_provider()
         db_path = Config.get_chat_db_path()
@@ -337,6 +382,7 @@ class SummaryScreen(Screen):
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button press to start the chat application."""
         if event.button.id == "start":
             self.app.exit(0)
 

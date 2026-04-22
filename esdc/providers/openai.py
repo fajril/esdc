@@ -15,6 +15,8 @@ from esdc.providers.base import Provider, ProviderConfig  # noqa: E402
 
 
 class OpenAIProvider(Provider):
+    """Provider implementation for OpenAI API."""
+
     NAME = "OpenAI"
     DEFAULT_MODEL = "gpt-4o-mini"
     BASE_URL = "https://models.inference.ai.azure.com"
@@ -91,6 +93,7 @@ class OpenAIProvider(Provider):
             reasoning_effort: OpenAI reasoning effort level.
                 Supported values: "none", "minimal", "low", "medium", "high", "xhigh".
                 Only applicable to reasoning models (o-series, GPT-5).
+            **kwargs: Additional keyword arguments passed to ChatOpenAI.
         """
         if not model:
             model = cls.get_default_model()

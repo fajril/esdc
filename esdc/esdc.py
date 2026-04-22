@@ -1,5 +1,4 @@
-"""
-ESDC Data Management Module
+"""ESDC Data Management Module.
 
 This module provides functionality for managing data
 related to the ESDC (https://esdc.skkmigas.go.id).
@@ -654,10 +653,10 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
 
 
 def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
-    """
-    Reads a CSV file and returns its contents as a tuple of two values:
-    a list of lists of strings representing the data,
-    and a list of strings representing the header.
+    """Reads a CSV file and returns its contents as a tuple.
+
+    Returns a tuple of (data, header) where data is a list of lists of strings
+    and header is a list of strings.
 
     Args:
         file: The path to the CSV file as a string,

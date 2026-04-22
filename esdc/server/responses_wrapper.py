@@ -99,6 +99,7 @@ class SequenceCounter:
     """Manages monotonically increasing sequence numbers for SSE events."""
 
     def __init__(self, start: int = 1):
+        """Initialize the responses API wrapper."""
         self._value = start
 
     def next(self) -> int:

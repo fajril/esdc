@@ -109,6 +109,11 @@ class Config:
                 "semantic_search": {
                     "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)  # noqa: E501
                 },
+                "phoenix": {
+                    "enabled": False,
+                    "collector_endpoint": "http://localhost:4317",
+                    "project_name": "iris",
+                },
             }
             with open(config_file, "w") as f:
                 yaml.dump(default_config, f, default_flow_style=False)
@@ -547,6 +552,37 @@ class Config:
         semantic_config = config.get("semantic_search", {})
         return semantic_config.get("embedding_batch_size", 100)
 
+    @classmethod
+    def get_phoenix_config(cls) -> dict[str, Any]:
+        """Get Phoenix observability configuration.
+
+        Priority:
+        1. Environment variables (PHOENIX_ENABLED, PHOENIX_COLLECTOR_ENDPOINT,
+           PHOENIX_PROJECT_NAME)
+        2. config.yaml: phoenix.enabled, phoenix.collector_endpoint,
+           phoenix.project_name
+        3. Defaults: enabled=False, collector_endpoint="http://localhost:4317",
+           project_name="iris"
+        """
+        config = cls._load_config() or {}
+        phoenix_config = config.get("phoenix", {})
+
+        enabled_env = os.environ.get("PHOENIX_ENABLED")
+        endpoint_env = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT")
+        project_env = os.environ.get("PHOENIX_PROJECT_NAME")
+
+        if enabled_env is not None:
+            enabled = enabled_env.lower() in ("true", "1", "yes")
+        else:
+            enabled = phoenix_config.get("enabled", False)
+
+        return {
+            "enabled": enabled,
+            "collector_endpoint": endpoint_env
+            or phoenix_config.get("collector_endpoint", "http://localhost:4317"),
+            "project_name": project_env or phoenix_config.get("project_name", "iris"),
+        }
+
     # Default packages available in OpenTerminal
     OPENTERM_DEFAULT_PACKAGES = (
         "matplotlib, seaborn, pandas, numpy, scipy, statsmodels, scikit-learn, plotly"
@@ -557,15 +593,19 @@ class Config:
         """Get OpenWebUI configuration for inline file rendering.
 
         Returns None if OpenWebUI is not configured.
-        When configured, returns dict with keys: url, terminal_server_id.
+        When configured, returns dict with keys:
+        url, proxy_url, terminal_server_id, api_key.
 
         Priority:
-        1. Environment variables (OPENWEBUI_URL, OPENWEBUI_TERMINAL_SERVER_ID)
+        1. Environment variables (OPENWEBUI_URL, OPENWEBUI_PROXY_URL,
+           OPENWEBUI_TERMINAL_SERVER_ID, OPENWEBUI_API_KEY)
         2. config.yaml: openwebui section
         3. None (not configured)
         """
         env_url = os.environ.get("OPENWEBUI_URL")
+        env_proxy_url = os.environ.get("OPENWEBUI_PROXY_URL")
         env_server_id = os.environ.get("OPENWEBUI_TERMINAL_SERVER_ID")
+        env_api_key = os.environ.get("OPENWEBUI_API_KEY")
 
         config = cls._load_config() or {}
         ow_config = config.get("openwebui", {})
@@ -576,9 +616,17 @@ class Config:
 
         server_id = env_server_id or ow_config.get("terminal_server_id", "openterminal")
 
+        # proxy_url: the URL the browser uses to reach OpenWebUI
+        # Falls back to url if not explicitly set (localhost scenario)
+        proxy_url = env_proxy_url or ow_config.get("proxy_url") or url.rstrip("/")
+
+        api_key = env_api_key or ow_config.get("api_key")
+
         return {
             "url": url.rstrip("/"),
+            "proxy_url": proxy_url.rstrip("/"),
             "terminal_server_id": server_id,
+            "api_key": api_key,
         }
 
     @classmethod

@@ -50,6 +50,7 @@ class QueryPatternMatcher:
     """Match natural language queries against KG query patterns."""
 
     def __init__(self, schema: KGSchema) -> None:
+        """Initialize query pattern matcher."""
         self.schema = schema
 
     def match(self, query: str) -> dict[str, Any] | None:

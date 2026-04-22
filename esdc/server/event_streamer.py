@@ -16,6 +16,7 @@ so consumers can emit a user-friendly response instead of a raw error.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -81,6 +82,7 @@ async def astream_agent_events(
     event_count = 0
     token_count = 0
     pending_tool_calls: list[dict[str, Any]] = []
+    seen_image_markdowns: list[str] = []
 
     try:
         async for event in agent.astream_events(
@@ -114,9 +116,14 @@ async def astream_agent_events(
                     token_count += 1
                     yield {"type": "token", "content": content}
 
-                reasoning_content = chunk.additional_kwargs.get(
-                    "reasoning_content"
-                ) or getattr(chunk, "reasoning_content", None)
+                reasoning_content = None
+                if not isinstance(chunk, str):
+                    if hasattr(chunk, "additional_kwargs"):
+                        reasoning_content = chunk.additional_kwargs.get(
+                            "reasoning_content"
+                        )
+                    if not reasoning_content and hasattr(chunk, "reasoning_content"):
+                        reasoning_content = chunk.reasoning_content
                 if reasoning_content:
                     token_count += 1
                     yield {"type": "reasoning_token", "content": reasoning_content}
@@ -124,13 +131,31 @@ async def astream_agent_events(
             elif event_type == "on_chat_model_end":
                 output = data.get("output")
                 if output and isinstance(output, AIMessage):
+                    content = output.content or ""
+
+                    # Append missing image markdowns for final messages (no tool_calls)
+                    # This is a fallback when LLM forgets to include the image
+                    has_tool_calls = hasattr(output, "tool_calls") and output.tool_calls
+                    if not has_tool_calls and seen_image_markdowns:
+                        # Ensure content is a string for content search
+                        content_str = str(content)
+                        missing_images = [
+                            md for md in seen_image_markdowns if md not in content_str
+                        ]
+                        if missing_images:
+                            content = content_str + "\n\n" + "\n\n".join(missing_images)
+                            logger.info(
+                                "[STREAM] Auto-appended %d image(s) to final response",
+                                len(missing_images),
+                            )
+
                     cleaned = AIMessage(
-                        content=output.content or "",
+                        content=content,
                         additional_kwargs=output.additional_kwargs
                         if hasattr(output, "additional_kwargs")
                         else {},
                     )
-                    if hasattr(output, "tool_calls") and output.tool_calls:
+                    if has_tool_calls:
                         cleaned.tool_calls = output.tool_calls  # type: ignore[attr-defined]
                         for tc in output.tool_calls:
                             pending_tool_calls.append(
@@ -181,6 +206,18 @@ async def astream_agent_events(
                     "result": result_str,
                     "tool_call_id": tool_call_id,
                 }
+
+                # Track image markdown from Code Interpreter for fallback
+                if tool_name == "Code Interpreter":
+                    image_pattern = r"!\[Generated Plot\]\((https?://[^)]+)\)"
+                    matches = re.findall(image_pattern, result_str)
+                    for url in matches:
+                        markdown = f"![Generated Plot]({url})"
+                        if markdown not in seen_image_markdowns:
+                            seen_image_markdowns.append(markdown)
+                            logger.debug(
+                                "[STREAM] Tracked image from Code Interpreter: %s", url
+                            )
 
             elif event_type == "on_chain_end":
                 node_name = event.get("name", "")

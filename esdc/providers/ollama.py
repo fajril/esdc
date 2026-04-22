@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaProvider(Provider):
+    """Provider implementation for Ollama local LLM server."""
+
     NAME = "Ollama"
     DEFAULT_BASE_URL = "http://localhost:11434"
     DEFAULT_MODEL = "llama3.2"
@@ -184,6 +186,7 @@ class OllamaProvider(Provider):
                 - "none": reasoning=False (disable thinking)
                 - "low"/"medium"/"high": reasoning=True (enables thinking;
                   string intensity only supported by gpt-oss cloud model)
+            **kwargs: Additional keyword arguments passed to ChatOllama.
         """
         if not model:
             model = cls.get_default_model(base_url)

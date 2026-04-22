@@ -43,7 +43,7 @@ class TestWithKeepalive:
 
         request = FakeRequest()
         results = []
-        async for chunk in with_keepalive(inner(), request, "test-1"):
+        async for chunk in with_keepalive(inner(), request, "test-1"):  # type: ignore[arg-type]
             results.append(chunk)
 
         data_chunks = [r for r in results if not r.startswith(":")]
@@ -65,7 +65,7 @@ class TestWithKeepalive:
 
         request = FakeRequest()
         results = []
-        async for chunk in with_keepalive(slow_inner(), request, "test-2"):
+        async for chunk in with_keepalive(slow_inner(), request, "test-2"):  # type: ignore[arg-type]
             results.append(chunk)
 
         data_chunks = [r for r in results if r.startswith("data:")]
@@ -96,7 +96,7 @@ class TestWithKeepalive:
 
         request = FakeRequest()
         results = []
-        async for chunk in with_keepalive(multi_gap_inner(), request, "test-3"):
+        async for chunk in with_keepalive(multi_gap_inner(), request, "test-3"):  # type: ignore[arg-type]
             results.append(chunk)
 
         data_chunks = [r for r in results if r.startswith("data:")]
@@ -117,7 +117,7 @@ class TestWithKeepalive:
         # Client stays connected for 2 is_disconnected checks, then disconnects
         request = FakeRequest(disconnected_after=2)
         results = []
-        async for chunk in with_keepalive(slow_inner(), request, "test-4"):
+        async for chunk in with_keepalive(slow_inner(), request, "test-4"):  # type: ignore[arg-type]
             results.append(chunk)
 
         data_chunks = [r for r in results if r.startswith("data:")]
@@ -139,7 +139,7 @@ class TestWithKeepalive:
             yield "data: never_reached\n\n"
 
         results = []
-        async for chunk in with_keepalive(inner(), request, "test-5"):
+        async for chunk in with_keepalive(inner(), request, "test-5"):  # type: ignore[arg-type]
             results.append(chunk)
 
         data_chunks = [r for r in results if r.startswith("data:")]
@@ -152,13 +152,13 @@ class TestWithKeepalive:
     async def test_empty_stream(self):
         """Empty stream completes without error."""
 
-    async def empty():
-        return
-        yield
+        async def empty():
+            return
+            yield
 
         request = FakeRequest()
         results = []
-        async for chunk in with_keepalive(empty(), request, "test-6"):
+        async for chunk in with_keepalive(empty(), request, "test-6"):  # type: ignore[arg-type]
             results.append(chunk)
 
         assert len(results) == 0
@@ -173,7 +173,7 @@ class TestWithKeepalive:
 
         request = FakeRequest()
         results = []
-        async for chunk in with_keepalive(fast_inner(), request, "test-7"):
+        async for chunk in with_keepalive(fast_inner(), request, "test-7"):  # type: ignore[arg-type]
             results.append(chunk)
 
         keepalive_chunks = [r for r in results if r.startswith(":")]
