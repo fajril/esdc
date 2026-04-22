@@ -73,16 +73,46 @@ logger = logging.getLogger("esdc.server.responses")
 # Tool source metadata mapping for OpenWebUI citation rendering
 _TOOL_SOURCE_MAP: dict[str, dict[str, str]] = {
     "execute_sql": {"resource_type": "sql_query", "resource_id": "project_resources"},
-    "execute_cypher": {"resource_type": "cypher_query", "resource_id": "knowledge_graph"},
-    "semantic_search": {"resource_type": "semantic_search", "resource_id": "project_embeddings"},
-    "get_schema": {"resource_type": "schema_lookup", "resource_id": "project_resources"},
-    "list_tables": {"resource_type": "schema_lookup", "resource_id": "project_resources"},
-    "get_recommended_table": {"resource_type": "schema_lookup", "resource_id": "project_resources"},
-    "resolve_spatial": {"resource_type": "spatial_query", "resource_id": "spatial_index"},
-    "resolve_uncertainty_level": {"resource_type": "domain_lookup", "resource_id": "uncertainty_levels"},
-    "search_problem_cluster": {"resource_type": "domain_lookup", "resource_id": "problem_clusters"},
-    "get_timeseries_columns": {"resource_type": "schema_lookup", "resource_id": "project_timeseries"},
-    "get_resources_columns": {"resource_type": "schema_lookup", "resource_id": "project_resources"},
+    "execute_cypher": {
+        "resource_type": "cypher_query",
+        "resource_id": "knowledge_graph",
+    },
+    "semantic_search": {
+        "resource_type": "semantic_search",
+        "resource_id": "project_embeddings",
+    },
+    "get_schema": {
+        "resource_type": "schema_lookup",
+        "resource_id": "project_resources",
+    },
+    "list_tables": {
+        "resource_type": "schema_lookup",
+        "resource_id": "project_resources",
+    },
+    "get_recommended_table": {
+        "resource_type": "schema_lookup",
+        "resource_id": "project_resources",
+    },
+    "resolve_spatial": {
+        "resource_type": "spatial_query",
+        "resource_id": "spatial_index",
+    },
+    "resolve_uncertainty_level": {
+        "resource_type": "domain_lookup",
+        "resource_id": "uncertainty_levels",
+    },
+    "search_problem_cluster": {
+        "resource_type": "domain_lookup",
+        "resource_id": "problem_clusters",
+    },
+    "get_timeseries_columns": {
+        "resource_type": "schema_lookup",
+        "resource_id": "project_timeseries",
+    },
+    "get_resources_columns": {
+        "resource_type": "schema_lookup",
+        "resource_id": "project_resources",
+    },
 }
 
 
@@ -223,15 +253,19 @@ def convert_responses_input_to_langchain(
                 messages.append(HumanMessage(content=text))
             elif role == "assistant":
                 # Preserve reasoning_content from previous assistant turn
+                # AIMessage uses extra="allow", so reasoning_content is stored
+                # in additional_kwargs for proper type safety
                 reasoning_content = (
                     item.get("reasoning_content")
                     if isinstance(item, dict)
                     else getattr(item, "reasoning_content", None)
                 )
-                ai_msg = AIMessage(content=text)
+                msg_kwargs: dict[str, Any] = {"content": text}
                 if reasoning_content:
-                    ai_msg.reasoning_content = reasoning_content
-                messages.append(ai_msg)
+                    msg_kwargs["additional_kwargs"] = {
+                        "reasoning_content": reasoning_content
+                    }
+                messages.append(AIMessage(**msg_kwargs))
             elif role == "system":
                 messages.append(SystemMessage(content=text))
 
@@ -270,12 +304,14 @@ def convert_responses_input_to_langchain(
                 f"call_id={call_id}, name={name}"
             )
 
-            ai_msg_kwargs = {
+            ai_msg_kwargs: dict[str, Any] = {
                 "content": "",
                 "tool_calls": [{"name": name, "args": args, "id": call_id}],
             }
             if reasoning_content:
-                ai_msg_kwargs["reasoning_content"] = reasoning_content
+                ai_msg_kwargs["additional_kwargs"] = {
+                    "reasoning_content": reasoning_content
+                }
             messages.append(AIMessage(**ai_msg_kwargs))
 
         elif item_type == "function_call_output":
@@ -754,7 +790,9 @@ async def generate_responses_stream(
                         content_part_done = {
                             "type": "output_text",
                             "text": accumulated_text,
-                            "annotations": collected_sources if collected_sources else [],
+                            "annotations": collected_sources
+                            if collected_sources
+                            else [],
                         }
                         part_done_seq = seq.next()
                         yield format_sse_event(
