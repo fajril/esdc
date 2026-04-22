@@ -1,7 +1,6 @@
 """Tests for hybrid search (vector + BM25 with RRF)."""
 
-import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 class TestHybridSearchMerge:
@@ -14,17 +13,39 @@ class TestHybridSearchMerge:
         resolver = SemanticResolver.__new__(SemanticResolver)
 
         semantic_results = [
-            {"project_id": "P1", "report_year": 2024, "similarity": 0.95, "field_name": "Alpha"},
-            {"project_id": "P2", "report_year": 2024, "similarity": 0.85, "field_name": "Beta"},
+            {
+                "project_id": "P1",
+                "report_year": 2024,
+                "similarity": 0.95,
+                "field_name": "Alpha",
+            },
+            {
+                "project_id": "P2",
+                "report_year": 2024,
+                "similarity": 0.85,
+                "field_name": "Beta",
+            },
         ]
         keyword_results = [
-            {"project_id": "P1", "report_year": 2024, "bm25_score": 10.5, "field_name": "Alpha"},
-            {"project_id": "P3", "report_year": 2024, "bm25_score": 8.0, "field_name": "Gamma"},
+            {
+                "project_id": "P1",
+                "report_year": 2024,
+                "bm25_score": 10.5,
+                "field_name": "Alpha",
+            },
+            {
+                "project_id": "P3",
+                "report_year": 2024,
+                "bm25_score": 8.0,
+                "field_name": "Gamma",
+            },
         ]
 
         merged = resolver._merge_rrf(
-            semantic_results, keyword_results,
-            semantic_weight=0.7, keyword_weight=0.3,
+            semantic_results,
+            keyword_results,
+            semantic_weight=0.7,
+            keyword_weight=0.3,
         )
 
         # P1 should rank highest (appears in both)
@@ -41,10 +62,17 @@ class TestHybridSearchMerge:
 
         resolver = SemanticResolver.__new__(SemanticResolver)
         semantic_results = [
-            {"project_id": "P1", "report_year": 2024, "similarity": 0.9, "field_name": "Alpha"},
+            {
+                "project_id": "P1",
+                "report_year": 2024,
+                "similarity": 0.9,
+                "field_name": "Alpha",
+            },
         ]
 
-        merged = resolver._merge_rrf(semantic_results, [], semantic_weight=0.7, keyword_weight=0.3)
+        merged = resolver._merge_rrf(
+            semantic_results, [], semantic_weight=0.7, keyword_weight=0.3
+        )
         assert len(merged) == 1
         assert merged[0]["project_id"] == "P1"
         assert merged[0]["score"] > 0
@@ -55,10 +83,17 @@ class TestHybridSearchMerge:
 
         resolver = SemanticResolver.__new__(SemanticResolver)
         keyword_results = [
-            {"project_id": "P1", "report_year": 2024, "bm25_score": 10.5, "field_name": "Alpha"},
+            {
+                "project_id": "P1",
+                "report_year": 2024,
+                "bm25_score": 10.5,
+                "field_name": "Alpha",
+            },
         ]
 
-        merged = resolver._merge_rrf([], keyword_results, semantic_weight=0.7, keyword_weight=0.3)
+        merged = resolver._merge_rrf(
+            [], keyword_results, semantic_weight=0.7, keyword_weight=0.3
+        )
         assert len(merged) == 1
         assert merged[0]["project_id"] == "P1"
         assert merged[0]["score"] > 0
@@ -69,13 +104,25 @@ class TestHybridSearchMerge:
 
         resolver = SemanticResolver.__new__(SemanticResolver)
         semantic_results = [
-            {"project_id": "P1", "report_year": 2024, "similarity": 0.9, "field_name": "Alpha"},
+            {
+                "project_id": "P1",
+                "report_year": 2024,
+                "similarity": 0.9,
+                "field_name": "Alpha",
+            },
         ]
         keyword_results = [
-            {"project_id": "P1", "report_year": 2024, "bm25_score": 10.0, "field_name": "Alpha"},
+            {
+                "project_id": "P1",
+                "report_year": 2024,
+                "bm25_score": 10.0,
+                "field_name": "Alpha",
+            },
         ]
 
-        merged = resolver._merge_rrf(semantic_results, keyword_results, semantic_weight=0.7, keyword_weight=0.3)
+        merged = resolver._merge_rrf(
+            semantic_results, keyword_results, semantic_weight=0.7, keyword_weight=0.3
+        )
         assert len(merged) == 1  # Not 2
         assert merged[0]["project_id"] == "P1"
 

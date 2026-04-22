@@ -35,7 +35,9 @@ class TestCitationAnnotationsOutput:
     def test_build_source_metadata_for_citation(self):
         """Source metadata should be convertible to citation annotation."""
         from esdc.server.responses_wrapper import _build_source_metadata
+
         source = _build_source_metadata("execute_sql")
+        assert source is not None
         citation = {"type": "source_citation", **source}
         assert citation["type"] == "source_citation"
         assert citation["resource_type"] == "sql_query"
@@ -43,6 +45,7 @@ class TestCitationAnnotationsOutput:
     def test_multiple_sources_in_annotations(self):
         """Multiple tool calls should result in multiple citation annotations."""
         from esdc.server.responses_wrapper import _build_source_metadata
+
         sources = []
         for tool_name in ["execute_sql", "semantic_search"]:
             source = _build_source_metadata(tool_name)
@@ -59,6 +62,7 @@ class TestCitationIntegration:
     def test_collected_sources_accumulate_tool_metadata(self):
         """collected_sources should accumulate source metadata from tool results."""
         from esdc.server.responses_wrapper import _build_source_metadata
+
         collected_sources = []
         # Simulate two tool calls
         for tool_name in ["execute_sql", "get_schema"]:

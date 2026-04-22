@@ -41,6 +41,8 @@ class TestToolNodeRicherResults:
 
     def test_string_observation_unchanged(self):
         """String observations should pass through unchanged."""
+        import json
+
         observation = "Cadangan minyak Duri: 123 MMSTB"
         if isinstance(observation, (dict, list)):
             result = json.dumps(observation, ensure_ascii=False)
@@ -54,12 +56,7 @@ class TestToolNodeRicherResults:
 
         observation = {
             "status": "success",
-            "data": {
-                "nested": {
-                    "deep": "value"
-                },
-                "array": [1, 2, 3]
-            }
+            "data": {"nested": {"deep": "value"}, "array": [1, 2, 3]},
         }
         serialized = json.dumps(observation, ensure_ascii=False)
         parsed = json.loads(serialized)
@@ -111,7 +108,7 @@ class TestToolResultContentTypes:
 
         observation = {
             "image_url": "https://example.com/chart.png",
-            "caption": "Reserves chart"
+            "caption": "Reserves chart",
         }
         serialized = json.dumps(observation, ensure_ascii=False)
         assert "image_url" in serialized

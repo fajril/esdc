@@ -1,5 +1,7 @@
 """Tests for incomplete status handling on interrupted responses."""
 
+import time
+
 import pytest
 
 
@@ -9,6 +11,7 @@ class TestCreateResponseIncompleteEvent:
     def test_create_response_incomplete_event_structure(self):
         """Incomplete event should have status='incomplete' and partial output."""
         from esdc.server.responses_events import create_response_incomplete_event
+
         event = create_response_incomplete_event(
             sequence_number=42,
             response_id="resp_test123",
@@ -24,8 +27,13 @@ class TestCreateResponseIncompleteEvent:
     def test_incomplete_event_preserves_partial_output(self):
         """Partial output should be preserved in the event."""
         from esdc.server.responses_events import create_response_incomplete_event
+
         partial = [
-            {"type": "message", "id": "msg_1", "content": [{"type": "output_text", "text": "Cadangan minyak"}]},
+            {
+                "type": "message",
+                "id": "msg_1",
+                "content": [{"type": "output_text", "text": "Cadangan minyak"}],
+            },
             {"type": "function_call_output", "call_id": "fc_1", "output": "SQL result"},
         ]
         event = create_response_incomplete_event(
@@ -41,6 +49,7 @@ class TestCreateResponseIncompleteEvent:
     def test_incomplete_event_with_function_calls(self):
         """Incomplete event can include function call items in partial output."""
         from esdc.server.responses_events import create_response_incomplete_event
+
         partial = [
             {
                 "type": "function_call",
@@ -74,11 +83,16 @@ class TestIncompleteVsFailedStatus:
             create_response_incomplete_event,
             create_response_failed_event,
         )
+
         output_items = [{"type": "message", "content": "partial"}]
         error = {"message": "Timeout", "type": "timeout"}
         # When partial output exists, use incomplete
         incomplete = create_response_incomplete_event(
-            sequence_number=1, response_id="r", model="m", output=output_items, error=error
+            sequence_number=1,
+            response_id="r",
+            model="m",
+            output=output_items,
+            error=error,
         )
         assert incomplete["response"]["status"] == "incomplete"
         assert incomplete["response"]["output"] == output_items
@@ -92,6 +106,7 @@ class TestIncompleteVsFailedStatus:
     def test_failed_when_no_partial_output(self):
         """Should emit failed when output_items is empty."""
         from esdc.server.responses_events import create_response_failed_event
+
         error = {"message": "Error", "type": "server_error"}
         failed = create_response_failed_event(
             sequence_number=1, response_id="r", model="m", error=error
@@ -105,25 +120,31 @@ class TestResponseModelStatus:
     def test_response_model_accepts_incomplete_status(self):
         """Response Pydantic model should accept 'incomplete' status."""
         from esdc.server.responses_models import Response
+
         response = Response(
             id="resp_test",
             model="iris",
             status="incomplete",
             output=[{"type": "message", "content": "partial"}],
             error={"message": "Timeout", "type": "timeout"},
+            created_at=time.time(),
         )
         assert response.status == "incomplete"
 
     def test_response_model_output_text_with_incomplete(self):
         """output_text property should work with incomplete responses."""
         from esdc.server.responses_models import Response
+
         response = Response(
             id="resp_test",
             model="iris",
             status="incomplete",
-            output=[{
-                "type": "message",
-                "content": [{"type": "output_text", "text": "Cadangan: 123"}]
-            }],
+            output=[
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Cadangan: 123"}],
+                }
+            ],
+            created_at=time.time(),
         )
         assert response.output_text == "Cadangan: 123"

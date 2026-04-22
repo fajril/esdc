@@ -8,6 +8,7 @@ class TestBuildSourceMetadata:
 
     def test_build_source_metadata_for_known_tool(self):
         from esdc.server.responses_wrapper import _build_source_metadata
+
         source = _build_source_metadata("execute_sql")
         assert source is not None
         assert source["resource_type"] == "sql_query"
@@ -15,11 +16,13 @@ class TestBuildSourceMetadata:
 
     def test_build_source_metadata_for_unknown_tool(self):
         from esdc.server.responses_wrapper import _build_source_metadata
+
         source = _build_source_metadata("unknown_tool")
         assert source is None
 
     def test_build_source_metadata_for_semantic_search(self):
         from esdc.server.responses_wrapper import _build_source_metadata
+
         source = _build_source_metadata("semantic_search")
         assert source is not None
         assert source["resource_type"] == "semantic_search"
@@ -27,12 +30,14 @@ class TestBuildSourceMetadata:
 
     def test_build_source_metadata_for_spatial(self):
         from esdc.server.responses_wrapper import _build_source_metadata
+
         source = _build_source_metadata("resolve_spatial")
         assert source is not None
         assert source["resource_type"] == "spatial_query"
 
     def test_build_source_metadata_for_cypher(self):
         from esdc.server.responses_wrapper import _build_source_metadata
+
         source = _build_source_metadata("execute_cypher")
         assert source is not None
         assert source["resource_type"] == "cypher_query"
@@ -43,6 +48,7 @@ class TestResponseFunctionCallResultModel:
 
     def test_response_function_call_result_model_accepts_source(self):
         from esdc.server.responses_models import ResponseFunctionCallResult
+
         item = ResponseFunctionCallResult(
             id="fco_test",
             status="completed",
@@ -55,6 +61,7 @@ class TestResponseFunctionCallResultModel:
 
     def test_response_function_call_result_model_source_optional(self):
         from esdc.server.responses_models import ResponseFunctionCallResult
+
         item = ResponseFunctionCallResult(
             id="fco_test",
             status="completed",
@@ -65,6 +72,7 @@ class TestResponseFunctionCallResultModel:
 
     def test_response_function_call_result_model_with_complex_source(self):
         from esdc.server.responses_models import ResponseFunctionCallResult
+
         item = ResponseFunctionCallResult(
             id="fco_test",
             status="completed",
@@ -77,6 +85,7 @@ class TestResponseFunctionCallResultModel:
                 "filters": {"field_name": "Duri"},
             },
         )
+        assert item.source is not None
         assert item.source["resource_type"] == "semantic_search"
         assert "filters" in item.source
 
@@ -86,6 +95,7 @@ class TestToolSourceMap:
 
     def test_tool_source_map_has_expected_tools(self):
         from esdc.server.responses_wrapper import _TOOL_SOURCE_MAP
+
         expected_tools = [
             "execute_sql",
             "execute_cypher",
@@ -106,6 +116,7 @@ class TestToolSourceMap:
 
     def test_tool_source_map_no_duplicate_resource_types(self):
         from esdc.server.responses_wrapper import _TOOL_SOURCE_MAP
+
         resource_types = [v["resource_type"] for v in _TOOL_SOURCE_MAP.values()]
         # Some tools share resource_types (like schema_lookup), that's OK
         assert len(resource_types) == len(_TOOL_SOURCE_MAP)
