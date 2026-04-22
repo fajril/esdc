@@ -60,13 +60,20 @@ def create_llm_from_config(config: dict[str, Any]):
         api_key=str(config.get("api_key", "")),
         auth_method=str(config.get("auth_method", "api_key")),
         oauth=config.get("oauth", {}),
+        reasoning_effort=config.get("reasoning_effort"),
     )
+
+    llm_kwargs: dict[str, Any] = {
+        "config": provider_config,
+    }
+    if provider_config.reasoning_effort is not None:
+        llm_kwargs["reasoning_effort"] = provider_config.reasoning_effort
 
     return provider_class.create_llm(
         model=provider_config.model or None,
         base_url=provider_config.base_url or None,
         api_key=provider_config.api_key or None,
-        config=provider_config,
+        **llm_kwargs,
     )
 
 

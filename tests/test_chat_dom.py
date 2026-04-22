@@ -1,5 +1,5 @@
 """
-DOM Structure and Widget Mounting Tests for ESDC Chat App
+DOM Structure and Widget Mounting Tests for ESDC Chat App.
 
 Tests verify:
 1. Widget mounting functionality

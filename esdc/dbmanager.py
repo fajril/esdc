@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import shutil
 from pathlib import Path
@@ -8,6 +9,26 @@ import pandas as pd
 from esdc.configs import Config
 from esdc.db_security import SQLSanitizer, _load_sql_script
 from esdc.selection import TableName
+
+
+def get_duckdb_connection(
+    db_path: str | Path, read_only: bool = False
+) -> duckdb.DuckDBPyConnection:
+    """Open a DuckDB connection with the VSS extension loaded.
+
+    The VSS extension must be loaded before any operation on a database
+    that contains HNSW indexes, including CHECKPOINT and WAL replay.
+    Failing to load VSS before checkpointing causes:
+    ``Missing Extension Error: Cannot bind index, unknown index type 'HNSW'``.
+
+    INSTALL is idempotent (no-op if already installed).
+    LOAD is idempotent (no-op if already loaded).
+    """
+    conn = duckdb.connect(str(db_path), read_only=read_only)
+    with contextlib.suppress(Exception):
+        conn.execute("INSTALL vss")
+    conn.execute("LOAD vss")
+    return conn
 
 
 def _is_sqlite_database(db_path: Path) -> bool:
@@ -150,7 +171,7 @@ def reindex_fts() -> None:
         return
 
     logging.info("Rebuilding FTS indexes on %s", db_path)
-    conn = duckdb.connect(str(db_path))
+    conn = get_duckdb_connection(db_path)
     try:
         _create_fts_indexes(conn)
         conn.execute("CHECKPOINT")
@@ -185,7 +206,7 @@ def load_data_to_db(
         Config.get_db_dir().mkdir(parents=True, exist_ok=True)
         logging.info("Database does not exist. Creating new database.")
         logging.debug("Database location: %s", Config.get_db_dir())
-    conn = duckdb.connect(str(Config.get_db_file()))
+    conn = get_duckdb_connection(Config.get_db_file())
     try:
         logging.debug("creating table %s in database", table_name)
         _execute_sql_script(conn, create_table_query[table_name])
@@ -283,7 +304,7 @@ def run_query(
         query, params = SQLSanitizer.build_query(
             table, where=where, like=like, years=years, details=details, columns=columns
         )
-        conn = duckdb.connect(str(Config.get_db_file()), read_only=True)
+        conn = get_duckdb_connection(Config.get_db_file(), read_only=True)
         try:
             df = conn.execute(query, params).fetchdf()
         finally:

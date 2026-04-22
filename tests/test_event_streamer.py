@@ -14,24 +14,31 @@ class AsyncEventIterator:
         self._events = iter(events)
 
     def __aiter__(self):
+        """Return self as the async iterator."""
         return self
 
     async def __anext__(self):
+        """Return next item or raise StopAsyncIteration."""
         try:
             return next(self._events)
         except StopIteration:
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
 
 def make_chunk(content, reasoning_content=None):
-    """Create a mock AIMessageChunk with content and optional reasoning_content."""
-    chunk = MagicMock()
-    chunk.content = content
+    """Create a mock AIMessageChunk with content and optional reasoning_content.
+
+    ChatOllama places reasoning_content in additional_kwargs,
+    not as a direct attribute on the chunk.
+    """
+    from langchain_core.messages import AIMessageChunk
+
     if reasoning_content is not None:
-        chunk.reasoning_content = reasoning_content
-    else:
-        del chunk.reasoning_content
-    return chunk
+        return AIMessageChunk(
+            content=content,
+            additional_kwargs={"reasoning_content": reasoning_content},
+        )
+    return AIMessageChunk(content=content)
 
 
 class TestAstreamAgentEvents:
@@ -87,7 +94,7 @@ class TestAstreamAgentEvents:
 
     @pytest.mark.asyncio
     async def test_message_complete_content_is_unfiltered(self):
-        """Test that message_complete content is NOT SQL-filtered (streamer is passthrough)."""
+        """Test message_complete content NOT SQL-filtered (streamer passthrough)."""
         from langchain_core.messages import AIMessage
 
         content = "Here:\n```sql\nSELECT 1;\n```\nDone."
@@ -190,7 +197,7 @@ class TestAstreamAgentEvents:
 
     @pytest.mark.asyncio
     async def test_tool_result_without_pending_call(self):
-        """Test that tool_result with no pending tool_call gets empty call_id + warning."""
+        """Test that tool_result with no pending tool_call gets empty call_id + warning."""  # noqa: E501
         events = [
             {
                 "event": "on_tool_end",
@@ -403,7 +410,7 @@ class TestAstreamAgentEvents:
 
         async def _raise_value_error(*args, **kwargs):
             raise ValueError("test error")
-            yield  # noqa: unreachable — makes this an async generator
+            yield  # noqa: B012 — makes this an async generator
 
         mock_agent = MagicMock()
         mock_agent.astream_events = _raise_value_error
@@ -413,7 +420,247 @@ class TestAstreamAgentEvents:
                 pass
 
     def test_default_recursion_limit(self):
-        """Test that DEFAULT_RECURSION_LIMIT is 25."""
+        """Test that DEFAULT_RECURSION_LIMIT is 100."""
         from esdc.server.event_streamer import DEFAULT_RECURSION_LIMIT
 
-        assert DEFAULT_RECURSION_LIMIT == 25
+        assert DEFAULT_RECURSION_LIMIT == 100
+
+
+class TestImageMarkdownFallback:
+    """Tests for image markdown fallback (auto-append when LLM forgets)."""
+
+    @pytest.mark.asyncio
+    async def test_image_appended_to_final_message(self):
+        """Image from Code Interpreter is appended when missing from final response."""
+        from langchain_core.messages import AIMessage
+
+        ai_message_final = AIMessage(content="Here are the statistics:")
+
+        events = [
+            {
+                "event": "on_tool_end",
+                "data": {
+                    "output": (
+                        "Execution complete (exit code: 0):\n\n```\n"
+                        "Plot saved to: /home/user/img/test.png\n```\n\n"
+                        "![Generated Plot](http://localhost:3000/api/v1/terminals/"
+                        "server1/files/read?path=/home/user/img/test.png)"
+                    )
+                },
+                "name": "Code Interpreter",
+            },
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message_final},
+                "name": "chat_model",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        # Image markdown should be appended
+        assert "![Generated Plot]" in msg_events[0]["ai_message"].content
+        img_url = (
+            "http://localhost:3000/api/v1/terminals/server1/files/read?path="
+            "/home/user/img/test.png"
+        )
+        assert img_url in msg_events[0]["ai_message"].content
+
+    @pytest.mark.asyncio
+    async def test_image_not_duplicated_when_already_present(self):
+        """Image is NOT appended if already present in final response."""
+        from langchain_core.messages import AIMessage
+
+        # LLM already includes the image
+        img_url = (
+            "http://localhost:3000/api/v1/terminals/server1/files/read?path="
+            "/home/user/img/test.png"
+        )
+        ai_message_final = AIMessage(
+            content=f"Here is the plot:\n\n![Generated Plot]({img_url})"
+        )
+
+        events = [
+            {
+                "event": "on_tool_end",
+                "data": {"output": f"![Generated Plot]({img_url})"},
+                "name": "Code Interpreter",
+            },
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message_final},
+                "name": "chat_model",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        content = msg_events[0]["ai_message"].content
+        # Should contain exactly one occurrence
+        assert content.count("![Generated Plot]") == 1
+
+    @pytest.mark.asyncio
+    async def test_image_not_appended_to_intermediate_message(self):
+        """Image is NOT appended to intermediate messages with tool_calls."""
+        from langchain_core.messages import AIMessage
+
+        # Intermediate message with tool_calls
+        ai_message_intermediate = AIMessage(content="Let me run Code Interpreter")
+        ai_message_intermediate.tool_calls = [
+            {
+                "name": "Code Interpreter",
+                "args": {"code": "print('test')"},
+                "id": "call_abc",
+            },
+        ]
+
+        events = [
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message_intermediate},
+                "name": "chat_model",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        # Should NOT be modified
+        assert msg_events[0]["ai_message"].content == "Let me run Code Interpreter"
+        # Should still have tool_calls
+        assert len(msg_events[0]["ai_message"].tool_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_images_all_appended(self):
+        """Multiple images from multiple Code Interpreter calls are all appended."""
+        from langchain_core.messages import AIMessage
+
+        ai_message_final = AIMessage(content="Analysis complete.")
+
+        events = [
+            {
+                "event": "on_tool_end",
+                "data": {"output": "![Generated Plot](http://localhost/img1.png)"},
+                "name": "Code Interpreter",
+            },
+            {
+                "event": "on_tool_end",
+                "data": {"output": "![Generated Plot](http://localhost/img2.png)"},
+                "name": "Code Interpreter",
+            },
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message_final},
+                "name": "chat_model",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        content = msg_events[0]["ai_message"].content
+        # Should have both images
+        assert "http://localhost/img1.png" in content
+        assert "http://localhost/img2.png" in content
+        assert content.count("![Generated Plot]") == 2
+
+    @pytest.mark.asyncio
+    async def test_partial_images_appended(self):
+        """Only missing images are appended when some are already present."""
+        from langchain_core.messages import AIMessage
+
+        # LLM includes first image but not second
+        ai_message_final = AIMessage(
+            content="First plot:\n\n![Generated Plot](http://localhost/img1.png)"
+        )
+
+        events = [
+            {
+                "event": "on_tool_end",
+                "data": {"output": "![Generated Plot](http://localhost/img1.png)"},
+                "name": "Code Interpreter",
+            },
+            {
+                "event": "on_tool_end",
+                "data": {"output": "![Generated Plot](http://localhost/img2.png)"},
+                "name": "Code Interpreter",
+            },
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message_final},
+                "name": "chat_model",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        content = msg_events[0]["ai_message"].content
+        # Should have both images (one from LLM, one appended)
+        assert content.count("![Generated Plot]") == 2
+        assert "img1.png" in content
+        assert "img2.png" in content
+
+    @pytest.mark.asyncio
+    async def test_no_images_when_no_code_interpreter(self):
+        """No modification when no Code Interpreter tool results."""
+        from langchain_core.messages import AIMessage
+
+        ai_message_final = AIMessage(content="No images here.")
+
+        events = [
+            {
+                "event": "on_tool_end",
+                "data": {"output": "Some SQL result"},
+                "name": "execute_sql",
+            },
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message_final},
+                "name": "chat_model",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert len(msg_events) == 1
+        # Should NOT be modified
+        assert msg_events[0]["ai_message"].content == "No images here."

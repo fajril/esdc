@@ -7,6 +7,8 @@ from esdc.providers.base import Provider, ProviderConfig
 
 
 class OpenAICompatibleProvider(Provider):
+    """Provider for OpenAI-compatible API servers."""
+
     NAME = "OpenAI-Compatible"
 
     @classmethod
@@ -41,13 +43,30 @@ class OpenAICompatibleProvider(Provider):
         base_url: str | None = None,
         api_key: str | None = None,
         temperature: float = 0.0,
+        reasoning_effort: str | None = None,
         **kwargs,
     ) -> ChatOpenAI:
-        """Create a ChatOpenAI instance with custom base URL."""
+        """Create a ChatOpenAI instance with custom base URL.
+
+        Args:
+            model: Model name (required)
+            base_url: OpenAI-compatible API base URL (required)
+            api_key: API key for authentication
+            temperature: Sampling temperature
+            reasoning_effort: Reasoning effort level passed as extra_body
+                parameter. Supported by some OpenAI-compatible backends.
+            **kwargs: Additional keyword arguments passed to ChatOpenAI.
+        """
         if not model:
             raise ValueError("model is required for OpenAI-Compatible provider")
         if not base_url:
             raise ValueError("base_url is required for OpenAI-Compatible provider")
+
+        if reasoning_effort is not None:
+            kwargs["extra_body"] = {
+                **kwargs.get("extra_body", {}),
+                "reasoning_effort": reasoning_effort,
+            }
 
         return ChatOpenAI(
             model=model,

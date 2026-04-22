@@ -27,6 +27,7 @@ class KGSchema:
     """
 
     def __init__(self, schema_path: Path | str | None = None) -> None:
+        """Initialize the schema loader."""
         path = Path(schema_path) if schema_path else _SCHEMA_PATH
         if not path.exists():
             raise FileNotFoundError(f"KG schema file not found: {path}")

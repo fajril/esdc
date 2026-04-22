@@ -186,6 +186,22 @@ async def chat_completions(
     use_native = should_use_native_format(headers, request.stream)
     logger.debug(f"[REQUEST {request_id}] use_native_format={use_native}")
 
+    # DEBUG: Log tools parameter if present (for OpenTerminal passthrough investigation)
+    request_tools = getattr(request, "tools", None)
+    if request_tools:
+        tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in request_tools
+        ]
+        logger.info(
+            "[REQUEST %s] CHAT_TOOLS_PRESENT: count=%d, names=%s",
+            request_id,
+            len(request_tools),
+            tool_names,
+        )
+
     try:
         if request.stream:
             # Return streaming response
@@ -197,8 +213,8 @@ async def chat_completions(
                         messages=request.messages,
                         model=request.model,
                         temperature=request.temperature or 0.7,
-                        use_native_format=use_native,
                         request_id=request_id,
+                        reasoning_effort=request.reasoning_effort,
                     ):
                         yield f"data: {chunk}\n\n"
 
@@ -242,52 +258,32 @@ async def chat_completions(
                     model=request.model,
                     temperature=request.temperature or 0.7,
                     use_native_format=use_native,
+                    reasoning_effort=request.reasoning_effort,
                 )
 
                 logger.info(f"[REQUEST {request_id}] Non-streaming response completed")
 
-                # Handle both native OpenAI format and legacy format
-                if "choices" in result:
-                    # Native OpenAI format - result is already ChatCompletion-like
-                    return ChatCompletionResponse(
-                        id=result.get("id", request_id),
-                        created=result.get("created", created),
-                        model=result.get("model", request.model),
-                        choices=[
-                            Choice(
-                                message=Message(
-                                    role=result["choices"][0]["message"].get(
-                                        "role", "assistant"
-                                    ),
-                                    content=result["choices"][0]["message"].get(
-                                        "content", ""
-                                    ),
-                                    tool_calls=result["choices"][0]["message"].get(
-                                        "tool_calls"
-                                    ),
+                # Result is always OpenAI format
+                return ChatCompletionResponse(
+                    id=result["id"],
+                    created=result["created"],
+                    model=result["model"],
+                    choices=[
+                        Choice(
+                            message=Message(
+                                role=result["choices"][0]["message"].get(
+                                    "role", "assistant"
                                 ),
-                                finish_reason=result["choices"][0].get(
-                                    "finish_reason", "stop"
+                                content=result["choices"][0]["message"].get(
+                                    "content", ""
                                 ),
-                            )
-                        ],
-                    )
-                else:
-                    # Legacy format - simple dict with role/content/finish_reason
-                    return ChatCompletionResponse(
-                        id=request_id,
-                        created=created,
-                        model=request.model,
-                        choices=[
-                            Choice(
-                                message=Message(
-                                    role=result.get("role", "assistant"),
-                                    content=result.get("content", ""),
-                                ),
-                                finish_reason=result.get("finish_reason", "stop"),
-                            )
-                        ],
-                    )
+                            ),
+                            finish_reason=result["choices"][0].get(
+                                "finish_reason", "stop"
+                            ),
+                        )
+                    ],
+                )
 
             except Exception as e:
                 error_msg = f"{type(e).__name__}: {str(e)}"
@@ -334,6 +330,33 @@ async def create_response(
         f"input={input_type}, model={request.model}"
     )
 
+    # DEBUG: Log raw tools parameter for OpenTerminal passthrough investigation
+    tools_raw_preview = "None"
+    if request.tools:
+        tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in request.tools
+        ]
+        tools_raw_preview = f"count={len(request.tools)}, names={tool_names}"
+    logger.debug(
+        "[RESPONSES %s] RAW_REQUEST: tools=%s, instructions_len=%d, "
+        "instructions_preview=%s, stream=%s, input_type=%s",
+        request_id,
+        tools_raw_preview,
+        len(request.instructions) if request.instructions else 0,
+        (request.instructions or "")[:200] if request.instructions else "None",
+        request.stream,
+        input_type,
+    )
+    logger.debug(
+        "[RESPONSES %s] RAW_REQUEST_HEADERS: content_type=%s, user_agent=%s",
+        request_id,
+        request_obj.headers.get("content-type", ""),
+        request_obj.headers.get("user-agent", ""),
+    )
+
     try:
         if request.stream:
             # Return streaming response
@@ -347,6 +370,7 @@ async def create_response(
                         instructions=request.instructions,
                         tools=request.tools,
                         temperature=request.temperature or 0.7,
+                        reasoning_effort=request.reasoning_effort,
                     ):
                         yield event
 
@@ -377,6 +401,7 @@ async def create_response(
                     instructions=request.instructions,
                     tools=request.tools,
                     temperature=request.temperature or 0.7,
+                    reasoning_effort=request.reasoning_effort,
                 )
 
                 logger.info(

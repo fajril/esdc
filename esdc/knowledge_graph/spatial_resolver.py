@@ -56,8 +56,11 @@ class SpatialResolver:
             with contextlib.suppress(Exception):
                 self._conn.execute("INSTALL spatial")
             self._conn.execute("LOAD spatial")
+            with contextlib.suppress(Exception):
+                self._conn.execute("INSTALL vss")
+            self._conn.execute("LOAD vss")
             logger.debug(
-                "[Spatial] DuckDB connection established with spatial extension"
+                "[Spatial] DuckDB connection established with spatial + vss extensions"
             )
         return self._conn
 

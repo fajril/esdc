@@ -17,7 +17,7 @@ class TestProblemClusterDefinitions:
 
     def test_all_clusters_have_required_fields(self):
         """All clusters must have code, name, category, definition."""
-        for code, cluster in PROBLEM_CLUSTERS.items():
+        for _code, cluster in PROBLEM_CLUSTERS.items():
             assert "name" in cluster
             assert "category" in cluster
             assert "definition" in cluster
@@ -43,7 +43,7 @@ class TestProblemClusterDefinitions:
         """Filter clusters by category."""
         technical = get_clusters_by_category("Technical")
         assert len(technical) > 0
-        for code, cluster in technical.items():
+        for _code, cluster in technical.items():
             assert "Technical" in cluster["category"]
 
 

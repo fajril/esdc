@@ -39,9 +39,6 @@ from .functions import (
     detect_report_year_from_query,
     detect_substance_from_query,
     detect_volume_type_from_query,
-    enrich_sql_query,
-    extract_selected_columns,
-    extract_table_from_sql,
     format_response_value,
     format_timeseries_response,
     get_aggregation_table_info,
@@ -57,11 +54,9 @@ from .functions import (
     get_timeseries_columns,
     get_use_case_sql_pattern,
     get_volume_columns,
-    is_already_enriched,
     is_forecast_data,
-    requires_classification_context,
     resolve_concept,
-    should_include_remarks,
+    # should_include_remarks,  # Removed - no longer used
     should_use_risked_columns,
 )
 
@@ -198,13 +193,6 @@ __all__ = [
     "get_volume_columns",
     "build_aggregate_query",
     "get_recommended_table",
-    # Functions - Query Enrichment (New)
-    "enrich_sql_query",
-    "extract_table_from_sql",
-    "extract_selected_columns",
-    "is_already_enriched",
-    "requires_classification_context",
-    "should_include_remarks",
     # Functions - Volume Column Helpers (New)
     "detect_substance_from_query",
     "detect_volume_type_from_query",

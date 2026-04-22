@@ -1,5 +1,4 @@
-"""
-ESDC Data Management Module
+"""ESDC Data Management Module.
 
 This module provides functionality for managing data
 related to the ESDC (https://esdc.skkmigas.go.id).
@@ -63,6 +62,7 @@ from tabulate import tabulate
 console = Console()
 
 from esdc.chat.app import ESDCChatApp  # noqa: E402
+from esdc.commands.configs import configs_app  # noqa: E402
 from esdc.commands.provider import provider_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
 from esdc.dbmanager import load_data_to_db, run_query  # noqa: E402
@@ -75,6 +75,7 @@ TABLES: tuple[TableName, TableName] = (
 
 app = typer.Typer(no_args_is_help=False)
 app.add_typer(provider_app, name="provider")
+app.add_typer(configs_app, name="configs")
 
 
 @app.callback()
@@ -652,10 +653,10 @@ def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes |
 
 
 def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
-    """
-    Reads a CSV file and returns its contents as a tuple of two values:
-    a list of lists of strings representing the data,
-    and a list of strings representing the header.
+    """Reads a CSV file and returns its contents as a tuple.
+
+    Returns a tuple of (data, header) where data is a list of lists of strings
+    and header is a list of strings.
 
     Args:
         file: The path to the CSV file as a string,

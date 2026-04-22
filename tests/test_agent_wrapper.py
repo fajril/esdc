@@ -2,7 +2,7 @@
 
 # Standard library
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 # Third-party
 import pytest
@@ -141,66 +141,70 @@ class TestAgentWrapperIntegration:
         """Test generate_response with mocked astream_agent_events."""
         from esdc.server.agent_wrapper import generate_response
 
-        with patch(
-            "esdc.server.agent_wrapper.Config.get_provider_config"
-        ) as mock_config:
-            with patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm:
-                with patch("esdc.server.agent_wrapper.create_agent") as mock_agent:
-                    mock_config.return_value = {
-                        "provider": "ollama",
-                        "model": "test-model",
-                    }
-                    mock_llm.return_value = MagicMock()
-                    mock_agent.return_value = MagicMock()
+        with (
+            patch(
+                "esdc.server.agent_wrapper.Config.get_provider_config"
+            ) as mock_config,
+            patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm,
+            patch("esdc.server.agent_wrapper.create_agent") as mock_agent,
+        ):
+            mock_config.return_value = {
+                "provider": "ollama",
+                "model": "test-model",
+            }
+            mock_llm.return_value = MagicMock()
+            mock_agent.return_value = MagicMock()
 
-                    async def _astream_events(*args, **kwargs):
-                        yield {"type": "token", "content": "Test response"}
+            async def _astream_events(*args, **kwargs):
+                yield {"type": "token", "content": "Test response"}
 
-                    with patch(
-                        "esdc.server.agent_wrapper.astream_agent_events",
-                        _astream_events,
-                    ):
-                        result = await generate_response(
-                            messages=[MagicMock(role="user", content="Hello")],
-                            model="iris",
-                        )
+            with patch(
+                "esdc.server.agent_wrapper.astream_agent_events",
+                _astream_events,
+            ):
+                result = await generate_response(
+                    messages=[MagicMock(role="user", content="Hello")],
+                    model="iris",
+                )
 
-                        assert isinstance(result, dict)
-                        assert "choices" in result
-                        assert result["choices"][0]["message"]["role"] == "assistant"
-                        assert result["choices"][0]["finish_reason"] == "stop"
+                assert isinstance(result, dict)
+                assert "choices" in result
+                assert result["choices"][0]["message"]["role"] == "assistant"
+                assert result["choices"][0]["finish_reason"] == "stop"
 
     @pytest.mark.asyncio
     async def test_generate_streaming_response_mock(self):
         """Test generate_streaming_response with mocked astream_agent_events."""
-        with patch(
-            "esdc.server.agent_wrapper.Config.get_provider_config"
-        ) as mock_config:
-            with patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm:
-                with patch("esdc.server.agent_wrapper.create_agent") as mock_agent:
-                    mock_config.return_value = {
-                        "provider": "ollama",
-                        "model": "test-model",
-                    }
-                    mock_llm.return_value = MagicMock()
-                    mock_agent.return_value = MagicMock()
+        with (
+            patch(
+                "esdc.server.agent_wrapper.Config.get_provider_config"
+            ) as mock_config,
+            patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm,
+            patch("esdc.server.agent_wrapper.create_agent") as mock_agent,
+        ):
+            mock_config.return_value = {
+                "provider": "ollama",
+                "model": "test-model",
+            }
+            mock_llm.return_value = MagicMock()
+            mock_agent.return_value = MagicMock()
 
-                    async def _astream_events(*args, **kwargs):
-                        yield {"type": "token", "content": "Test"}
+            async def _astream_events(*args, **kwargs):
+                yield {"type": "token", "content": "Test"}
 
-                    with patch(
-                        "esdc.server.agent_wrapper.astream_agent_events",
-                        _astream_events,
-                    ):
-                        chunks = []
-                        async for chunk in generate_streaming_response(
-                            messages=[MagicMock(role="user", content="Hello")],
-                            model="iris",
-                        ):
-                            chunks.append(json.loads(chunk))
+            with patch(
+                "esdc.server.agent_wrapper.astream_agent_events",
+                _astream_events,
+            ):
+                chunks = []
+                async for chunk in generate_streaming_response(
+                    messages=[MagicMock(role="user", content="Hello")],
+                    model="iris",
+                ):
+                    chunks.append(json.loads(chunk))
 
-                        assert len(chunks) > 0
-                        assert all("choices" in c for c in chunks)
+                assert len(chunks) > 0
+                assert all("choices" in c for c in chunks)
 
     @pytest.mark.asyncio
     async def test_generate_response_no_provider(self):
@@ -211,8 +215,9 @@ class TestAgentWrapperIntegration:
             messages=[MagicMock(role="user", content="Hello")],
         )
 
-        assert "Error" in result["content"]
-        assert result["finish_reason"] == "stop"
+        assert isinstance(result, dict)
+        assert "choices" in result
+        assert "Error" in result["choices"][0]["message"]["content"]
 
     @pytest.mark.asyncio
     async def test_generate_streaming_response_no_provider(self):
@@ -262,7 +267,7 @@ async def test_generate_streaming_response_real_token_streaming():
         ),
     ):
         async for chunk in generate_streaming_response(
-            messages=messages, use_native_format=True
+            messages=messages,
         ):
             data = json.loads(chunk)
             delta = data.get("choices", [{}])[0].get("delta", {})
@@ -301,7 +306,7 @@ async def test_generate_streaming_response_recursion_error():
         ),
     ):
         async for chunk in generate_streaming_response(
-            messages=messages, use_native_format=True
+            messages=messages,
         ):
             data = json.loads(chunk)
             delta = data.get("choices", [{}])[0].get("delta", {})

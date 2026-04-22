@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import duckdb
@@ -19,10 +20,8 @@ def mock_spatial_db(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
 
     # Load spatial extension
-    try:
+    with contextlib.suppress(Exception):
         conn.execute("INSTALL spatial")
-    except Exception:
-        pass
     conn.execute("LOAD spatial")
 
     # Create table with test data

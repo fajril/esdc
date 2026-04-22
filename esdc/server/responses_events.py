@@ -283,6 +283,56 @@ def create_function_call_arguments_done_event(
 
 
 # =============================================================================
+# Reasoning Summary Events (Open Responses API spec)
+# =============================================================================
+
+
+def create_reasoning_summary_text_delta_event(
+    sequence_number: int,
+    output_index: int,
+    content_index: int,
+    item_id: str,
+    delta: str,
+) -> dict[str, Any]:
+    """Event: response.reasoning_summary_text.delta.
+
+    Emitted for each chunk of reasoning summary text.
+    Per Open Responses API spec, reasoning items contain summary
+    text parts that explain the model's thinking process.
+    """
+    return {
+        "type": "response.reasoning_summary_text.delta",
+        "sequence_number": sequence_number,
+        "output_index": output_index,
+        "content_index": content_index,
+        "item_id": item_id,
+        "delta": delta,
+    }
+
+
+def create_reasoning_summary_text_done_event(
+    sequence_number: int,
+    output_index: int,
+    content_index: int,
+    item_id: str,
+    text: str,
+) -> dict[str, Any]:
+    """Event: response.reasoning_summary_text.done.
+
+    Emitted when a reasoning summary text part is complete.
+    Contains the full accumulated reasoning text.
+    """
+    return {
+        "type": "response.reasoning_summary_text.done",
+        "sequence_number": sequence_number,
+        "output_index": output_index,
+        "content_index": content_index,
+        "item_id": item_id,
+        "text": text,
+    }
+
+
+# =============================================================================
 # Non-Streaming Response Helper
 # =============================================================================
 

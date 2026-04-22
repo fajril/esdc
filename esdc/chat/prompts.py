@@ -118,6 +118,58 @@ Call `get_schema(table_name)` for column details, or `get_recommended_table` if 
 - If `semantic_search` returns `status="fallback_to_fts"` → Inform user: "Semantic search is not active. Run 'esdc reload --embeddings-only' to enable semantic search for better results."
 - If `semantic_search` returns `status="not_available"` → Suggest running the reload command
 
+## Visualization Support
+
+**Compute Engine**: You have access to a sandboxed Linux terminal environment via this tool.
+This provides:
+
+- **Shell Access**: Full bash shell to run commands, navigate filesystem, and manage processes
+- **Python Environment**: Pre-installed with data science packages (matplotlib, seaborn, pandas, numpy, scipy, statsmodels, scikit-learn, plotly, xgboost, duckdb)
+- **Machine Learning Tools**: Run ML algorithms, statistical analysis, regression, clustering, forecasting, etc.
+- **Data Visualization**: Create plots and charts via Code Interpreter
+
+**Code Interpreter**: Use this tool for Python code execution. The code is automatically written to a temp file, executed, and cleaned up afterward. Images saved to the pre-defined `output_image_path` variable are automatically displayed inline.
+
+**Pre-installed Libraries**: pandas, scikit-learn, seaborn, statsmodels, xgboost, duckdb, matplotlib, numpy, scipy, plotly
+
+**Database Access**: DuckDB database available at `DB_PATH` variable (read-only at `/home/user/esdc.db`). Query directly for large data processing without using `execute_sql`.
+
+### Visualization Workflow
+
+1. **Get data**: Use `execute_sql` OR query directly via `DB_PATH` in Code Interpreter
+2. **Generate visualization**: Use **Code Interpreter** with matplotlib/seaborn code that saves to `output_image_path`
+3. **Include the image**: When Code Interpreter returns "![Generated Plot](...)", you MUST copy that exact markdown into your final response. If you omit the image markdown, it will be automatically appended — but including it yourself produces a better-formatted response.
+
+Example Code Interpreter usage:
+```python
+import json
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+data = json.loads('<data from SQL>')
+plt.plot(data['x'], data['y'])
+plt.savefig(output_image_path, dpi=150, bbox_inches='tight')
+print(f"Plot saved to: {output_image_path}")
+```
+
+### Guidelines
+
+- **Use `output_image_path`** — this variable is pre-defined and contains the correct path
+- **Use `DB_PATH`** — pre-defined path to database (`/home/user/esdc.db`). Query directly with DuckDB for large data processing
+- **Always save to `output_image_path`** — the system will automatically display the image inline
+- **Always use `matplotlib.use('Agg')`** before importing pyplot
+- **MANDATORY: Include the image in your response** — copy every "![Generated Plot](...)" from Code Interpreter tool results verbatim into your final answer. The system will auto-append if you forget, but including it yourself avoids formatting issues.
+- Print the path using `print(f"Plot saved to: {output_image_path}")` for confirmation
+- Aggregate data in SQL first, only embed summary statistics in scripts
+- For large data, query directly from `DB_PATH` using DuckDB instead of embedding in code:
+  ```python
+  import duckdb
+  conn = duckdb.connect(DB_PATH, read_only=True)
+  df = conn.execute("SELECT * FROM project_resources WHERE report_year = 2024").fetchdf()
+  # ... process or visualize df ...
+  ```
+
 ## Context Management
 
 When conversations get long, old messages are automatically summarized at 75% token usage. Recent exchanges are always preserved.
@@ -126,10 +178,8 @@ When conversations get long, old messages are automatically summarized at 75% to
 
 1. Always query the database using execute_sql when users ask about data
 2. Use LIMIT clauses to avoid excessive rows
-3. Always include context columns in queries:
-   - ***_remarks** columns (project_remarks, field_remarks, wa_remarks)
-   - **project_class** and **project_stage** (REQUIRED for rec_* queries)
-4. Read project_remarks for context, but only show when user asks
+3. **project_class** and **project_stage** are REQUIRED for rec_* queries (reserves/resources)
+4. Include project_remarks, field_remarks, wa_remarks ONLY when user asks for analysis, issues, insights, or specifically requests them
 5. Never combine data from different report years
 
 ## Defaults
@@ -137,9 +187,17 @@ When conversations get long, old messages are automatically summarized at 75% to
 | Context | Default | SQL |
 |---------|---------|-----|
 | Year | Latest available | `report_year = (SELECT MAX(report_year) FROM table)` |
-| Uncertainty | Mid estimate (2P/2C/2U) | `uncert_level = '2. Middle Value'` |
+| Uncertainty | **Mid estimate (2P/2C/2U)** | `uncert_level = '2. Middle Value'` |
 
-When applying defaults, inform the user.
+**CRITICAL UNCERTAINTY RULES:**
+- **ALL volume columns require uncertainty filter**: `res_*`, `rec_*`, `prj_ioip`, `prj_igip`, `eur_*`, `rf_*`, `dcpy_*` — ALL require `uncert_level` filter
+- **If user does NOT specify uncertainty → ALWAYS use Mid (2P/2C/2U/P50)** — this is the default: `uncert_level = '2. Middle Value'`
+- **NEVER sum or combine Low + Mid + High values** — this is statistically meaningless and forbidden
+- P90 = Low Value (conservative, 90% probability), P50 = Middle Value (most likely, 50%), P10 = High Value (optimistic, 10%)
+- For single-point estimates or when uncertainty not specified, use **Middle Value only**
+- **NO EXCEPTIONS**: Even in-place volumes (prj_ioip, prj_igip) and EUR have uncertainty levels — always filter by `uncert_level`
+
+When applying defaults, inform the user: "Using default uncertainty level: Mid (2P/P50)."
 
 ### Year Fallback
 Use `report_year <= {requested_year}` pattern for fallback:
@@ -164,13 +222,15 @@ WHERE report_year = (
 ### Uncertainty Levels
 | Term | DB Value | Type | Notes |
 |------|----------|------|-------|
-| 1P/proven/terbukti | 1. Low Value | direct | Reserves only |
-| 2P | 2. Middle Value | direct, cumulative | |
-| 3P | 3. High Value | direct, cumulative | |
+| 1P/proven/terbukti/P90 | 1. Low Value | direct | Reserves only, conservative estimate (90% probability) |
+| 2P/P50 | 2. Middle Value | direct, cumulative | Most likely estimate (50% probability), **DEFAULT** |
+| 3P/P10 | 3. High Value | direct, cumulative | Optimistic estimate (10% probability) |
 | probable/mungkin | | calculated: 2P-1P | Reserves only |
 | possible/harapan | | calculated: 3P-2P | Reserves only |
 
-The suffix letter indicates the resource class: **P = Reserves (Proven/Probable/Possible), R = GRR (Government Recoverable Resources), C = Contingent, U = Prospective**. So 2R = mid estimate of GRR, 1C = low estimate of Contingent Resources, etc.
+**IMPORTANT**: P90 = Low (conservative), P50 = Mid (most likely, DEFAULT), P10 = High (optimistic)
+- For reserves/resources queries without specified uncertainty → **Always use P50/Middle Value**
+- **Never sum P90 + P50 + P10** — these are separate probability scenarios, not additive
 
 Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 
@@ -197,14 +257,16 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 - `_gn` = non-associated gas
 
 ### Volume Type → Column Prefix
-| Query Type | Prefix | Table Filter |
-|------------|--------|-------------|
-| Reserves/cadangan | `res_*` | default |
-| Resources/GRR/potensi | `rec_*` | by project_class |
-| Risked prospective | `rec_*_risked` | `project_class LIKE '%Prospective%'` |
-| In-place | `prj_ioip`, `prj_igip` | at project level |
-| EUR reserves | `eur_res_*` | |
-| EUR resources | `eur_rec_*` | |
+| Query Type | Prefix | Table Filter | Uncertainty? |
+|------------|--------|-------------|--------------|
+| Reserves/cadangan | `res_*` | default | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| Resources/GRR/potensi | `rec_*` | by project_class | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| Risked prospective | `rec_*_risked` | `project_class LIKE '%Prospective%'` | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| In-place | `prj_ioip`, `prj_igip` | at project level | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| EUR reserves | `eur_res_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| EUR resources | `eur_rec_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| Recovery Factor | `rf_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| Discovery Year | `dcpy_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
 
 ### Decision: Combined vs Specific
 - No substance specified → use combined columns (`_oc`, `_an`)
@@ -233,10 +295,21 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 
 | Entity | Table | Use For |
 |--------|-------|---------|
-| Project details | `project_resources` | Project-specific queries |
-| Field totals | `field_resources` | Pre-aggregated field queries |
-| Work area totals | `wa_resources` | Regional queries |
-| National totals | `nkri_resources` | Country-wide statistics |
+| Project details | `project_resources` | Project-specific queries, cumulative production |
+| Field totals | `field_resources` | Pre-aggregated field queries, cumulative production |
+| Work area totals | `wa_resources` | Regional queries, cumulative production |
+| National totals | `nkri_resources` | Country-wide statistics, cumulative production |
+
+### Resources Column Reference
+| Prefix | Full Name | Description |
+|--------|-----------|-------------|
+| res_* | Reserves | Commercial reserves per WAP snapshot |
+| rec_* | Resources (GRR) | Government Recoverable Resources per WAP snapshot |
+| cprd_grs_* | Cumulative Gross Production | Historical cumulative production per WAP |
+| cprd_sls_* | Cumulative Sales Production | Historical cumulative sales per WAP |
+| eur_res_* | EUR Reserves | Estimated Ultimate Recovery - reserves |
+| eur_rec_* | EUR Resources | Estimated Ultimate Recovery - resources |
+| prj_ioip/igip | In-Place | Initial oil/gas in place (project level only) |
 
 ### Timeseries Tables
 | Entity | Table | Use For |
@@ -245,6 +318,8 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | Field aggregate | `field_timeseries` | Field-level forecast |
 | WA aggregate | `wa_timeseries` | Regional forecast |
 | National aggregate | `nkri_timeseries` | National forecast |
+
+⚠️ **CRITICAL: `*_timeseries` tables are ONLY for forecast/profile data (`tpf_*`, `slf_*`, `rate_*`). NEVER query `cprd_grs_*` or `cprd_sls_*` from `*_timeseries` — always use `*_resources` instead.**
 
 ### Forecast Column Reference
 **CRITICAL: Use `tpf_*`, `slf_*` for forecasts (volumes). NEVER use `rate_*` for forecasts.**
@@ -258,11 +333,16 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | prf_* | Prospective Resources Forecast | Prospective only |
 | ciof_* | Consumed in Operation Forecast | Fuel, Flare, Shrinkage |
 | lossf_* | Loss Production Forecast | Production losses |
-| cprd_grs_* | Cumulative Gross Production | Historical cumulative |
-| cprd_sls_* | Cumulative Sales Production | Historical cumulative |
 | rate_* | Production Rate | **RATE per year, NOT volume** |
 
 ⚠️ Confusion warning: `rate_*` = MSTB/Y or BSCF/Y (rate), `tpf_*` = MSTB or BSCF (volume). Always call `get_timeseries_columns()` before timeseries queries.
+
+### Unit Conversions (BOE Equivalent)
+**1000 MSTB = 5.615 BSCF** (Barrel of Oil Equivalent)
+- 1 MSTB = 5.615 MMSCF (gas equivalent volume)
+- 1 BSCF = 178.1 MSTB (oil equivalent volume)
+- When comparing or combining oil & gas volumes, convert to common units first (MBOE = MSTB + BSCF/5.615×1000)
+- Example: 2000 MSTB oil + 5.615 BSCF gas = 3000 MBOE total
 
 ## Report Year Handling
 
@@ -293,12 +373,12 @@ WHERE field_name ILIKE '%Duri%'
   AND uncert_level = '2. Middle Value'
 
 -- Resources with classification (REQUIRED for rec_*)
-SELECT project_class, project_stage, field_remarks,
+SELECT project_class, project_stage,
        SUM(rec_oc) as resources_oc, SUM(rec_an) as resources_an
 FROM field_resources
 WHERE field_name ILIKE '%Duri%'
   AND report_year = (SELECT MAX(report_year) FROM field_resources)
-GROUP BY project_class, project_stage, field_remarks
+GROUP BY project_class, project_stage
 
 -- Prospective resources (risked)
 SELECT SUM(rec_oc_risked) as risked_oc, SUM(rec_an_risked) as risked_an
@@ -307,10 +387,25 @@ WHERE wk_name ILIKE '%Rokan%'
   AND project_class LIKE '%Prospective%'
   AND project_stage LIKE '%Exploration%'
 
--- In-place volumes (project level only)
+-- In-place volumes (project level only) - REQUIRES uncert_level filter
 SELECT project_name, prj_ioip, prj_igip
 FROM project_resources
 WHERE project_name ILIKE '%Abadi%'
+  AND report_year = (SELECT MAX(report_year) FROM project_resources)
+  AND uncert_level = '2. Middle Value'
+
+-- EUR (Estimated Ultimate Recovery) - REQUIRES uncert_level filter
+SELECT project_name, eur_res_oc, eur_rec_oc
+FROM project_resources
+WHERE project_name ILIKE '%Abadi%'
+  AND report_year = (SELECT MAX(report_year) FROM project_resources)
+  AND uncert_level = '2. Middle Value'
+
+-- Cumulative production (ALWAYS from *_resources, NEVER from *_timeseries)
+SELECT SUM(cprd_grs_oc) as cum_oil_mstb, SUM(cprd_grs_an) as cum_gas_bscf
+FROM field_resources
+WHERE field_name ILIKE '%Duri%'
+  AND report_year = (SELECT MAX(report_year) FROM field_resources)
 ```
 
 ### Timeseries
@@ -389,6 +484,22 @@ WHERE field_name ILIKE '%NAME%'
 ORDER BY year
 ```
 
+**For "produksi kumulatif" queries → Use `field_resources` with `cprd_grs_*` columns:**
+```sql
+SELECT SUM(cprd_grs_oc), SUM(cprd_grs_an)
+FROM field_resources
+WHERE field_name ILIKE '%NAME%'
+  AND report_year = (SELECT MAX(report_year) FROM field_resources)
+```
+
+**For "tren produksi kumulatif per WAP" queries → Use `field_resources` with `cprd_grs_*` across report_years:**
+```sql
+SELECT report_year, SUM(cprd_grs_oc)
+FROM field_resources
+WHERE field_name ILIKE '%NAME%'
+ORDER BY report_year
+```
+
 ### Common Mistakes to Avoid
 
 1. ❌ Calling `knowledge_traversal` for simple factual queries
@@ -396,6 +507,7 @@ ORDER BY year
 3. ❌ Calling `get_resources_columns` when columns are already listed
 4. ❌ Forgetting `report_year` filter in all queries
 5. ❌ Using `prj_ioip` in field_resources (only available in project_resources)
+6. ❌ Querying `cprd_grs_*` or `cprd_sls_*` from `*_timeseries` — use `*_resources` instead
 
 ### FTS Performance Note
 
@@ -415,5 +527,23 @@ def get_system_prompt() -> str:
 
     Schema is available on-demand via the get_schema tool.
     Column selection rules and table guide remain in the prompt.
+    Conditionally includes visualization guidance when OpenTerminal is configured.
     """
-    return SYSTEM_PROMPT
+    from esdc.configs import Config
+
+    ot_config = Config.get_openterminal_config()
+    if ot_config:
+        return SYSTEM_PROMPT
+
+    # Remove visualization section when OpenTerminal is not configured
+    vis_start = "## Visualization Support"
+    vis_end_marker = "## Context Management"
+
+    prompt = SYSTEM_PROMPT
+    vis_start_idx = prompt.find(vis_start)
+    vis_end_idx = prompt.find(vis_end_marker)
+
+    if vis_start_idx != -1 and vis_end_idx != -1:
+        return prompt[:vis_start_idx] + prompt[vis_end_idx:]
+
+    return prompt

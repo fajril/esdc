@@ -133,6 +133,7 @@ class KnowledgeTraversalResolver:
     """Resolve entities from database for Knowledge Traversal."""
 
     def __init__(self, db: duckdb.DuckDBPyConnection) -> None:
+        """Initialize the knowledge graph resolver."""
         self.schema = KGSchema()
         self.pattern_matcher = QueryPatternMatcher(self.schema)
         self.db = db

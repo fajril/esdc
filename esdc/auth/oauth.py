@@ -36,10 +36,13 @@ def generate_pkce_pair() -> tuple[str, str]:
 
 
 class CallbackHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for OAuth callback server."""
+
     auth_code: str | None = None
     error: str | None = None
 
     def do_GET(self):
+        """Handle GET requests to the OAuth callback endpoint."""
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
 
@@ -67,7 +70,7 @@ class CallbackHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format, *args):
-        pass
+        """Suppress default HTTP server request logging."""
 
 
 def start_callback_server() -> HTTPServer:

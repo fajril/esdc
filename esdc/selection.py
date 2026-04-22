@@ -1,6 +1,4 @@
-"""
-Enum classes for API versions, table names, and file types.
-"""
+"""Enum classes for API versions, table names, and file types."""
 
 from enum import Enum
 

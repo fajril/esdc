@@ -25,7 +25,15 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 # Local
-from esdc.chat.agent import create_agent, generate_conversation_title
+from esdc.chat.agent import (
+    create_agent,
+    generate_conversation_tags,
+    generate_conversation_title,
+)
+from esdc.chat.external_tools import (
+    categorize_tools,
+    convert_external_specs_to_langchain,
+)
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
@@ -40,6 +48,8 @@ from esdc.server.responses_events import (
     create_output_item_done_event,
     create_output_text_delta_event,
     create_output_text_done_event,
+    create_reasoning_summary_text_delta_event,
+    create_reasoning_summary_text_done_event,
     create_response_completed_event,
     create_response_created_event,
     create_response_failed_event,
@@ -48,10 +58,13 @@ from esdc.server.responses_events import (
 from esdc.server.responses_models import ResponseInputItem
 from esdc.server.stream_utils import chunk_json
 from esdc.server.title_detection import (
+    create_tags_stream_events,
+    create_tags_sync_response,
     create_title_stream_events,
     create_title_sync_response,
-    extract_user_query_from_title_request,
-    is_title_generation_request,
+    extract_user_query,
+    get_ancillary_type,
+    is_ancillary_request,
 )
 
 logger = logging.getLogger("esdc.server.responses")
@@ -61,6 +74,7 @@ class SequenceCounter:
     """Manages monotonically increasing sequence numbers for SSE events."""
 
     def __init__(self, start: int = 1):
+        """Initialize the responses API wrapper."""
         self._value = start
 
     def next(self) -> int:
@@ -283,6 +297,7 @@ async def generate_responses_stream(
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     temperature: float = 0.7,
+    reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate Responses API streaming events from LangGraph agent.
 
@@ -292,8 +307,13 @@ async def generate_responses_stream(
         input_messages: Input (string or list of items)
         model: Model ID
         instructions: System message / instructions
-        tools: Tools available to the model (not used by ESDC, tools are internal)
+        tools: Tools available to the model. If provided, tools are categorized
+            into internal (ESDC) and external (e.g. OpenTerminal). Internal tools
+            are executed server-side. External tools are not executed; when the
+            LLM calls an external tool, a function_call item is emitted for
+            OpenWebUI to handle.
         temperature: Sampling temperature
+        reasoning_effort: Reasoning effort level (none/minimal/low/medium/high/xhigh)
 
     Yields:
         SSE-formatted event strings
@@ -301,13 +321,16 @@ async def generate_responses_stream(
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
     seq = SequenceCounter()
 
-    # Bypass: Detect OpenWebUI title-generation requests
-    if is_title_generation_request(input_messages):
+    # Bypass: Detect OpenWebUI ancillary requests (title/tag generation)
+    if is_ancillary_request(input_messages):
+        anc_type = get_ancillary_type(input_messages) or "other"
+        user_query = extract_user_query(input_messages)
+
         logger.info(
-            "[RESPONSES %s] TITLE_GEN_STREAM: bypassing agent pipeline",
+            "[RESPONSES %s] ANCILLARY_STREAM: bypassing agent pipeline, type=%s",
             response_id,
+            anc_type,
         )
-        user_query = extract_user_query_from_title_request(input_messages)
 
         provider_config = Config.get_provider_config()
         if not provider_config:
@@ -323,18 +346,28 @@ async def generate_responses_stream(
             "model": provider_config.get("model"),
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
+            "reasoning_effort": reasoning_effort,
         }
         llm = create_llm_from_config(provider_config_obj)
 
-        title = await generate_conversation_title(llm, user_query)
-        logger.info(
-            "[RESPONSES %s] TITLE_GEN_STREAM: completed, title=%r",
-            response_id,
-            title,
-        )
-
-        for event in create_title_stream_events(title, response_id, model):
-            yield event
+        if anc_type == "tags":
+            result = await generate_conversation_tags(llm, user_query)
+            logger.info(
+                "[RESPONSES %s] ANCILLARY_STREAM: completed, type=tags, result=%r",
+                response_id,
+                result,
+            )
+            for event in create_tags_stream_events(result, response_id, model):
+                yield event
+        else:
+            result = await generate_conversation_title(llm, user_query)
+            logger.info(
+                "[RESPONSES %s] ANCILLARY_STREAM: completed, type=title, result=%r",
+                response_id,
+                result,
+            )
+            for event in create_title_stream_events(result, response_id, model):
+                yield event
         return
 
     # DEBUG: Track execution
@@ -379,10 +412,63 @@ async def generate_responses_stream(
         "model": provider_model,
         "base_url": base_url,
         "api_key": api_key,
+        "reasoning_effort": reasoning_effort,
     }
 
+    # Categorize tools into internal (ESDC) and external (OpenTerminal etc.)
+    (
+        internal_tool_names,
+        external_tool_names,
+        external_tool_specs,
+    ) = categorize_tools(tools)
+    external_langchain_tools = convert_external_specs_to_langchain(external_tool_specs)
+
+    # DEBUG: Log tool categorization for OpenTerminal passthrough investigation
+    raw_tool_names = []
+    if tools:
+        raw_tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in tools
+        ]
+    logger.debug(
+        "[RESPONSES %s] TOOL_CATEGORIZATION: "
+        "tools_received=%d, raw_names=%s, "
+        "internal_count=%d, internal_names=%s, "
+        "external_count=%d, external_names=%s",
+        response_id,
+        len(tools) if tools else 0,
+        raw_tool_names[:20],
+        len(internal_tool_names),
+        sorted(internal_tool_names)[:5],
+        len(external_tool_names),
+        sorted(external_tool_names),
+    )
+
+    if external_tool_names:
+        logger.info(
+            "[RESPONSES %s] External tools detected: %s",
+            response_id,
+            sorted(external_tool_names),
+        )
+
     llm = create_llm_from_config(provider_config_obj)
-    agent = create_agent(llm, checkpointer=None)
+    agent = create_agent(
+        llm,
+        checkpointer=None,
+        external_tool_names=external_tool_names,
+        external_tools=external_langchain_tools if external_langchain_tools else None,
+    )
+
+    # DEBUG: Log agent creation params
+    logger.debug(
+        "[RESPONSES %s] AGENT_CREATED: external_tool_names=%s, "
+        "external_langchain_count=%d",
+        response_id,
+        sorted(external_tool_names),
+        len(external_langchain_tools) if external_langchain_tools else 0,
+    )
 
     # Convert input to LangChain messages
     lc_messages = convert_responses_input_to_langchain(input_messages, instructions)
@@ -438,6 +524,17 @@ async def generate_responses_stream(
     content_index = 0
     last_usage: dict[str, Any] | None = None
 
+    # Reasoning state
+    in_reasoning = False
+    reasoning_item_id = ""
+    reasoning_output_index = 0
+    accumulated_reasoning = ""
+    reasoning_content_index = 0
+
+    # Track external tool call arguments for streaming in function_call items
+    # Maps tool_call_id -> JSON args string
+    pending_external_tool_args: dict[str, str] = {}
+
     try:
         stream_deadline = time.perf_counter() + SSE_STREAM_TIMEOUT
 
@@ -454,6 +551,79 @@ async def generate_responses_stream(
                 content = event["content"]
                 if not content:
                     continue
+
+                # Close reasoning if transitioning from reasoning to regular content
+                if in_reasoning:
+                    # Emit </thinking> closing tag in message stream
+                    think_close = "\n</thinking>\n\n"
+                    if current_item_id:
+                        accumulated_text += think_close
+                        close_delta_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_text_delta_event(
+                                close_delta_seq,
+                                output_index,
+                                content_index,
+                                current_item_id,
+                                think_close,
+                            )
+                        )
+
+                    # Close reasoning summary text part
+                    rs_done_seq = seq.next()
+                    yield format_sse_event(
+                        create_reasoning_summary_text_done_event(
+                            rs_done_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            accumulated_reasoning,
+                        )
+                    )
+                    # Close content part in reasoning item
+                    rs_content_done = {
+                        "type": "reasoning_summary_text",
+                        "text": accumulated_reasoning,
+                    }
+                    rs_part_done_seq = seq.next()
+                    yield format_sse_event(
+                        create_content_part_done_event(
+                            rs_part_done_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            rs_content_done,
+                        )
+                    )
+                    # Close reasoning output item
+                    reasoning_item_done = {
+                        "id": reasoning_item_id,
+                        "type": "reasoning",
+                        "status": "completed",
+                        "summary": [rs_content_done],
+                    }
+                    rs_item_done_seq = seq.next()
+                    logger.debug(
+                        "[RESPONSES %s] EMIT response.output_item.done "
+                        "seq=%d, output_index=%d, type=reasoning, id=%s",
+                        response_id,
+                        rs_item_done_seq,
+                        reasoning_output_index,
+                        reasoning_item_id,
+                    )
+                    yield format_sse_event(
+                        create_output_item_done_event(
+                            rs_item_done_seq,
+                            reasoning_output_index,
+                            reasoning_item_done,
+                        )
+                    )
+                    output_items.append(reasoning_item_done)
+
+                    # Reset reasoning state (content_started remains True)
+                    in_reasoning = False
+                    accumulated_reasoning = ""
+                    reasoning_item_id = ""
 
                 # First token for this message → emit item.added + content_part.added
                 if not content_started:
@@ -519,20 +689,109 @@ async def generate_responses_stream(
 
             # ---- Reasoning token events ----
             elif event_type == "reasoning_token":
-                # Models that emit reasoning_content field get a reasoning output item
                 reasoning_content = event["content"]
                 if not reasoning_content:
                     continue
 
-                # For now, emit reasoning tokens as text deltas in the same
-                # content stream. OpenWebUI detects thinking tags natively.
-                # TODO: Emit as proper reasoning output item per Open Responses spec.
-                if not content_started:
+                if not in_reasoning:
+                    # If currently in a content message, close it first
+                    if content_started and accumulated_text:
+                        text_done_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_text_done_event(
+                                text_done_seq,
+                                output_index,
+                                content_index,
+                                current_item_id,
+                                accumulated_text,
+                            )
+                        )
+                        content_part_done = {
+                            "type": "output_text",
+                            "text": accumulated_text,
+                        }
+                        part_done_seq = seq.next()
+                        yield format_sse_event(
+                            create_content_part_done_event(
+                                part_done_seq,
+                                output_index,
+                                content_index,
+                                current_item_id,
+                                content_part_done,
+                            )
+                        )
+                        message_item_done = {
+                            "id": current_item_id,
+                            "type": "message",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [content_part_done],
+                        }
+                        item_done_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_item_done_event(
+                                item_done_seq, output_index, message_item_done
+                            )
+                        )
+                        output_items.append(message_item_done)
+                        output_index += 1
+                    elif content_started:
+                        output_index += 1
+
+                    # Reset content state for new output items
+                    content_started = False
+                    accumulated_text = ""
+                    delta_count = 0
+                    content_index = 0
+                    current_item_id = ""
+
+                    # --- Start reasoning output item (spec-compliant) ---
+                    reasoning_item_id = generate_item_id("rs")
+                    reasoning_output_index = output_index
+                    reasoning_content_index = 0
+                    accumulated_reasoning = ""
+                    reasoning_item = {
+                        "id": reasoning_item_id,
+                        "type": "reasoning",
+                        "status": "in_progress",
+                        "summary": [],
+                    }
+                    rs_added_seq = seq.next()
+                    logger.debug(
+                        "[RESPONSES %s] EMIT response.output_item.added "
+                        "seq=%d, output_index=%d, type=reasoning, id=%s",
+                        response_id,
+                        rs_added_seq,
+                        reasoning_output_index,
+                        reasoning_item_id,
+                    )
+                    yield format_sse_event(
+                        create_output_item_added_event(
+                            rs_added_seq, reasoning_output_index, reasoning_item
+                        )
+                    )
+                    rs_content_part = {
+                        "type": "reasoning_summary_text",
+                        "text": "",
+                    }
+                    rs_part_seq = seq.next()
+                    yield format_sse_event(
+                        create_content_part_added_event(
+                            rs_part_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            rs_content_part,
+                        )
+                    )
+
+                    # --- Start message output item (OpenWebUI fallback) ---
+                    output_index += 1
                     current_item_id = generate_item_id("msg")
                     content_started = True
                     accumulated_text = ""
                     delta_count = 0
-
+                    content_index = 0
                     message_item = {
                         "id": current_item_id,
                         "type": "message",
@@ -540,18 +799,25 @@ async def generate_responses_stream(
                         "role": "assistant",
                         "content": [],
                     }
-                    added_seq = seq.next()
+                    msg_added_seq = seq.next()
+                    logger.debug(
+                        "[RESPONSES %s] EMIT response.output_item.added "
+                        "seq=%d, output_index=%d, type=message, id=%s",
+                        response_id,
+                        msg_added_seq,
+                        output_index,
+                        current_item_id,
+                    )
                     yield format_sse_event(
                         create_output_item_added_event(
-                            added_seq, output_index, message_item
+                            msg_added_seq, output_index, message_item
                         )
                     )
-
                     content_part = {"type": "output_text", "text": ""}
-                    part_added_seq = seq.next()
+                    msg_part_seq = seq.next()
                     yield format_sse_event(
                         create_content_part_added_event(
-                            part_added_seq,
+                            msg_part_seq,
                             output_index,
                             content_index,
                             current_item_id,
@@ -559,17 +825,47 @@ async def generate_responses_stream(
                         )
                     )
 
-                if not current_item_id:
-                    continue
+                    # Emit <thinking> opening tag in message stream
+                    think_open = "<thinking>\n"
+                    accumulated_text += think_open
+                    delta_seq = seq.next()
+                    yield format_sse_event(
+                        create_output_text_delta_event(
+                            delta_seq,
+                            output_index,
+                            content_index,
+                            current_item_id,
+                            think_open,
+                        )
+                    )
+
+                    in_reasoning = True
+
+                # Emit reasoning as text delta and
+                # reasoning_summary_text_delta
                 accumulated_text += reasoning_content
+                accumulated_reasoning += reasoning_content
                 delta_count += 1
-                delta_seq = seq.next()
+                # Text delta in message stream (<thinking> tags fallback)
+                if current_item_id:
+                    delta_seq = seq.next()
+                    yield format_sse_event(
+                        create_output_text_delta_event(
+                            delta_seq,
+                            output_index,
+                            content_index,
+                            current_item_id,
+                            reasoning_content,
+                        )
+                    )
+                # Reasoning summary text delta (spec-compliant)
+                rs_delta_seq = seq.next()
                 yield format_sse_event(
-                    create_output_text_delta_event(
-                        delta_seq,
-                        output_index,
-                        content_index,
-                        current_item_id,
+                    create_reasoning_summary_text_delta_event(
+                        rs_delta_seq,
+                        reasoning_output_index,
+                        reasoning_content_index,
+                        reasoning_item_id,
                         reasoning_content,
                     )
                 )
@@ -581,6 +877,80 @@ async def generate_responses_stream(
                 # Track usage from last LLM response
                 if hasattr(ai_message, "usage_metadata") and ai_message.usage_metadata:
                     last_usage = ai_message.usage_metadata
+
+                # Close reasoning if still active when message completes
+                if in_reasoning:
+                    # Emit </thinking> closing tag in message stream
+                    think_close = "\n</thinking>\n\n"
+                    if current_item_id:
+                        accumulated_text += think_close
+                        close_delta_seq = seq.next()
+                        yield format_sse_event(
+                            create_output_text_delta_event(
+                                close_delta_seq,
+                                output_index,
+                                content_index,
+                                current_item_id,
+                                think_close,
+                            )
+                        )
+
+                    # Close reasoning summary text part
+                    rs_done_seq = seq.next()
+                    yield format_sse_event(
+                        create_reasoning_summary_text_done_event(
+                            rs_done_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            accumulated_reasoning,
+                        )
+                    )
+                    # Close content part in reasoning item
+                    rs_content_done = {
+                        "type": "reasoning_summary_text",
+                        "text": accumulated_reasoning,
+                    }
+                    rs_part_done_seq = seq.next()
+                    yield format_sse_event(
+                        create_content_part_done_event(
+                            rs_part_done_seq,
+                            reasoning_output_index,
+                            reasoning_content_index,
+                            reasoning_item_id,
+                            rs_content_done,
+                        )
+                    )
+                    # Close reasoning output item
+                    reasoning_item_done = {
+                        "id": reasoning_item_id,
+                        "type": "reasoning",
+                        "status": "completed",
+                        "summary": [rs_content_done],
+                    }
+                    rs_item_done_seq = seq.next()
+                    logger.debug(
+                        "[RESPONSES %s] EMIT response.output_item.done "
+                        "seq=%d, output_index=%d, type=reasoning, id=%s",
+                        response_id,
+                        rs_item_done_seq,
+                        reasoning_output_index,
+                        reasoning_item_id,
+                    )
+                    yield format_sse_event(
+                        create_output_item_done_event(
+                            rs_item_done_seq,
+                            reasoning_output_index,
+                            reasoning_item_done,
+                        )
+                    )
+                    output_items.append(reasoning_item_done)
+
+                    # Reset reasoning state (but NOT content_started --
+                    # the text close block below will handle that)
+                    in_reasoning = False
+                    accumulated_reasoning = ""
+                    reasoning_item_id = ""
 
                 # Close any open text content
                 if content_started and accumulated_text:
@@ -670,6 +1040,10 @@ async def generate_responses_stream(
                         tc_name = tc.get("name", "")
                         tc_id = tc.get("id", "")
                         tc_args = json.dumps(tc.get("args", {}))
+
+                        # Track args for external tool calls
+                        if tc_name in external_tool_names:
+                            pending_external_tool_args[tc_id] = tc_args
 
                         function_call_item = {
                             "id": item_id,
@@ -787,6 +1161,72 @@ async def generate_responses_stream(
                 output_items.append(function_call_output)
                 output_index += 1
 
+            # ---- External tool call events (passthrough to OpenWebUI) ----
+            elif event_type == "external_tool_call":
+                tool_name = event.get("tool_name", "unknown")
+                tool_call_id = event.get("tool_call_id", "")
+                marker_tool_name = event.get("marker_tool_name", tool_name)
+
+                # Get stored args for this external tool call
+                args_str = pending_external_tool_args.pop(tool_call_id, "{}")
+
+                logger.info(
+                    "[RESPONSES %s] EXTERNAL_TOOL_CALL: name=%s, "
+                    "call_id=%s, args_len=%d",
+                    response_id,
+                    marker_tool_name,
+                    tool_call_id,
+                    len(args_str),
+                )
+
+                # Emit function_call output item for OpenWebUI to execute
+                item_id = generate_item_id("fc")
+                function_call_item = {
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "name": marker_tool_name,
+                    "call_id": tool_call_id,
+                    "arguments": "",
+                }
+
+                added_seq = seq.next()
+                yield format_sse_event(
+                    create_output_item_added_event(
+                        added_seq, output_index, function_call_item
+                    )
+                )
+
+                # Stream argument deltas
+                for arg_chunk in chunk_json(args_str):
+                    function_call_item["arguments"] += arg_chunk
+                    delta_seq = seq.next()
+                    yield format_sse_event(
+                        create_function_call_arguments_delta_event(
+                            delta_seq, output_index, item_id, arg_chunk
+                        )
+                    )
+
+                # Emit args done
+                args_done_seq = seq.next()
+                yield format_sse_event(
+                    create_function_call_arguments_done_event(
+                        args_done_seq, output_index, item_id, args_str
+                    )
+                )
+
+                # Complete item — external tools are completed immediately
+                function_call_item["status"] = "completed"
+                item_done_seq = seq.next()
+                yield format_sse_event(
+                    create_output_item_done_event(
+                        item_done_seq, output_index, function_call_item
+                    )
+                )
+
+                output_items.append(function_call_item)
+                output_index += 1
+
             # ---- Context metadata (informational, not emitted as SSE) ----
             elif event_type == "context_metadata":
                 logger.debug(
@@ -876,6 +1316,7 @@ async def generate_responses_sync(
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     temperature: float = 0.7,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Generate non-streaming Responses API response.
 
@@ -885,8 +1326,12 @@ async def generate_responses_sync(
         input_messages: Input (string or list of items)
         model: Model ID
         instructions: System message / instructions
-        tools: Tools available to the model (not used by ESDC)
+        tools: Tools available to the model. If provided, tools are categorized
+            into internal (ESDC) and external (e.g. OpenTerminal). Internal tools
+            are executed server-side. External tools are returned as function_call
+            items for OpenWebUI to handle.
         temperature: Sampling temperature
+        reasoning_effort: Reasoning effort level (none/minimal/low/medium/high/xhigh)
 
     Returns:
         Complete response object
@@ -896,10 +1341,16 @@ async def generate_responses_sync(
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
     output_items: list[dict[str, Any]] = []
 
-    # Bypass: Detect OpenWebUI title-generation requests
-    if is_title_generation_request(input_messages):
-        logger.info("[RESPONSES %s] TITLE_GEN: bypassing agent pipeline", response_id)
-        user_query = extract_user_query_from_title_request(input_messages)
+    # Bypass: Detect OpenWebUI ancillary requests (title/tag generation)
+    if is_ancillary_request(input_messages):
+        anc_type = get_ancillary_type(input_messages) or "other"
+        user_query = extract_user_query(input_messages)
+
+        logger.info(
+            "[RESPONSES %s] ANCILLARY: bypassing agent pipeline, type=%s",
+            response_id,
+            anc_type,
+        )
 
         provider_config = Config.get_provider_config()
         if not provider_config:
@@ -915,20 +1366,31 @@ async def generate_responses_sync(
             "model": provider_config.get("model"),
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
+            "reasoning_effort": reasoning_effort,
         }
         llm = create_llm_from_config(provider_config_obj)
 
-        title_start = time.perf_counter()
-        title = await generate_conversation_title(llm, user_query)
-        title_elapsed = (time.perf_counter() - title_start) * 1000
-        logger.info(
-            "[RESPONSES %s] TITLE_GEN: completed in %.0fms, title=%r",
-            response_id,
-            title_elapsed,
-            title,
-        )
-
-        return create_title_sync_response(title, response_id)
+        anc_start = time.perf_counter()
+        if anc_type == "tags":
+            result = await generate_conversation_tags(llm, user_query)
+            anc_elapsed = (time.perf_counter() - anc_start) * 1000
+            logger.info(
+                "[RESPONSES %s] ANCILLARY: completed in %.0fms, type=tags, result=%r",
+                response_id,
+                anc_elapsed,
+                result,
+            )
+            return create_tags_sync_response(result, response_id)
+        else:
+            result = await generate_conversation_title(llm, user_query)
+            anc_elapsed = (time.perf_counter() - anc_start) * 1000
+            logger.info(
+                "[RESPONSES %s] ANCILLARY: completed in %.0fms, type=title, result=%r",
+                response_id,
+                anc_elapsed,
+                result,
+            )
+            return create_title_sync_response(result, response_id)
 
     # Create LLM and agent
     provider_config = Config.get_provider_config()
@@ -956,10 +1418,67 @@ async def generate_responses_sync(
         "model": provider_model,
         "base_url": base_url,
         "api_key": api_key,
+        "reasoning_effort": reasoning_effort,
     }
 
+    # Categorize tools into internal and external
+    (
+        sync_internal_tool_names,
+        sync_external_tool_names,
+        sync_external_tool_specs,
+    ) = categorize_tools(tools)
+    sync_external_langchain_tools = convert_external_specs_to_langchain(
+        sync_external_tool_specs
+    )
+
+    # DEBUG: Log tool categorization for OpenTerminal passthrough investigation
+    sync_raw_tool_names = []
+    if tools:
+        sync_raw_tool_names = [
+            t.get("function", {}).get("name", t.get("name", "?"))
+            if isinstance(t, dict)
+            else str(t)
+            for t in tools
+        ]
+    logger.debug(
+        "[RESPONSES %s] SYNC TOOL_CATEGORIZATION: "
+        "tools_received=%d, raw_names=%s, "
+        "internal_count=%d, internal_names=%s, "
+        "external_count=%d, external_names=%s",
+        response_id,
+        len(tools) if tools else 0,
+        sync_raw_tool_names[:20],
+        len(sync_internal_tool_names),
+        sorted(sync_internal_tool_names)[:5],
+        len(sync_external_tool_names),
+        sorted(sync_external_tool_names),
+    )
+
+    if sync_external_tool_names:
+        logger.info(
+            "[RESPONSES %s] SYNC External tools detected: %s",
+            response_id,
+            sorted(sync_external_tool_names),
+        )
+
     llm = create_llm_from_config(provider_config_obj)
-    agent = create_agent(llm, checkpointer=None)
+    agent = create_agent(
+        llm,
+        checkpointer=None,
+        external_tool_names=sync_external_tool_names,
+        external_tools=sync_external_langchain_tools
+        if sync_external_langchain_tools
+        else None,
+    )
+
+    # DEBUG: Log sync agent creation params
+    logger.debug(
+        "[RESPONSES %s] SYNC AGENT_CREATED: external_tool_names=%s, "
+        "external_langchain_count=%d",
+        response_id,
+        sorted(sync_external_tool_names),
+        len(sync_external_langchain_tools) if sync_external_langchain_tools else 0,
+    )
 
     # Convert input to LangChain messages
     lc_messages = convert_responses_input_to_langchain(input_messages, instructions)
@@ -1004,6 +1523,7 @@ async def generate_responses_sync(
         all_function_calls: list[dict[str, Any]] = []
         all_tool_results: list[dict[str, Any]] = []
         accumulated_text = ""
+        accumulated_reasoning = ""
         last_message_content = ""
         had_recursion_error = False
 
@@ -1011,10 +1531,15 @@ async def generate_responses_sync(
             event_counter += 1
             event_type = event["type"]
 
-            if event_type == "token" or event_type == "reasoning_token":
+            if event_type == "token":
                 content = event["content"]
                 if content:
                     accumulated_text += content
+
+            elif event_type == "reasoning_token":
+                content = event["content"]
+                if content:
+                    accumulated_reasoning += content
 
             elif event_type == "message_complete":
                 ai_message = event["ai_message"]
@@ -1066,6 +1591,29 @@ async def generate_responses_sync(
                     len(result_text),
                 )
 
+            elif event_type == "external_tool_call":
+                tool_name = event.get("tool_name", "unknown")
+                tool_call_id = event.get("tool_call_id", "")
+                marker_tool_name = event.get("marker_tool_name", tool_name)
+
+                logger.info(
+                    "[RESPONSES %s] SYNC EXTERNAL_TOOL_CALL: name=%s, call_id=%s",
+                    response_id,
+                    marker_tool_name,
+                    tool_call_id,
+                )
+
+                all_function_calls.append(
+                    {
+                        "id": generate_item_id("fc"),
+                        "type": "function_call",
+                        "status": "completed",
+                        "name": marker_tool_name,
+                        "call_id": tool_call_id,
+                        "arguments": "{}",
+                    }
+                )
+
             elif event_type == "recursion_error":
                 logger.error(
                     "[RESPONSES %s] SYNC RECURSION_ERROR: %s",
@@ -1084,6 +1632,26 @@ async def generate_responses_sync(
 
         output_items.extend(all_function_calls)
         output_items.extend(all_tool_results)
+
+        # Add reasoning output item if reasoning was accumulated
+        if accumulated_reasoning.strip():
+            output_items.append(
+                {
+                    "id": generate_item_id("rs"),
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [
+                        {
+                            "type": "reasoning_summary_text",
+                            "text": accumulated_reasoning,
+                        }
+                    ],
+                }
+            )
+            last_message_content = (
+                f"\n\n<thinking>\n{accumulated_reasoning}"
+                f"\n</thinking>\n\n{last_message_content}"
+            )
 
         if last_message_content.strip():
             logger.debug(

@@ -62,6 +62,7 @@ class ContextManager:
         compaction_threshold: float = 0.75,
         recent_messages: int = 6,
     ):
+        """Initialize context manager with token budget and compaction settings."""
         self.max_tokens = max_tokens
         self.compaction_threshold = int(max_tokens * compaction_threshold)
         self.recent_messages = recent_messages

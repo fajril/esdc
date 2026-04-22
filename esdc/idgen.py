@@ -1,5 +1,4 @@
-"""
-KSMI ID Generation Utilities
+"""KSMI ID Generation Utilities.
 
 This module produces identifiers for field, project, and zone entities in the
 KSMI standard used by eSDC. It validates inputs, enforces digit uniqueness,

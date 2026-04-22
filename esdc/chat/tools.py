@@ -233,7 +233,9 @@ def get_db_connection(db_path: str | None = None) -> duckdb.DuckDBPyConnection:
                     f"Run 'esdc fetch --save' to rebuild in DuckDB format."
                 )
 
-    conn = duckdb.connect(str(db_path), read_only=True)
+    from esdc.dbmanager import get_duckdb_connection
+
+    conn = get_duckdb_connection(db_path, read_only=True)
     return conn
 
 
@@ -244,10 +246,10 @@ async def execute_sql(
     ],
     db_path: Annotated[str | None, "Optional path to the database file."] = None,
 ) -> str:
-    """Execute a SQL query against the ESDC database
-    and return results as a formatted table.
+    """Execute a SQL query against the ESDC database.
 
-    Use this tool when the user wants to query data from the database.
+    Returns results as a formatted table. Use this tool when the user wants
+    to query data from the database.
     Only SELECT queries are allowed for safety.
 
     This is an async tool that runs the query in a thread pool to avoid blocking
@@ -767,14 +769,14 @@ def get_timeseries_columns(
        - Units: MSTB (oil), BSCF (gas) - these are VOLUMES, not rates
        - Example: tpf_oc = forecast oil+condensate volume in MSTB
 
-    2. Historical CUMULATIVE: cprd_grs_*, cprd_sls_*
-       - Units: MSTB (oil), BSCF (gas) - cumulative production volumes
-       - Example: cprd_grs_oc = cumulative gross oil+condensate in MSTB
-
-    3. Production RATES: rate_*
+    2. Production RATES: rate_*
        - Units: MSTB/Y (oil), BSCF/Y (gas) - RATES per year, NOT volumes
        - Example: rate_oc = production rate in MSTB per year
        - NEVER use for forecast queries!
+
+    ⚠️ CUMULATIVE PRODUCTION (cprd_grs_*, cprd_sls_*) are NOT available via this tool.
+    Use get_resources_columns(volume_type="cumulative_production") instead.
+    Cumulative production must ALWAYS be queried from *_resources, NEVER *_timeseries.
 
     UNIT DIFFERENCE:
     - tpf_oc = 1000 MSTB means 1 million barrels total volume
@@ -796,7 +798,7 @@ def get_timeseries_columns(
     Examples:
     - get_timeseries_columns("forecast", "tpf", "oc") → tpf_oc for forecast volumes
     - get_timeseries_columns("forecast", "slf", "an") → slf_an for sales forecast gas
-    - get_timeseries_columns("historical", substance="oc") → cprd_grs_oc for cumulative
+    - get_timeseries_columns("rate", substance="oc") → rate_oc for production rate
     - get_timeseries_columns("rate", substance="oc") → rate_oc for production rate
 
     IMPORTANT: For forecast queries, the model often incorrectly selects rate_* columns.
@@ -922,8 +924,7 @@ def search_problem_cluster(
         "cluster code (e.g., '1.1.1', '2.2'), or keyword from the problem description.",
     ],
 ) -> str:
-    """Search for problem cluster definitions when user
-    asks about project issues or specific cluster terms.
+    """Search for problem cluster definitions when user asks about project issues.
 
     CRITICAL: Use this tool when user asks about:
     - Problem cluster definitions (e.g., "apa arti subsurface uncertainty?")
@@ -1620,8 +1621,6 @@ def _search_remarks_via_fts(
 
     Searches project_remarks using FTS match_bm25 for keyword-based results.
     """
-    import duckdb
-
     from esdc.configs import Config
 
     target_table = table_name or "project_resources"
@@ -1656,7 +1655,9 @@ def _search_remarks_via_fts(
             LIMIT {limit}
         """
 
-        conn = duckdb.connect(str(db_file), read_only=True)
+        from esdc.dbmanager import get_duckdb_connection
+
+        conn = get_duckdb_connection(db_file, read_only=True)
         try:
             df = conn.execute(sql).fetchdf()
         finally:

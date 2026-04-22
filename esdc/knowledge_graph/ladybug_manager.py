@@ -28,6 +28,7 @@ class LadybugDBManager:
     """
 
     def __init__(self, db_path: Path | str | None = None) -> None:
+        """Initialize the LadybugDB knowledge graph manager."""
         if db_path is None:
             kg_dir = Config.get_cache_dir() / "knowledge_graph"
             kg_dir.mkdir(parents=True, exist_ok=True)

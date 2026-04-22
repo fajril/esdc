@@ -8,13 +8,20 @@ from typing import Any, cast
 
 # Third-party
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
 # Local
 from esdc.chat.context_manager import AgentState, manage_context_node
+from esdc.chat.openterminal import get_openterminal_tools
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.query_classifier import (
     QueryClassifier,
@@ -39,7 +46,7 @@ from esdc.chat.tools import (
 # Logger is configured by app.py (runs first)
 logger = logging.getLogger("esdc.chat.agent")
 
-MAX_TOOL_CALLS = 6
+MAX_TOOL_CALLS = 50
 
 
 _context_length_cache: dict[str, int] = {}
@@ -194,11 +201,88 @@ async def generate_conversation_title(
         return query_clean
 
 
+async def generate_conversation_tags(
+    llm: BaseChatModel,
+    user_query: str,
+) -> str:
+    """Generate broad tags categorizing the conversation.
+
+    Args:
+        llm: Language model to use for generation
+        user_query: First user query
+
+    Returns:
+        Comma-separated tags (max 100 chars)
+    """
+    prompt = (
+        "Generate 1-3 broad tags categorizing this user query.\n"
+        "The tags should be general categories. "
+        "Respond with ONLY comma-separated tags,\n"
+        "no quotes, no explanation, no numbering.\n\n"
+        "Examples:\n"
+        '- "how much oil reserves in Rokan field" -> '
+        '"Reserves, Oil, Rokan"\n'
+        '- "list all working areas with gas production" -> '
+        '"Working Areas, Gas Production"\n'
+        '- "compare reserves between 2020 and 2023" -> '
+        '"Reserves, Comparison"\n\n'
+        "User query: {query}\n\n"
+        "Tags:"
+    )
+
+    try:
+        messages = [
+            SystemMessage(
+                content="You are a helpful assistant that generates broad categorization tags."  # noqa: E501
+            ),
+            HumanMessage(content=prompt.format(query=user_query)),
+        ]
+
+        total_chars = sum(len(str(m.content)) for m in messages)
+        logger.debug(
+            "[INFERENCE] tag_generation_start | messages=%d | total_chars=%d",
+            len(messages),
+            total_chars,
+        )
+        inference_start = time.perf_counter()
+
+        response = await llm.ainvoke(messages)
+
+        inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
+        response_content = (
+            response.content if hasattr(response, "content") else str(response)
+        )
+        content_len = len(response_content) if response_content else 0
+        logger.debug(
+            "[INFERENCE] tag_generation_complete | elapsed=%.2fms | response_len=%d",
+            inference_elapsed_ms,
+            content_len,
+        )
+        content = response.content
+        if isinstance(content, list):
+            tags = str(content[0]) if content else ""
+        else:
+            tags = str(content)
+        tags = tags.strip().strip("\"'")
+
+        if len(tags) > 100:
+            tags = tags[:97] + "..."
+
+        return tags
+    except Exception:
+        query_clean = user_query.strip()
+        if len(query_clean) > 100:
+            return query_clean[:97] + "..."
+        return query_clean
+
+
 def create_agent(
     llm: BaseChatModel,
     tools: list | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     context_length: int | None = None,
+    external_tool_names: set[str] | None = None,
+    external_tools: list | None = None,
 ) -> Runnable:
     """Create a LangGraph agent with tools.
 
@@ -209,6 +293,12 @@ def create_agent(
         context_length: Maximum context length in tokens for messages.
             If None, auto-detected from the LLM model's context window.
             Explicit values (e.g. from TUI) take precedence.
+        external_tool_names: Set of tool names that are external (e.g. OpenTerminal).
+            External tool calls are not executed server-side; instead, a marker
+            is returned for the Responses API to pass through to the client.
+        external_tools: Optional list of LangChain tool objects for external tools.
+            These are bound to the LLM so it can call them, but their execution
+            is intercepted by tool_node and returned as markers.
 
     Returns:
         A compiled StateGraph agent
@@ -230,6 +320,16 @@ def create_agent(
             get_timeseries_columns,
             get_resources_columns,
         ]
+
+    # Conditionally add OpenTerminal tools when configured
+    openterminal_tools = get_openterminal_tools()
+    if openterminal_tools:
+        tools = tools + openterminal_tools
+
+    if external_tools:
+        tools = tools + external_tools
+
+    _external_tool_names = external_tool_names or set()
 
     all_tools: dict[str, Any] = {tool.name: tool for tool in tools}
     tools_by_name = dict(all_tools)
@@ -279,18 +379,27 @@ def create_agent(
         ]
 
         tool_call_count = state.get("tool_call_count", 0)
-        if tool_call_count >= 4:
+        if tool_call_count >= 35:
             nudge = (
                 f"CRITICAL: You have already made {tool_call_count} tool calls. "
-                "If you have enough data to answer the user's question, "
-                "do NOT make more tool calls. "
-                "Synthesize the data you already have and respond directly. "
-                "Only call another tool if you are absolutely "
-                "missing critical information."
+                "You are approaching the limit of 50. "
+                "You MUST synthesize the data you already have and respond directly. "
+                "Do NOT make more tool calls unless absolutely essential."
             )
             messages_with_system.append(SystemMessage(content=nudge))
             logger.info(
-                "[AGENT] synthesize_nudge_injected | tool_call_count=%d",
+                "[AGENT] strong_nudge_injected | tool_call_count=%d",
+                tool_call_count,
+            )
+        elif tool_call_count >= 20:
+            nudge = (
+                f"NOTE: You have made {tool_call_count} tool calls. "
+                "If you have enough data to answer the user's question, "
+                "consider synthesizing your findings rather than making more calls."
+            )
+            messages_with_system.append(SystemMessage(content=nudge))
+            logger.info(
+                "[AGENT] gentle_nudge_injected | tool_call_count=%d",
                 tool_call_count,
             )
 
@@ -375,11 +484,10 @@ def create_agent(
         tool_call_count = state.get("tool_call_count", 0)
         if tool_call_count >= MAX_TOOL_CALLS:
             logger.warning(
-                "🔧 TOOL_LIMIT: Reached %d tool calls, forcing end",
+                "[TOOL] TOOL_LIMIT: Reached %d tool calls, forcing end",
                 tool_call_count,
             )
             return END
-
         messages = state["messages"]
         if not messages:
             logger.warning("[AGENT] should_continue: empty messages, ending")
@@ -389,6 +497,28 @@ def create_agent(
 
         ai_message = cast(AIMessage, last_message)
         if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
+            tool_call_count = state.get("tool_call_count", 0)
+            if tool_call_count >= MAX_TOOL_CALLS:
+                # Check if we already sent a "limit reached" response
+                # (ToolMessage with the limit-reached message). If so, the
+                # LLM ignored it and tried to call tools again — force END.
+                for msg in reversed(messages):
+                    if isinstance(
+                        msg, ToolMessage
+                    ) and _max_tool_calls_reached_msg.format(
+                        limit=MAX_TOOL_CALLS
+                    ) in str(msg.content):
+                        logger.warning(
+                            "🔧 TOOL_LIMIT: LLM still calling tools after "
+                            "limit-reached message, forcing END"
+                        )
+                        return END
+
+                logger.warning(
+                    "🔧 TOOL_LIMIT: Reached %d tool calls, routing to tool_node "
+                    "for limit-reached response before final synthesis",
+                    tool_call_count,
+                )
             return "tools"
 
         return END
@@ -431,7 +561,7 @@ def create_agent(
             }
 
         logger.info(
-            "🔧 TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
+            "[TOOL] TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
         )
 
         for tool_call in ai_message.tool_calls:
@@ -439,9 +569,26 @@ def create_agent(
             tool_args = tool_call.get("args", {})
             tool_id = tool_call.get("id", "unknown")
 
+            if tool_name in _external_tool_names:
+                logger.info(
+                    "[TOOL] TOOL_NODE: External tool call detected: %s (id=%s). "
+                    "Returning marker for passthrough.",
+                    tool_name,
+                    tool_id,
+                )
+                result.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": f"[EXTERNAL_TOOL_CALL:{tool_name}]",
+                    }
+                )
+                continue
+
             if tool_name not in allowed_tools:
                 logger.warning(
-                    "🔧 TOOL_NODE: Blocked disallowed tool %s (allowed: %s)",
+                    "[TOOL] TOOL_NODE: Blocked disallowed tool %s (allowed: %s)",
                     tool_name,
                     sorted(allowed_tools),
                 )
@@ -465,11 +612,13 @@ def create_agent(
                     if isinstance(tool_args, str):
                         tool_args = json.loads(tool_args)
 
-                    logger.info("🔧 TOOL_NODE: Invoking %s (id=%s)", tool_name, tool_id)
+                    logger.info(
+                        "[TOOL] TOOL_NODE: Invoking %s (id=%s)", tool_name, tool_id
+                    )
                     observation = await tool.ainvoke(tool_args)
                     observation_str = str(observation)
                     logger.info(
-                        "🔧 TOOL_NODE: %s returned %d chars",
+                        "[TOOL] TOOL_NODE: %s returned %d chars",
                         tool_name,
                         len(observation_str),
                     )
@@ -480,13 +629,13 @@ def create_agent(
                             + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
                         )
                         logger.info(
-                            "🔧 TOOL_NODE: %s result truncated from %d to %d chars",
+                            "[TOOL] TOOL_NODE: %s result truncated from %d to %d chars",
                             tool_name,
                             len(observation_str),
                             MAX_TOOL_RESULT_CHARS,
                         )
                 except Exception as e:
-                    logger.error("🔧 TOOL_NODE: %s failed: %s", tool_name, e)
+                    logger.error("[TOOL] TOOL_NODE: %s failed: %s", tool_name, e)
                     observation = f"Error: {str(e)}"
 
                 result.append(
@@ -499,7 +648,7 @@ def create_agent(
                 )
             else:
                 logger.warning(
-                    "🔧 TOOL_NODE: Unknown tool %s (not in tools_by_name: %s)",
+                    "[TOOL] TOOL_NODE: Unknown tool %s (not in tools_by_name: %s)",
                     tool_name,
                     sorted(tools_by_name.keys()),
                 )
@@ -512,7 +661,7 @@ def create_agent(
                     }
                 )
 
-        logger.info("🔧 TOOL_NODE: Returning %d tool results", len(result))
+        logger.info("[TOOL] TOOL_NODE: Returning %d tool results", len(result))
         return {
             "messages": result,
             "tool_call_count": current_tool_count + len(ai_message.tool_calls),
@@ -546,6 +695,23 @@ def create_agent(
 
             strategy_text = format_classification_for_prompt(classification)
             allowed_tools = get_tools_for_classification(classification)
+
+            # Preserve conditionally-registered tools (e.g. OpenTerminal
+            # Compute Engine, File Processing, View File) that exist in
+            # all_tools but are not returned by the classifier. Without
+            # this, query_classification_node would override allowed_tools
+            # with only classifier-selected tools, dropping any tools that
+            # were added by create_agent conditionally (like sandbox tools),
+            # making the LLM unable to call them.
+            classifier_tool_set = set(allowed_tools)
+            preserved = set(all_tools.keys()) - classifier_tool_set
+            if preserved:
+                logger.debug(
+                    "[CLASSIFICATION] Preserving conditionally-registered "
+                    "tools not in classifier output: %s",
+                    sorted(preserved),
+                )
+                allowed_tools = list(classifier_tool_set | preserved)
 
             strategy_msg = SystemMessage(content=strategy_text)
             logger.info(
@@ -641,7 +807,7 @@ async def run_agent_stream(
         Dict with 'type' (message/tool/error) and 'content' or 'token_usage'
     """
     config: RunnableConfig = {  # type: ignore[assignment]
-        "recursion_limit": 25,
+        "recursion_limit": 100,
         "configurable": {
             "thread_id": thread_id,
             "checkpoint_ns": "esdc_chat",
@@ -841,7 +1007,7 @@ async def run_agent_stream(
                 )
 
             logger.info(
-                "🔧 AGENT_TOOL_END: tool=%s, result_len=%d",
+                "[TOOL] AGENT_TOOL_END: tool=%s, result_len=%d",
                 tool_name,
                 len(str(tool_result)),
             )

@@ -127,6 +127,14 @@ class ContextSection(Container):
         badge: str = "",
         id: str | None = None,
     ):
+        """Initialize a collapsible context section.
+
+        Args:
+            title: Display title for the section.
+            expanded: Whether section starts expanded (default True).
+            badge: Optional badge text displayed next to title.
+            id: Widget ID for CSS targeting.
+        """
         super().__init__(id=id)
         self.section_title = title
         self.expanded = expanded
@@ -219,6 +227,13 @@ class ContextUsageWidget(Static):
         context_length: int = DEFAULT_CONTEXT_LENGTH,
         id: str | None = None,
     ):
+        """Initialize context usage display widget.
+
+        Args:
+            token_count: Current token count (default 0).
+            context_length: Maximum context length in tokens.
+            id: Widget ID for CSS targeting.
+        """
         super().__init__(id=id)
         self.token_count = token_count
         self.context_length = context_length
@@ -314,6 +329,7 @@ class ToolStatusList(Static):
     """
 
     def __init__(self, id: str | None = None):
+        """Initialize the tool status list widget."""
         super().__init__(id=id)
         self.tools = TOOLS_LIST
         self.tools_used: list[str] = []
@@ -368,6 +384,7 @@ class QueryHistory(Static):
     """
 
     def __init__(self, max_queries: int = 5, id: str | None = None):
+        """Initialize the query history widget."""
         super().__init__(id=id)
         self.max_queries = max_queries
         self.queries: list[str] = []
@@ -415,6 +432,12 @@ class ConversationTitle(Static):
     """
 
     def __init__(self, title: str = "", id: str | None = None):
+        """Initialize conversation title widget.
+
+        Args:
+            title: Initial conversation title (empty shows as "New Conversation").
+            id: Widget ID for CSS targeting.
+        """
         super().__init__(title if title else "New Conversation", id=id)
         self._title = title
 
@@ -460,6 +483,7 @@ class ContextPanel(Vertical):
     """
 
     def __init__(self, id: str | None = None):
+        """Initialize the context panel widget."""
         super().__init__(id=id)
         self._provider_name: str = ""
         self._model_name: str = ""
@@ -635,6 +659,7 @@ class ChatMessage(Markdown):
     """
 
     def __init__(self, role: str, content: str):
+        """Initialize a chat message widget."""
         if role == "user" or role == "ai":
             formatted = content
         else:
@@ -671,6 +696,7 @@ class StatusBar(Static):
     """
 
     def __init__(self):
+        """Initialize the status bar widget."""
         super().__init__("Loading...")
 
     def set_status(
@@ -704,11 +730,13 @@ class ChatInput(TextArea):
         """Message posted when user presses Enter."""
 
         def __init__(self, text_area: "ChatInput") -> None:
+            """Initialize the submitted message."""
             self.text_area = text_area
             super().__init__()
 
         @property
         def control(self) -> "ChatInput":
+            """Return the text area control."""
             return self.text_area
 
     async def _on_key(self, event: events.Key) -> None:
@@ -757,6 +785,7 @@ class Footer(Vertical):
     """
 
     def __init__(self):
+        """Initialize the footer widget."""
         super().__init__()
         self.status_bar = StatusBar()
         self.user_input = ChatInput(
@@ -768,6 +797,7 @@ class Footer(Vertical):
         self.user_input.styles.height = 3  # Set initial height via styles
 
     def compose(self) -> ComposeResult:
+        """Compose the footer layout."""
         yield self.user_input
         yield self.status_bar
 
@@ -784,6 +814,7 @@ class ChatPanel(ScrollableContainer):
     """
 
     def __init__(self):
+        """Initialize the chat panel widget."""
         super().__init__()
         self.messages: list[tuple[str, str]] = []
 
@@ -848,14 +879,17 @@ class ThinkingIndicator(Collapsible):
     """
 
     def __init__(self):
+        """Initialize the thinking indicator widget."""
         super().__init__(title="▶ Thinking...", collapsed=False)
         self.steps: list[str] = []
         self._content_widget: Static | None = None
 
     def compose(self) -> ComposeResult:
+        """Compose the thinking indicator layout."""
         yield Static("", classes="thinking-steps")
 
     def on_mount(self) -> None:
+        """Handle widget mount event."""
         self._content_widget = self.query_one(".thinking-steps", Static)
         # Update display if steps were added before mount
         if self.steps:
@@ -922,11 +956,13 @@ class SQLPanel(Collapsible):
     """
 
     def __init__(self, sql: str = ""):
+        """Initialize the SQL panel widget."""
         super().__init__(title="📝 SQL Query", collapsed=not sql)
         self.sql_content = sql
         self._content_widget: Markdown | None = None
 
     def compose(self) -> ComposeResult:
+        """Compose the SQL panel layout."""
         content = (
             f"```sql\n{self.sql_content}\n```"
             if self.sql_content
@@ -935,6 +971,7 @@ class SQLPanel(Collapsible):
         yield Markdown(content, classes="sql-content")
 
     def on_mount(self) -> None:
+        """Handle widget mount event."""
         self._content_widget = self.query_one(".sql-content", Markdown)
 
     def set_sql(self, sql: str) -> None:
@@ -978,11 +1015,13 @@ class ResultsPanel(Collapsible):
     """
 
     def __init__(self, results: str = ""):
+        """Initialize the results panel widget."""
         super().__init__(title="📊 Query Results", collapsed=not results)
         self.results_content = results
         self._content_widget: Markdown | None = None
 
     def compose(self) -> ComposeResult:
+        """Compose the results panel layout."""
         content = (
             self._format_results_as_markdown(self.results_content)
             if self.results_content
@@ -1025,6 +1064,7 @@ class ResultsPanel(Collapsible):
         return "\n".join(md_lines)
 
     def on_mount(self) -> None:
+        """Handle widget mount event."""
         self._content_widget = self.query_one(".results-content", Markdown)
 
     def set_results(self, results: str) -> None:
@@ -1048,22 +1088,28 @@ class RightPanel(Vertical):
     """
 
     def __init__(self):
+        """Initialize the right panel widget."""
         super().__init__()
         self.sql_panel = SQLPanel()
         self.results_panel = ResultsPanel()
 
     def compose(self) -> ComposeResult:
+        """Compose the right panel layout."""
         yield self.sql_panel
         yield self.results_panel
 
     def set_sql(self, sql: str):
+        """Set the SQL content in the SQL panel."""
         self.sql_panel.set_sql(sql)
 
     def set_results(self, results: str):
+        """Set the results content in the results panel."""
         self.results_panel.set_results(results)
 
 
 class ESDCChatApp(App):
+    """Main ESDC chat application."""
+
     CSS = """
     /* ===== Minimalist Clean UI - Applied UX Laws =====
        Occam's Razor: Simplest effective design
@@ -1240,6 +1286,7 @@ class ESDCChatApp(App):
     ]
 
     def __init__(self):
+        """Initialize the ESDC chat application."""
         super().__init__()
         self.chat_panel: ChatPanel | None = None
         self._context_panel: ContextPanel | None = None
@@ -1266,6 +1313,7 @@ class ESDCChatApp(App):
         self._title_generated: bool = False
 
     def compose(self) -> ComposeResult:
+        """Compose the main application layout."""
         # Main horizontal split container
         chat = ChatPanel()
         chat.id = "chat-area"
@@ -1280,6 +1328,7 @@ class ESDCChatApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        """Handle application mount event."""
         # Get the chat panel and context panel from compose
         self.chat_panel = self.query_one("#chat-area", ChatPanel)
         self._context_panel = self.query_one("#context-panel", ContextPanel)
@@ -1355,7 +1404,10 @@ class ESDCChatApp(App):
         from esdc.chat.agent import create_agent
         from esdc.chat.memory import create_checkpointer, create_thread_id
         from esdc.configs import Config
+        from esdc.phoenix import setup_phoenix_tracing
         from esdc.providers import create_llm_from_config
+
+        setup_phoenix_tracing()
 
         provider_config = Config.get_provider_config()
         if not provider_config:
@@ -1613,7 +1665,7 @@ class ESDCChatApp(App):
             tool_name = chunk.get("tool", "")
 
             logger.info(
-                "🔧 TOOL_RESULT: tool=%s, result_len=%d",
+                "[TOOL] TOOL_RESULT: tool=%s, result_len=%d",
                 tool_name,
                 len(result),
             )
@@ -1740,6 +1792,7 @@ class ESDCChatApp(App):
                 yield chunk
 
     def display_message(self, role: str, content: str) -> None:
+        """Display a message in the chat panel."""
         if self.chat_panel:
             self.chat_panel.add_message(role, content)
             self._message_count += 1

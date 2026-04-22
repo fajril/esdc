@@ -6,9 +6,9 @@ from esdc.chat.agent import MAX_TOOL_CALLS
 class TestToolCallLimit:
     """Test that MAX_TOOL_CALLS is set correctly."""
 
-    def test_max_tool_calls_is_6(self):
-        """MAX_TOOL_CALLS should be 6 as defined in agent.py."""
-        assert MAX_TOOL_CALLS == 6
+    def test_max_tool_calls_is_50(self):
+        """MAX_TOOL_CALLS should be 50 as defined in agent.py."""
+        assert MAX_TOOL_CALLS == 50
 
     def test_agent_state_has_tool_call_count(self):
         """AgentState should include tool_call_count field."""
