@@ -1,6 +1,5 @@
 """Tests for citation annotations in output_text content parts."""
 
-import pytest
 
 
 class TestCitationAnnotationsOutput:

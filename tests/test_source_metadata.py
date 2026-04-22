@@ -1,6 +1,5 @@
 """Tests for source context metadata in function_call_output items."""
 
-import pytest
 
 
 class TestBuildSourceMetadata:

@@ -2,8 +2,6 @@
 
 import time
 
-import pytest
-
 
 class TestCreateResponseIncompleteEvent:
     """Test create_response_incomplete_event helper function."""
@@ -80,8 +78,8 @@ class TestIncompleteVsFailedStatus:
     def test_incomplete_when_partial_output_exists(self):
         """Should emit incomplete when output_items is non-empty."""
         from esdc.server.responses_events import (
-            create_response_incomplete_event,
             create_response_failed_event,
+            create_response_incomplete_event,
         )
 
         output_items = [{"type": "message", "content": "partial"}]

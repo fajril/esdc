@@ -25,7 +25,7 @@ class TestReasoningContentPreservation:
                 "name": "execute_sql",
                 "arguments": '{"query": "SELECT * FROM project_resources"}',
                 "reasoning_content": (
-                    "I need to query the project_resources table for Duri's reserves data."
+                    "I need to query the project_resources table for Duri's data."
                 ),
             },
             {
@@ -64,8 +64,9 @@ class TestReasoningContentPreservation:
         assert not ai_messages[0].additional_kwargs.get("reasoning_content")
 
     def test_message_item_with_reasoning_in_content_parts(self):
-        """When an assistant message input item has reasoning in content parts,
+        """Test that reasoning in content parts is preserved.
 
+        When an assistant message input item has reasoning in content parts,
         the reasoning should be extracted and preserved.
         """
         from langchain_core.messages import AIMessage

@@ -99,7 +99,7 @@ class TestHybridSearchMerge:
         assert merged[0]["score"] > 0
 
     def test_merge_rrf_deduplicates_by_project_id_year(self):
-        """Results appearing in both paths should be deduplicated, keeping best score."""
+        """Results should be deduplicated by project_id and report_year."""
         from esdc.knowledge_graph.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
@@ -141,7 +141,7 @@ class TestHybridSearchToolIntegration:
     def test_semantic_search_tool_uses_hybrid(self):
         """The semantic_search tool should call hybrid_search method."""
         import json
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         from esdc.chat.tools import semantic_search
 
@@ -207,10 +207,6 @@ class TestHybridSearchResultFormat:
 
     def test_hybrid_search_result_has_expected_fields(self):
         """Hybrid search results should have expected fields after cleanup."""
-        from esdc.knowledge_graph.semantic_resolver import SemanticResolver
-
-        resolver = SemanticResolver.__new__(SemanticResolver)
-
         # Create sample merged results
         merged = [
             {
