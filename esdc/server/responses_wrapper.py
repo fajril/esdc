@@ -1377,7 +1377,9 @@ async def generate_responses_stream(
                     model,
                     output_items,
                     {
-                        "message": f"Response timed out after {SSE_STREAM_TIMEOUT} seconds",
+                        "message": (
+                            f"Response timed out after {SSE_STREAM_TIMEOUT} seconds"
+                        ),
                         "type": "timeout",
                     },
                 )
@@ -1389,7 +1391,9 @@ async def generate_responses_stream(
                     response_id,
                     model,
                     {
-                        "message": f"Response timed out after {SSE_STREAM_TIMEOUT} seconds",
+                        "message": (
+                            f"Response timed out after {SSE_STREAM_TIMEOUT} seconds"
+                        ),
                         "type": "timeout",
                     },
                 )

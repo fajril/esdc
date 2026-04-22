@@ -234,7 +234,9 @@ class ResponseFunctionCallResult(BaseModel):
     output: str | list[dict[str, Any]]
     source: dict[str, Any] | None = Field(
         default=None,
-        description="Source context metadata: resource_type and resource_id for citation rendering",
+        description=(
+            "Source context metadata: resource_type and resource_id for citation"
+        ),
     )
 
 

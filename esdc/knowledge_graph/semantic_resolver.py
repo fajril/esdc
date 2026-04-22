@@ -573,8 +573,14 @@ class SemanticResolver:
                 if "report_year" in filters:
                     where_conditions.append("report_year = ?")
                     where_params.append(filters["report_year"])
-                for col in ("field_name", "wk_name", "province", "basin128",
-                           "operator_name", "operator_group"):
+                for col in (
+                    "field_name",
+                    "wk_name",
+                    "province",
+                    "basin128",
+                    "operator_name",
+                    "operator_group",
+                ):
                     if col in filters:
                         where_conditions.append(f"{col} ILIKE ?")
                         where_params.append(f"%{filters[col]}%")
@@ -605,7 +611,9 @@ class SemanticResolver:
                 WHERE {where_clause}
                 AND EXISTS (
                     SELECT 1 FROM project_resources pr
-                    WHERE fts_main_project_resources.match_bm25(pr.uuid, '{escaped_query}') IS NOT NULL
+                    WHERE fts_main_project_resources.match_bm25(
+                        pr.uuid, '{escaped_query}'
+                    ) IS NOT NULL
                     AND pr.project_id = pe.project_id
                     AND pr.report_year = pe.report_year
                 )
@@ -617,28 +625,34 @@ class SemanticResolver:
 
             results = []
             for row in result:
-                results.append({
-                    "project_id": row[0],
-                    "report_year": row[1],
-                    "field_name": row[2],
-                    "project_name": row[3],
-                    "pod_name": row[4],
-                    "wk_name": row[5],
-                    "province": row[6],
-                    "basin128": row[7],
-                    "project_class": row[8],
-                    "project_stage": row[9],
-                    "project_level": row[10],
-                    "operator_name": row[11],
-                    "operator_group": row[12],
-                    "project_remarks": row[13][:200] + "..." if len(row[13]) > 200 else row[13],
-                    "bm25_score": round(float(row[14] or 0), 4),
-                })
+                results.append(
+                    {
+                        "project_id": row[0],
+                        "report_year": row[1],
+                        "field_name": row[2],
+                        "project_name": row[3],
+                        "pod_name": row[4],
+                        "wk_name": row[5],
+                        "province": row[6],
+                        "basin128": row[7],
+                        "project_class": row[8],
+                        "project_stage": row[9],
+                        "project_level": row[10],
+                        "operator_name": row[11],
+                        "operator_group": row[12],
+                        "project_remarks": row[13][:200] + "..."
+                        if len(row[13]) > 200
+                        else row[13],
+                        "bm25_score": round(float(row[14] or 0), 4),
+                    }
+                )
 
             return results
 
         except Exception as e:
-            logger.warning("[Semantic] keyword search failed, returning empty | error=%s", e)
+            logger.warning(
+                "[Semantic] keyword search failed, returning empty | error=%s", e
+            )
             return []
 
     def _merge_rrf(
@@ -725,7 +739,9 @@ class SemanticResolver:
         if semantic_results_raw.get("status") == "not_available":
             return {
                 "status": "not_available",
-                "message": "No embeddings found. Run 'esdc reload' to generate embeddings.",
+                "message": (
+                    "No embeddings found. Run 'esdc reload' to generate embeddings."
+                ),
                 "results": [],
             }
 
@@ -736,8 +752,10 @@ class SemanticResolver:
             semantic_items = semantic_results_raw.get("results", [])
 
         merged = self._merge_rrf(
-            semantic_items, keyword_results_raw,
-            semantic_weight, keyword_weight,
+            semantic_items,
+            keyword_results_raw,
+            semantic_weight,
+            keyword_weight,
         )
 
         results = merged[:limit]

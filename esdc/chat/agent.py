@@ -617,10 +617,8 @@ def create_agent(
                     )
                     observation = await tool.ainvoke(tool_args)
 
-                    # JSON-serialize dict/list observations for richer content preservation
-                    if isinstance(observation, dict):
-                        observation = json.dumps(observation, ensure_ascii=False)
-                    elif isinstance(observation, list):
+                    # JSON-serialize dict/list observations for richer content
+                    if isinstance(observation, (dict, list)):
                         observation = json.dumps(observation, ensure_ascii=False)
 
                     observation_str = str(observation)
