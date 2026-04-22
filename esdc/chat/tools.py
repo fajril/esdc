@@ -1575,7 +1575,7 @@ def semantic_search(
     resolver = SemanticResolver()
 
     try:
-        result = resolver.search_by_text(
+        result = resolver.hybrid_search(
             query=query,
             limit=limit,
             filters=filters if filters else None,
