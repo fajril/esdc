@@ -593,16 +593,19 @@ class Config:
         """Get OpenWebUI configuration for inline file rendering.
 
         Returns None if OpenWebUI is not configured.
-        When configured, returns dict with keys: url, proxy_url, terminal_server_id.
+        When configured, returns dict with keys:
+        url, proxy_url, terminal_server_id, api_key.
 
         Priority:
-        1. Environment variables (OPENWEBUI_URL, OPENWEBUI_PROXY_URL, OPENWEBUI_TERMINAL_SERVER_ID)
+        1. Environment variables (OPENWEBUI_URL, OPENWEBUI_PROXY_URL,
+           OPENWEBUI_TERMINAL_SERVER_ID, OPENWEBUI_API_KEY)
         2. config.yaml: openwebui section
         3. None (not configured)
         """
         env_url = os.environ.get("OPENWEBUI_URL")
         env_proxy_url = os.environ.get("OPENWEBUI_PROXY_URL")
         env_server_id = os.environ.get("OPENWEBUI_TERMINAL_SERVER_ID")
+        env_api_key = os.environ.get("OPENWEBUI_API_KEY")
 
         config = cls._load_config() or {}
         ow_config = config.get("openwebui", {})
@@ -617,10 +620,13 @@ class Config:
         # Falls back to url if not explicitly set (localhost scenario)
         proxy_url = env_proxy_url or ow_config.get("proxy_url") or url.rstrip("/")
 
+        api_key = env_api_key or ow_config.get("api_key")
+
         return {
             "url": url.rstrip("/"),
             "proxy_url": proxy_url.rstrip("/"),
             "terminal_server_id": server_id,
+            "api_key": api_key,
         }
 
     @classmethod

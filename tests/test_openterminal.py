@@ -7,6 +7,7 @@ import pytest
 from esdc.chat.openterminal import (
     _DEFAULT_PACKAGES,
     _build_file_url,
+    _upload_image_to_openwebui,
     get_openterminal_tools,
     run_command,
     run_python,
@@ -628,3 +629,271 @@ class TestBuildFileUrl:
             pytest.raises(ValueError, match="OpenWebUI not configured"),
         ):
             _build_file_url("/home/user/test.png")
+
+    def test_api_key_in_openwebui_config(self):
+        """Should include api_key in OpenWebUI config when set."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+                "api_key": "sk-test-key",
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["api_key"] == "sk-test-key"
+
+    def test_api_key_env_overrides_config(self):
+        """OPENWEBUI_API_KEY env var should override config."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+                "api_key": "sk-config-key",
+            }
+        }
+        env = {"OPENWEBUI_API_KEY": "sk-env-key"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["api_key"] == "sk-env-key"
+
+    def test_api_key_defaults_to_none(self):
+        """api_key should be None when not configured."""
+        config_data = {
+            "openwebui": {
+                "url": "http://localhost:3000",
+            }
+        }
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("esdc.configs.Config._load_config", return_value=config_data),
+        ):
+            from esdc.configs import Config
+
+            Config._config_cache = config_data
+            result = Config.get_openwebui_config()
+            assert result is not None
+            assert result["api_key"] is None
+
+
+class TestUploadImageToOpenWebUI:
+    """Tests for _upload_image_to_openwebui function."""
+
+    @pytest.fixture(autouse=True)
+    def setup_config(self):
+        self.ot_config = {
+            "url": "http://localhost:8000",
+            "api_key": "ot-key",
+        }
+        self.ow_config = {
+            "url": "http://localhost:3000",
+            "proxy_url": "https://iris.ambia.id",
+            "terminal_server_id": "my-terminal",
+            "api_key": "sk-admin-key",
+        }
+
+    @pytest.mark.asyncio
+    async def test_upload_success_returns_persistent_url(self):
+        mock_dl = MagicMock()
+        mock_dl.raise_for_status = MagicMock()
+        mock_dl.content = b"\x89PNG" + b"\x00" * 100
+
+        mock_ul = MagicMock()
+        mock_ul.raise_for_status = MagicMock()
+        mock_ul.json.return_value = {"id": "file-abc123"}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_dl)
+        mock_client.post = AsyncMock(return_value=mock_ul)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        assert result == "https://iris.ambia.id/api/v1/files/file-abc123/content"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_api_key(self):
+        self.ow_config["api_key"] = ""  # type: ignore[assignment]
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_download_failure(self):
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=Exception("connection error"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_upload_returns_no_id(self):
+        mock_dl = MagicMock()
+        mock_dl.raise_for_status = MagicMock()
+        mock_dl.content = b"\x89PNG" + b"\x00" * 100
+
+        mock_ul = MagicMock()
+        mock_ul.raise_for_status = MagicMock()
+        mock_ul.json.return_value = {}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_dl)
+        mock_client.post = AsyncMock(return_value=mock_ul)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_uploads_with_process_false(self):
+        mock_dl = MagicMock()
+        mock_dl.raise_for_status = MagicMock()
+        mock_dl.content = b"\x89PNG" + b"\x00" * 100
+
+        mock_ul = MagicMock()
+        mock_ul.raise_for_status = MagicMock()
+        mock_ul.json.return_value = {"id": "file-xyz"}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_dl)
+        mock_client.post = AsyncMock(return_value=mock_ul)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            await _upload_image_to_openwebui("/home/user/img/test.png", "test.png")
+
+        post_call = mock_client.post.call_args
+        assert post_call.kwargs.get("params") == {"process": "false"}
+
+    @pytest.mark.asyncio
+    async def test_uses_server_url_for_upload_not_proxy_url(self):
+        mock_dl = MagicMock()
+        mock_dl.raise_for_status = MagicMock()
+        mock_dl.content = b"\x89PNG" + b"\x00" * 100
+
+        mock_ul = MagicMock()
+        mock_ul.raise_for_status = MagicMock()
+        mock_ul.json.return_value = {"id": "file-xyz"}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_dl)
+        mock_client.post = AsyncMock(return_value=mock_ul)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "esdc.chat.openterminal._get_config",
+                return_value=self.ot_config,
+            ),
+            patch(
+                "esdc.chat.openterminal._get_ow_config",
+                return_value=self.ow_config,
+            ),
+            patch(
+                "esdc.chat.openterminal.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _upload_image_to_openwebui(
+                "/home/user/img/test.png", "test.png"
+            )
+
+        post_call = mock_client.post.call_args
+        upload_url_used = post_call.args[0] if post_call.args else ""
+        assert "localhost:3000" in upload_url_used
+        assert "iris.ambia.id" not in upload_url_used
+        assert result is not None and "iris.ambia.id" in result

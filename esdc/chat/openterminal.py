@@ -401,24 +401,30 @@ async def run_python(
 
             # Step 4: Check if image was generated and display it
             if output_path in output:
-                # Image was saved — build proxy URL
-                try:
-                    ow_config = _get_ow_config()
-                    proxy_url = ow_config.get("proxy_url", ow_config["url"]).rstrip("/")
-                    server_id = ow_config["terminal_server_id"]
-                except ValueError:
-                    # OWUI not configured — fall back to direct OT URL
-                    proxy_url = config["url"].rstrip("/")
-                    server_id = ""
+                filename = output_path.split("/")[-1]
+                persistent_url = await _upload_image_to_openwebui(output_path, filename)
 
-                encoded_path = quote(output_path, safe="/")
-                if server_id:
-                    file_url = (
-                        f"{proxy_url}/api/v1/terminals/{server_id}"
-                        f"/files/read?path={encoded_path}"
-                    )
+                if persistent_url:
+                    file_url = persistent_url
                 else:
-                    file_url = f"{proxy_url}/files/read?path={encoded_path}"
+                    try:
+                        ow_config = _get_ow_config()
+                        proxy_url = ow_config.get("proxy_url", ow_config["url"]).rstrip(
+                            "/"
+                        )
+                        server_id = ow_config["terminal_server_id"]
+                    except ValueError:
+                        proxy_url = config["url"].rstrip("/")
+                        server_id = ""
+
+                    encoded_path = quote(output_path, safe="/")
+                    if server_id:
+                        file_url = (
+                            f"{proxy_url}/api/v1/terminals/{server_id}"
+                            f"/files/read?path={encoded_path}"
+                        )
+                    else:
+                        file_url = f"{proxy_url}/files/read?path={encoded_path}"
 
                 return (
                     f"Execution complete (exit code: {exit_code}):\n\n"
@@ -471,3 +477,60 @@ def _build_file_url(filepath: str, description: str = "") -> str:
     )
     desc = description or filepath.split("/")[-1]
     return f"![{desc}]({file_url})"
+
+
+async def _upload_image_to_openwebui(
+    image_path: str,
+    filename: str,
+) -> str | None:
+    """Download image from OpenTerminal and upload to OpenWebUI file API.
+
+    Returns persistent file URL, or None on failure so the caller can
+    fall back to the terminal proxy URL.
+    """
+    ot_config = _get_config()
+    ow_config = _get_ow_config()
+    api_key = ow_config.get("api_key")
+    if not api_key:
+        logger.debug("[OPENTERM] No OpenWebUI API key, skipping file upload")
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            download_resp = await client.get(
+                f"{ot_config['url']}/files/read",
+                params={"path": image_path},
+                headers=_get_headers(),
+            )
+            download_resp.raise_for_status()
+            image_bytes = download_resp.content
+
+            upload_url = ow_config["url"].rstrip("/")
+            upload_resp = await client.post(
+                f"{upload_url}/api/v1/files/",
+                params={"process": "false"},
+                files={"file": (filename, image_bytes, "image/png")},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                },
+            )
+            upload_resp.raise_for_status()
+            file_data = upload_resp.json()
+            file_id = file_data.get("id")
+            if not file_id:
+                logger.warning("[OPENTERM] OpenWebUI file upload returned no id")
+                return None
+
+            proxy_url = ow_config.get("proxy_url", ow_config["url"]).rstrip("/")
+            persistent_url = f"{proxy_url}/api/v1/files/{file_id}/content"
+            logger.info(
+                "[OPENTERM] Image uploaded to OpenWebUI: %s -> %s",
+                filename,
+                persistent_url,
+            )
+            return persistent_url
+
+    except Exception as e:
+        logger.warning("[OPENTERM] Failed to upload image to OpenWebUI: %s", e)
+        return None

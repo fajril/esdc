@@ -24,6 +24,7 @@ class TestRunPythonTool:
             "url": "http://localhost:3000",
             "proxy_url": "https://iris.skkmigas.go.id",
             "terminal_server_id": "openterminal",
+            "api_key": None,
         }
 
     @pytest.mark.asyncio
