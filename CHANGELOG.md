@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Persist Code Interpreter images via OpenWebUI file upload
   - Detect images from stdout and directory scan (not just inline savefig)
   - Auto-append image markdown when LLM omits it from final response
+  - **Enforce direct DB access for visualization**: Code Interpreter MUST query `DB_PATH` directly; separate `execute_sql` before visualization is forbidden
+
+- **Dynamic Multi-Year Timeseries Fetch**:
+  - Removed hardcoded `report_year = 2024` in API URL builder
+  - Timeseries now fetched for all available report years (>= 2020) detected from `project_resources`
+  - Added `--year` option to `esdc fetch` for updating specific year(s) in both `project_resources` and `project_timeseries`
+  - Full-replace mode on plain `esdc fetch`; append/upsert mode on `esdc fetch --year YYYY`
 
 - **System Prompt & Domain Knowledge**:
   - Added MSTB↔BSCF (BOE) unit conversions to system prompt

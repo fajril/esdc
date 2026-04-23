@@ -132,12 +132,12 @@ This provides:
 
 **Pre-installed Libraries**: pandas, scikit-learn, seaborn, statsmodels, xgboost, duckdb, matplotlib, numpy, scipy, plotly
 
-**Database Access**: DuckDB database available at `DB_PATH` variable (read-only at `/home/user/esdc.db`). Query directly for large data processing without using `execute_sql`.
+**Database Access**: DuckDB database available at `DB_PATH` variable (read-only at `/home/user/esdc.db`). Query directly for large data processing. **MUST NOT call `execute_sql` before visualization tasks — Code Interpreter has built-in database access.**
 
 ### Visualization Workflow
 
-1. **Get data**: Use `execute_sql` OR query directly via `DB_PATH` in Code Interpreter
-2. **Generate visualization**: Use **Code Interpreter** with matplotlib/seaborn code that saves to `output_image_path`
+1. **Get data**: **MUST query data directly via `DB_PATH` inside Code Interpreter.** Do NOT call `execute_sql` separately — Code Interpreter has built-in read-only database access.
+2. **Generate visualization**: Write Python code with matplotlib/seaborn that saves to `output_image_path`
 3. **Include the image**: When Code Interpreter returns "![Generated Plot](...)", you MUST copy that exact markdown into your final response. If you omit the image markdown, it will be automatically appended — but including it yourself produces a better-formatted response.
 
 Example Code Interpreter usage:
