@@ -232,6 +232,12 @@ class ResponseFunctionCallResult(BaseModel):
     status: Literal["completed", "failed"]
     call_id: str
     output: str | list[dict[str, Any]]
+    source: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Source context metadata: resource_type and resource_id for citation"
+        ),
+    )
 
 
 class ResponseOutputItem(BaseModel):

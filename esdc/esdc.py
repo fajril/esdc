@@ -40,6 +40,7 @@ import warnings
 from collections.abc import Iterable
 from contextlib import closing
 from datetime import date
+from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
@@ -65,7 +66,12 @@ from esdc.chat.app import ESDCChatApp  # noqa: E402
 from esdc.commands.configs import configs_app  # noqa: E402
 from esdc.commands.provider import provider_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
-from esdc.dbmanager import load_data_to_db, run_query  # noqa: E402
+from esdc.dbmanager import (  # noqa: E402
+    _ensure_duckdb_database,
+    get_duckdb_connection,
+    load_data_to_db,
+    run_query,
+)
 from esdc.selection import ApiVer, FileType, TableName  # noqa: E402
 
 TABLES: tuple[TableName, TableName] = (
@@ -130,13 +136,28 @@ def fetch(
         "--no-reload",
         help="Only download data, skip loading into database (implies --save).",
     ),
+    year: Annotated[
+        list[int] | None,
+        typer.Option(
+            help=(
+                "Specific report year(s) to fetch. "
+                "Can specify multiple: --year 2024 --year 2025"
+            )
+        ),
+    ] = None,
 ) -> None:
     """Fetch data from ESDC and optionally load into the database.
 
     By default, downloads data and loads it into the database.
     Use --no-reload to download and save data without loading into the database.
+    Use --year to fetch and update specific year(s) for both resources and
+    timeseries.
     """
     username, password = Config.get_credentials()
+
+    if year:
+        year = sorted(set(year))
+        logging.info("Will fetch data for specific year(s): %s", year)
 
     should_save = save or no_reload
     should_reload = not no_reload
@@ -148,6 +169,7 @@ def fetch(
             reload=should_reload,
             username=username,
             password=password,
+            years=year,
         )
     elif filetype == "json":
         load_esdc_data(
@@ -156,6 +178,7 @@ def fetch(
             reload=should_reload,
             username=username,
             password=password,
+            years=year,
         )
     else:
         logging.warning("File type %s is not available.", filetype)
@@ -430,12 +453,151 @@ def show(
         logging.warning("Unable to show data. The query is none.")
 
 
+def _detect_report_years(db_path: Path, min_year: int = 2020) -> list[int]:
+    """Query available report_year from project_resources, starting from min_year."""
+    if not db_path.exists():
+        logging.warning(
+            "Database not found at %s. Cannot detect report years.", db_path
+        )
+        return []
+
+    try:
+        conn = get_duckdb_connection(db_path, read_only=True)
+        try:
+            result = conn.execute(
+                f"SELECT DISTINCT report_year FROM project_resources "
+                f"WHERE report_year >= {min_year} ORDER BY report_year"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        years = [row[0] for row in result if row[0] is not None]
+        logging.info(
+            "Detected report years (>= %d) for timeseries: %s", min_year, years
+        )
+        return years
+    except Exception:
+        logging.exception("Failed to detect report years from database.")
+        return []
+
+
+_CREATE_TABLE_SCRIPTS = {
+    "project_resources": "create_table_project_resources.sql",
+    "project_timeseries": "create_table_project_timeseries.sql",
+}
+
+
+def _append_to_table(
+    table_name: str,
+    header: list[str],
+    content: list[list[str]],
+    append_years: list[int],
+) -> None:
+    """Append data: delete existing rows for given years, then insert new rows."""
+    db_path = Config.get_db_file()
+    _ensure_duckdb_database(db_path)
+    if not Config.get_db_dir().exists():
+        Config.get_db_dir().mkdir(parents=True, exist_ok=True)
+
+    conn = get_duckdb_connection(db_path)
+    try:
+        # Ensure table exists; only create if missing
+        table_exists = conn.execute(
+            f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'"
+        ).fetchone()
+
+        if not table_exists:
+            from esdc.db_security import _load_sql_script
+
+            script_name = _CREATE_TABLE_SCRIPTS.get(table_name)
+            if script_name is None:
+                raise ValueError(f"No create script mapped for table '{table_name}'")
+            create_sql = _load_sql_script(script_name)
+            statements = [s.strip() for s in create_sql.split(";") if s.strip()]
+            for stmt in statements:
+                conn.execute(stmt)
+
+        # Delete existing rows for the specified years
+        year_list = ", ".join(str(y) for y in append_years)
+        delete_stmt = f"DELETE FROM {table_name} WHERE report_year IN ({year_list})"
+        logging.debug(
+            "Deleting existing rows from %s for years: %s", table_name, year_list
+        )
+        conn.execute(delete_stmt)
+
+        # Insert new rows
+        placeholders = ", ".join(["?" for _ in header])
+        insert_stmt = (
+            f"INSERT INTO {table_name} ({', '.join(header)}) VALUES ({placeholders})"
+        )
+        conn.executemany(insert_stmt, content)
+
+        # ------------------------------------------------------------------
+        # Work around DuckDB HNSW checkpoint crash: drop the index before
+        # CHECKPOINT.  The index will be rebuilt by
+        # `esdc reload --embeddings-only` when embeddings are regenerated
+        # for the updated data.
+        # ------------------------------------------------------------------
+        conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
+        conn.execute("CHECKPOINT")
+
+        logging.info(
+            "Appended %d rows to %s for year(s): %s",
+            len(content),
+            table_name,
+            year_list,
+        )
+    finally:
+        conn.close()
+
+
+def _fetch_and_parse_table(
+    table: TableName,
+    filetype: FileType,
+    to_file: bool,
+    username: str,
+    password: str,
+    report_year: int | None = None,
+) -> tuple[list[list[str]], list[str]] | None:
+    """Download and parse a single table."""
+    url = esdc_url_builder(
+        table_name=table, file_type=filetype, report_year=report_year
+    )
+    logging.info("downloading from %s", url)
+    data = esdc_downloader(url, username, password)
+    if data is None:
+        logging.warning("Failed to download %s data.", table.value)
+        return None
+
+    if to_file:
+        filename = table.value
+        if report_year is not None:
+            filename = f"{table.value}_{report_year}"
+        save_path = Config.get_db_dir() / f"{filename}.{filetype.value}"
+        logging.debug("Save data as %s", save_path)
+        with open(save_path, "wb") as f:
+            _ = f.write(data)
+
+    if filetype == FileType.CSV:
+        decoded_data = data.decode("utf-8").splitlines()
+        return _read_csv(decoded_data)
+    elif filetype == FileType.JSON:
+        parsed_json = json.loads(data)
+        if not parsed_json:
+            return None
+        header = list(parsed_json[0].keys())
+        content = [list(item.values()) for item in parsed_json]
+        return content, header
+    return None
+
+
 def load_esdc_data(
     filetype: FileType = FileType.CSV,
     to_file: bool = True,
     reload: bool = True,
     username: str = "",
     password: str = "",
+    years: list[int] | None = None,
 ) -> None:
     """Download data from the ESDC API and optionally load into the database.
 
@@ -452,34 +614,89 @@ def load_esdc_data(
         The username for authenticating with the ESDC API.
     password : str
         The password for authenticating with the ESDC API.
+    years : list[int] | None
+        Specific report year(s) to fetch. When provided both
+        ``project_resources`` and ``project_timeseries`` are updated for
+        those years using append mode.
     """
-    for table in TABLES:
-        logging.info("Downloading %s table.", table.value)
-        url = esdc_url_builder(table_name=table, file_type=filetype)
-        logging.info("downloading from %s", url)
-        data = esdc_downloader(url, username, password)
-        if data is None:
-            logging.warning("Failed to download %s data.", table.value)
-            break
-        if to_file:
-            save_path = Config.get_db_dir() / f"{table.value}.{filetype.value}"
-            logging.debug("Save data as %s", save_path)
-            with open(save_path, "wb") as f:
-                _ = f.write(data)
+    # ------------------------------------------------------------------
+    # 1) Full-replace mode (default)
+    # ------------------------------------------------------------------
+    if years is None:
+        # Resources: full replace
+        resources_result = _fetch_and_parse_table(
+            TableName.PROJECT_RESOURCES,
+            filetype,
+            to_file,
+            username,
+            password,
+        )
+        if resources_result is not None and reload:
+            load_data_to_db(
+                resources_result[0],
+                resources_result[1],
+                TableName.PROJECT_RESOURCES.value,
+            )
 
-        if not reload:
-            logging.info("Skipping database load for %s (--no-reload).", table.value)
-            continue
+        # Detect years from DB after resources loaded
+        timeseries_years = _detect_report_years(Config.get_db_file(), min_year=2020)
+        if not timeseries_years:
+            logging.warning("No report years found for timeseries. Skipping.")
+            return
 
-        if filetype == FileType.CSV:
-            decoded_data = data.decode("utf-8").splitlines()
-            content, header = _read_csv(decoded_data)
-            load_data_to_db(content, header, table.value)
-        elif filetype == FileType.JSON:
-            parsed_json = json.loads(data)
-            header = parsed_json[0].keys()
-            content = [list(item.values()) for item in parsed_json]
-            load_data_to_db(content, header, table.value)
+        # Timeseries: full replace, fetching per year
+        all_timeseries_content: list[list[str]] = []
+        timeseries_header: list[str] = []
+        for year in timeseries_years:
+            result = _fetch_and_parse_table(
+                TableName.PROJECT_TIMESERIES,
+                filetype,
+                to_file,
+                username,
+                password,
+                report_year=year,
+            )
+            if result is not None:
+                all_timeseries_content.extend(result[0])
+                timeseries_header = result[1]
+
+        if all_timeseries_content and reload:
+            load_data_to_db(
+                all_timeseries_content,
+                timeseries_header,
+                TableName.PROJECT_TIMESERIES.value,
+            )
+        return
+
+    # ------------------------------------------------------------------
+    # 2) Per-year append mode (--year)
+    # ------------------------------------------------------------------
+    if reload:
+        console.print(
+            "[dim]Per-year mode: updating project_resources and "
+            f"project_timeseries for years {years}[/dim]"
+        )
+
+    for year in sorted(set(years)):
+        for table in TABLES:
+            result = _fetch_and_parse_table(
+                table,
+                filetype,
+                to_file,
+                username,
+                password,
+                report_year=year,
+            )
+            if result is None or not reload:
+                continue
+            _append_to_table(table.value, result[1], result[0], [year])
+
+    if reload:
+        console.print(
+            "[yellow]:warning:  Embedding index has been dropped. "
+            "Run `[dim]esdc reload --embeddings-only[/dim]` "
+            "to regenerate embeddings.[/yellow]"
+        )
 
 
 def esdc_url_builder(
@@ -528,8 +745,6 @@ def esdc_url_builder(
     # TODO this is temporary fix since as of 2024-07-06
     # the API for time series does not support all year selection
     # remove this conditional if the API for project_timeseries is fixed.
-    if table_name == TableName.PROJECT_TIMESERIES:
-        report_year = 2024
     if report_year is not None:
         url = f"{url}&report-year={report_year}"
     url = f"{url}&output={file_type.value}"
