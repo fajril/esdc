@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Clarified uncertainty rules for all volume types
   - Updated prompt length limit from 25000 to 26000 for expanded uncertainty rules
 
+- **Database Performance Optimization**:
+  - Refactored embeddings generation from row-by-row to bulk insert using `executemany()` (~10x faster)
+  - Added B-tree indexes on `project_embeddings` contextual columns for fast semantic search filtering
+  - Added FTS indexes on 16 columns (was 8) for enhanced text search
+
 - **Config System**:
   - Added config descriptions and enums
   - Added reasoning_content detection from ChatOllama `additional_kwargs`
