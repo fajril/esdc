@@ -44,6 +44,19 @@ When writing SQL queries, use DuckDB syntax:
 - **knowledge_traversal**: Resolve entities and match query patterns from knowledge graph (query) — call only if no auto-resolved entities provided
 - **resolve_spatial**: Execute spatial queries using DuckDB spatial extension (query_type, target, radius_km=20, limit=10, wk_name=None) — use for proximity, distance, or working area queries. **IMPORTANT: When a query mentions a working area (e.g., "di WK Mahakam", "in Rokan"), ALWAYS pass wk_name to scope results to that working area.**
 - **semantic_search**: Search documents by semantic similarity (query, limit=10, **filters**) — use for concept-based queries, "proyek dengan masalah X", when FTS returns no results. **NEW: Supports many filters** - report_year, field_name, pod_name, wk_name, province, basin128, project_class, project_stage, project_level, operator_name, operator_group, wk_subgroup, wk_regionisasi_ngi (NGI region), wk_area_perwakilan_skkmigas (SKK Migas region). **IMPORTANT**: If semantic embeddings are not available, this tool automatically falls back to FTS search and returns status="fallback_to_fts". Inform the user that semantic search is not active and how to enable it.
+
+### Semantic Search Guidelines
+
+**Use semantic_search ONLY for:**
+- Conceptual queries describing issues, problems, or characteristics (5+ words)
+- Bilingual Indonesian/English concept queries: "proyek dengan masalah reservoir heterogen", "kendala teknis water injection"
+
+**NEVER use semantic_search for:**
+- Keyword matching on project_name, field_name, or entity names
+- Short entity keywords: "EOR", "waterflood", "water cut", single words
+- Queries like "proyek yang namanya ada..." or "project name contains..."
+
+**For project_name keyword matching:** Use execute_sql with ILIKE '%keyword%' — DuckDB auto-optimizes ILIKE to BM25 FTS.
 - **execute_cypher**: Execute Cypher queries on the knowledge graph (cypher_query) — use when knowledge_traversal returns cypher_available=true
 - **execute_sql**: Execute SELECT queries on the DuckDB database
 - **get_schema**: Get table structure and column information
@@ -82,10 +95,13 @@ When writing SQL queries, use DuckDB syntax:
 **A. SIMPLE FACTUAL** (cadangan, sumber daya, profil produksi):
 → **Skip directly to Step 2** — Write `execute_sql` using detected entities
 
-**B. CONCEPTUAL** (tidak ekonomis, kendala teknis, masalah):
-1. Call `semantic_search(query, [filters])` FIRST
-2. **WAIT** for results
-3. Use `project_ids` from results in `execute_sql`
+**B. CONCEPTUAL** (masalah, kendala, karakteristik proyek):
+1. Rewrite query into a 5+ word concept query if needed
+2. Call `semantic_search(query, [filters])` — query MUST be conceptual, not keyword matching on project_name or single words
+3. **WAIT** for results
+4. Use `project_ids` or `project_name` from results in `execute_sql`
+
+**NEVER use semantic_search for:** Keyword matching on project_name, acronyms (EOR, waterflood), or single words. Use execute_sql with ILIKE instead.
 
 **C. SPATIAL** (dekat, jarak, radius):
 1. Call `resolve_spatial`

@@ -1442,7 +1442,13 @@ def resolve_spatial(
 def semantic_search(
     query: Annotated[
         str,
-        "Natural language query to search for semantically similar documents.",
+        "Bilingual Indonesian/English concept query (5+ words) describing issues, "
+        "problems, or characteristics in project_remarks. The database contains "
+        "bilingual remarks (Indonesian narrative + English technical terms). "
+        "Examples: 'proyek dengan masalah reservoir heterogen', "
+        "'kendala teknis water injection'. "
+        "DO NOT use for keyword matching on project_name (EOR, waterflood, water cut) "
+        "or single words. For those, use execute_sql with ILIKE on project_name.",
     ],
     limit: Annotated[
         int,
