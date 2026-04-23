@@ -137,6 +137,9 @@ class SemanticResolver:
                 )
             """)
 
+            # Create B-tree indexes on embedding contextual columns for fast filtering
+            self._create_embedding_indexes()
+
             logger.info(
                 "[Semantic] embeddings table created with dimension %d", embedding_dim
             )
@@ -231,21 +234,10 @@ class SemanticResolver:
                 # Generate embeddings
                 embeddings = self._embedding_manager.generate_embeddings_batch(texts)
 
-                # Store in DuckDB with all contextual columns
-                for _j, (row, embedding) in enumerate(
-                    zip(batch, embeddings, strict=True)
-                ):
-                    conn.execute(
-                        f"""
-                        INSERT OR REPLACE INTO {self.EMBEDDING_TABLE}
-                        (project_id, report_year, table_name, field_name, project_name,
-                         pod_name, wk_name, province, basin128, project_class,
-                         project_stage,
-                         project_level, operator_name, operator_group, wk_subgroup,
-                         wk_regionisasi_ngi, wk_area_perwakilan_skkmigas,
-                         project_remarks, embedding)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                # Store in DuckDB with all contextual columns using bulk insert
+                data_to_insert = []
+                for row, embedding in zip(batch, embeddings, strict=True):
+                    data_to_insert.append(
                         [
                             row[0],  # project_id
                             row[1],  # report_year
@@ -266,8 +258,20 @@ class SemanticResolver:
                             row[15],  # wk_area_perwakilan_skkmigas
                             row[16],  # project_remarks
                             embedding,
-                        ],
+                        ]
                     )
+                conn.executemany(
+                    f"""
+                    INSERT OR REPLACE INTO {self.EMBEDDING_TABLE}
+                    (project_id, report_year, table_name, field_name, project_name,
+                     pod_name, wk_name, province, basin128, project_class,
+                     project_stage, project_level, operator_name, operator_group,
+                     wk_subgroup, wk_regionisasi_ngi,
+                     wk_area_perwakilan_skkmigas, project_remarks, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    data_to_insert,
+                )
 
                 logger.debug(
                     "[Semantic] batch %d/%d processed",
@@ -312,6 +316,33 @@ class SemanticResolver:
             logger.info("[Semantic] HNSW index created")
         except Exception as e:
             logger.error("[Semantic] HNSW index failed | error=%s", e)
+
+    def _create_embedding_indexes(self) -> None:
+        """Create B-tree indexes on embedding contextual columns for fast filtering."""
+        conn = self._get_connection()
+
+        embedding_indexes = [
+            ("idx_emb_field_name", "field_name"),
+            ("idx_emb_wk_name", "wk_name"),
+            ("idx_emb_province", "province"),
+            ("idx_emb_report_year", "report_year"),
+            ("idx_emb_project_class", "project_class"),
+            ("idx_emb_project_stage", "project_stage"),
+            ("idx_emb_project_level", "project_level"),
+            ("idx_emb_operator_name", "operator_name"),
+            ("idx_emb_operator_group", "operator_group"),
+            ("idx_emb_basin128", "basin128"),
+        ]
+
+        for idx_name, column in embedding_indexes:
+            try:
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} "
+                    f"ON {self.EMBEDDING_TABLE}({column})"
+                )
+                logger.debug("[Semantic] B-tree index created: %s", idx_name)
+            except Exception as e:
+                logger.warning("[Semantic] Failed to create index %s: %s", idx_name, e)
 
     def search_by_text(
         self,

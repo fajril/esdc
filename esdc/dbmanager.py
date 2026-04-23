@@ -1,14 +1,18 @@
 import contextlib
 import logging
 import shutil
+import time
 from pathlib import Path
 
 import duckdb
 import pandas as pd
+from rich.console import Console
 
 from esdc.configs import Config
 from esdc.db_security import SQLSanitizer, _load_sql_script
 from esdc.selection import TableName
+
+console = Console()
 
 
 def get_duckdb_connection(
@@ -79,6 +83,14 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 "operator_name",
                 "project_remarks",
                 "vol_remarks",
+                "basin86",
+                "wk_id",
+                "field_id",
+                "field_name_previous",
+                "project_name_previous",
+                "pod_name",
+                "operator_group",
+                "wk_subgroup",
             ],
         },
         {
@@ -93,6 +105,14 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 "operator_name",
                 "project_remarks",
                 "vol_remarks",
+                "basin86",
+                "wk_id",
+                "field_id",
+                "field_name_previous",
+                "project_name_previous",
+                "pod_name",
+                "operator_group",
+                "wk_subgroup",
             ],
         },
     ]
@@ -200,59 +220,63 @@ def load_data_to_db(
         "project_resources": "create_table_project_resources.sql",
         "project_timeseries": "create_table_project_timeseries.sql",
     }
-    logging.info("Connecting to the database.")
+    start_time = time.monotonic()
+    label = f"Loading {table_name}" if len(content) > 1000 else f"{table_name}"
+
+    def _status(step: str) -> str:
+        elapsed = time.monotonic() - start_time
+        return f"[dim]{label}: {step} [elapsed {elapsed:.1f}s][/dim]"
+
     _ensure_duckdb_database(Config.get_db_file())
     if not Config.get_db_dir().exists():
         Config.get_db_dir().mkdir(parents=True, exist_ok=True)
-        logging.info("Database does not exist. Creating new database.")
-        logging.debug("Database location: %s", Config.get_db_dir())
     conn = get_duckdb_connection(Config.get_db_file())
-    try:
-        logging.debug("creating table %s in database", table_name)
-        _execute_sql_script(conn, create_table_query[table_name])
-        column_names = ", ".join(["?" for _ in header])
-        insert_stmt = (
-            f"INSERT INTO {table_name} ({', '.join(header)}) VALUES ({column_names})"
-        )
-        logging.debug("Inserting table data %s into the database.", table_name)
+
+    with console.status(_status("preparing")) as status:
         try:
-            conn.executemany(insert_stmt, content)
-        except duckdb.Error as e:
-            logging.debug("insert statement: %s", insert_stmt)
-            raise duckdb.Error(str(e)) from e
+            status.update(_status("creating schema"))
+            _execute_sql_script(conn, create_table_query[table_name])
 
-        logging.debug("Creating uuid column for table %s", table_name)
-        _execute_sql_script(
-            conn,
-            "create_column_uuid.sql",
-            replacements={"{table_name}": table_name},
-        )
+            status.update(_status(f"inserting {len(content):,} rows"))
+            placeholders = ", ".join(["?" for _ in header])
+            stmt = (
+                f"INSERT INTO {table_name} "
+                f"({', '.join(header)}) VALUES ({placeholders})"
+            )
+            conn.executemany(stmt, content)
 
-        if table_name == "project_resources":
-            logging.debug("Creating project_uuid column.")
-            _execute_sql_script(conn, "create_project_resources_uuid.sql")
+            status.update(_status("creating uuid columns"))
+            _execute_sql_script(
+                conn,
+                "create_column_uuid.sql",
+                replacements={"{table_name}": table_name},
+            )
 
-            logging.debug("Creating is_discovered column.")
-            _execute_sql_script(conn, "create_project_resources_is_discovered.sql")
+            if table_name == "project_resources":
+                status.update(_status("creating resource views"))
+                _execute_sql_script(conn, "create_project_resources_uuid.sql")
+                _execute_sql_script(conn, "create_project_resources_is_discovered.sql")
+                _execute_sql_script(conn, "create_project_resources_project_stage.sql")
+                _execute_sql_script(conn, "create_esdc_view.sql")
 
-            logging.debug("Creating project_stage column.")
-            _execute_sql_script(conn, "create_project_resources_project_stage.sql")
+            if table_name == "project_timeseries":
+                status.update(_status("creating timeseries views"))
+                _execute_sql_script(conn, "create_timeseries_views.sql")
 
-            logging.debug("Creating table view for field, working area, nkri.")
-            _execute_sql_script(conn, "create_esdc_view.sql")
+            if table_name in ("project_resources", "project_timeseries"):
+                status.update(_status("building search indexes"))
+                _create_fts_indexes(conn)
 
-        if table_name == "project_timeseries":
-            logging.debug("Creating timeseries views for field, wa, nkri.")
-            _execute_sql_script(conn, "create_timeseries_views.sql")
+            status.update(_status("checkpointing"))
+            conn.execute("CHECKPOINT")
 
-        if table_name in ("project_resources", "project_timeseries"):
-            logging.debug("Creating FTS indexes for text search.")
-            _create_fts_indexes(conn)
-
-        conn.execute("CHECKPOINT")
-        logging.info("Table %s is loaded into database.", table_name)
-    finally:
-        conn.close()
+            elapsed = time.monotonic() - start_time
+            console.print(
+                f"[green]✓[/green] {label}: "
+                f"{len(content):,} rows loaded in {elapsed:.1f}s"
+            )
+        finally:
+            conn.close()
 
     invalidate_sql_cache()
     from esdc.chat.tools import invalidate_tool_cache, reset_sql_cache

@@ -36,6 +36,7 @@ import io
 import json
 import logging
 import os
+import time
 import warnings
 from collections.abc import Iterable
 from contextlib import closing
@@ -494,61 +495,78 @@ def _append_to_table(
     append_years: list[int],
 ) -> None:
     """Append data: delete existing rows for given years, then insert new rows."""
+    start_time = time.monotonic()
     db_path = Config.get_db_file()
     _ensure_duckdb_database(db_path)
     if not Config.get_db_dir().exists():
         Config.get_db_dir().mkdir(parents=True, exist_ok=True)
 
-    conn = get_duckdb_connection(db_path)
-    try:
-        # Ensure table exists; only create if missing
-        table_exists = conn.execute(
-            f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'"
-        ).fetchone()
+    year_label = ", ".join(str(y) for y in append_years)
 
-        if not table_exists:
-            from esdc.db_security import _load_sql_script
-
-            script_name = _CREATE_TABLE_SCRIPTS.get(table_name)
-            if script_name is None:
-                raise ValueError(f"No create script mapped for table '{table_name}'")
-            create_sql = _load_sql_script(script_name)
-            statements = [s.strip() for s in create_sql.split(";") if s.strip()]
-            for stmt in statements:
-                conn.execute(stmt)
-
-        # Delete existing rows for the specified years
-        year_list = ", ".join(str(y) for y in append_years)
-        delete_stmt = f"DELETE FROM {table_name} WHERE report_year IN ({year_list})"
-        logging.debug(
-            "Deleting existing rows from %s for years: %s", table_name, year_list
+    def _status(step: str) -> str:
+        elapsed = time.monotonic() - start_time
+        return (
+            f"[dim]{table_name} ({year_label}): {step} [elapsed {elapsed:.1f}s][/dim]"
         )
-        conn.execute(delete_stmt)
 
-        # Insert new rows
-        placeholders = ", ".join(["?" for _ in header])
-        insert_stmt = (
-            f"INSERT INTO {table_name} ({', '.join(header)}) VALUES ({placeholders})"
-        )
-        conn.executemany(insert_stmt, content)
+    with console.status(_status("preparing")) as status:
+        conn = get_duckdb_connection(db_path)
+        try:
+            # Ensure table exists; only create if missing
+            status.update(_status("creating schema"))
+            schema_stmt = (
+                "SELECT 1 FROM information_schema.tables "
+                f"WHERE table_name = '{table_name}'"
+            )
+            table_exists = conn.execute(schema_stmt).fetchone()
 
-        # ------------------------------------------------------------------
-        # Work around DuckDB HNSW checkpoint crash: drop the index before
-        # CHECKPOINT.  The index will be rebuilt by
-        # `esdc reload --embeddings-only` when embeddings are regenerated
-        # for the updated data.
-        # ------------------------------------------------------------------
-        conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
-        conn.execute("CHECKPOINT")
+            if not table_exists:
+                status.update(_status("creating table"))
+                from esdc.db_security import _load_sql_script
 
-        logging.info(
-            "Appended %d rows to %s for year(s): %s",
-            len(content),
-            table_name,
-            year_list,
-        )
-    finally:
-        conn.close()
+                script_name = _CREATE_TABLE_SCRIPTS.get(table_name)
+                if script_name is None:
+                    raise ValueError(
+                        f"No create script mapped for table '{table_name}'"
+                    )
+                create_sql = _load_sql_script(script_name)
+                statements = [s.strip() for s in create_sql.split(";") if s.strip()]
+                for stmt in statements:
+                    conn.execute(stmt)
+
+            # Delete existing rows for the specified years
+            status.update(_status("deleting old rows"))
+            delete_stmt = (
+                f"DELETE FROM {table_name} WHERE report_year IN ({year_label})"
+            )
+            conn.execute(delete_stmt)
+
+            # Insert new rows
+            status.update(_status(f"inserting {len(content):,} rows"))
+            placeholders = ", ".join(["?" for _ in header])
+            insert_stmt = (
+                f"INSERT INTO {table_name} ({', '.join(header)}) "
+                f"VALUES ({placeholders})"
+            )
+            conn.executemany(insert_stmt, content)
+
+            # ------------------------------------------------------------------
+            # Work around DuckDB HNSW checkpoint crash: drop the index before
+            # CHECKPOINT.  The index will be rebuilt by
+            # `esdc reload --embeddings-only` when embeddings are regenerated
+            # for the updated data.
+            # ------------------------------------------------------------------
+            status.update(_status("checkpointing"))
+            conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
+            conn.execute("CHECKPOINT")
+
+            elapsed = time.monotonic() - start_time
+            console.print(
+                f"[green]✓[/green] {table_name} ({year_label}): "
+                f"{len(content):,} rows updated in {elapsed:.1f}s"
+            )
+        finally:
+            conn.close()
 
 
 def _fetch_and_parse_table(
