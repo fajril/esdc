@@ -48,7 +48,6 @@ import pandas as pd
 import requests
 import rich
 import typer
-from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
@@ -61,12 +60,11 @@ from rich.progress import (
 )
 from tabulate import tabulate
 
-console = Console()
-
 from esdc.chat.app import ESDCChatApp  # noqa: E402
 from esdc.commands.configs import configs_app  # noqa: E402
 from esdc.commands.provider import provider_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
+from esdc.console import console  # noqa: E402
 from esdc.dbmanager import (  # noqa: E402
     _ensure_duckdb_database,
     get_duckdb_connection,

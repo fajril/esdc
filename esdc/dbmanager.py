@@ -6,13 +6,11 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
-from rich.console import Console
 
 from esdc.configs import Config
+from esdc.console import console
 from esdc.db_security import SQLSanitizer, _load_sql_script
 from esdc.selection import TableName
-
-console = Console()
 
 
 def get_duckdb_connection(
