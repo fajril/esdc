@@ -282,7 +282,7 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 | EUR reserves | `eur_res_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
 | EUR resources | `eur_rec_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
 | Recovery Factor | `rf_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
-| Discovery Year | `dcpy_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| Discrepancy | `dcpy_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
 
 ### Decision: Combined vs Specific
 - No substance specified → use combined columns (`_oc`, `_an`)

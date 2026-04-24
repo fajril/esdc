@@ -512,150 +512,151 @@ DATABASE_SCHEMA: dict[str, dict] = {
                 "type": "REAL",
                 "description": "Cumulative sales production total gas (BSCF).",
             },
-            # === Decommissioning ===
+            # === Discrepancy (dcpy_*) ===
+            # dcpy = Discrepancy (volume reconciliation between reporting periods)
             "dcpy_um_oil": {
                 "type": "REAL",
-                "description": "Decommissioning - ultimate mission oil (MSTB).",
+                "description": "Update Model - volume changes from Geology, Geophysics, and Reservoir studies oil (MSTB).",
             },
             "dcpy_um_con": {
                 "type": "REAL",
-                "description": "Decommissioning - ultimate mission condensate (MSTB).",
+                "description": "Update Model - volume changes from Geology, Geophysics, and Reservoir studies condensate (MSTB).",
             },
             "dcpy_um_ga": {
                 "type": "REAL",
-                "description": "Decommissioning - ultimate mission associated gas (BSCF).",
+                "description": "Update Model - volume changes from Geology, Geophysics, and Reservoir studies associated gas (BSCF).",
             },
             "dcpy_um_gn": {
                 "type": "REAL",
-                "description": "Decommissioning - ultimate mission non-associated gas (BSCF).",
+                "description": "Update Model - volume changes from Geology, Geophysics, and Reservoir studies non-associated gas (BSCF).",
             },
             "dcpy_um_oc": {
                 "type": "REAL",
-                "description": "Decommissioning - ultimate mission oil+condensate (MSTB).",
+                "description": "Update Model - volume changes from Geology, Geophysics, and Reservoir studies oil+condensate (MSTB).",
             },
             "dcpy_um_an": {
                 "type": "REAL",
-                "description": "Decommissioning - ultimate mission total gas (BSCF).",
+                "description": "Update Model - volume changes from Geology, Geophysics, and Reservoir studies total gas (BSCF).",
             },
             "dcpy_ppa_oil": {
                 "type": "REAL",
-                "description": "Decommissioning - PPA oil (MSTB).",
+                "description": "Production Performance Analysis - volume changes from production profile analysis oil (MSTB).",
             },
             "dcpy_ppa_con": {
                 "type": "REAL",
-                "description": "Decommissioning - PPA condensate (MSTB).",
+                "description": "Production Performance Analysis - volume changes from production profile analysis condensate (MSTB).",
             },
             "dcpy_ppa_ga": {
                 "type": "REAL",
-                "description": "Decommissioning - PPA associated gas (BSCF).",
+                "description": "Production Performance Analysis - volume changes from production profile analysis associated gas (BSCF).",
             },
             "dcpy_ppa_gn": {
                 "type": "REAL",
-                "description": "Decommissioning - PPA non-associated gas (BSCF).",
+                "description": "Production Performance Analysis - volume changes from production profile analysis non-associated gas (BSCF).",
             },
             "dcpy_ppa_oc": {
                 "type": "REAL",
-                "description": "Decommissioning - PPA oil+condensate (MSTB).",
+                "description": "Production Performance Analysis - volume changes from production profile analysis oil+condensate (MSTB).",
             },
             "dcpy_ppa_an": {
                 "type": "REAL",
-                "description": "Decommissioning - PPA total gas (BSCF).",
+                "description": "Production Performance Analysis - volume changes from production profile analysis total gas (BSCF).",
             },
             "dcpy_wi_oil": {
                 "type": "REAL",
-                "description": "Decommissioning - well intervention oil (MSTB).",
+                "description": "Well Intervention - volume changes from well workover or well service activities oil (MSTB).",
             },
             "dcpy_wi_con": {
                 "type": "REAL",
-                "description": "Decommissioning - well intervention condensate (MSTB).",
+                "description": "Well Intervention - volume changes from well workover or well service activities condensate (MSTB).",
             },
             "dcpy_wi_ga": {
                 "type": "REAL",
-                "description": "Decommissioning - well intervention associated gas (BSCF).",
+                "description": "Well Intervention - volume changes from well workover or well service activities associated gas (BSCF).",
             },
             "dcpy_wi_gn": {
                 "type": "REAL",
-                "description": "Decommissioning - well intervention non-associated gas (BSCF).",
+                "description": "Well Intervention - volume changes from well workover or well service activities non-associated gas (BSCF).",
             },
             "dcpy_wi_oc": {
                 "type": "REAL",
-                "description": "Decommissioning - well intervention oil+condensate (MSTB).",
+                "description": "Well Intervention - volume changes from well workover or well service activities oil+condensate (MSTB).",
             },
             "dcpy_wi_an": {
                 "type": "REAL",
-                "description": "Decommissioning - well intervention total gas (BSCF).",
+                "description": "Well Intervention - volume changes from well workover or well service activities total gas (BSCF).",
             },
             "dcpy_cio_oil": {
                 "type": "REAL",
-                "description": "Decommissioning - CIO oil (MSTB).",
+                "description": "Consumed in Operations - fuel, flare, and shrinkage losses oil (MSTB).",
             },
             "dcpy_cio_con": {
                 "type": "REAL",
-                "description": "Decommissioning - CIO condensate (MSTB).",
+                "description": "Consumed in Operations - fuel, flare, and shrinkage losses condensate (MSTB).",
             },
             "dcpy_cio_ga": {
                 "type": "REAL",
-                "description": "Decommissioning - CIO associated gas (BSCF).",
+                "description": "Consumed in Operations - fuel, flare, and shrinkage losses associated gas (BSCF).",
             },
             "dcpy_cio_gn": {
                 "type": "REAL",
-                "description": "Decommissioning - CIO non-associated gas (BSCF).",
+                "description": "Consumed in Operations - fuel, flare, and shrinkage losses non-associated gas (BSCF).",
             },
             "dcpy_cio_oc": {
                 "type": "REAL",
-                "description": "Decommissioning - CIO oil+condensate (MSTB).",
+                "description": "Consumed in Operations - fuel, flare, and shrinkage losses oil+condensate (MSTB).",
             },
             "dcpy_cio_an": {
                 "type": "REAL",
-                "description": "Decommissioning - CIO total gas (BSCF).",
+                "description": "Consumed in Operations - fuel, flare, and shrinkage losses total gas (BSCF).",
             },
             "dcpy_gtr_oil": {
                 "type": "REAL",
-                "description": "Decommissioning - GTR oil (MSTB).",
+                "description": "GRR to Reserves - reserve additions from GRR reclassification or commercial factor reductions oil (MSTB).",
             },
             "dcpy_gtr_con": {
                 "type": "REAL",
-                "description": "Decommissioning - GTR condensate (MSTB).",
+                "description": "GRR to Reserves - reserve additions from GRR reclassification or commercial factor reductions condensate (MSTB).",
             },
             "dcpy_gtr_ga": {
                 "type": "REAL",
-                "description": "Decommissioning - GTR associated gas (BSCF).",
+                "description": "GRR to Reserves - reserve additions from GRR reclassification or commercial factor reductions associated gas (BSCF).",
             },
             "dcpy_gtr_gn": {
                 "type": "REAL",
-                "description": "Decommissioning - GTR non-associated gas (BSCF).",
+                "description": "GRR to Reserves - reserve additions from GRR reclassification or commercial factor reductions non-associated gas (BSCF).",
             },
             "dcpy_gtr_oc": {
                 "type": "REAL",
-                "description": "Decommissioning - GTR oil+condensate (MSTB).",
+                "description": "GRR to Reserves - reserve additions from GRR reclassification or commercial factor reductions oil+condensate (MSTB).",
             },
             "dcpy_gtr_an": {
                 "type": "REAL",
-                "description": "Decommissioning - GTR total gas (BSCF).",
+                "description": "GRR to Reserves - reserve additions from GRR reclassification or commercial factor reductions total gas (BSCF).",
             },
             "dcpy_uc_oil": {
                 "type": "REAL",
-                "description": "Decommissioning - UC oil (MSTB).",
+                "description": "Unaccounted Changes - volume corrections from data reconciliation or record fixes oil (MSTB).",
             },
             "dcpy_uc_con": {
                 "type": "REAL",
-                "description": "Decommissioning - UC condensate (MSTB).",
+                "description": "Unaccounted Changes - volume corrections from data reconciliation or record fixes condensate (MSTB).",
             },
             "dcpy_uc_ga": {
                 "type": "REAL",
-                "description": "Decommissioning - UC associated gas (BSCF).",
+                "description": "Unaccounted Changes - volume corrections from data reconciliation or record fixes associated gas (BSCF).",
             },
             "dcpy_uc_gn": {
                 "type": "REAL",
-                "description": "Decommissioning - UC non-associated gas (BSCF).",
+                "description": "Unaccounted Changes - volume corrections from data reconciliation or record fixes non-associated gas (BSCF).",
             },
             "dcpy_uc_oc": {
                 "type": "REAL",
-                "description": "Decommissioning - UC oil+condensate (MSTB).",
+                "description": "Unaccounted Changes - volume corrections from data reconciliation or record fixes oil+condensate (MSTB).",
             },
             "dcpy_uc_an": {
                 "type": "REAL",
-                "description": "Decommissioning - UC total gas (BSCF).",
+                "description": "Unaccounted Changes - volume corrections from data reconciliation or record fixes total gas (BSCF).",
             },
             "ghv_avg": {"type": "REAL", "description": "Average Gross Heating Value."},
         },
