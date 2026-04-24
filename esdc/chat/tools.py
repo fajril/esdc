@@ -864,9 +864,11 @@ def get_resources_columns(
        - Columns: rec_oil, rec_con, rec_ga, rec_gn, rec_oc, rec_an, rec_mboe
        - Includes Reserves + GRR + Contingent + Prospective
 
-    3. Risked Resources (rec_*_risked): Prospective resources with GCF applied
+    3. Risked Resources (rec_*_risked): Universal shortcut for all resource classes
        - Columns: rec_oil_risked, rec_con_risked, etc.
-       - Only applies to prospective resources
+       - GRR/Contingent: GCF=1, identical to rec_*
+       - Prospective: GCF<1, differs from rec_*
+       - Use for "all resources" without project_class filter
 
     PREFIX CONFUSION:
     - res_* = Reserves (commercial only, "cadangan")

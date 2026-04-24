@@ -267,31 +267,31 @@ DATABASE_SCHEMA: dict[str, dict] = {
             },
             "rec_oil_risked": {
                 "type": "REAL",
-                "description": "Resources crude oil risked (MSTB). Prospective Resources multiplied by chance factor. Use SUM() aggregation.",
+                "description": "Resources crude oil risked (MSTB). Identical to rec_oil for GRR and Contingent (GCF=1). Only differs for Prospective Resources. Use SUM() aggregation.",
             },
             "rec_con_risked": {
                 "type": "REAL",
-                "description": "Resources condensate risked (MSTB).",
+                "description": "Resources condensate risked (MSTB). Identical to rec_con for GRR and Contingent (GCF=1). Only differs for Prospective Resources.",
             },
             "rec_ga_risked": {
                 "type": "REAL",
-                "description": "Resources associated gas risked (BSCF).",
+                "description": "Resources associated gas risked (BSCF). Identical to rec_ga for GRR and Contingent (GCF=1). Only differs for Prospective Resources.",
             },
             "rec_gn_risked": {
                 "type": "REAL",
-                "description": "Resources non-associated gas risked (BSCF).",
+                "description": "Resources non-associated gas risked (BSCF). Identical to rec_gn for GRR and Contingent (GCF=1). Only differs for Prospective Resources.",
             },
             "rec_oc_risked": {
                 "type": "REAL",
-                "description": "Resources oil+condensate risked (MSTB).",
+                "description": "Resources oil+condensate risked (MSTB). Identical to rec_oc for GRR and Contingent (GCF=1). Only differs for Prospective Resources.",
             },
             "rec_an_risked": {
                 "type": "REAL",
-                "description": "Resources total gas risked (BSCF).",
+                "description": "Resources total gas risked (BSCF). Identical to rec_an for GRR and Contingent (GCF=1). Only differs for Prospective Resources.",
             },
             "rec_mboe_risked": {
                 "type": "REAL",
-                "description": "Resources oil equivalent risked (MBOE).",
+                "description": "Resources oil equivalent risked (MBOE). Identical to rec_mboe for GRR and Contingent (GCF=1). Only differs for Prospective Resources.",
             },
             # === Reserves (res_*) ===
             "res_oil": {

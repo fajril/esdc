@@ -235,6 +235,18 @@ WHERE report_year = (
 - Contingent Resources: Discovered but not commercial (separate project_class)
 - Prospective Resources: Not yet discovered (separate project_class)
 
+### rec_*_risked Shortcut
+
+**Use `rec_*_risked` as a universal shortcut for all resource classes.**
+- GRR: GCF=1 → `rec_*_risked` = `rec_*` (identical)
+- Contingent: GCF=1 → `rec_*_risked` = `rec_*` (identical)
+- Prospective: GCF<1 → `rec_*_risked` < `rec_*` (different)
+
+**When user asks for "all resources" or "total resources" with risked applied:**
+- Use `rec_*_risked` with NO project_class filter
+- Do NOT write UNION queries mixing rec_* and rec_*_risked
+- `rec_*_risked` alone covers GRR + Contingent + Prospective automatically
+
 ### Uncertainty Levels
 | Term | DB Value | Type | Notes |
 |------|----------|------|-------|
@@ -277,7 +289,7 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 |------------|--------|-------------|--------------|
 | Reserves/cadangan | `res_*` | default | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
 | Resources/GRR/potensi | `rec_*` | by project_class | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
-| Risked prospective | `rec_*_risked` | `project_class LIKE '%Prospective%'` | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
+| Risked resources | `rec_*_risked` | all classes (universal) | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
 | In-place | `prj_ioip`, `prj_igip` | at project level | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
 | EUR reserves | `eur_res_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
 | EUR resources | `eur_rec_*` | | ✅ **Required** — use `uncert_level = '2. Middle Value'` |
