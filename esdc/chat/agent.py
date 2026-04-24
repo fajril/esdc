@@ -137,26 +137,32 @@ async def generate_conversation_title(
         Short title (max 50 chars) summarizing the conversation
     """
     prompt = (
-        "Generate a very short title (max 50 characters) "
-        "summarizing this user query.\n"
-        "The title should be concise and descriptive. "
-        "Respond with ONLY the title,\n"
-        "no quotes or explanation.\n\n"
-        "Examples:\n"
+        "Buatkan judul singkat (maks. 50 karakter) yang merangkum "
+        "pertanyaan user berikut dalam BAHASA yang SAMA dengan "
+        "pertanyaan user.\n"
+        "Judul harus ringkas dan padat."
+        "Hanya sertakan judul, tanpa tanda petik atau penjelasan.\n\n"
+        "Contoh:\n"
+        '- "berapa cadangan nasional" -> '
+        '"Cadangan nasional"\n'
+        '- "buatkan profil produksi EOR" -> '
+        '"Profil produksi EOR"\n'
+        '- "berapa cadangan lapangan Duri" -> '
+        '"Cadangan lapangan Duri"\n'
         '- "how much oil reserves in Rokan field" -> '
-        '"Rokan Field Oil Reserves"\n'
+        '"Oil Reserves Rokan Field"\n'
         '- "list all working areas with gas production" -> '
         '"Working Areas Gas Production"\n'
         '- "compare reserves between 2020 and 2023" -> '
         '"Reserve Comparison 2020-2023"\n\n'
-        "User query: {query}\n\n"
-        "Title:"
+        "Pertanyaan user: {query}\n\n"
+        "Judul:"
     )
 
     try:
         messages = [
             SystemMessage(
-                content="You are a helpful assistant that generates concise conversation titles."  # noqa: E501
+                content="Kamu adalah asisten yang membuat judul percakapan singkat dan ringkas. Gunakan bahasa yang sama dengan pertanyaan user."  # noqa: E501
             ),
             HumanMessage(content=prompt.format(query=user_query)),
         ]
