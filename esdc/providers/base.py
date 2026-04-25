@@ -6,7 +6,15 @@ from typing import Any, Literal
 # Third-party
 from langchain_core.language_models import BaseChatModel
 
-ProviderType = Literal["ollama", "openai", "openai_compatible"]
+ProviderType = Literal[
+    "ollama",
+    "openai",
+    "openai_compatible",
+    "anthropic",
+    "google",
+    "azure_openai",
+    "groq",
+]
 
 DEFAULT_CONTEXT_LENGTH = 4096
 

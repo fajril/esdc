@@ -100,6 +100,76 @@ def _detect_context_length(llm: BaseChatModel) -> int:
             pass
 
     if model_context_length == 0:
+        try:
+            from langchain_anthropic import ChatAnthropic
+
+            if isinstance(llm, ChatAnthropic):
+                model_name = getattr(llm, "model", "")
+                model_key = f"anthropic:{model_name}"
+
+                if model_key in _context_length_cache:
+                    return _context_length_cache[model_key]
+
+                from esdc.providers.anthropic import AnthropicProvider
+
+                model_context_length = AnthropicProvider.get_context_length(model_name)
+        except ImportError:
+            pass
+
+    if model_context_length == 0:
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
+            if isinstance(llm, ChatGoogleGenerativeAI):
+                model_name = getattr(llm, "model", "")
+                model_key = f"google:{model_name}"
+
+                if model_key in _context_length_cache:
+                    return _context_length_cache[model_key]
+
+                from esdc.providers.google import GoogleProvider
+
+                model_context_length = GoogleProvider.get_context_length(model_name)
+        except ImportError:
+            pass
+
+    if model_context_length == 0:
+        try:
+            from langchain_openai import AzureChatOpenAI
+
+            if isinstance(llm, AzureChatOpenAI):
+                model_name = getattr(llm, "azure_deployment", "")
+                model_key = f"azure_openai:{model_name}"
+
+                if model_key in _context_length_cache:
+                    return _context_length_cache[model_key]
+
+                from esdc.providers.azure_openai import AzureOpenAIProvider
+
+                model_context_length = AzureOpenAIProvider.get_context_length(
+                    model_name
+                )
+        except ImportError:
+            pass
+
+    if model_context_length == 0:
+        try:
+            from langchain_groq import ChatGroq
+
+            if isinstance(llm, ChatGroq):
+                model_name = getattr(llm, "model", "")
+                model_key = f"groq:{model_name}"
+
+                if model_key in _context_length_cache:
+                    return _context_length_cache[model_key]
+
+                from esdc.providers.groq import GroqProvider
+
+                model_context_length = GroqProvider.get_context_length(model_name)
+        except ImportError:
+            pass
+
+    if model_context_length == 0:
         from esdc.providers.base import DEFAULT_CONTEXT_LENGTH
 
         model_context_length = DEFAULT_CONTEXT_LENGTH

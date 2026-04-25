@@ -1,7 +1,6 @@
 """Tests for source context metadata in function_call_output items."""
 
 
-
 class TestBuildSourceMetadata:
     """Test _build_source_metadata helper function."""
 

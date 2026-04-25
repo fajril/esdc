@@ -62,13 +62,22 @@ def _create_judge_llm() -> PhoenixLLM:
     provider_type: str = provider_config["provider_type"]
     model_name: str = provider_config["model"]
 
-    if provider_type == "ollama":
+    if provider_type in ("ollama", "groq", "azure_openai"):
         base_url = provider_config.get("base_url") or "http://localhost:11434/v1"
+        if provider_type == "groq":
+            base_url = (
+                provider_config.get("base_url") or "https://api.groq.com/openai/v1"
+            )
+        elif provider_type == "azure_openai":
+            base_url = provider_config.get("base_url") or ""
+        api_key = provider_config.get("api_key") or (
+            "ollama" if provider_type == "ollama" else ""
+        )
         _judge_llm = LLM(
             provider="openai",
             model=model_name,
             base_url=base_url,
-            api_key="ollama",
+            api_key=api_key,
         )
     elif provider_type == "openai_compatible":
         base_url = provider_config["base_url"]
