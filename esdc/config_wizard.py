@@ -75,18 +75,19 @@ def _mask_value(key: str, value: Any) -> str:
     return str(value)
 
 
-def _fetch_models(provider_type: str) -> list[str]:
+def _fetch_models(provider_type: str, **kwargs) -> list[str]:
     """Fetch model list from a provider class.
 
     Falls back to the provider's default model if the API call fails or
-    returns no results.
+    returns no results. Passes kwargs (base_url, api_key) to support
+    providers that require them for listing models.
     """
     provider_class = PROVIDER_CLASSES.get(provider_type)
     if provider_class is None:
         return []
 
     try:
-        models = provider_class.list_models()
+        models = provider_class.list_models(**kwargs)
         if models:
             return models
     except Exception as exc:
@@ -233,24 +234,12 @@ def _add_provider_flow() -> None:
     config_data: dict[str, Any] = {"provider_type": provider_type}
     fields = _PROVIDER_FIELDS.get(provider_type, ["model"])
 
+    # Pass 1: collect connection fields first (base_url, api_key, api_version)
     for field in fields:
-        if field == "model":
-            rich_print(f"[{_SEP_COLOR}]Fetching models…[/{_SEP_COLOR}]")
-            models = _fetch_models(provider_type)
-            default_model = _resolve_default_field(provider_type, "model")
-            selected = questionary.select(
-                "Select model:",
-                choices=models,
-                default=default_model,
-                style=_WIZARD_STYLE,
-            ).ask()
-            config_data["model"] = selected or default_model
-
-        elif field == "api_key":
+        if field == "api_key":
             value = questionary.password("API Key:", style=_WIZARD_STYLE).ask()
             if value:
                 config_data["api_key"] = value
-
         elif field == "base_url":
             default = _resolve_default_field(provider_type, "base_url")
             value = questionary.text(
@@ -258,7 +247,6 @@ def _add_provider_flow() -> None:
             ).ask()
             if value is not None:
                 config_data["base_url"] = value
-
         elif field == "api_version":
             default = _resolve_default_field(provider_type, "api_version")
             value = questionary.text(
@@ -268,7 +256,6 @@ def _add_provider_flow() -> None:
             ).ask()
             if value is not None:
                 config_data["api_version"] = value
-
         elif field == "reasoning_effort":
             effort = questionary.select(
                 "Reasoning effort (optional):",
@@ -278,6 +265,27 @@ def _add_provider_flow() -> None:
             ).ask()
             if effort and effort != "(none)":
                 config_data["reasoning_effort"] = effort
+
+    # Pass 2: fetch models (needs base_url/api_key for some providers)
+    if "model" in fields:
+        rich_print(f"[{_SEP_COLOR}]Fetching models…[/{_SEP_COLOR}]")
+        models = _fetch_models(provider_type, **config_data)
+        if not models:
+            models = ["(manual entry)"]
+        default_model = _resolve_default_field(provider_type, "model")
+        selected = questionary.select(
+            "Select model:",
+            choices=models,
+            default=default_model,
+            style=_WIZARD_STYLE,
+        ).ask()
+        if selected == "(manual entry)":
+            selected = questionary.text(
+                "Model name:",
+                default=default_model,
+                style=_WIZARD_STYLE,
+            ).ask()
+        config_data["model"] = selected or default_model
 
     # Check for existing provider of same type (openai can have max 1)
     existing = _find_provider_by_type(provider_type)

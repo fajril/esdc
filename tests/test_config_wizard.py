@@ -87,6 +87,19 @@ class TestFetchModels:
         result = _fetch_models("openai")
         assert "gpt-4o" in result
 
+    @patch("esdc.config_wizard.PROVIDER_CLASSES")
+    def test_fetch_with_kwargs(self, mock_classes):
+        mock_provider = MagicMock()
+        mock_provider.list_models.return_value = ["model-a", "model-b"]
+        mock_provider.get_default_model.return_value = "model-a"
+        mock_classes.get.return_value = mock_provider
+
+        result = _fetch_models("openai_compatible", base_url="http://localhost:8000")
+        mock_provider.list_models.assert_called_once_with(
+            base_url="http://localhost:8000"
+        )
+        assert result == ["model-a", "model-b"]
+
 
 class TestRunWizard:
     """Test the main run_wizard dispatch logic."""
