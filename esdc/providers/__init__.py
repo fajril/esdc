@@ -6,6 +6,7 @@ from esdc.providers.base import Provider, ProviderConfig
 from esdc.providers.google import GoogleProvider
 from esdc.providers.groq import GroqProvider
 from esdc.providers.ollama import OllamaProvider
+from esdc.providers.ollama_cloud import OllamaCloudProvider
 from esdc.providers.openai import OpenAIProvider
 from esdc.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -17,6 +18,7 @@ PROVIDER_CLASSES: dict[str, type[Provider]] = {
     "google": GoogleProvider,
     "azure_openai": AzureOpenAIProvider,
     "groq": GroqProvider,
+    "ollama_cloud": OllamaCloudProvider,
 }
 
 PROVIDER_NAMES: dict[str, str] = {
@@ -27,6 +29,7 @@ PROVIDER_NAMES: dict[str, str] = {
     "google": "Google (Gemini)",
     "azure_openai": "Azure OpenAI",
     "groq": "Groq",
+    "ollama_cloud": "Ollama Cloud",
 }
 
 
@@ -93,6 +96,7 @@ __all__ = [
     "Provider",
     "ProviderConfig",
     "OllamaProvider",
+    "OllamaCloudProvider",
     "OpenAIProvider",
     "OpenAICompatibleProvider",
     "AnthropicProvider",

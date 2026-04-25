@@ -14,6 +14,7 @@ ProviderType = Literal[
     "google",
     "azure_openai",
     "groq",
+    "ollama_cloud",
 ]
 
 DEFAULT_CONTEXT_LENGTH = 4096

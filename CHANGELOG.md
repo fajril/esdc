@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **New LLM Providers**: Anthropic (Claude), Google (Gemini), Azure OpenAI, Groq
+- **New LLM Providers**: Anthropic (Claude), Google (Gemini), Azure OpenAI, Groq, Ollama Cloud
   - Added `AnthropicProvider` via `langchain-anthropic` (`ChatAnthropic`)
   - Added `GoogleProvider` via `langchain-google-genai` (`ChatGoogleGenerativeAI`)
   - Added `AzureOpenAIProvider` via `langchain-openai` (`AzureChatOpenAI`)
   - Added `GroqProvider` via `langchain-groq` (`ChatGroq`)
+  - Added `OllamaCloudProvider` — direct cloud access without local daemon
+    - Uses OpenAI-compatible endpoint `https://ollama.com/v1`
+    - Discovery models via API (no `:cloud` suffix in model names)
+    - Requires API key only (no base_url configuration needed)
   - All providers follow existing `Provider` ABC pattern with tool calling, streaming, and context length detection
   - Updated `ProviderType` Literal in `base.py` to include new providers
   - Updated registry in `__init__.py` (`PROVIDER_CLASSES`, `PROVIDER_NAMES`)

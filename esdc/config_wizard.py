@@ -58,6 +58,7 @@ _PROVIDER_FIELDS: dict[str, list[str]] = {
     "google": ["api_key", "model"],
     "azure_openai": ["base_url", "api_key", "model", "api_version"],
     "groq": ["api_key", "model"],
+    "ollama_cloud": ["api_key", "model"],
 }
 
 
@@ -225,11 +226,7 @@ def _add_provider_flow() -> None:
     if not provider_type:
         return
 
-    name = questionary.text(
-        "Provider name:", default=provider_type, style=_WIZARD_STYLE
-    ).ask()
-    if not name:
-        return
+    name = provider_type
 
     config_data: dict[str, Any] = {"provider_type": provider_type}
     fields = _PROVIDER_FIELDS.get(provider_type, ["model"])
@@ -351,10 +348,7 @@ def _test_provider_standalone() -> None:
         rich_print(f"[{_WARNING_COLOR}]No providers configured.[/{_WARNING_COLOR}]")
         return
 
-    choices = [
-        questionary.Choice(f"{name} ({cfg.get('provider_type')})", value=name)
-        for name, cfg in providers.items()
-    ]
+    choices = [questionary.Choice(name, value=name) for name in providers]
     choices.append(questionary.Choice("  — Cancel", value="__cancel__"))
 
     selected = questionary.select(
@@ -405,10 +399,7 @@ def _edit_provider_flow() -> None:
         rich_print("[yellow]No providers configured.[/yellow]")
         return
 
-    choices = [
-        questionary.Choice(f"{name} ({cfg.get('provider_type')})", value=name)
-        for name, cfg in providers.items()
-    ]
+    choices = [questionary.Choice(name, value=name) for name in providers]
     choices.append(questionary.Choice("← Back", value="__back__"))
 
     selected = questionary.select("Select provider to edit:", choices=choices).ask()
@@ -470,10 +461,7 @@ def _remove_provider_flow() -> None:
         rich_print("[yellow]No providers configured.[/yellow]")
         return
 
-    choices = [
-        questionary.Choice(f"{name} ({cfg.get('provider_type')})", value=name)
-        for name, cfg in providers.items()
-    ]
+    choices = [questionary.Choice(name, value=name) for name in providers]
     choices.append(questionary.Choice("← Back", value="__back__"))
 
     selected = questionary.select("Select provider to remove:", choices=choices).ask()
@@ -494,10 +482,7 @@ def _set_default_provider_flow() -> None:
         rich_print("[yellow]No providers configured.[/yellow]")
         return
 
-    choices = [
-        questionary.Choice(f"{name} ({cfg.get('provider_type')})", value=name)
-        for name, cfg in providers.items()
-    ]
+    choices = [questionary.Choice(name, value=name) for name in providers]
     choices.append(questionary.Choice("← Back", value="__back__"))
 
     selected = questionary.select("Set default provider:", choices=choices).ask()
