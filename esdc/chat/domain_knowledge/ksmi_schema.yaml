@@ -612,6 +612,9 @@ ProducingLicense:
     pod_1: 
       name: Plan of Development I (POD I)
       approved_by: Ministry of Energy and Mineral Resources
+      description: >-
+        POD pertama yang disetujui di Wilayah Kerja tersebut. Persetujuan ini juga menandai 
+        perubahan status Wilayah Kerja dari Wilayah Kerja Eksplorasi menjadi Wilayah Kerja Eksploitasi.
     pod: 
       name: Plan of Development (POD)
       approved_by: Head of SKK Migas
@@ -620,10 +623,14 @@ ProducingLicense:
       approved_by: Head of SKK Migas
     opl: 
       name: Optimasi Pengembangan Lapangan (OPL)
-      approved_by: Deputy of SKK Migas
+      approved_by: 
+        - Head of SKK Migas
+        - Deputy of SKK Migas
     opll: 
       name: Optimasi Pengembangan Lapangan-Lapangan (OPLL)
-      approved_by: Deputy of SKK Migas
+      approved_by: 
+        - Head of SKK Migas
+        - Deputy of SKK Migas
     pop: 
       name: Put on Production (POP)
       approved_by: Deputy of SKK Migas

@@ -1,10 +1,50 @@
 """Regression tests for cancel/None handling in config wizard."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from esdc.config_wizard import (
+    WizardCancelledError,
+    _prompt,
     _prompt_for_config_value,
+    _select_with_back,
 )
+
+
+class TestPromptWrapper:
+    """_prompt() must raise WizardCancelledError when questionary returns None."""
+
+    def test_prompt_raises_wizard_exit_on_none(self):
+        mock_question = MagicMock()
+        mock_question.ask.return_value = None
+        with pytest.raises(WizardCancelledError):
+            _prompt(mock_question)
+
+    def test_prompt_returns_value_on_success(self):
+        mock_question = MagicMock()
+        mock_question.ask.return_value = "openai"
+        assert _prompt(mock_question) == "openai"
+
+
+class TestSelectWithBack:
+    """_select_with_back() must prepend a Back choice and raise on cancel."""
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_select_returns_value(self, mock_select):
+        mock_select.return_value.ask.return_value = "openai"
+        result = _select_with_back("Pick:", [MagicMock()], default="openai")
+        assert result == "openai"
+        # Verify Back choice was prepended
+        call_args = mock_select.call_args
+        choices = call_args.kwargs["choices"]
+        assert choices[0].value == "__back__"
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_select_raises_wizard_exit_on_cancel(self, mock_select):
+        mock_select.return_value.ask.return_value = None
+        with pytest.raises(WizardCancelledError):
+            _select_with_back("Pick:", [MagicMock()])
 
 
 class TestPromptForConfigValueCancel:
