@@ -55,6 +55,7 @@ dependencies = [
     "langchain-anthropic>=0.3.0",
     "langchain-google-genai>=2.0.0",
     "langchain-groq>=0.2.0",
+    "questionary>=2.0.0",
 ]
 
 [project.urls]

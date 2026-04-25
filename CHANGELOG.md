@@ -32,7 +32,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `GroqProvider`: added `llama-4-scout`, `qwen-qwq-32b`, `mistral-saba-24b` to `CONTEXT_LENGTHS`
   - All deprecated/retired models removed from `list_models()` (Claude 3.5 retired Oct 2025, Gemini 2.0 Flash retired Jun 2026)
 
+- **Refactored Configuration Wizard (`esdc configs`)**:
+  - Replaced `textual` TUI with `questionary`-based interactive prompts
+  - Deleted `esdc/chat/wizard.py` (854 baris) and `esdc/commands/provider.py` (131 baris)
+  - Deleted `tests/test_wizard.py` (276 baris)
+  - Created `esdc/config_wizard.py` (~440 baris) with unified menu-driven wizard
+  - All provider CRUD (add, edit, remove, set default, test) centralized in `esdc configs`
+  - Model dropdown fetched live from provider API during setup
+  - General config editing with automatic widget detection (dropdown for enums/booleans, password for api_key, etc.)
+  - Standalone "Test connection" menu for testing existing providers
+  - Professional menu layout with grouped sections and visual separators
+  - **Single instance per provider type**: max 1 provider per type (kecuali `openai_compatible`)
+    - Saat add provider yang sudah ada, tanya overwrite: "Provider 'X' (openai) already exists. Overwrite?"
+    - Auto-set default provider saat pertama kali add (kalau belum ada default)
+    - CLI: `esdc configs --set-default-provider <name>` untuk non-interactive switch
+  - **Colorful UI** (Blue Grey palette): key-value distinct, Rich Panel header, questionary Style
+  - Removed `esdc chat --setup` — now displays "Run 'esdc configs'" redirect message
+  - Added `--show` / `-s` flag to `esdc configs` for non-interactive config display
+
 - Added `langchain-anthropic>=0.3.0`, `langchain-google-genai>=2.0.0`, `langchain-groq>=0.2.0`
+- Added `questionary>=2.0.0`
 
 ## [0.6.0] - 2026-04-22
 

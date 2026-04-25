@@ -60,9 +60,7 @@ from rich.progress import (
 )
 from tabulate import tabulate
 
-from esdc.chat.app import ESDCChatApp  # noqa: E402
 from esdc.commands.configs import configs_app  # noqa: E402
-from esdc.commands.provider import provider_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
 from esdc.console import console  # noqa: E402
 from esdc.dbmanager import (  # noqa: E402
@@ -79,7 +77,6 @@ TABLES: tuple[TableName, TableName] = (
 )
 
 app = typer.Typer(no_args_is_help=False)
-app.add_typer(provider_app, name="provider")
 app.add_typer(configs_app, name="configs")
 
 
@@ -922,14 +919,18 @@ def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
 @app.command(name="chat")
 def chat(setup: bool = False):
     """Start the interactive chat TUI."""
-    from esdc.chat.wizard import WizardApp
     from esdc.configs import Config
 
     if setup or not Config.has_chat_config():
-        rich.print("[bold]Running setup wizard...[/bold]")
-        WizardApp.run()
+        rich.print(
+            "[bold yellow]No provider configured.[/bold yellow] "
+            "Run '[cyan]esdc configs[/cyan]' to set one up."
+        )
+        return
 
     if Config.has_chat_config():
+        from esdc.chat.app import ESDCChatApp
+
         app = ESDCChatApp()
         app.run()
     else:
