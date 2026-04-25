@@ -272,12 +272,19 @@ def _add_provider_flow() -> None:
     # Pass 2: fetch models (needs base_url/api_key for some providers)
     if "model" in fields:
         rich_print(f"[{_SEP_COLOR}]Fetching models…[/{_SEP_COLOR}]")
+        # Auto-append /v1 to base_url for OpenAI-compatible servers if needed
+        if provider_type == "openai_compatible":
+            base = config_data.get("base_url", "")
+            if base and not base.rstrip("/").endswith("/v1"):
+                config_data["base_url"] = base.rstrip("/") + "/v1"
         # Strip provider_type from kwargs to avoid "got multiple values" error
         list_kwargs = {k: v for k, v in config_data.items() if k != "provider_type"}
         models = _fetch_models(provider_type, **list_kwargs)
         if not models:
             models = ["(manual entry)"]
         default_model = _resolve_default_field(provider_type, "model")
+        if default_model not in models and models:
+            default_model = models[0]
         selected = questionary.select(
             "Select model:",
             choices=models,
@@ -429,11 +436,17 @@ def _edit_provider_flow() -> None:
         return
 
     if field == "model":
-        models = _fetch_models(provider_type)
+        models = _fetch_models(provider_type, **cfg)
+        if not models:
+            models = ["(manual entry)"]
         default = cfg.get("model", "")
+        if default not in models and models:
+            default = models[0]
         new_model = questionary.select(
             "Select model:", choices=models, default=default
         ).ask()
+        if new_model == "(manual entry)":
+            new_model = questionary.text("Model name:", default=default).ask()
         if new_model is not None:
             cfg["model"] = new_model
     elif field == "api_key":
