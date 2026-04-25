@@ -237,9 +237,12 @@ def _add_provider_flow() -> None:
     # Pass 1: collect connection fields first (base_url, api_key, api_version)
     for field in fields:
         if field == "api_key":
-            value = questionary.password("API Key:", style=_WIZARD_STYLE).ask()
-            if value:
-                config_data["api_key"] = value
+            value = questionary.password(
+                "API Key (optional for local):", style=_WIZARD_STYLE
+            ).ask()
+            if value is None:
+                value = ""
+            config_data["api_key"] = value
         elif field == "base_url":
             default = _resolve_default_field(provider_type, "base_url")
             value = questionary.text(
@@ -269,7 +272,9 @@ def _add_provider_flow() -> None:
     # Pass 2: fetch models (needs base_url/api_key for some providers)
     if "model" in fields:
         rich_print(f"[{_SEP_COLOR}]Fetching models…[/{_SEP_COLOR}]")
-        models = _fetch_models(provider_type, **config_data)
+        # Strip provider_type from kwargs to avoid "got multiple values" error
+        list_kwargs = {k: v for k, v in config_data.items() if k != "provider_type"}
+        models = _fetch_models(provider_type, **list_kwargs)
         if not models:
             models = ["(manual entry)"]
         default_model = _resolve_default_field(provider_type, "model")
