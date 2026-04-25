@@ -1,6 +1,10 @@
 from typing import Any
 
+from esdc.providers.anthropic import AnthropicProvider
+from esdc.providers.azure_openai import AzureOpenAIProvider
 from esdc.providers.base import Provider, ProviderConfig
+from esdc.providers.google import GoogleProvider
+from esdc.providers.groq import GroqProvider
 from esdc.providers.ollama import OllamaProvider
 from esdc.providers.openai import OpenAIProvider
 from esdc.providers.openai_compatible import OpenAICompatibleProvider
@@ -9,12 +13,20 @@ PROVIDER_CLASSES: dict[str, type[Provider]] = {
     "ollama": OllamaProvider,
     "openai": OpenAIProvider,
     "openai_compatible": OpenAICompatibleProvider,
+    "anthropic": AnthropicProvider,
+    "google": GoogleProvider,
+    "azure_openai": AzureOpenAIProvider,
+    "groq": GroqProvider,
 }
 
 PROVIDER_NAMES: dict[str, str] = {
     "ollama": "Ollama",
     "openai": "OpenAI",
     "openai_compatible": "OpenAI-Compatible",
+    "anthropic": "Anthropic (Claude)",
+    "google": "Google (Gemini)",
+    "azure_openai": "Azure OpenAI",
+    "groq": "Groq",
 }
 
 
@@ -83,6 +95,10 @@ __all__ = [
     "OllamaProvider",
     "OpenAIProvider",
     "OpenAICompatibleProvider",
+    "AnthropicProvider",
+    "GoogleProvider",
+    "AzureOpenAIProvider",
+    "GroqProvider",
     "PROVIDER_CLASSES",
     "PROVIDER_NAMES",
     "get_provider",

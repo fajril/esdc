@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **New LLM Providers**: Anthropic (Claude), Google (Gemini), Azure OpenAI, Groq
+  - Added `AnthropicProvider` via `langchain-anthropic` (`ChatAnthropic`)
+  - Added `GoogleProvider` via `langchain-google-genai` (`ChatGoogleGenerativeAI`)
+  - Added `AzureOpenAIProvider` via `langchain-openai` (`AzureChatOpenAI`)
+  - Added `GroqProvider` via `langchain-groq` (`ChatGroq`)
+  - All providers follow existing `Provider` ABC pattern with tool calling, streaming, and context length detection
+  - Updated `ProviderType` Literal in `base.py` to include new providers
+  - Updated registry in `__init__.py` (`PROVIDER_CLASSES`, `PROVIDER_NAMES`)
+  - Added wizard setup screens for each new provider
+  - Updated CLI `esdc provider add` to accept new provider types
+  - Updated Phoenix evals to route Groq and Azure OpenAI through OpenAI-compatible judge LLM
+  - Added comprehensive unit tests in `tests/test_new_providers.py`
+
+### Changed
+
+- **Updated Default Models for 2026**:
+  - `AnthropicProvider`: default now `claude-sonnet-4-6` (was deprecated `claude-3-5-sonnet-20241022`)
+    - Added `claude-sonnet-4-6` (1M context) and `claude-opus-4-7` to `CONTEXT_LENGTHS`
+  - `GoogleProvider`: default now `gemini-2.5-flash` (was deprecated `gemini-1.5-pro`)
+    - Added `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-pro`, `gemini-2.0-flash` to mappings
+  - `GroqProvider`: added `llama-4-scout`, `qwen-qwq-32b`, `mistral-saba-24b` to `CONTEXT_LENGTHS`
+  - All deprecated/retired models removed from `list_models()` (Claude 3.5 retired Oct 2025, Gemini 2.0 Flash retired Jun 2026)
+
+- Added `langchain-anthropic>=0.3.0`, `langchain-google-genai>=2.0.0`, `langchain-groq>=0.2.0`
+
 ## [0.6.0] - 2026-04-22
 
 ### Added

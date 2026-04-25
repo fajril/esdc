@@ -1,7 +1,6 @@
 """Tests for citation annotations in output_text content parts."""
 
 
-
 class TestCitationAnnotationsOutput:
     """Test annotations field in output_text content parts."""
 

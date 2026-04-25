@@ -35,7 +35,15 @@ def provider_add(
     base_url: str = "",
 ):
     """Add a new provider."""
-    valid_types = ["ollama", "openai", "openai_compatible"]
+    valid_types = [
+        "ollama",
+        "openai",
+        "openai_compatible",
+        "anthropic",
+        "google",
+        "azure_openai",
+        "groq",
+    ]
     if provider_type not in valid_types:
         typer.echo(f"Invalid provider type. Must be one of: {', '.join(valid_types)}")
         return

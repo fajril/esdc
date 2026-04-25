@@ -321,6 +321,346 @@ class OpenAICompatibleSetupScreen(Screen):
             self.app.push_screen("database_path")
 
 
+class AnthropicSetupScreen(Screen):
+    """Screen for configuring Anthropic provider."""
+
+    BINDINGS = [
+        Binding("escape", "back", "Back"),
+    ]
+
+    def __init__(self, provider_type: str = "anthropic"):
+        """Initialize Anthropic setup screen.
+
+        Args:
+            provider_type: The type of provider to configure (default "anthropic").
+        """
+        super().__init__()
+        self.provider_type = provider_type
+
+    def compose(self) -> ComposeResult:
+        """Build the Anthropic configuration UI."""
+        from esdc.providers.anthropic import AnthropicProvider
+
+        models = AnthropicProvider.list_models()
+        default_model = AnthropicProvider.get_default_model()
+
+        model_choices = (
+            [(m, m) for m in models] if models else [(default_model, default_model)]
+        )
+
+        yield Container(
+            Static("Configure Anthropic (Claude)", classes="title"),
+            Static("API Key:", classes="label"),
+            Input("", id="api-key", password=True),
+            Select(
+                model_choices,
+                id="model-select",
+                value=default_model,
+            ),
+            Static("", id="status"),
+            Horizontal(
+                Button("Back", variant="default", id="back"),
+                Button("Test Connection", variant="default", id="test"),
+                Button("Save", variant="success", id="save"),
+            ),
+            id="anthropic-setup",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation, testing, and saving."""
+        if event.button.id == "back":
+            self.app.pop_screen()
+        elif event.button.id == "test":
+            api_key = self.query_one("#api-key", Input).value
+            model = self.query_one("#model-select", Select).value
+            status = self.query_one("#status", Static)
+
+            from esdc.providers.anthropic import AnthropicProvider
+            from esdc.providers.base import ProviderConfig
+
+            test_config = ProviderConfig(
+                name="test",
+                provider_type="anthropic",
+                api_key=api_key,
+                model=str(model) if model else "",
+            )
+            success, message = AnthropicProvider.test_connection(test_config)
+            status.update(message)
+        elif event.button.id == "save":
+            api_key = self.query_one("#api-key", Input).value
+            model = self.query_one("#model-select", Select).value
+            status = self.query_one("#status", Static)
+
+            if not api_key:
+                status.update("Please enter an API key")
+                return
+
+            config_data = {
+                "provider_type": "anthropic",
+                "api_key": api_key,
+                "model": str(model) if model else "",
+            }
+            Config.update_provider_config("anthropic", config_data)
+            Config.set_default_provider("anthropic")
+            self.app.push_screen("database_path")
+
+
+class GeminiSetupScreen(Screen):
+    """Screen for configuring Google Gemini provider."""
+
+    BINDINGS = [
+        Binding("escape", "back", "Back"),
+    ]
+
+    def __init__(self, provider_type: str = "google"):
+        """Initialize Gemini setup screen.
+
+        Args:
+            provider_type: The type of provider to configure (default "google").
+        """
+        super().__init__()
+        self.provider_type = provider_type
+
+    def compose(self) -> ComposeResult:
+        """Build the Gemini configuration UI."""
+        from esdc.providers.google import GoogleProvider
+
+        models = GoogleProvider.list_models()
+        default_model = GoogleProvider.get_default_model()
+
+        model_choices = (
+            [(m, m) for m in models] if models else [(default_model, default_model)]
+        )
+
+        yield Container(
+            Static("Configure Google (Gemini)", classes="title"),
+            Static("API Key:", classes="label"),
+            Input("", id="api-key", password=True),
+            Select(
+                model_choices,
+                id="model-select",
+                value=default_model,
+            ),
+            Static("", id="status"),
+            Horizontal(
+                Button("Back", variant="default", id="back"),
+                Button("Test Connection", variant="default", id="test"),
+                Button("Save", variant="success", id="save"),
+            ),
+            id="gemini-setup",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation, testing, and saving."""
+        if event.button.id == "back":
+            self.app.pop_screen()
+        elif event.button.id == "test":
+            api_key = self.query_one("#api-key", Input).value
+            model = self.query_one("#model-select", Select).value
+            status = self.query_one("#status", Static)
+
+            from esdc.providers.base import ProviderConfig
+            from esdc.providers.google import GoogleProvider
+
+            test_config = ProviderConfig(
+                name="test",
+                provider_type="google",
+                api_key=api_key,
+                model=str(model) if model else "",
+            )
+            success, message = GoogleProvider.test_connection(test_config)
+            status.update(message)
+        elif event.button.id == "save":
+            api_key = self.query_one("#api-key", Input).value
+            model = self.query_one("#model-select", Select).value
+            status = self.query_one("#status", Static)
+
+            if not api_key:
+                status.update("Please enter an API key")
+                return
+
+            config_data = {
+                "provider_type": "google",
+                "api_key": api_key,
+                "model": str(model) if model else "",
+            }
+            Config.update_provider_config("google", config_data)
+            Config.set_default_provider("google")
+            self.app.push_screen("database_path")
+
+
+class AzureOpenAISetupScreen(Screen):
+    """Screen for configuring Azure OpenAI provider."""
+
+    BINDINGS = [
+        Binding("escape", "back", "Back"),
+    ]
+
+    def __init__(self, provider_type: str = "azure_openai"):
+        """Initialize Azure OpenAI setup screen.
+
+        Args:
+            provider_type: The type of provider to configure (default "azure_openai").
+        """
+        super().__init__()
+        self.provider_type = provider_type
+
+    def compose(self) -> ComposeResult:
+        """Build the Azure OpenAI configuration UI."""
+        yield Container(
+            Static("Configure Azure OpenAI", classes="title"),
+            Static("Azure Endpoint:", classes="label"),
+            Input("https://your-resource.openai.azure.com/", id="base-url"),
+            Static("API Key:", classes="label"),
+            Input("", id="api-key", password=True),
+            Static("Deployment Name:", classes="label"),
+            Input("gpt-4o", id="deployment-name"),
+            Static("API Version:", classes="label"),
+            Input("2024-02-01", id="api-version"),
+            Static("", id="status"),
+            Horizontal(
+                Button("Back", variant="default", id="back"),
+                Button("Test Connection", variant="default", id="test"),
+                Button("Save", variant="success", id="save"),
+            ),
+            id="azure-setup",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation, testing, and saving."""
+        if event.button.id == "back":
+            self.app.pop_screen()
+        elif event.button.id == "test":
+            base_url = self.query_one("#base-url", Input).value
+            api_key = self.query_one("#api-key", Input).value
+            deployment = self.query_one("#deployment-name", Input).value
+            status = self.query_one("#status", Static)
+
+            from esdc.providers.azure_openai import AzureOpenAIProvider
+            from esdc.providers.base import ProviderConfig
+
+            test_config = ProviderConfig(
+                name="test",
+                provider_type="azure_openai",
+                base_url=base_url,
+                api_key=api_key,
+                model=deployment,
+            )
+            success, message = AzureOpenAIProvider.test_connection(test_config)
+            status.update(message)
+        elif event.button.id == "save":
+            base_url = self.query_one("#base-url", Input).value
+            api_key = self.query_one("#api-key", Input).value
+            deployment = self.query_one("#deployment-name", Input).value
+            api_version = self.query_one("#api-version", Input).value
+            status = self.query_one("#status", Static)
+
+            if not base_url:
+                status.update("Please enter an Azure endpoint")
+                return
+            if not api_key:
+                status.update("Please enter an API key")
+                return
+            if not deployment:
+                status.update("Please enter a deployment name")
+                return
+
+            config_data = {
+                "provider_type": "azure_openai",
+                "base_url": base_url,
+                "api_key": api_key,
+                "model": deployment,
+                "oauth": {"api_version": api_version},
+            }
+            Config.update_provider_config("azure_openai", config_data)
+            Config.set_default_provider("azure_openai")
+            self.app.push_screen("database_path")
+
+
+class GroqSetupScreen(Screen):
+    """Screen for configuring Groq provider."""
+
+    BINDINGS = [
+        Binding("escape", "back", "Back"),
+    ]
+
+    def __init__(self, provider_type: str = "groq"):
+        """Initialize Groq setup screen.
+
+        Args:
+            provider_type: The type of provider to configure (default "groq").
+        """
+        super().__init__()
+        self.provider_type = provider_type
+
+    def compose(self) -> ComposeResult:
+        """Build the Groq configuration UI."""
+        from esdc.providers.groq import GroqProvider
+
+        models = GroqProvider.list_models()
+        default_model = GroqProvider.get_default_model()
+
+        model_choices = (
+            [(m, m) for m in models] if models else [(default_model, default_model)]
+        )
+
+        yield Container(
+            Static("Configure Groq", classes="title"),
+            Static("API Key:", classes="label"),
+            Input("", id="api-key", password=True),
+            Select(
+                model_choices,
+                id="model-select",
+                value=default_model,
+            ),
+            Static("", id="status"),
+            Horizontal(
+                Button("Back", variant="default", id="back"),
+                Button("Test Connection", variant="default", id="test"),
+                Button("Save", variant="success", id="save"),
+            ),
+            id="groq-setup",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for navigation, testing, and saving."""
+        if event.button.id == "back":
+            self.app.pop_screen()
+        elif event.button.id == "test":
+            api_key = self.query_one("#api-key", Input).value
+            model = self.query_one("#model-select", Select).value
+            status = self.query_one("#status", Static)
+
+            from esdc.providers.base import ProviderConfig
+            from esdc.providers.groq import GroqProvider
+
+            test_config = ProviderConfig(
+                name="test",
+                provider_type="groq",
+                api_key=api_key,
+                model=str(model) if model else "",
+            )
+            success, message = GroqProvider.test_connection(test_config)
+            status.update(message)
+        elif event.button.id == "save":
+            api_key = self.query_one("#api-key", Input).value
+            model = self.query_one("#model-select", Select).value
+            status = self.query_one("#status", Static)
+
+            if not api_key:
+                status.update("Please enter an API key")
+                return
+
+            config_data = {
+                "provider_type": "groq",
+                "api_key": api_key,
+                "model": str(model) if model else "",
+            }
+            Config.update_provider_config("groq", config_data)
+            Config.set_default_provider("groq")
+            self.app.push_screen("database_path")
+
+
 class DatabasePathScreen(Screen):
     """Screen for configuring the database path."""
 
@@ -396,6 +736,10 @@ class WizardApp:
         "ollama": OllamaSetupScreen,
         "openai": OpenAISetupScreen,
         "openai_compatible": OpenAICompatibleSetupScreen,
+        "anthropic": AnthropicSetupScreen,
+        "google": GeminiSetupScreen,
+        "azure_openai": AzureOpenAISetupScreen,
+        "groq": GroqSetupScreen,
         "database_path": DatabasePathScreen,
         "summary": SummaryScreen,
     }
