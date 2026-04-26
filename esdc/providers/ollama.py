@@ -7,7 +7,7 @@ from typing import Any
 from langchain_ollama import ChatOllama
 
 # Local
-from esdc.providers.base import Provider, ProviderConfig
+from esdc.providers.base import Provider, ProviderConfig, _extract_model_info
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +89,16 @@ class OllamaProvider(Provider):
 
     @classmethod
     def get_context_length_from_api(
-        cls, model: str, base_url: str | None = None
+        cls,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
     ) -> int:
         """Fetch context length dynamically from Ollama API.
 
         Args:
-            model: Model name (e.g., "kimi-k2.5:cloud")
+            model: Model name (e.g. "kimi-k2.5:cloud")
+            api_key: Unused for local Ollama but kept for uniform interface.
             base_url: Optional base URL for API
 
         Returns:
@@ -121,11 +125,7 @@ class OllamaProvider(Provider):
                 show_elapsed_ms,
             )
 
-            model_info = (
-                info.modelinfo
-                if hasattr(info, "modelinfo")
-                else info.get("model_info", {})
-            ) or {}
+            model_info = _extract_model_info(info)
             logger.debug(f"📊 Model info for {model}: {model_info}")
 
             for key, value in model_info.items():
@@ -196,7 +196,7 @@ class OllamaProvider(Provider):
         elif reasoning_effort is not None:
             kwargs["reasoning"] = reasoning_effort
 
-        return ChatOllama(
+        llm = ChatOllama(
             model=model,
             base_url=base_url or cls.DEFAULT_BASE_URL,
             temperature=temperature,
@@ -204,6 +204,12 @@ class OllamaProvider(Provider):
             async_client_kwargs={"timeout": 120},
             **kwargs,
         )
+        setattr(  # noqa: B010
+            llm,
+            "_esdc_context_length",
+            cls.get_actual_context_length(model, base_url=base_url),
+        )
+        return llm
 
     @classmethod
     def test_connection(cls, config: ProviderConfig) -> tuple[bool, str]:

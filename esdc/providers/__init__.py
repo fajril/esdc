@@ -68,13 +68,13 @@ def create_llm_from_config(config: dict[str, Any]):
         raise ValueError(f"Unknown provider type: {provider_type}")
 
     provider_config = ProviderConfig(
-        name=str(config.get("name", provider_type)),
+        name=str(config.get("name") or provider_type),
         provider_type=provider_type,
-        model=str(config.get("model", "")),
-        base_url=str(config.get("base_url", "")),
-        api_key=str(config.get("api_key", "")),
-        auth_method=str(config.get("auth_method", "api_key")),
-        oauth=config.get("oauth", {}),
+        model=str(config.get("model") or ""),
+        base_url=str(config.get("base_url") or ""),
+        api_key=str(config.get("api_key") or ""),
+        auth_method=str(config.get("auth_method") or "api_key"),
+        oauth=config.get("oauth") or {},
         reasoning_effort=config.get("reasoning_effort"),
     )
 

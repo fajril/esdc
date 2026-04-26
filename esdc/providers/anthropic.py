@@ -20,16 +20,32 @@ class AnthropicProvider(Provider):
 
     CONTEXT_LENGTHS = {
         "claude-opus-4-7": 200000,
-        "claude-opus-4-6": 200000,
         "claude-sonnet-4-6": 1_000_000,
-        "claude-sonnet-4-5": 1_000_000,
         "claude-3-opus": 200000,
         "claude-3-sonnet": 200000,
         "claude-3-haiku": 200000,
-        "claude-3-5-sonnet": 200000,
-        "claude-3-5-haiku": 200000,
-        "claude-3-7-sonnet": 200000,
     }
+
+    @classmethod
+    def get_context_length_from_api(
+        cls, model: str, api_key: str | None = None, base_url: str | None = None
+    ) -> int:
+        """Fetch context length from Anthropic /v1/models API."""
+        try:
+            if not api_key:
+                return 0
+            import anthropic as anthropic_lib  # optional dep
+
+            client = anthropic_lib.Anthropic(api_key=api_key)
+            for m in client.models.list():
+                if model in m.id or m.id in model:
+                    val = getattr(m, "max_input_tokens", 0) or 0
+                    if val > 0:
+                        logger.debug("Anthropic API context length: %s = %d", m.id, val)
+                        return int(val)
+        except Exception:
+            pass
+        return 0
 
     @classmethod
     def list_models(cls, **kwargs: Any) -> list[str]:
@@ -86,12 +102,15 @@ class AnthropicProvider(Provider):
                 "reasoning_effort": reasoning_effort,
             }
 
-        return ChatAnthropic(
+        llm = ChatAnthropic(
             model_name=model,
             api_key=api_key or "",  # type: ignore[arg-type]
             temperature=temperature,
             **kwargs,
         )
+        val = cls.get_actual_context_length(model, api_key=api_key)
+        llm._esdc_context_length = val  # type: ignore[attr-defined]
+        return llm
 
     @classmethod
     def test_connection(cls, config: ProviderConfig) -> tuple[bool, str]:

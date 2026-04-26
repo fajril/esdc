@@ -305,6 +305,7 @@ class TestProviderRegistry:
             "google",
             "azure_openai",
             "groq",
+            "ollama_cloud",
         }
         assert set(PROVIDER_CLASSES.keys()) == expected
         assert set(list_provider_types()) == expected

@@ -59,7 +59,7 @@ _PROVIDER_FIELDS: dict[str, list[str]] = {
     "google": ["api_key", "model"],
     "azure_openai": ["base_url", "api_key", "model", "api_version"],
     "groq": ["api_key", "model"],
-    "ollama_cloud": ["api_key", "model"],
+    "ollama_cloud": ["base_url", "api_key", "model"],
 }
 
 
@@ -473,7 +473,9 @@ def _edit_provider_flow() -> None:
             break
 
         if field == "model":
-            models = _fetch_models(provider_type, **cfg)
+            # Remove provider_type from kwargs to avoid duplicate argument
+            api_kwargs = {k: v for k, v in cfg.items() if k != "provider_type"}
+            models = _fetch_models(provider_type, **api_kwargs)
             if not models:
                 models = ["(manual entry)"]
             default = cfg.get("model", "")

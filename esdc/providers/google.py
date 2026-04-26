@@ -29,6 +29,28 @@ class GoogleProvider(Provider):
     }
 
     @classmethod
+    def get_context_length_from_api(
+        cls, model: str, api_key: str | None = None, base_url: str | None = None
+    ) -> int:
+        """Fetch context length from Google /v1/models API."""
+        try:
+            if not api_key:
+                return 0
+            import google.genai as genai
+
+            client = genai.Client(api_key=api_key)
+            for m in client.models.list():
+                m_name = m.name if m.name is not None else ""
+                if model in m_name or m_name in model:
+                    val = getattr(m, "input_token_limit", 0) or 0
+                    if val > 0:
+                        logger.debug("Google API context length: %s = %d", m.name, val)
+                        return int(val)
+        except Exception:
+            pass
+        return 0
+
+    @classmethod
     def list_models(cls, **kwargs: Any) -> list[str]:
         """List available Gemini models."""
         logger.debug("[INFERENCE] google_list_models")
@@ -76,12 +98,15 @@ class GoogleProvider(Provider):
                 "reasoning_effort is not supported by Google, ignoring"
             )
 
-        return ChatGoogleGenerativeAI(
+        llm = ChatGoogleGenerativeAI(
             model=model,
             google_api_key=effective_api_key,
             temperature=temperature,
             **kwargs,
         )
+        val = cls.get_actual_context_length(model, api_key=effective_api_key)
+        llm._esdc_context_length = val  # type: ignore[attr-defined]
+        return llm
 
     @classmethod
     def test_connection(cls, config: ProviderConfig) -> tuple[bool, str]:

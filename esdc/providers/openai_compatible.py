@@ -68,13 +68,40 @@ class OpenAICompatibleProvider(Provider):
                 "reasoning_effort": reasoning_effort,
             }
 
-        return ChatOpenAI(
+        llm = ChatOpenAI(
             model=model,
             base_url=base_url,
             api_key=api_key or "none",  # type: ignore[arg-type]
             temperature=temperature,
             **kwargs,
         )
+        # Attach metadata (fallback to zero; agent will use static dict if needed)
+        val = cls.get_context_length_from_api(model, api_key=api_key, base_url=base_url)
+        llm._esdc_context_length = val  # type: ignore[attr-defined]
+        return llm
+
+    @classmethod
+    def get_context_length_from_api(
+        cls, model: str, api_key: str | None = None, base_url: str | None = None
+    ) -> int:
+        """Fetch context length from OpenAI-compatible /v1/models API.
+
+        Some OpenAI-compatible servers (e.g. vLLM) include ``max_model_len``
+        in model metadata. If found, return it; otherwise 0.
+        """
+        try:
+            if not base_url:
+                return 0
+            client = OpenAI(base_url=base_url, api_key=api_key or "none")
+            for m in client.models.list():
+                if m.id == model:
+                    extra = getattr(m, "__dict__", {})
+                    for key in ("max_model_len", "context_length", "max_tokens"):
+                        if key in extra and extra[key]:
+                            return int(extra[key])
+        except Exception:
+            pass
+        return 0
 
     @classmethod
     def test_connection(cls, config: ProviderConfig) -> tuple[bool, str]:

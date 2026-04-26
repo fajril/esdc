@@ -20,6 +20,31 @@ ProviderType = Literal[
 DEFAULT_CONTEXT_LENGTH = 4096
 
 
+def _extract_model_info(info: Any) -> dict[str, Any]:
+    """Normalize Ollama ``show()`` response into a plain ``dict``.
+
+    The Ollama Python client returns either:
+
+    * a ``ShowResponse`` object with a ``modelinfo`` attribute, or
+    * a plain ``dict`` from the underlying HTTP response.
+
+    This helper returns a uniform ``dict`` so callers don't have to
+    repeat the ``hasattr / getattr`` fallback pattern.
+
+    Args:
+        info: Raw response from ``client.show(model)``.
+
+    Returns:
+        Normalised dict (empty dict if the field is missing).
+    """
+    if hasattr(info, "modelinfo"):
+        data = info.modelinfo  # type: ignore[union-attr]
+    else:
+        data = info.get("model_info", {}) if isinstance(info, dict) else {}  # type: ignore[union-attr]
+
+    return data if isinstance(data, dict) else {}
+
+
 @dataclass
 class ProviderConfig:
     """Data class holding provider connection configuration."""
@@ -69,6 +94,8 @@ class Provider(ABC):
     def get_context_length(cls, model: str) -> int:
         """Return context length for a model in tokens.
 
+        Static fallback using provider-specific CONTEXT_LENGTHS dict.
+
         Args:
             model: The model name
 
@@ -82,6 +109,47 @@ class Provider(ABC):
                 return length
 
         return DEFAULT_CONTEXT_LENGTH
+
+    @classmethod
+    def get_context_length_from_api(
+        cls,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> int:
+        """Fetch context length dynamically from provider API if supported.
+
+        Args:
+            model: The model name
+            api_key: Optional API key for authenticated requests
+            base_url: Optional base URL override
+
+        Returns:
+            Context length in tokens, or 0 if API doesn't support it
+        """
+        return 0
+
+    @classmethod
+    def get_actual_context_length(
+        cls,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> int:
+        """Resolve context length: try API first, then static dict.
+
+        Args:
+            model: The model name
+            api_key: Optional API key for authenticated requests
+            base_url: Optional base URL override
+
+        Returns:
+            Context length in tokens (always > 0)
+        """
+        ctx = cls.get_context_length_from_api(model, api_key, base_url)
+        if ctx > 0:
+            return ctx
+        return cls.get_context_length(model)
 
     @classmethod
     def get_name(cls) -> str:

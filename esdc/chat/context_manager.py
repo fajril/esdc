@@ -1,6 +1,7 @@
 # esdc/chat/context_manager.py
 
 # Standard library
+import logging
 from collections.abc import Sequence
 from typing import Annotated, Any, TypedDict
 
@@ -13,6 +14,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langgraph.graph.message import add_messages
+
+logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
@@ -68,17 +71,29 @@ class ContextManager:
         self.recent_messages = recent_messages
         self.compaction_count = 0
 
-    def should_compact(self, messages: Sequence[AnyMessage]) -> bool:
+    def should_compact(
+        self,
+        messages: Sequence[AnyMessage],
+        system_prompt: str = "",
+    ) -> bool:
         """Check if compaction is needed (proactive at 75%)."""
         if not messages:
             return False
-        token_count = self._estimate_tokens(messages)
+        token_count = self._estimate_tokens(messages, system_prompt)
         return token_count >= self.compaction_threshold
 
     def manage_context(
-        self, messages: Sequence[AnyMessage], force: bool = False
+        self,
+        messages: Sequence[AnyMessage],
+        force: bool = False,
+        system_prompt: str = "",
     ) -> tuple[list[AnyMessage], dict]:
         """Apply hybrid compaction if needed.
+
+        Args:
+            messages: Conversation messages
+            force: Always compact regardless of threshold
+            system_prompt: System prompt content (included in token budget)
 
         Returns:
             Tuple of (managed_messages, metadata)
@@ -87,14 +102,18 @@ class ContextManager:
         if not messages:
             return list(messages), {"was_compacted": False}
 
-        # Proactive check: only compact if over threshold
-        if not force and not self.should_compact(messages):
+        # Proactive check: include system prompt in token budget
+        if not force and not self.should_compact(messages, system_prompt):
             return list(messages), {"was_compacted": False}
 
         self.compaction_count += 1
-        return self._hybrid(messages)
+        return self._hybrid(messages, system_prompt)
 
-    def _hybrid(self, messages: Sequence[AnyMessage]) -> tuple[list[AnyMessage], dict]:
+    def _hybrid(
+        self,
+        messages: Sequence[AnyMessage],
+        system_prompt: str = "",
+    ) -> tuple[list[AnyMessage], dict]:
         """Hybrid: Keep recent exact + summarized older."""
         # Separate system messages (always keep)
         system_messages = [m for m in messages if isinstance(m, SystemMessage)]
@@ -164,22 +183,27 @@ class ContextManager:
 
         return "\n".join(summary_parts[-10:])  # Keep last 10 significant actions
 
-    def _estimate_tokens(self, messages: Sequence[AnyMessage]) -> int:
+    def _estimate_tokens(
+        self,
+        messages: Sequence[AnyMessage],
+        system_prompt: str = "",
+    ) -> int:
         """Estimate token count using ~4 chars per token.
 
         Counts tokens from all message types including:
-        - HumanMessage/AIMessage/SystemMessage content
+        - System prompt (passed separately, not duplicated in messages)
+        - HumanMessage/AIMessage/SystemMessage content in messages
         - ToolMessage content (can be very large, 100K+ chars)
         - AIMessage tool_calls arguments
         """
-        total_chars = 0
+        total_chars = len(system_prompt) if system_prompt else 0
 
         for m in messages:
-            # Count message content (applies to HumanMessage, AIMessage, ToolMessage, SystemMessage)  # noqa: E501
+            # Count message content
             if m.content:
                 total_chars += len(str(m.content))
 
-            # Count AIMessage tool_calls arguments (these contribute to token usage)
+            # Count AIMessage tool_calls arguments
             if isinstance(m, AIMessage) and m.tool_calls:
                 for tc in m.tool_calls:
                     total_chars += len(str(tc.get("name", "")))
@@ -189,19 +213,21 @@ class ContextManager:
         return total_chars // 4
 
 
-def estimate_tokens(messages: Sequence[AnyMessage]) -> int:
+def estimate_tokens(messages: Sequence[AnyMessage], system_prompt: str = "") -> int:
     """Estimate token count from messages list.
 
     Public API for calculating tokens from messages in state.
     Uses the same algorithm as ContextManager._estimate_tokens.
+    Includes system prompt in the token budget.
 
     Args:
         messages: List of messages to estimate tokens for
+        system_prompt: Optional system prompt content
 
     Returns:
-        Estimated token count
+        Estimated token count (system + messages)
     """
-    total_chars = 0
+    total_chars = len(system_prompt) if system_prompt else 0
 
     for m in messages:
         if m.content:
@@ -222,18 +248,27 @@ def manage_context_node(
     """LangGraph node wrapper for context management.
 
     This node is called before the agent to proactively manage context.
-    The context_length parameter applies to the messages field only.
-    The system prompt is stored separately in AgentState and does not
-    compete with messages for the context budget.
+    It includes the system prompt in the token budget.
 
     Args:
         state: LangGraph state with 'messages' key (and 'system_prompt')
-        context_length: Maximum context length in tokens for messages (default: 6000)
+        context_length: Maximum context length in tokens (default: 6000)
 
     Returns:
         State dict with managed messages and context metadata
     """
     messages = state.get("messages", [])
+    system_prompt = state.get("system_prompt", "")
+
+    # Strip empty assistant messages that cause death spiral
+    filtered = []
+    for m in messages:
+        if isinstance(m, AIMessage) and not m.content and not m.tool_calls:
+            logger.warning("[CONTEXT] Removing empty AIMessage from history")
+            continue
+        filtered.append(m)
+    messages = filtered
+
     if not messages:
         return {"messages": [], "context_metadata": {"was_compacted": False}}
 
@@ -243,7 +278,9 @@ def manage_context_node(
         recent_messages=6,
     )
 
-    managed_messages, metadata = manager.manage_context(messages)
+    managed_messages, metadata = manager.manage_context(
+        messages, system_prompt=system_prompt
+    )
 
     return {
         "messages": managed_messages,

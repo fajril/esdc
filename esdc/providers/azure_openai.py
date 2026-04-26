@@ -86,7 +86,7 @@ class AzureOpenAIProvider(Provider):
                 "reasoning_effort": reasoning_effort,
             }
 
-        return AzureChatOpenAI(
+        llm = AzureChatOpenAI(
             azure_endpoint=azure_endpoint,
             api_key=effective_api_key,  # type: ignore[arg-type]
             azure_deployment=model,
@@ -94,6 +94,9 @@ class AzureOpenAIProvider(Provider):
             temperature=temperature,
             **kwargs,
         )
+        val = cls.get_actual_context_length(model, api_key=effective_api_key)
+        llm._esdc_context_length = val  # type: ignore[attr-defined]
+        return llm
 
     @classmethod
     def test_connection(cls, config: ProviderConfig) -> tuple[bool, str]:

@@ -112,13 +112,16 @@ class GroqProvider(Provider):
                 reasoning_effort,
             )
 
-        return ChatGroq(
+        llm = ChatGroq(
             model=model,
             api_key=api_key or "",  # type: ignore[arg-type]
             base_url=base_url or cls.BASE_URL,
             temperature=temperature,
             **kwargs,
         )
+        val = cls.get_actual_context_length(model, api_key=api_key)
+        llm._esdc_context_length = val  # type: ignore[attr-defined]
+        return llm
 
     @classmethod
     def test_connection(cls, config: ProviderConfig) -> tuple[bool, str]:

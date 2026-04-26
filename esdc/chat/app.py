@@ -1352,21 +1352,14 @@ class ESDCChatApp(App):
         if provider_config and provider_config.get("model"):
             from esdc.providers import get_provider
 
-            provider_type = provider_config.get("provider_type", "ollama")
-            provider = get_provider(provider_type)
+            provider = get_provider(provider_config.get("provider_type", "ollama"))
             if provider:
-                # Use dynamic API fetching for Ollama
-                if provider_type == "ollama":
-                    from esdc.providers.ollama import OllamaProvider
-
-                    self._context_length = OllamaProvider.get_context_length_from_api(
-                        provider_config.get("model", ""),
-                        provider_config.get("base_url"),
-                    )
-                else:
-                    self._context_length = provider.get_context_length(
-                        provider_config.get("model", "")
-                    )
+                # Use static fallback; dynamic resolution from the provider API
+                # happens later inside the agent pipeline when the LLM instance
+                # is already available (see _detect_context_length / agent_node).
+                self._context_length = provider.get_context_length(
+                    provider_config.get("model", "")
+                )
 
         # Log context length
         logger.info(

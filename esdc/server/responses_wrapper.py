@@ -249,21 +249,35 @@ def convert_responses_input_to_langchain(
                     f"{type(content).__name__}"
                 )
 
+            # Extract reasoning_content for assistant messages early,
+            # so we can decide whether to skip empty assistant turns
+            # that only contain internal monologue (thinking).
+            candidate_reasoning = (
+                item.get("reasoning_content")
+                if isinstance(item, dict)
+                else getattr(item, "reasoning_content", None)
+            )
+
             if role == "user":
                 messages.append(HumanMessage(content=text))
             elif role == "assistant":
+                # Pre-filter: skip empty assistant messages without reasoning
+                # or tool_calls. These zombie messages poison conversation
+                # history and trigger LLM death spirals.
+                if not text and not candidate_reasoning:
+                    logger.warning(
+                        f"[convert_responses_input] Item {idx}: SKIPPING "
+                        f"empty assistant message (no content, no reasoning), "
+                        f"item_type={item_type}"
+                    )
+                    continue
                 # Preserve reasoning_content from previous assistant turn
                 # AIMessage uses extra="allow", so reasoning_content is stored
                 # in additional_kwargs for proper type safety
-                reasoning_content = (
-                    item.get("reasoning_content")
-                    if isinstance(item, dict)
-                    else getattr(item, "reasoning_content", None)
-                )
                 msg_kwargs: dict[str, Any] = {"content": text}
-                if reasoning_content:
+                if candidate_reasoning:
                     msg_kwargs["additional_kwargs"] = {
-                        "reasoning_content": reasoning_content
+                        "reasoning_content": candidate_reasoning
                     }
                 messages.append(AIMessage(**msg_kwargs))
             elif role == "system":

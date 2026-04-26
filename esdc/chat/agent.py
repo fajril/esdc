@@ -55,137 +55,117 @@ _context_length_cache: dict[str, int] = {}
 def _detect_context_length(llm: BaseChatModel) -> int:
     """Auto-detect model context length from LLM instance.
 
-    Checks provider-specific APIs (Ollama, OpenAI) and caches results.
-    Returns the full model context length — the system prompt is stored
-    separately in AgentState and doesn't compete with messages for the
-    context budget, so no reservation is needed.
-    """
-    model_key = ""
-    model_context_length = 0
+    Priority:
+    1. Check ``_esdc_context_length`` metadata set by the provider's
+       ``create_llm()``. This is dynamically fetched from provider APIs
+       (Ollama API, Anthropic API, etc.) and is the source of truth.
+    2. Fallback to ``isinstance()`` detection + static dicts (legacy).
+    3. Fallback to ``DEFAULT_CONTEXT_LENGTH``.
 
+    Results are cached by a deterministic model key.
+    """
+    # ── Priority 1: provider metadata ──────────────────────────
+    val: int = 0
+    try:
+        raw = getattr(llm, "_esdc_context_length", 0)
+        if isinstance(raw, int) and raw > 0:
+            val = raw
+    except AttributeError:
+        pass
+
+    if val > 0:
+        logger.info(
+            "[CONTEXT_LENGTH] from_provider_metadata | context_length=%d",
+            val,
+        )
+        return val
+
+    # Build a cache key from the LLM instance's identity.
+    model_key = ""
     try:
         from langchain_ollama import ChatOllama
 
         if isinstance(llm, ChatOllama):
             model = getattr(llm, "model", "")
-            base_url = str(getattr(llm, "base_url", "http://localhost:11434"))
-            model_key = f"ollama:{model}@{base_url}"
-
-            if model_key in _context_length_cache:
-                return _context_length_cache[model_key]
-
-            from esdc.providers.ollama import OllamaProvider
-
-            model_context_length = OllamaProvider.get_context_length_from_api(
-                model, base_url
-            )
+            model_key = f"ollama:{model}"
     except ImportError:
         pass
 
-    if model_context_length == 0:
+    if not model_key:
         try:
             from langchain_openai import ChatOpenAI
 
             if isinstance(llm, ChatOpenAI):
-                model_name = getattr(llm, "model_name", "")
-                model_key = f"openai:{model_name}"
-
-                if model_key in _context_length_cache:
-                    return _context_length_cache[model_key]
-
-                from esdc.providers.openai import OpenAIProvider
-
-                model_context_length = OpenAIProvider.get_context_length(model_name)
+                model_key = f"openai:{llm.model_name}"
         except ImportError:
             pass
 
-    if model_context_length == 0:
+    if not model_key:
         try:
             from langchain_anthropic import ChatAnthropic
 
             if isinstance(llm, ChatAnthropic):
-                model_name = getattr(llm, "model", "")
-                model_key = f"anthropic:{model_name}"
-
-                if model_key in _context_length_cache:
-                    return _context_length_cache[model_key]
-
-                from esdc.providers.anthropic import AnthropicProvider
-
-                model_context_length = AnthropicProvider.get_context_length(model_name)
+                model_key = f"anthropic:{llm.model}"
         except ImportError:
             pass
 
-    if model_context_length == 0:
+    if not model_key:
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
 
             if isinstance(llm, ChatGoogleGenerativeAI):
-                model_name = getattr(llm, "model", "")
-                model_key = f"google:{model_name}"
-
-                if model_key in _context_length_cache:
-                    return _context_length_cache[model_key]
-
-                from esdc.providers.google import GoogleProvider
-
-                model_context_length = GoogleProvider.get_context_length(model_name)
+                model_key = f"google:{llm.model}"
         except ImportError:
             pass
 
-    if model_context_length == 0:
+    if not model_key:
         try:
             from langchain_openai import AzureChatOpenAI
 
             if isinstance(llm, AzureChatOpenAI):
-                model_name = getattr(llm, "azure_deployment", "")
-                model_key = f"azure_openai:{model_name}"
-
-                if model_key in _context_length_cache:
-                    return _context_length_cache[model_key]
-
-                from esdc.providers.azure_openai import AzureOpenAIProvider
-
-                model_context_length = AzureOpenAIProvider.get_context_length(
-                    model_name
-                )
+                model_key = f"azure_openai:{llm.azure_deployment}"  # type: ignore[attr-defined]
         except ImportError:
             pass
 
-    if model_context_length == 0:
+    if not model_key:
         try:
             from langchain_groq import ChatGroq
 
             if isinstance(llm, ChatGroq):
-                model_name = getattr(llm, "model", "")
-                model_key = f"groq:{model_name}"
-
-                if model_key in _context_length_cache:
-                    return _context_length_cache[model_key]
-
-                from esdc.providers.groq import GroqProvider
-
-                model_context_length = GroqProvider.get_context_length(model_name)
+                model_key = f"groq:{llm.model}"  # type: ignore[attr-defined]
         except ImportError:
             pass
 
-    if model_context_length == 0:
-        from esdc.providers.base import DEFAULT_CONTEXT_LENGTH
+    if model_key:
+        if model_key in _context_length_cache:
+            return _context_length_cache[model_key]
 
-        model_context_length = DEFAULT_CONTEXT_LENGTH
-        logger.debug(
-            "[CONTEXT_LENGTH] using_default | context_length=%d",
-            model_context_length,
-        )
+        # ── Priority 2: static provider dicts ────────────────────
+        from esdc.providers import get_provider
 
-    _context_length_cache[model_key] = model_context_length
+        provider_type = model_key.split(":")[0]
+        provider_cls = get_provider(provider_type)
+        if provider_cls is not None:
+            model_name = model_key.split(":", 1)[1]
+            model_context_length = provider_cls.get_actual_context_length(model_name)
+            if model_context_length > 0:
+                _context_length_cache[model_key] = model_context_length
+                logger.info(
+                    "[CONTEXT_LENGTH] from_provider_static | "
+                    "model_key=%s | context_length=%d",
+                    model_key,
+                    model_context_length,
+                )
+                return model_context_length
 
-    logger.info(
-        "[CONTEXT_LENGTH] detected | model_key=%s | context_length=%d",
-        model_key,
+    # ── Priority 3: default fallback ─────────────────────────
+    from esdc.providers.base import DEFAULT_CONTEXT_LENGTH
+
+    model_context_length = DEFAULT_CONTEXT_LENGTH
+    logger.debug(
+        "[CONTEXT_LENGTH] using_default | context_length=%d",
         model_context_length,
     )
-
     return model_context_length
 
 
@@ -450,9 +430,24 @@ def create_agent(
                 len(system_prompt),
             )
 
-        messages_with_system = [SystemMessage(content=system_prompt)] + state[
-            "messages"
-        ]
+        # Filter out empty assistant messages that can cause death spiral
+        # when accumulated in conversation history
+        filtered_messages = []
+        empty_count = 0
+        for m in state["messages"]:
+            if isinstance(m, AIMessage) and not m.content and not m.tool_calls:
+                empty_count += 1
+                continue
+            filtered_messages.append(m)
+        if empty_count:
+            logger.warning(
+                "[AGENT] Filtered %d empty AIMessage from history",
+                empty_count,
+            )
+
+        messages_with_system = [
+            SystemMessage(content=system_prompt)
+        ] + filtered_messages
 
         tool_call_count = state.get("tool_call_count", 0)
         if tool_call_count >= 35:
@@ -1121,8 +1116,6 @@ async def run_agent_stream(
                 )
 
             # Add ToolMessage to conversation for token tracking
-            from langchain_core.messages import ToolMessage
-
             tool_msg = ToolMessage(content=str(tool_result), tool_call_id=tool_call_id)
             conversation_messages.append(tool_msg)
             yield {
@@ -1137,6 +1130,17 @@ async def run_agent_stream(
                 "result": str(tool_result),
                 "sql": sql,
             }
+
+    # If no content was streamed (e.g., fallback message from agent_node
+    # that never triggered LLM events), yield it now
+    if token_event_count == 0 and first_llm_time is None:
+        logger.warning("[AGENT] No LLM content streamed, yielding fallback message")
+        yield {
+            "type": "message",
+            "content": (
+                "Maaf, saya tidak dapat memproses permintaan Anda. Silakan coba lagi."
+            ),
+        }
 
     # Stream complete - log final timing summary
     total_ms = (time.perf_counter() - stream_start) * 1000

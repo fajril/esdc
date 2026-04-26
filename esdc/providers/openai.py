@@ -118,13 +118,16 @@ class OpenAIProvider(Provider):
                 "reasoning_effort": reasoning_effort,
             }
 
-        return ChatOpenAI(
+        llm = ChatOpenAI(
             model=model,
             api_key=effective_api_key or "",  # type: ignore[arg-type]
             base_url=cls.BASE_URL,
             temperature=temperature,
             **kwargs,
         )
+        val = cls.get_actual_context_length(model, api_key=effective_api_key)
+        llm._esdc_context_length = val  # type: ignore[attr-defined]
+        return llm
 
     @classmethod
     def authenticate(cls) -> dict[str, Any]:
