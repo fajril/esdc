@@ -962,9 +962,9 @@ def chat(setup: bool = False):
         rich.print("[yellow]Setup incomplete. Chat cannot start.[/yellow]")
 
 
-@app.command(name="db-info")
-def db_info() -> None:
-    """Show database location and configuration."""
+@app.command(name="status")
+def status() -> None:
+    """Show database location, configuration, and index status."""
     db_dir = Config.get_db_dir()
     db_file = Config.get_db_file()
 
@@ -976,12 +976,53 @@ def db_info() -> None:
     if os.environ.get("ESDC_DB_FILE"):
         rich.print("  (from [cyan]ESDC_DB_FILE[/cyan] environment variable)")
 
-    if db_file.exists():
-        rich.print("[green]Database exists: Yes[/green]")
-    else:
+    if not db_file.exists():
         rich.print(
-            "[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"  # noqa: E501
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
         )
+        return
+
+    rich.print("[green]Database exists: Yes[/green]")
+
+    try:
+        from esdc.dbmanager import check_indexes, get_duckdb_connection
+
+        conn = get_duckdb_connection(db_file)
+        try:
+            status = check_indexes(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
+        return
+
+    rich.print()
+    rich.print("[bold]FTS Indexes:[/bold]")
+    for fts in status["fts_indexes"]:
+        icon = "[green]✅[/green]" if fts["exists"] else "[red]❌[/red]"
+        detail = ""
+        if fts["exists"]:
+            detail = f" ({fts['column_count']} columns)"
+        rich.print(f"  {icon} FTS {fts['table']}{detail}")
+
+    rich.print()
+    rich.print("[bold]B-tree Indexes:[/bold]")
+    for bt in status["btree_indexes"]:
+        icon = "[green]✅[/green]" if bt["exists"] else "[red]❌[/red]"
+        rich.print(f"  {icon} {bt['name']}")
+
+    rich.print()
+    rich.print("[bold]Embeddings:[/bold]")
+    emb = status["embeddings"]
+    table_icon = "[green]✅[/green]" if emb["table_exists"] else "[red]❌[/red]"
+    rich.print(f"  {table_icon} project_embeddings table", end="")
+    if emb["table_exists"]:
+        rich.print(f" ({emb['row_count']:,} rows)")
+    else:
+        rich.print()
+    hnsw_icon = "[green]✅[/green]" if emb["hnsw_exists"] else "[red]❌[/red]"
+    rich.print(f"  {hnsw_icon} HNSW index idx_hnsw_embeddings")
 
 
 @app.command(name="serve")

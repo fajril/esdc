@@ -418,6 +418,95 @@ def _execute_sql_script(
         conn.execute(stmt)
 
 
+def check_indexes(conn: duckdb.DuckDBPyConnection) -> dict:
+    """Check the status of FTS, B-tree, and embedding indexes.
+
+    Returns a dict with keys:
+        fts_indexes: list of dicts with table, exists, column_count
+        btree_indexes: list of dicts with name, table, exists
+        embeddings: dict with table_exists, row_count, hnsw_exists
+    """
+    result: dict = {
+        "fts_indexes": [],
+        "btree_indexes": [],
+        "embeddings": {
+            "table_exists": False,
+            "row_count": 0,
+            "hnsw_exists": False,
+        },
+    }
+
+    fts_tables = ["project_resources", "project_timeseries"]
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+
+    fts_schemas = {
+        row[0]
+        for row in conn.execute(
+            "SELECT schema_name FROM information_schema.schemata "
+            "WHERE schema_name LIKE 'fts_main_%'"
+        ).fetchall()
+    }
+
+    for table in fts_tables:
+        fts_schema = f"fts_main_{table}"
+        col_count = 0
+        if fts_schema in fts_schemas:
+            try:
+                cols = conn.execute(
+                    f"SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_schema = '{fts_schema}' AND table_name = 'fields'"
+                ).fetchall()
+                col_count = len(cols)
+            except duckdb.Error:
+                col_count = 0
+        result["fts_indexes"].append(
+            {
+                "table": table,
+                "exists": fts_schema in fts_schemas,
+                "column_count": col_count,
+            }
+        )
+
+    btree_expected = [
+        ("idx_project_resources_report_year", "project_resources"),
+        ("idx_project_resources_agg", "project_resources"),
+        ("idx_project_timeseries_report_year", "project_timeseries"),
+        ("idx_project_timeseries_agg", "project_timeseries"),
+    ]
+
+    existing_indexes = {
+        row[0]
+        for row in conn.execute("SELECT index_name FROM duckdb_indexes()").fetchall()
+    }
+
+    for idx_name, table in btree_expected:
+        result["btree_indexes"].append(
+            {
+                "name": idx_name,
+                "table": table,
+                "exists": idx_name in existing_indexes,
+            }
+        )
+
+    if "project_embeddings" in existing_tables:
+        result["embeddings"]["table_exists"] = True
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM project_embeddings").fetchone()
+            result["embeddings"]["row_count"] = (row or (0,))[0]
+        except duckdb.Error:
+            result["embeddings"]["row_count"] = 0
+
+    result["embeddings"]["hnsw_exists"] = "idx_hnsw_embeddings" in existing_indexes
+
+    return result
+
+
 def invalidate_sql_cache() -> None:
     """Clear the SQL results cache directory."""
     cache_dir = Config.get_cache_dir() / "sql_results"
