@@ -986,16 +986,33 @@ def status() -> None:
     rich.print("[green]Database exists: Yes[/green]")
 
     try:
-        from esdc.dbmanager import check_indexes, get_duckdb_connection
+        from esdc.dbmanager import (
+            check_indexes,
+            check_table_stats,
+            get_duckdb_connection,
+        )
 
         conn = get_duckdb_connection(db_file)
         try:
             status = check_indexes(conn)
+            table_stats = check_table_stats(conn)
         finally:
             conn.close()
     except Exception as e:
         rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
         return
+
+    rich.print()
+    rich.print("[bold]Tables:[/bold]")
+    for ts in table_stats:
+        if not ts["years"]:
+            icon = "[red]❌[/red]"
+            rich.print(f"  {icon} {ts['table']}: not loaded")
+            continue
+        icon = "[green]✅[/green]"
+        rich.print(f"  {icon} {ts['table']} ({ts['total']:,} rows):")
+        for year, count in ts["years"]:
+            rich.print(f"      {year}: {count:,} rows")
 
     rich.print()
     rich.print("[bold]FTS Indexes:[/bold]")

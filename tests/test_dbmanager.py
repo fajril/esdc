@@ -5,6 +5,7 @@ import pytest
 from esdc.dbmanager import (
     _load_sql_script,
     check_indexes,
+    check_table_stats,
     invalidate_sql_cache,
     load_data_to_db,
     run_query,
@@ -220,4 +221,53 @@ class TestCheckIndexes:
         assert all(not b["exists"] for b in result["btree_indexes"])
         assert result["embeddings"]["table_exists"] is False
         assert result["embeddings"]["hnsw_exists"] is False
+        conn.close()
+
+
+class TestCheckTableStats:
+    """Tests for check_table_stats()."""
+
+    def test_check_table_stats_with_data(self, tmp_path):
+        """Test check_table_stats with data per year."""
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+        conn.execute(
+            "CREATE TABLE project_resources AS "
+            "SELECT 2023 AS report_year, 'name' || CAST(range AS VARCHAR) "
+            "AS project_name FROM range(5) "
+            "UNION ALL "
+            "SELECT 2024 AS report_year, 'name' || CAST(range + 5 AS VARCHAR) "
+            "AS project_name FROM range(3)"
+        )
+        conn.execute(
+            "CREATE TABLE project_timeseries AS "
+            "SELECT 2024 AS report_year, 'name' || CAST(range AS VARCHAR) "
+            "AS project_name FROM range(7)"
+        )
+
+        result = check_table_stats(conn)
+
+        assert len(result) == 2
+        pr = result[0]
+        assert pr["table"] == "project_resources"
+        assert pr["total"] == 8
+        assert (2023, 5) in pr["years"]
+        assert (2024, 3) in pr["years"]
+
+        pt = result[1]
+        assert pt["table"] == "project_timeseries"
+        assert pt["total"] == 7
+        assert (2024, 7) in pt["years"]
+        conn.close()
+
+    def test_check_table_stats_empty_database(self, tmp_path):
+        """Test check_table_stats with no tables."""
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+
+        result = check_table_stats(conn)
+
+        assert len(result) == 2
+        assert result[0]["total"] == 0
+        assert result[0]["years"] == []
+        assert result[1]["total"] == 0
+        assert result[1]["years"] == []
         conn.close()

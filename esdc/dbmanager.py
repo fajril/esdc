@@ -507,6 +507,47 @@ def check_indexes(conn: duckdb.DuckDBPyConnection) -> dict:
     return result
 
 
+def check_table_stats(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Check row counts per report_year for each data table.
+
+    Returns list of dicts with keys:
+        table: table name
+        total: total row count
+        years: list of (report_year, count) tuples
+    """
+    tables = ["project_resources", "project_timeseries"]
+    result = []
+
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+
+    for table in tables:
+        if table not in existing_tables:
+            result.append({"table": table, "total": 0, "years": []})
+            continue
+
+        total = (conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() or (0,))[0]
+        rows = conn.execute(
+            f"SELECT report_year, COUNT(*) FROM {table} "
+            f"GROUP BY report_year ORDER BY report_year"
+        ).fetchall()
+
+        result.append(
+            {
+                "table": table,
+                "total": total,
+                "years": [(row[0], row[1]) for row in rows],
+            }
+        )
+
+    return result
+
+
 def invalidate_sql_cache() -> None:
     """Clear the SQL results cache directory."""
     cache_dir = Config.get_cache_dir() / "sql_results"
