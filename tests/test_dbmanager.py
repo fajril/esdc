@@ -4,6 +4,7 @@ import pytest
 
 from esdc.dbmanager import (
     _load_sql_script,
+    check_indexes,
     invalidate_sql_cache,
     load_data_to_db,
     run_query,
@@ -136,3 +137,87 @@ class TestInvalidateSqlCache:
         """Test invalidate_sql_cache handles missing cache dir gracefully."""
         mocker.patch("esdc.dbmanager.Config.get_cache_dir", return_value=tmp_path)
         invalidate_sql_cache()
+
+
+class TestCheckIndexes:
+    """Tests for check_indexes()."""
+
+    def test_check_indexes_all_present(self, tmp_path):
+        """Test check_indexes with all indexes present."""
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+        conn.execute("INSTALL fts")
+        conn.execute("LOAD fts")
+        conn.execute("INSTALL vss")
+        conn.execute("LOAD vss")
+        conn.execute("SET hnsw_enable_experimental_persistence = true")
+        conn.execute(
+            "CREATE TABLE project_resources AS "
+            "SELECT range AS id, 'name' || CAST(range AS VARCHAR) AS project_name "
+            "FROM range(5)"
+        )
+        conn.execute(
+            "CREATE TABLE project_timeseries AS "
+            "SELECT range AS id, 'name' || CAST(range AS VARCHAR) AS project_name "
+            "FROM range(5)"
+        )
+        conn.execute(
+            "PRAGMA create_fts_index('project_resources', 'id', 'project_name')"
+        )
+        conn.execute(
+            "PRAGMA create_fts_index('project_timeseries', 'id', 'project_name')"
+        )
+        conn.execute(
+            "CREATE INDEX idx_project_resources_report_year ON project_resources(id)"
+        )
+        conn.execute(
+            "CREATE TABLE project_embeddings AS "
+            "SELECT CAST(range AS VARCHAR) AS uuid, "
+            "[0.1, 0.2, 0.3]::FLOAT[3] AS embedding "
+            "FROM range(3)"
+        )
+        conn.execute(
+            "CREATE INDEX idx_hnsw_embeddings ON project_embeddings "
+            "USING HNSW (embedding)"
+        )
+
+        result = check_indexes(conn)
+
+        assert len(result["fts_indexes"]) == 2
+        assert result["fts_indexes"][0]["table"] == "project_resources"
+        assert result["fts_indexes"][0]["exists"] is True
+        assert result["fts_indexes"][1]["table"] == "project_timeseries"
+        assert result["fts_indexes"][1]["exists"] is True
+
+        assert len(result["btree_indexes"]) == 4
+        assert any(
+            b["name"] == "idx_project_resources_report_year" and b["exists"]
+            for b in result["btree_indexes"]
+        )
+
+        assert result["embeddings"]["table_exists"] is True
+        assert result["embeddings"]["row_count"] == 3
+        assert result["embeddings"]["hnsw_exists"] is True
+        conn.close()
+
+    def test_check_indexes_missing_indexes(self, tmp_path):
+        """Test check_indexes with no indexes."""
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+        conn.execute(
+            "CREATE TABLE project_resources AS "
+            "SELECT range AS id, 'name' || CAST(range AS VARCHAR) AS project_name "
+            "FROM range(5)"
+        )
+        conn.execute(
+            "CREATE TABLE project_timeseries AS "
+            "SELECT range AS id, 'name' || CAST(range AS VARCHAR) AS project_name "
+            "FROM range(5)"
+        )
+
+        result = check_indexes(conn)
+
+        assert result["fts_indexes"][0]["exists"] is False
+        assert result["fts_indexes"][1]["exists"] is False
+        assert all(not b["exists"] for b in result["btree_indexes"])
+        assert result["embeddings"]["table_exists"] is False
+        assert result["embeddings"]["hnsw_exists"] is False
+        conn.close()

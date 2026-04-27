@@ -41,21 +41,28 @@ class TestCliHelp:
         assert "filetype" in result.stdout.lower()
 
 
-class TestDbInfoCommand:
-    """Tests for db-info command."""
+class TestStatusCommand:
+    """Tests for status command."""
 
-    def test_db_info_output(self):
-        """Test db-info shows correct database info."""
-        result = runner.invoke(app, ["db-info"])
+    def test_status_output(self):
+        """Test status shows correct database info."""
+        result = runner.invoke(app, ["status"])
         assert result.exit_code == 0
         assert ".esdc" in result.stdout
 
-    def test_db_info_with_custom_env(self):
-        """Test db-info shows custom path from env var."""
+    def test_status_with_custom_env(self):
+        """Test status shows custom path from env var."""
         with patch.dict(os.environ, {"ESDC_DB_FILE": "/custom/path/db.db"}):
-            result = runner.invoke(app, ["db-info"])
+            result = runner.invoke(app, ["status"])
             assert result.exit_code == 0
             assert "/custom/path/db.db" in result.stdout
+
+    def test_status_no_database(self):
+        """Test status shows no database message when DB missing."""
+        with patch.dict(os.environ, {"ESDC_DB_FILE": "/nonexistent/path/db.db"}):
+            result = runner.invoke(app, ["status"])
+            assert result.exit_code == 0
+            assert "Database exists: No" in result.stdout
 
 
 class TestShowCommand:
@@ -146,11 +153,11 @@ class TestVerboseFlag:
     def test_verbose_info(self):
         """Test info verbosity level."""
         with patch("esdc.esdc.Config.init_config"):
-            result = runner.invoke(app, ["--verbose", "1", "db-info"])
+            result = runner.invoke(app, ["--verbose", "1", "status"])
             assert result.exit_code == 0
 
     def test_verbose_debug(self):
         """Test debug verbosity level."""
         with patch("esdc.esdc.Config.init_config"):
-            result = runner.invoke(app, ["--verbose", "2", "db-info"])
+            result = runner.invoke(app, ["--verbose", "2", "status"])
             assert result.exit_code == 0

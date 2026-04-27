@@ -132,6 +132,15 @@ def fetch(
         "--no-reload",
         help="Only download data, skip loading into database (implies --save).",
     ),
+    no_reindex: bool = typer.Option(
+        False,
+        "--no-reindex",
+        help=(
+            "Skip rebuilding FTS and B-tree indexes after loading data. "
+            "By default, indexes are rebuilt automatically so ILIKE text "
+            "searches work correctly for the newly-fetched data."
+        ),
+    ),
     year: Annotated[
         list[int] | None,
         typer.Option(
@@ -144,7 +153,9 @@ def fetch(
 ) -> None:
     """Fetch data from ESDC and optionally load into the database.
 
-    By default, downloads data and loads it into the database.
+    By default, downloads data and loads it into the database, then
+    rebuilds FTS/B-tree indexes so ILIKE text searches work correctly.
+    Use --no-reindex to skip index rebuilding after loading.
     Use --no-reload to download and save data without loading into the database.
     Use --year to fetch and update specific year(s) for both resources and
     timeseries.
@@ -157,6 +168,7 @@ def fetch(
 
     should_save = save or no_reload
     should_reload = not no_reload
+    should_reindex = not no_reindex
 
     if filetype == "csv":
         load_esdc_data(
@@ -166,6 +178,7 @@ def fetch(
             username=username,
             password=password,
             years=year,
+            reindex=should_reindex,
         )
     elif filetype == "json":
         load_esdc_data(
@@ -175,6 +188,7 @@ def fetch(
             username=username,
             password=password,
             years=year,
+            reindex=should_reindex,
         )
     else:
         logging.warning("File type %s is not available.", filetype)
@@ -611,6 +625,7 @@ def load_esdc_data(
     username: str = "",
     password: str = "",
     years: list[int] | None = None,
+    reindex: bool = True,
 ) -> None:
     """Download data from the ESDC API and optionally load into the database.
 
@@ -631,6 +646,10 @@ def load_esdc_data(
         Specific report year(s) to fetch. When provided both
         ``project_resources`` and ``project_timeseries`` are updated for
         those years using append mode.
+    reindex : bool
+        If True (default), rebuild FTS and B-tree indexes after loading data.
+        This ensures ILIKE text searches work correctly for the newly-fetched data.
+        Set to False to skip reindexing (e.g. via --no-reindex).
     """
     # ------------------------------------------------------------------
     # 1) Full-replace mode (default)
@@ -679,6 +698,14 @@ def load_esdc_data(
                 timeseries_header,
                 TableName.PROJECT_TIMESERIES.value,
             )
+
+        # Full-replace mode: load_data_to_db already calls _create_fts_indexes,
+        # but we still reindex here as a safety pass when flag is set.
+        if reload and reindex:
+            from esdc.dbmanager import reindex_fts
+
+            reindex_fts()
+
         return
 
     # ------------------------------------------------------------------
@@ -704,12 +731,10 @@ def load_esdc_data(
                 continue
             _append_to_table(table.value, result[1], result[0], [year])
 
-    if reload:
-        console.print(
-            "[yellow]:warning:  Embedding index has been dropped. "
-            "Run `[dim]esdc reload --embeddings-only[/dim]` "
-            "to regenerate embeddings.[/yellow]"
-        )
+    if reload and reindex:
+        from esdc.dbmanager import reindex_fts
+
+        reindex_fts()
 
 
 def esdc_url_builder(
@@ -937,9 +962,9 @@ def chat(setup: bool = False):
         rich.print("[yellow]Setup incomplete. Chat cannot start.[/yellow]")
 
 
-@app.command(name="db-info")
-def db_info() -> None:
-    """Show database location and configuration."""
+@app.command(name="status")
+def status() -> None:
+    """Show database location, configuration, and index status."""
     db_dir = Config.get_db_dir()
     db_file = Config.get_db_file()
 
@@ -951,12 +976,53 @@ def db_info() -> None:
     if os.environ.get("ESDC_DB_FILE"):
         rich.print("  (from [cyan]ESDC_DB_FILE[/cyan] environment variable)")
 
-    if db_file.exists():
-        rich.print("[green]Database exists: Yes[/green]")
-    else:
+    if not db_file.exists():
         rich.print(
-            "[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"  # noqa: E501
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
         )
+        return
+
+    rich.print("[green]Database exists: Yes[/green]")
+
+    try:
+        from esdc.dbmanager import check_indexes, get_duckdb_connection
+
+        conn = get_duckdb_connection(db_file)
+        try:
+            status = check_indexes(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
+        return
+
+    rich.print()
+    rich.print("[bold]FTS Indexes:[/bold]")
+    for fts in status["fts_indexes"]:
+        icon = "[green]✅[/green]" if fts["exists"] else "[red]❌[/red]"
+        detail = ""
+        if fts["exists"]:
+            detail = f" ({fts['column_count']} columns)"
+        rich.print(f"  {icon} FTS {fts['table']}{detail}")
+
+    rich.print()
+    rich.print("[bold]B-tree Indexes:[/bold]")
+    for bt in status["btree_indexes"]:
+        icon = "[green]✅[/green]" if bt["exists"] else "[red]❌[/red]"
+        rich.print(f"  {icon} {bt['name']}")
+
+    rich.print()
+    rich.print("[bold]Embeddings:[/bold]")
+    emb = status["embeddings"]
+    table_icon = "[green]✅[/green]" if emb["table_exists"] else "[red]❌[/red]"
+    rich.print(f"  {table_icon} project_embeddings table", end="")
+    if emb["table_exists"]:
+        rich.print(f" ({emb['row_count']:,} rows)")
+    else:
+        rich.print()
+    hnsw_icon = "[green]✅[/green]" if emb["hnsw_exists"] else "[red]❌[/red]"
+    rich.print(f"  {hnsw_icon} HNSW index idx_hnsw_embeddings")
 
 
 @app.command(name="serve")

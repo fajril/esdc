@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Auto-reindex after `esdc fetch`** — FTS and B-tree indexes are rebuilt automatically after data loading, ensuring ILIKE queries return correct results for newly-fetched data
+  - Default behavior: reindex is ON after every fetch (both full-replace and per-year append modes)
+  - Use `--no-reindex` flag on `esdc fetch` to skip reindexing if desired
+  - Fixes ILIKE queries returning no results after `esdc fetch --year` because FTS index was stale
+- **FTS zero-row fallback** — when an FTS-rewritten query returns 0 rows, the system automatically retries with the original ILIKE query, ensuring results are never lost due to FTS stemming/stopword issues
+- **FTS index without stemmer/stopwords** — FTS indexes are now created with `stemmer=''` and `stopwords=''` so that short keywords like "Duri" are matched exactly without being filtered by English stemming rules
+
+### Added
+
 - **New LLM Providers**: Anthropic (Claude), Google (Gemini), Azure OpenAI, Groq, Ollama Cloud
   - Added `AnthropicProvider` via `langchain-anthropic` (`ChatAnthropic`)
   - Added `GoogleProvider` via `langchain-google-genai` (`ChatGoogleGenerativeAI`)
