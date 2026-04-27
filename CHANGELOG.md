@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`esdc fetch --reindex-only` flag** — rebuilds FTS and B-tree indexes after data loading
+  - Fixes ILIKE queries returning no results after `esdc fetch --year` because FTS index was stale
+  - Works for both full-replace mode and per-year append mode
+  - When enabled, calls `reindex_fts()` after all data is loaded into the database
+  - Added comprehensive unit tests in `tests/test_fts_reindex_after_per_year_fetch.py`
+
+### Added
+
 - **New LLM Providers**: Anthropic (Claude), Google (Gemini), Azure OpenAI, Groq, Ollama Cloud
   - Added `AnthropicProvider` via `langchain-anthropic` (`ChatAnthropic`)
   - Added `GoogleProvider` via `langchain-google-genai` (`ChatGoogleGenerativeAI`)

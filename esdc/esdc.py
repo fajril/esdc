@@ -132,6 +132,14 @@ def fetch(
         "--no-reload",
         help="Only download data, skip loading into database (implies --save).",
     ),
+    reindex_only: bool = typer.Option(
+        False,
+        "--reindex-only",
+        help=(
+            "After loading data, rebuild FTS and B-tree indexes "
+            "so that ILIKE text searches work correctly for the newly-fetched data."
+        ),
+    ),
     year: Annotated[
         list[int] | None,
         typer.Option(
@@ -148,6 +156,8 @@ def fetch(
     Use --no-reload to download and save data without loading into the database.
     Use --year to fetch and update specific year(s) for both resources and
     timeseries.
+    Use --reindex-only to rebuild FTS/B-tree indexes after loading so that
+    ILIKE text searches return correct results for the newly-fetched data.
     """
     username, password = Config.get_credentials()
 
@@ -166,6 +176,7 @@ def fetch(
             username=username,
             password=password,
             years=year,
+            reindex_only=reindex_only,
         )
     elif filetype == "json":
         load_esdc_data(
@@ -175,6 +186,7 @@ def fetch(
             username=username,
             password=password,
             years=year,
+            reindex_only=reindex_only,
         )
     else:
         logging.warning("File type %s is not available.", filetype)
@@ -611,6 +623,7 @@ def load_esdc_data(
     username: str = "",
     password: str = "",
     years: list[int] | None = None,
+    reindex_only: bool = False,
 ) -> None:
     """Download data from the ESDC API and optionally load into the database.
 
@@ -631,6 +644,9 @@ def load_esdc_data(
         Specific report year(s) to fetch. When provided both
         ``project_resources`` and ``project_timeseries`` are updated for
         those years using append mode.
+    reindex_only : bool
+        If True, rebuild FTS and B-tree indexes after loading data.
+        This ensures ILIKE text searches work correctly for the newly-fetched data.
     """
     # ------------------------------------------------------------------
     # 1) Full-replace mode (default)
@@ -679,6 +695,12 @@ def load_esdc_data(
                 timeseries_header,
                 TableName.PROJECT_TIMESERIES.value,
             )
+
+        if reload and reindex_only:
+            from esdc.dbmanager import reindex_fts
+
+            reindex_fts()
+
         return
 
     # ------------------------------------------------------------------
@@ -703,6 +725,11 @@ def load_esdc_data(
             if result is None or not reload:
                 continue
             _append_to_table(table.value, result[1], result[0], [year])
+
+    if reload and reindex_only:
+        from esdc.dbmanager import reindex_fts
+
+        reindex_fts()
 
     if reload:
         console.print(
