@@ -316,7 +316,24 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
             logger.debug("[SQL] rows_fetched | count=%d", len(rows))
 
             if not rows:
-                return "Query executed successfully. No results returned."
+                has_fts_rewrite = query != original_query and (
+                    "match_bm25" in query or "fts_main_" in query
+                )
+                if has_fts_rewrite:
+                    logger.debug(
+                        "[FTS] zero_results_with_fts | falling back to original query"
+                    )
+                    result = conn.execute(original_query)
+                    if result.description:
+                        rows = result.fetchall()
+                        query = original_query
+                        logger.debug(
+                            "[FTS] fallback_rows | count=%d", len(rows)
+                        )
+                    if not rows:
+                        return "Query executed successfully. No results returned."
+                else:
+                    return "Query executed successfully. No results returned."
 
             max_rows = 50
             total_rows = len(rows)

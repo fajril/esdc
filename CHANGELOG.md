@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`esdc fetch --reindex-only` flag** — rebuilds FTS and B-tree indexes after data loading
+- **Auto-reindex after `esdc fetch`** — FTS and B-tree indexes are rebuilt automatically after data loading, ensuring ILIKE queries return correct results for newly-fetched data
+  - Default behavior: reindex is ON after every fetch (both full-replace and per-year append modes)
+  - Use `--no-reindex` flag on `esdc fetch` to skip reindexing if desired
   - Fixes ILIKE queries returning no results after `esdc fetch --year` because FTS index was stale
-  - Works for both full-replace mode and per-year append mode
-  - When enabled, calls `reindex_fts()` after all data is loaded into the database
-  - Added comprehensive unit tests in `tests/test_fts_reindex_after_per_year_fetch.py`
+- **FTS zero-row fallback** — when an FTS-rewritten query returns 0 rows, the system automatically retries with the original ILIKE query, ensuring results are never lost due to FTS stemming/stopword issues
+- **FTS index without stemmer/stopwords** — FTS indexes are now created with `stemmer=''` and `stopwords=''` so that short keywords like "Duri" are matched exactly without being filtered by English stemming rules
 
 ### Added
 

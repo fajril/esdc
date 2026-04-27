@@ -132,12 +132,13 @@ def fetch(
         "--no-reload",
         help="Only download data, skip loading into database (implies --save).",
     ),
-    reindex_only: bool = typer.Option(
+    no_reindex: bool = typer.Option(
         False,
-        "--reindex-only",
+        "--no-reindex",
         help=(
-            "After loading data, rebuild FTS and B-tree indexes "
-            "so that ILIKE text searches work correctly for the newly-fetched data."
+            "Skip rebuilding FTS and B-tree indexes after loading data. "
+            "By default, indexes are rebuilt automatically so ILIKE text "
+            "searches work correctly for the newly-fetched data."
         ),
     ),
     year: Annotated[
@@ -152,12 +153,12 @@ def fetch(
 ) -> None:
     """Fetch data from ESDC and optionally load into the database.
 
-    By default, downloads data and loads it into the database.
+    By default, downloads data and loads it into the database, then
+    rebuilds FTS/B-tree indexes so ILIKE text searches work correctly.
+    Use --no-reindex to skip index rebuilding after loading.
     Use --no-reload to download and save data without loading into the database.
     Use --year to fetch and update specific year(s) for both resources and
     timeseries.
-    Use --reindex-only to rebuild FTS/B-tree indexes after loading so that
-    ILIKE text searches return correct results for the newly-fetched data.
     """
     username, password = Config.get_credentials()
 
@@ -167,6 +168,7 @@ def fetch(
 
     should_save = save or no_reload
     should_reload = not no_reload
+    should_reindex = not no_reindex
 
     if filetype == "csv":
         load_esdc_data(
@@ -176,7 +178,7 @@ def fetch(
             username=username,
             password=password,
             years=year,
-            reindex_only=reindex_only,
+            reindex=should_reindex,
         )
     elif filetype == "json":
         load_esdc_data(
@@ -186,7 +188,7 @@ def fetch(
             username=username,
             password=password,
             years=year,
-            reindex_only=reindex_only,
+            reindex=should_reindex,
         )
     else:
         logging.warning("File type %s is not available.", filetype)
@@ -623,7 +625,7 @@ def load_esdc_data(
     username: str = "",
     password: str = "",
     years: list[int] | None = None,
-    reindex_only: bool = False,
+    reindex: bool = True,
 ) -> None:
     """Download data from the ESDC API and optionally load into the database.
 
@@ -644,9 +646,10 @@ def load_esdc_data(
         Specific report year(s) to fetch. When provided both
         ``project_resources`` and ``project_timeseries`` are updated for
         those years using append mode.
-    reindex_only : bool
-        If True, rebuild FTS and B-tree indexes after loading data.
+    reindex : bool
+        If True (default), rebuild FTS and B-tree indexes after loading data.
         This ensures ILIKE text searches work correctly for the newly-fetched data.
+        Set to False to skip reindexing (e.g. via --no-reindex).
     """
     # ------------------------------------------------------------------
     # 1) Full-replace mode (default)
@@ -696,7 +699,9 @@ def load_esdc_data(
                 TableName.PROJECT_TIMESERIES.value,
             )
 
-        if reload and reindex_only:
+        # Full-replace mode: load_data_to_db already calls _create_fts_indexes,
+        # but we still reindex here as a safety pass when flag is set.
+        if reload and reindex:
             from esdc.dbmanager import reindex_fts
 
             reindex_fts()
@@ -726,7 +731,7 @@ def load_esdc_data(
                 continue
             _append_to_table(table.value, result[1], result[0], [year])
 
-    if reload and reindex_only:
+    if reload and reindex:
         from esdc.dbmanager import reindex_fts
 
         reindex_fts()
