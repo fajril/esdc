@@ -327,9 +327,7 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
                     if result.description:
                         rows = result.fetchall()
                         query = original_query
-                        logger.debug(
-                            "[FTS] fallback_rows | count=%d", len(rows)
-                        )
+                        logger.debug("[FTS] fallback_rows | count=%d", len(rows))
                     if not rows:
                         return "Query executed successfully. No results returned."
                 else:

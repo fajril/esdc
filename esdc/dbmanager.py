@@ -135,8 +135,10 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
         cols_str = ", ".join(f"'{c}'" for c in config["index_cols"])
         try:
             conn.execute(
-                f"PRAGMA create_fts_index('{table_name}', '{id_col}', "
-                f"{cols_str}, lower=1, strip_accents=1, stemmer='', stopwords='', overwrite=1)"
+                f"PRAGMA create_fts_index('{table_name}', "
+                f"'{id_col}', {cols_str}, "
+                f"lower=1, strip_accents=1, "
+                f"stemmer='', stopwords='', overwrite=1)"
             )
             logging.debug("FTS index created for %s", table_name)
         except duckdb.Error as e:

@@ -10,11 +10,9 @@ These tests verify that:
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from esdc.configs import Config
-from esdc.dbmanager import get_duckdb_connection
 from esdc.esdc import app, load_esdc_data
 from esdc.selection import FileType
 
@@ -22,7 +20,7 @@ runner = CliRunner()
 
 
 class TestFetchNoReindexFlag:
-    """Test that --no-reindex is accepted by the fetch CLI and defaults to auto-reindex."""
+    """Test --no-reindex flag defaults to auto-reindex."""
 
     def test_fetch_help_shows_no_reindex(self):
         result = runner.invoke(app, ["fetch", "--help"])
@@ -194,7 +192,7 @@ class TestReindexFtsUnit:
 
         db_path_mock = MagicMock()
         db_path_mock.exists.return_value = True
-        db_path_mock.__str__ = lambda self: "/tmp/test.duckdb"
+        db_path_mock.__str__ = MagicMock(return_value="/tmp/test.duckdb")
 
         with patch.object(Config, "get_db_file", return_value=db_path_mock):
             reindex_fts()
