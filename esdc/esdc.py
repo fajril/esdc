@@ -736,13 +736,6 @@ def load_esdc_data(
 
         reindex_fts()
 
-    if reload:
-        console.print(
-            "[yellow]:warning:  Embedding index has been dropped. "
-            "Run `[dim]esdc reload --embeddings-only[/dim]` "
-            "to regenerate embeddings.[/yellow]"
-        )
-
 
 def esdc_url_builder(
     table_name: TableName,

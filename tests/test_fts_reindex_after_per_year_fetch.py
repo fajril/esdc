@@ -5,7 +5,7 @@ These tests verify that:
 - load_esdc_data defaults to reindex=True
 - reindex_fts is called/not called depending on flag
 - FTS query returning 0 rows falls back to original ILIKE query
-- FTS index is created with stemmer='' and stopwords=''
+- FTS omits stemmer/stopwords (DuckDB bug: empty strings cause Catalog Error)
 """
 
 from unittest.mock import MagicMock, patch
@@ -218,20 +218,58 @@ class TestFTSZeroRowFallback:
 
 
 class TestFTSIndexNoStopwordsNoStemmer:
-    """Verify FTS index creation uses stemmer='' and stopwords=''."""
+    """Verify FTS index creation omits stemmer/stopwords params.
 
-    def test_create_fts_indexes_uses_no_stemmer_no_stopwords(self):
-        """_create_fts_indexes must create FTS with stemmer='' and stopwords=''."""
+    DuckDB's FTS extension treats empty string values (stemmer='',
+    stopwords='') as references to catalog tables, causing
+    'Catalog Error: Table with name  does not exist!'.
+    Omitting these params disables stemming and stopword removal by default.
+    """
+
+    def test_create_fts_indexes_omits_stemmer_and_stopwords(self):
+        """_create_fts_indexes must not pass stemmer/stopwords to PRAGMA."""
         from esdc.dbmanager import _create_fts_indexes
 
         mock_conn = MagicMock()
 
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = [
-            ("project_resources",),
-            ("project_timeseries",),
+        fts_columns = [
+            "project_name",
+            "field_name",
+            "wk_name",
+            "province",
+            "basin128",
+            "operator_name",
+            "project_remarks",
+            "vol_remarks",
+            "basin86",
+            "wk_id",
+            "field_id",
+            "field_name_previous",
+            "project_name_previous",
+            "pod_name",
+            "operator_group",
+            "wk_subgroup",
         ]
-        mock_conn.execute.return_value = mock_result
+
+        def mock_execute(sql, *args, **kwargs):
+            result = MagicMock()
+            if "information_schema.tables" in sql:
+                result.fetchall.return_value = [
+                    ("project_resources",),
+                    ("project_timeseries",),
+                ]
+            elif "information_schema.columns" in sql:
+                result.fetchone.return_value = (5,)
+                cols = fts_columns if "project_resources" in sql else fts_columns[:13]
+                result.fetchall.return_value = [(c,) for c in cols]
+            elif "COUNT" in sql:
+                result.fetchone.return_value = (5,)
+            else:
+                result.fetchall.return_value = []
+                result.fetchone.return_value = None
+            return result
+
+        mock_conn.execute.side_effect = mock_execute
 
         _create_fts_indexes(mock_conn)
 
@@ -242,5 +280,7 @@ class TestFTSIndexNoStopwordsNoStemmer:
         ]
         assert len(fts_calls) >= 1, "Expected at least one create_fts_index call"
         for call_str in fts_calls:
-            assert "stemmer=''" in call_str, f"Missing stemmer='' in: {call_str}"
-            assert "stopwords=''" in call_str, f"Missing stopwords='' in: {call_str}"
+            assert "stemmer" not in call_str, f"Unexpected stemmer param in: {call_str}"
+            assert "stopwords" not in call_str, (
+                f"Unexpected stopwords param in: {call_str}"
+            )
