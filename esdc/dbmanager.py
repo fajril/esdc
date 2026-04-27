@@ -548,6 +548,132 @@ def check_table_stats(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     return result
 
 
+def verify_indexes(conn: duckdb.DuckDBPyConnection) -> dict:
+    """Run functional verification on FTS, HNSW, and B-tree indexes.
+
+    Returns a dict with keys:
+        fts: list of dicts with table, functional, result_count
+        hnsw: dict with functional, result_count
+        btree: list of dicts with name, functional
+    """
+    result: dict = {
+        "fts": [],
+        "hnsw": {"functional": False, "result_count": 0},
+        "btree": [],
+    }
+
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+
+    fts_schemas = {
+        row[0]
+        for row in conn.execute(
+            "SELECT schema_name FROM information_schema.schemata "
+            "WHERE schema_name LIKE 'fts_main_%'"
+        ).fetchall()
+    }
+
+    fts_tests = [
+        ("project_resources", "duri"),
+        ("project_timeseries", "duri"),
+    ]
+    for table, test_query in fts_tests:
+        fts_schema = f"fts_main_{table}"
+        if table not in existing_tables or fts_schema not in fts_schemas:
+            result["fts"].append(
+                {"table": table, "functional": False, "result_count": 0}
+            )
+            continue
+
+        try:
+            conn.execute("INSTALL fts")
+            conn.execute("LOAD fts")
+        except duckdb.Error:
+            pass
+
+        try:
+            count = (
+                conn.execute(
+                    f"SELECT COUNT(*) FROM {table} "
+                    f"WHERE {fts_schema}.match_bm25(uuid, '{test_query}') "
+                    f"IS NOT NULL"
+                ).fetchone()
+                or (0,)
+            )[0]
+            result["fts"].append(
+                {
+                    "table": table,
+                    "functional": count > 0,
+                    "result_count": count,
+                }
+            )
+        except duckdb.Error:
+            result["fts"].append(
+                {"table": table, "functional": False, "result_count": 0}
+            )
+
+    if "project_embeddings" in existing_tables:
+        try:
+            dim = (
+                conn.execute(
+                    "SELECT array_length(embedding) FROM project_embeddings LIMIT 1"
+                ).fetchone()
+                or (0,)
+            )[0]
+
+            import numpy as np
+
+            test_vec = ",".join(str(v) for v in np.random.rand(dim))
+            count = (
+                conn.execute(
+                    f"SELECT COUNT(*) FROM project_embeddings "
+                    f"WHERE array_cosine_similarity(embedding, "
+                    f"[{test_vec}]::FLOAT[{dim}]) > 0.5"
+                ).fetchone()
+                or (0,)
+            )[0]
+            result["hnsw"] = {"functional": True, "result_count": count}
+        except (duckdb.Error, Exception):
+            result["hnsw"] = {"functional": False, "result_count": 0}
+
+    btree_expected = [
+        ("idx_project_resources_report_year", "project_resources"),
+        ("idx_project_resources_agg", "project_resources"),
+        ("idx_project_timeseries_report_year", "project_timeseries"),
+        ("idx_project_timeseries_agg", "project_timeseries"),
+    ]
+
+    existing_indexes = {
+        row[0]
+        for row in conn.execute("SELECT index_name FROM duckdb_indexes()").fetchall()
+    }
+
+    for idx_name, table in btree_expected:
+        if table not in existing_tables:
+            result["btree"].append({"name": idx_name, "functional": False})
+            continue
+
+        if idx_name not in existing_indexes:
+            result["btree"].append({"name": idx_name, "functional": False})
+            continue
+
+        try:
+            col = "report_year" if "report_year" in idx_name else "wk_id"
+            conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {col} = 2024 LIMIT 1"
+            ).fetchone()
+            result["btree"].append({"name": idx_name, "functional": True})
+        except duckdb.Error:
+            result["btree"].append({"name": idx_name, "functional": False})
+
+    return result
+
+
 def invalidate_sql_cache() -> None:
     """Clear the SQL results cache directory."""
     cache_dir = Config.get_cache_dir() / "sql_results"

@@ -9,6 +9,7 @@ from esdc.dbmanager import (
     invalidate_sql_cache,
     load_data_to_db,
     run_query,
+    verify_indexes,
 )
 from esdc.selection import TableName
 
@@ -270,4 +271,56 @@ class TestCheckTableStats:
         assert result[0]["years"] == []
         assert result[1]["total"] == 0
         assert result[1]["years"] == []
+        conn.close()
+
+
+class TestVerifyIndexes:
+    """Tests for verify_indexes()."""
+
+    def test_verify_indexes_with_fts(self, tmp_path):
+        """Test verify_indexes detects functional FTS."""
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+        conn.execute("INSTALL fts")
+        conn.execute("LOAD fts")
+        conn.execute("INSTALL vss")
+        conn.execute("LOAD vss")
+        conn.execute(
+            "CREATE TABLE project_resources AS "
+            "SELECT CAST(range AS VARCHAR) AS uuid, "
+            "'duri field' AS project_name, "
+            "2024 AS report_year "
+            "FROM range(5)"
+        )
+        conn.execute(
+            "CREATE TABLE project_timeseries AS "
+            "SELECT CAST(range AS VARCHAR) AS uuid, "
+            "'duri field' AS project_name, "
+            "2024 AS report_year "
+            "FROM range(5)"
+        )
+        conn.execute(
+            "PRAGMA create_fts_index('project_resources', 'uuid', 'project_name')"
+        )
+        conn.execute(
+            "PRAGMA create_fts_index('project_timeseries', 'uuid', 'project_name')"
+        )
+
+        result = verify_indexes(conn)
+
+        assert len(result["fts"]) == 2
+        assert result["fts"][0]["table"] == "project_resources"
+        assert result["fts"][0]["functional"] is True
+        assert result["fts"][0]["result_count"] > 0
+        assert result["fts"][1]["table"] == "project_timeseries"
+        assert result["fts"][1]["functional"] is True
+        conn.close()
+
+    def test_verify_indexes_empty_database(self, tmp_path):
+        """Test verify_indexes with no indexes."""
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+
+        result = verify_indexes(conn)
+
+        assert len(result["btree"]) == 4
+        assert all(not bt["functional"] for bt in result["btree"])
         conn.close()

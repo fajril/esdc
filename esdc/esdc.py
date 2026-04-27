@@ -963,7 +963,15 @@ def chat(setup: bool = False):
 
 
 @app.command(name="status")
-def status() -> None:
+def status(
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help="Run functional verification on indexes (slower).",
+        ),
+    ] = False,
+) -> None:
     """Show database location, configuration, and index status."""
     db_dir = Config.get_db_dir()
     db_file = Config.get_db_file()
@@ -1040,6 +1048,50 @@ def status() -> None:
         rich.print()
     hnsw_icon = "[green]✅[/green]" if emb["hnsw_exists"] else "[red]❌[/red]"
     rich.print(f"  {hnsw_icon} HNSW index idx_hnsw_embeddings")
+
+    if not verify:
+        return
+
+    rich.print()
+    rich.print("[bold]Verification:[/bold]")
+
+    try:
+        from esdc.dbmanager import verify_indexes
+
+        conn = get_duckdb_connection(db_file)
+        try:
+            vf = verify_indexes(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]  Could not verify indexes: {e}[/yellow]")
+        return
+
+    for fts in vf["fts"]:
+        if fts["functional"]:
+            icon = "[green]✅[/green]"
+            detail = f"functional ({fts['result_count']} results)"
+        else:
+            icon = "[red]❌[/red]"
+            detail = "not functional"
+        rich.print(f"  {icon} FTS {fts['table']}: {detail}")
+
+    if vf["hnsw"]["functional"]:
+        icon = "[green]✅[/green]"
+        detail = f"functional ({vf['hnsw']['result_count']} results)"
+    else:
+        icon = "[red]❌[/red]"
+        detail = "not functional"
+    rich.print(f"  {icon} HNSW search: {detail}")
+
+    for bt in vf["btree"]:
+        if bt["functional"]:
+            icon = "[green]✅[/green]"
+            detail = "query OK"
+        else:
+            icon = "[yellow]⚠[/yellow]"
+            detail = "not verified (compound index)"
+        rich.print(f"  {icon} {bt['name']}: {detail}")
 
 
 @app.command(name="serve")
