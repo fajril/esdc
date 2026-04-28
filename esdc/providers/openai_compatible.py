@@ -9,7 +9,7 @@ from esdc.providers.base import Provider, ProviderConfig
 class OpenAICompatibleProvider(Provider):
     """Provider for OpenAI-compatible API servers."""
 
-    NAME = "OpenAI-Compatible"
+    NAME = "OpenAI Compatible API"
 
     @classmethod
     def list_models(
@@ -58,9 +58,9 @@ class OpenAICompatibleProvider(Provider):
             **kwargs: Additional keyword arguments passed to ChatOpenAI.
         """
         if not model:
-            raise ValueError("model is required for OpenAI-Compatible provider")
+            raise ValueError("model is required for OpenAI Compatible API provider")
         if not base_url:
-            raise ValueError("base_url is required for OpenAI-Compatible provider")
+            raise ValueError("base_url is required for OpenAI Compatible API provider")
 
         if reasoning_effort is not None:
             kwargs["extra_body"] = {

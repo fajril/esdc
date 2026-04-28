@@ -131,7 +131,7 @@ def _fetch_models(provider_type: str, **kwargs) -> list[str]:
     try:
         models = provider_class.list_models(**kwargs)
         if models:
-            return models
+            return sorted(models)
     except Exception as exc:
         logger.debug("Failed to fetch models for %s: %s", provider_type, exc)
 

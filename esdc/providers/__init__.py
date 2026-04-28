@@ -24,7 +24,7 @@ PROVIDER_CLASSES: dict[str, type[Provider]] = {
 PROVIDER_NAMES: dict[str, str] = {
     "ollama": "Ollama",
     "openai": "OpenAI",
-    "openai_compatible": "OpenAI-Compatible",
+    "openai_compatible": "OpenAI Compatible API",
     "anthropic": "Anthropic (Claude)",
     "google": "Google (Gemini)",
     "azure_openai": "Azure OpenAI",
@@ -45,7 +45,7 @@ def get_provider_name(provider_type: str) -> str:
 
 def list_provider_types() -> list[str]:
     """List all available provider types."""
-    return list(PROVIDER_CLASSES.keys())
+    return sorted(PROVIDER_CLASSES.keys())
 
 
 def create_provider(provider_type: str, model: str | None = None, **kwargs) -> Provider:
