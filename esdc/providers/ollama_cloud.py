@@ -172,6 +172,8 @@ class OllamaCloudProvider(OllamaProvider):
             kwargs["reasoning"] = False
         elif reasoning_effort is not None:
             kwargs["reasoning"] = reasoning_effort
+        else:
+            kwargs["reasoning"] = True
 
         client_kwargs: dict[str, Any] = {}
         if effective_api_key:

@@ -649,21 +649,6 @@ async def generate_responses_stream(
 
                 # Close reasoning if transitioning from reasoning to regular content
                 if in_reasoning:
-                    # Emit </thinking> closing tag in message stream
-                    think_close = "\n</thinking>\n\n"
-                    if current_item_id:
-                        accumulated_text += think_close
-                        close_delta_seq = seq.next()
-                        yield format_sse_event(
-                            create_output_text_delta_event(
-                                close_delta_seq,
-                                output_index,
-                                content_index,
-                                current_item_id,
-                                think_close,
-                            )
-                        )
-
                     # Close reasoning summary text part
                     rs_done_seq = seq.next()
                     yield format_sse_event(
@@ -883,80 +868,10 @@ async def generate_responses_stream(
                         )
                     )
 
-                    # --- Start message output item (OpenWebUI fallback) ---
-                    output_index += 1
-                    current_item_id = generate_item_id("msg")
-                    content_started = True
-                    accumulated_text = ""
-                    delta_count = 0
-                    content_index = 0
-                    message_item = {
-                        "id": current_item_id,
-                        "type": "message",
-                        "status": "in_progress",
-                        "role": "assistant",
-                        "content": [],
-                    }
-                    msg_added_seq = seq.next()
-                    logger.debug(
-                        "[RESPONSES %s] EMIT response.output_item.added "
-                        "seq=%d, output_index=%d, type=message, id=%s",
-                        response_id,
-                        msg_added_seq,
-                        output_index,
-                        current_item_id,
-                    )
-                    yield format_sse_event(
-                        create_output_item_added_event(
-                            msg_added_seq, output_index, message_item
-                        )
-                    )
-                    content_part = {"type": "output_text", "text": ""}
-                    msg_part_seq = seq.next()
-                    yield format_sse_event(
-                        create_content_part_added_event(
-                            msg_part_seq,
-                            output_index,
-                            content_index,
-                            current_item_id,
-                            content_part,
-                        )
-                    )
-
-                    # Emit <thinking> opening tag in message stream
-                    think_open = "<thinking>\n"
-                    accumulated_text += think_open
-                    delta_seq = seq.next()
-                    yield format_sse_event(
-                        create_output_text_delta_event(
-                            delta_seq,
-                            output_index,
-                            content_index,
-                            current_item_id,
-                            think_open,
-                        )
-                    )
-
                     in_reasoning = True
 
-                # Emit reasoning as text delta and
-                # reasoning_summary_text_delta
-                accumulated_text += reasoning_content
+                # Emit reasoning_summary_text_delta (spec-compliant only)
                 accumulated_reasoning += reasoning_content
-                delta_count += 1
-                # Text delta in message stream (<thinking> tags fallback)
-                if current_item_id:
-                    delta_seq = seq.next()
-                    yield format_sse_event(
-                        create_output_text_delta_event(
-                            delta_seq,
-                            output_index,
-                            content_index,
-                            current_item_id,
-                            reasoning_content,
-                        )
-                    )
-                # Reasoning summary text delta (spec-compliant)
                 rs_delta_seq = seq.next()
                 yield format_sse_event(
                     create_reasoning_summary_text_delta_event(
@@ -978,21 +893,6 @@ async def generate_responses_stream(
 
                 # Close reasoning if still active when message completes
                 if in_reasoning:
-                    # Emit </thinking> closing tag in message stream
-                    think_close = "\n</thinking>\n\n"
-                    if current_item_id:
-                        accumulated_text += think_close
-                        close_delta_seq = seq.next()
-                        yield format_sse_event(
-                            create_output_text_delta_event(
-                                close_delta_seq,
-                                output_index,
-                                content_index,
-                                current_item_id,
-                                think_close,
-                            )
-                        )
-
                     # Close reasoning summary text part
                     rs_done_seq = seq.next()
                     yield format_sse_event(
@@ -1797,10 +1697,6 @@ async def generate_responses_sync(
                         }
                     ],
                 }
-            )
-            last_message_content = (
-                f"\n\n<thinking>\n{accumulated_reasoning}"
-                f"\n</thinking>\n\n{last_message_content}"
             )
 
         if last_message_content.strip():

@@ -182,10 +182,10 @@ class OllamaProvider(Provider):
             temperature: Sampling temperature
             reasoning_effort: Reasoning effort level. Maps to ChatOllama's
                 ``reasoning`` parameter:
-                - None: model default (no think tags captured)
+                - None (default): reasoning=True (enables thinking capture)
                 - "none": reasoning=False (disable thinking)
-                - "low"/"medium"/"high": reasoning=True (enables thinking;
-                  string intensity only supported by gpt-oss cloud model)
+                - "low"/"medium"/"high": reasoning=True with intensity level
+                  (string intensity only supported by gpt-oss cloud model)
             **kwargs: Additional keyword arguments passed to ChatOllama.
         """
         if not model:
@@ -195,6 +195,8 @@ class OllamaProvider(Provider):
             kwargs["reasoning"] = False
         elif reasoning_effort is not None:
             kwargs["reasoning"] = reasoning_effort
+        else:
+            kwargs["reasoning"] = True
 
         llm = ChatOllama(
             model=model,
