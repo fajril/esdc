@@ -192,20 +192,20 @@ async def generate_conversation_title(
         "pertanyaan user.\n"
         "Judul harus ringkas dan padat.\n\n"
         "INSTRUCTION: Selalu respons dalam format JSON berikut (tanpa markdown):\n"
-        '{"title": "judul ringkas di sini"}\n\n'
+        '{{"title": "judul ringkas di sini"}}\n\n'
         "Contoh:\n"
         '- "berapa cadangan nasional" -> '
-        '{"title": "Cadangan nasional"}\n'
+        '{{"title": "Cadangan nasional"}}\n'
         '- "buatkan profil produksi EOR" -> '
-        '{"title": "Profil produksi EOR"}\n'
+        '{{"title": "Profil produksi EOR"}}\n'
         '- "berapa cadangan lapangan Duri" -> '
-        '{"title": "Cadangan lapangan Duri"}\n'
+        '{{"title": "Cadangan lapangan Duri"}}\n'
         '- "how much oil reserves in Rokan field" -> '
-        '{"title": "Oil Reserves Rokan Field"}\n'
+        '{{"title": "Oil Reserves Rokan Field"}}\n'
         '- "list all working areas with gas production" -> '
-        '{"title": "Working Areas Gas Production"}\n'
+        '{{"title": "Working Areas Gas Production"}}\n'
         '- "compare reserves between 2020 and 2023" -> '
-        '{"title": "Reserve Comparison 2020-2023"}\n\n'
+        '{{"title": "Reserve Comparison 2020-2023"}}\n\n'
         "Pertanyaan user: {query}\n\n"
         "Judul:"
     )
@@ -217,7 +217,7 @@ async def generate_conversation_title(
                     "Kamu adalah asisten yang membuat judul percakapan "
                     "singkat dan ringkas. Gunakan bahasa yang sama dengan "
                     "pertanyaan user. Hanya respons dalam format JSON "
-                    'tanpa markdown: {"title": "..."}.'
+                    'tanpa markdown: {{"title": "..."}}.'
                 )
             ),
             HumanMessage(content=prompt.format(query=user_query)),
@@ -296,14 +296,14 @@ async def generate_conversation_tags(
         "Generate 1-3 broad tags categorizing this user query.\n"
         "The tags should be general categories.\n\n"
         "INSTRUCTION: Selalu respons dalam format JSON berikut (tanpa markdown):\n"
-        '{"tags": "tag1, tag2, tag3"}\n\n'
+        '{{"tags": "tag1, tag2, tag3"}}\n\n'
         "Examples:\n"
         '- "how much oil reserves in Rokan field" -> '
-        '{"tags": "Reserves, Oil, Rokan"}\n'
+        '{{"tags": "Reserves, Oil, Rokan"}}\n'
         '- "list all working areas with gas production" -> '
-        '{"tags": "Working Areas, Gas Production"}\n'
+        '{{"tags": "Working Areas, Gas Production"}}\n'
         '- "compare reserves between 2020 and 2023" -> '
-        '{"tags": "Reserves, Comparison"}\n\n'
+        '{{"tags": "Reserves, Comparison"}}\n\n'
         "User query: {query}\n\n"
         "Tags:"
     )
@@ -315,7 +315,7 @@ async def generate_conversation_tags(
                     "You are a helpful assistant that "
                     "generates broad categorization tags. "
                     "Respond ONLY in JSON format: "
-                    '{"tags": "tag1, tag2, ..."}. '
+                    '{{"tags": "tag1, tag2, ..."}}. '
                     "No markdown, no explanation."
                 )
             ),
