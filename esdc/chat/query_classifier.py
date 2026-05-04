@@ -318,7 +318,11 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
     Returns:
         List of LangChain tool names to bind for this query
     """
-    base_tools = ["Knowledge Traversal", "SQL Executor"] + _SCHEMA_TOOLS
+    base_tools = [
+        "Knowledge Traversal",
+        "SQL Executor",
+        "Simple Data Query",
+    ] + _SCHEMA_TOOLS
 
     if classification.query_type in (
         QueryType.SIMPLE_FACTUAL,

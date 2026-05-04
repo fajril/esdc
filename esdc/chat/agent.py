@@ -28,6 +28,7 @@ from esdc.chat.query_classifier import (
     format_classification_for_prompt,
     get_tools_for_classification,
 )
+from esdc.chat.smart_query import simple_data_query
 from esdc.chat.tools import (
     execute_cypher,
     execute_sql,
@@ -407,6 +408,7 @@ def create_agent(
         context_length = _detect_context_length(llm)
     if tools is None:
         tools = [
+            simple_data_query,
             knowledge_traversal,
             resolve_spatial,
             semantic_search,

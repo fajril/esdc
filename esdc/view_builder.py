@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from esdc.selection import TableName
 
@@ -297,6 +298,200 @@ _LIKE_SPECIAL_CHARS = re.compile(r"([%_])")
 def _escape_like(value: str) -> str:
     escaped = _LIKE_SPECIAL_CHARS.sub(r"\\\1", value)
     return f"%{escaped}%"
+
+
+def _escape_like_value(value: str) -> str:
+    """Escape LIKE special characters only (no wildcard wrapping)."""
+    return _LIKE_SPECIAL_CHARS.sub(r"\\\1", value)
+
+
+# ── Smart Query Builder ───────────────────────────────────────────
+
+# Query type to detail level mapping
+QUERY_TYPE_DETAIL: dict[str, str] = {
+    "cadangan": "reserves",
+    "potensi": "resources",
+    "contingent": "resources",
+    "prospective": "resources_risked",
+    "cumprod": "cumprod",
+    "prodrate": "rate",
+}
+
+# Query type to GROUP BY columns (None means no grouping)
+QUERY_TYPE_GROUP_BY: dict[str, list[str] | None] = {
+    "cadangan": None,
+    "potensi": ["project_class", "project_stage"],
+    "contingent": None,
+    "prospective": None,
+    "cumprod": None,
+    "prodrate": None,
+}
+
+# Query type to project_class LIKE filter
+QUERY_TYPE_PROJECT_CLASS: dict[str, str | None] = {
+    "cadangan": None,
+    "potensi": None,
+    "contingent": "Contingent",
+    "prospective": "Prospective",
+    "cumprod": None,
+    "prodrate": None,
+}
+
+# Uncertainty level mapping: maps shorthand to DB uncert_level values
+UNCERTAINTY_MAP: dict[str, tuple[str, ...]] = {
+    "1P": ("1. Low Value",),
+    "1C": ("1. Low Value",),
+    "2P": ("1. Low Value", "2. Middle Value"),
+    "2C": ("1. Low Value", "2. Middle Value"),
+    "3P": ("1. Low Value", "2. Middle Value", "3. High Value"),
+    "3C": ("1. Low Value", "2. Middle Value", "3. High Value"),
+    "probable": ("1. Low Value", "2. Middle Value"),
+}
+
+# Entity-level filter column per table
+TABLE_FILTER_COLUMN: dict[TableName, str | None] = {
+    TableName.PROJECT_RESOURCES: "project_name",
+    TableName.FIELD_RESOURCES: "field_name",
+    TableName.WA_RESOURCES: "wk_name",
+    TableName.NKRI_RESOURCES: None,
+}
+
+
+def build_smart_query(
+    query_type: str,
+    table: TableName,
+    entity_name: str | None = None,
+    uncertainty: str = "2P",
+    report_years: list[int] | None = None,
+) -> dict[str, Any]:
+    """Build a smart aggregate SQL query for standardized data retrieval.
+
+    Unlike ``build_view_query`` (raw row-level queries), this produces
+    aggregated queries with ``SUM``, ``GROUP BY``, uncertainty filtering,
+    and report-year fallback.
+
+    Parameters
+    ----------
+    query_type:
+        One of ``cadangan``, ``potensi``, ``contingent``, ``prospective``,
+        ``cumprod``, ``prodrate``.
+    table:
+        Target aggregation table (``TableName`` enum).
+    entity_name:
+        Entity name to filter via ``ILIKE``.  ``None`` for national (no
+        entity filter).
+    uncertainty:
+        Uncertainty level shorthand.  Default ``"2P"``.
+    report_years:
+        Year filter.  ``None`` → latest year only; ``[2024]`` → single
+        year; ``[2023, 2024]`` → comparison/trend mode with ``GROUP BY
+        report_year``.
+
+    Returns:
+    -------
+    dict
+        Keys: ``sql``, ``params``, ``query_type``, ``table``,
+        ``report_years_used``.
+
+    Raises:
+    ------
+    ValueError
+        If *query_type* is invalid.
+    """
+    valid_types = set(QUERY_TYPE_DETAIL.keys())
+    if query_type not in valid_types:
+        raise ValueError(
+            f"Invalid query_type '{query_type}'. Must be one of: {sorted(valid_types)}"
+        )
+
+    view_def = VIEW_DEFINITIONS[table]
+    filter_col = TABLE_FILTER_COLUMN[table]
+
+    detail = QUERY_TYPE_DETAIL[query_type]
+    detail_cols = DETAIL_COLUMNS[detail][table]
+    group_by_cols = QUERY_TYPE_GROUP_BY[query_type]
+    project_class_filter = QUERY_TYPE_PROJECT_CLASS[query_type]
+
+    # Build aggregate expressions: SUM(vc.name) AS vc.alias_or_name
+    agg_parts: list[str] = []
+    for vc in detail_cols:
+        alias = vc.alias or vc.name
+        # Keep snake_case alias internally; downstream can pretty-print
+        agg_parts.append(f"SUM({vc.name}) AS {alias}")
+
+    # Determine SELECT and GROUP BY
+    if group_by_cols:
+        select_parts = list(group_by_cols) + agg_parts
+        group_by_clause = f"GROUP BY {', '.join(group_by_cols)}"
+    elif report_years and len(report_years) > 1:
+        select_parts = ["report_year"] + agg_parts
+        group_by_clause = "GROUP BY report_year"
+    else:
+        select_parts = agg_parts
+        group_by_clause = ""
+
+    select_clause = ",\n    ".join(select_parts)
+
+    sql = f"SELECT\n    {select_clause}\nFROM {view_def.table_name}"
+
+    conditions: list[str] = []
+    params: list[str | int] = []
+
+    # Entity filter
+    if filter_col and entity_name:
+        conditions.append(f"{filter_col} ILIKE ?")
+        params.append(_escape_like(entity_name))
+
+    # Uncertainty filter
+    uncert_levels = UNCERTAINTY_MAP.get(uncertainty, UNCERTAINTY_MAP["2P"])
+    if len(uncert_levels) == 1:
+        conditions.append(f"uncert_level = '{uncert_levels[0]}'")
+    else:
+        placeholders = ", ".join(f"'{lvl}'" for lvl in uncert_levels)
+        conditions.append(f"uncert_level IN ({placeholders})")
+
+    # Project class filter
+    if project_class_filter:
+        conditions.append(f"project_class LIKE '%{project_class_filter}%'")
+
+    # Report year filter / fallback
+    report_years_used = report_years
+    if report_years and len(report_years) == 1:
+        conditions.append("report_year = ?")
+        params.append(report_years[0])
+    elif report_years and len(report_years) > 1:
+        placeholders = ", ".join("?" for _ in report_years)
+        conditions.append(f"report_year IN ({placeholders})")
+        params.extend(report_years)
+    else:
+        # Fallback: latest year, scoped by entity filter if provided
+        subquery_filter = ""
+        if filter_col and entity_name:
+            subquery_filter = (
+                f"WHERE {filter_col} ILIKE '%{_escape_like(entity_name).strip('%')}%'"
+            )
+        sql_filter = (
+            f"SELECT MAX(report_year) FROM {view_def.table_name}{subquery_filter}"
+        )
+        conditions.append(f"report_year = ({sql_filter})")
+        report_years_used = None
+
+    if conditions:
+        sql += "\nWHERE " + "\n    AND ".join(conditions)
+
+    if group_by_clause:
+        sql += f"\n{group_by_clause}"
+
+    if report_years and len(report_years) > 1:
+        sql += "\nORDER BY report_year"
+
+    return {
+        "sql": sql,
+        "params": params,
+        "query_type": query_type,
+        "table": view_def.table_name,
+        "report_years_used": report_years_used,
+    }
 
 
 def build_view_query(
