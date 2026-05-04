@@ -471,7 +471,7 @@ def build_smart_query(
                 f"WHERE {filter_col} ILIKE '%{_escape_like(entity_name).strip('%')}%'"
             )
         sql_filter = (
-            f"SELECT MAX(report_year) FROM {view_def.table_name}{subquery_filter}"
+            f"SELECT MAX(report_year) FROM {view_def.table_name} {subquery_filter}"
         )
         conditions.append(f"report_year = ({sql_filter})")
         report_years_used = None

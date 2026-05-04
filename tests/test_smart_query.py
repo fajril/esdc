@@ -138,6 +138,23 @@ class TestBuildSmartQuery:
                 entity_name="Rokan",
             )
 
+    def test_sql_is_valid_with_entity_filter(self):
+        """Subquery must have space between table name and WHERE.
+
+        Regression: build_smart_query produced malformed SQL like
+        'FROM wa_resourcesWHERE wk_name ...' when report_years was None
+        and an entity_name was provided.
+        """
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Jabung",
+        )
+        sql = res["sql"]
+        # The subquery should be "FROM wa_resources WHERE ...", not "wa_resourcesWHERE"
+        assert "resources WHERE" in sql
+        assert "resourcesWHERE" not in sql
+
     def test_project_level_is_ignored(self):
         """PROJECT_RESOURCES is valid but entity filtering still works."""
         res = build_smart_query(
