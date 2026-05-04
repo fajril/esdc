@@ -190,21 +190,22 @@ async def generate_conversation_title(
         "Buatkan judul singkat (maks. 50 karakter) yang merangkum "
         "pertanyaan user berikut dalam BAHASA yang SAMA dengan "
         "pertanyaan user.\n"
-        "Judul harus ringkas dan padat."
-        "Hanya sertakan judul, tanpa tanda petik atau penjelasan.\n\n"
+        "Judul harus ringkas dan padat.\n\n"
+        "INSTRUCTION: Selalu respons dalam format JSON berikut (tanpa markdown):\n"
+        '{"title": "judul ringkas di sini"}\n\n'
         "Contoh:\n"
         '- "berapa cadangan nasional" -> '
-        '"Cadangan nasional"\n'
+        '{"title": "Cadangan nasional"}\n'
         '- "buatkan profil produksi EOR" -> '
-        '"Profil produksi EOR"\n'
+        '{"title": "Profil produksi EOR"}\n'
         '- "berapa cadangan lapangan Duri" -> '
-        '"Cadangan lapangan Duri"\n'
+        '{"title": "Cadangan lapangan Duri"}\n'
         '- "how much oil reserves in Rokan field" -> '
-        '"Oil Reserves Rokan Field"\n'
+        '{"title": "Oil Reserves Rokan Field"}\n'
         '- "list all working areas with gas production" -> '
-        '"Working Areas Gas Production"\n'
+        '{"title": "Working Areas Gas Production"}\n'
         '- "compare reserves between 2020 and 2023" -> '
-        '"Reserve Comparison 2020-2023"\n\n'
+        '{"title": "Reserve Comparison 2020-2023"}\n\n'
         "Pertanyaan user: {query}\n\n"
         "Judul:"
     )
@@ -212,7 +213,12 @@ async def generate_conversation_title(
     try:
         messages = [
             SystemMessage(
-                content="Kamu adalah asisten yang membuat judul percakapan singkat dan ringkas. Gunakan bahasa yang sama dengan pertanyaan user."  # noqa: E501
+                content=(
+                    "Kamu adalah asisten yang membuat judul percakapan "
+                    "singkat dan ringkas. Gunakan bahasa yang sama dengan "
+                    "pertanyaan user. Hanya respons dalam format JSON "
+                    'tanpa markdown: {"title": "..."}.'
+                )
             ),
             HumanMessage(content=prompt.format(query=user_query)),
         ]
@@ -239,18 +245,34 @@ async def generate_conversation_title(
             inference_elapsed_ms,
             content_len,
         )
-        content = response.content
-        if isinstance(content, list):
-            title = str(content[0]) if content else ""
-        else:
-            title = str(content)
-        title = title.strip().strip("\"'")
+
+        raw_text = str(response.content).strip() if response.content else ""
+
+        # Parse JSON title
+        title = ""
+        if raw_text:
+            try:
+                json_start = raw_text.find("{")
+                json_end = raw_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    parsed = json.loads(raw_text[json_start:json_end])
+                    title = parsed.get("title", "")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Fallback: plain text extraction if JSON parsing fails
+        if not title:
+            title = raw_text.strip().strip("\"'")
 
         if len(title) > 50:
             title = title[:47] + "..."
 
         return title
     except Exception:
+        logger.exception(
+            "[INFERENCE] title_generation_error | query=%r",
+            user_query[:80],
+        )
         query_clean = user_query.strip()
         if len(query_clean) > 50:
             return query_clean[:47] + "..."
@@ -272,16 +294,16 @@ async def generate_conversation_tags(
     """
     prompt = (
         "Generate 1-3 broad tags categorizing this user query.\n"
-        "The tags should be general categories. "
-        "Respond with ONLY comma-separated tags,\n"
-        "no quotes, no explanation, no numbering.\n\n"
+        "The tags should be general categories.\n\n"
+        "INSTRUCTION: Selalu respons dalam format JSON berikut (tanpa markdown):\n"
+        '{"tags": "tag1, tag2, tag3"}\n\n'
         "Examples:\n"
         '- "how much oil reserves in Rokan field" -> '
-        '"Reserves, Oil, Rokan"\n'
+        '{"tags": "Reserves, Oil, Rokan"}\n'
         '- "list all working areas with gas production" -> '
-        '"Working Areas, Gas Production"\n'
+        '{"tags": "Working Areas, Gas Production"}\n'
         '- "compare reserves between 2020 and 2023" -> '
-        '"Reserves, Comparison"\n\n'
+        '{"tags": "Reserves, Comparison"}\n\n'
         "User query: {query}\n\n"
         "Tags:"
     )
@@ -289,7 +311,13 @@ async def generate_conversation_tags(
     try:
         messages = [
             SystemMessage(
-                content="You are a helpful assistant that generates broad categorization tags."  # noqa: E501
+                content=(
+                    "You are a helpful assistant that "
+                    "generates broad categorization tags. "
+                    "Respond ONLY in JSON format: "
+                    '{"tags": "tag1, tag2, ..."}. '
+                    "No markdown, no explanation."
+                )
             ),
             HumanMessage(content=prompt.format(query=user_query)),
         ]
@@ -314,18 +342,34 @@ async def generate_conversation_tags(
             inference_elapsed_ms,
             content_len,
         )
-        content = response.content
-        if isinstance(content, list):
-            tags = str(content[0]) if content else ""
-        else:
-            tags = str(content)
-        tags = tags.strip().strip("\"'")
+
+        raw_text = str(response.content).strip() if response.content else ""
+
+        # Parse JSON tags
+        tags = ""
+        if raw_text:
+            try:
+                json_start = raw_text.find("{")
+                json_end = raw_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    parsed = json.loads(raw_text[json_start:json_end])
+                    tags = parsed.get("tags", "")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Fallback: plain text extraction if JSON parsing fails
+        if not tags:
+            tags = raw_text.strip().strip("\"'")
 
         if len(tags) > 100:
             tags = tags[:97] + "..."
 
         return tags
     except Exception:
+        logger.exception(
+            "[INFERENCE] tag_generation_error | query=%r",
+            user_query[:80],
+        )
         query_clean = user_query.strip()
         if len(query_clean) > 100:
             return query_clean[:97] + "..."

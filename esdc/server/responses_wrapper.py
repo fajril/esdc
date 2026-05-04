@@ -438,27 +438,29 @@ async def generate_responses_stream(
             "model": provider_config.get("model"),
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": "none",
         }
         llm = create_llm_from_config(provider_config_obj)
 
         if anc_type == "tags":
             result = await generate_conversation_tags(llm, user_query)
+            result_json = json.dumps({"tags": result})
             logger.info(
                 "[RESPONSES %s] ANCILLARY_STREAM: completed, type=tags, result=%r",
                 response_id,
                 result,
             )
-            for event in create_tags_stream_events(result, response_id, model):
+            for event in create_tags_stream_events(result_json, response_id, model):
                 yield event
         else:
             result = await generate_conversation_title(llm, user_query)
+            result_json = json.dumps({"title": result})
             logger.info(
                 "[RESPONSES %s] ANCILLARY_STREAM: completed, type=title, result=%r",
                 response_id,
                 result,
             )
-            for event in create_title_stream_events(result, response_id, model):
+            for event in create_title_stream_events(result_json, response_id, model):
                 yield event
         return
 
@@ -1412,13 +1414,14 @@ async def generate_responses_sync(
             "model": provider_config.get("model"),
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": "none",
         }
         llm = create_llm_from_config(provider_config_obj)
 
         anc_start = time.perf_counter()
         if anc_type == "tags":
             result = await generate_conversation_tags(llm, user_query)
+            result_json = json.dumps({"tags": result})
             anc_elapsed = (time.perf_counter() - anc_start) * 1000
             logger.info(
                 "[RESPONSES %s] ANCILLARY: completed in %.0fms, type=tags, result=%r",
@@ -1426,9 +1429,10 @@ async def generate_responses_sync(
                 anc_elapsed,
                 result,
             )
-            return create_tags_sync_response(result, response_id)
+            return create_tags_sync_response(result_json, response_id)
         else:
             result = await generate_conversation_title(llm, user_query)
+            result_json = json.dumps({"title": result})
             anc_elapsed = (time.perf_counter() - anc_start) * 1000
             logger.info(
                 "[RESPONSES %s] ANCILLARY: completed in %.0fms, type=title, result=%r",
@@ -1436,7 +1440,7 @@ async def generate_responses_sync(
                 anc_elapsed,
                 result,
             )
-            return create_title_sync_response(result, response_id)
+            return create_title_sync_response(result_json, response_id)
 
     # Create LLM and agent
     provider_config = Config.get_provider_config()
