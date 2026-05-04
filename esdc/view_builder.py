@@ -309,8 +309,8 @@ def _escape_like_value(value: str) -> str:
 
 # Query type to detail level mapping
 QUERY_TYPE_DETAIL: dict[str, str] = {
-    "cadangan": "reserves",
-    "potensi": "resources",
+    "reserves": "reserves",
+    "resources": "resources",
     "contingent": "resources",
     "prospective": "resources_risked",
     "cumprod": "cumprod",
@@ -319,8 +319,8 @@ QUERY_TYPE_DETAIL: dict[str, str] = {
 
 # Query type to GROUP BY columns (None means no grouping)
 QUERY_TYPE_GROUP_BY: dict[str, list[str] | None] = {
-    "cadangan": None,
-    "potensi": ["project_class", "project_stage"],
+    "reserves": None,
+    "resources": ["project_class", "project_stage"],
     "contingent": None,
     "prospective": None,
     "cumprod": None,
@@ -329,8 +329,8 @@ QUERY_TYPE_GROUP_BY: dict[str, list[str] | None] = {
 
 # Query type to project_class LIKE filter
 QUERY_TYPE_PROJECT_CLASS: dict[str, str | None] = {
-    "cadangan": None,
-    "potensi": None,
+    "reserves": None,
+    "resources": None,
     "contingent": "Contingent",
     "prospective": "Prospective",
     "cumprod": None,
@@ -373,7 +373,7 @@ def build_smart_query(
     Parameters
     ----------
     query_type:
-        One of ``cadangan``, ``potensi``, ``contingent``, ``prospective``,
+        One of ``reserves``, ``resources``, ``contingent``, ``prospective``,
         ``cumprod``, ``prodrate``.
     table:
         Target aggregation table (``TableName`` enum).

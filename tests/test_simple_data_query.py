@@ -27,7 +27,7 @@ class TestSimpleDataQuery:
 
     @patch("esdc.chat.smart_query.Config.get_db_file")
     @patch("esdc.chat.smart_query.get_duckdb_connection")
-    def test_cadangan_query(self, mock_get_conn, mock_get_db):
+    def test_reserves_query(self, mock_get_conn, mock_get_db):
         mock_db = MagicMock()
         mock_db.exists.return_value = True
         mock_get_db.return_value = mock_db
@@ -37,13 +37,13 @@ class TestSimpleDataQuery:
 
         result = simple_data_query.invoke(
             {
-                "query_type": "cadangan",
+                "query_type": "reserves",
                 "entity_level": "work_area",
                 "entity_name": "Rokan",
             }
         )
         data = json.loads(result)
-        assert data["query_type"] == "cadangan"
+        assert data["query_type"] == "reserves"
         assert data["entity"] == "Rokan"
         assert data["entity_level"] == "work_area"
         assert "1,000.00" in data["summary"]
@@ -51,7 +51,7 @@ class TestSimpleDataQuery:
 
     @patch("esdc.chat.smart_query.Config.get_db_file")
     @patch("esdc.chat.smart_query.get_duckdb_connection")
-    def test_potensi_query(self, mock_get_conn, mock_get_db):
+    def test_resources_query(self, mock_get_conn, mock_get_db):
         mock_db = MagicMock()
         mock_db.exists.return_value = True
         mock_get_db.return_value = mock_db
@@ -71,13 +71,13 @@ class TestSimpleDataQuery:
 
         result = simple_data_query.invoke(
             {
-                "query_type": "potensi",
+                "query_type": "resources",
                 "entity_level": "work_area",
                 "entity_name": "Rokan",
             }
         )
         data = json.loads(result)
-        assert data["query_type"] == "potensi"
+        assert data["query_type"] == "resources"
         assert "Potensi" in data["summary"]
 
     @patch("esdc.chat.smart_query.Config.get_db_file")
@@ -88,7 +88,7 @@ class TestSimpleDataQuery:
 
         result = simple_data_query.invoke(
             {
-                "query_type": "cadangan",
+                "query_type": "reserves",
                 "entity_level": "national",
             }
         )
@@ -109,7 +109,7 @@ class TestSimpleDataQuery:
         with pytest.raises(ValueError, match="Invalid entity_level"):
             simple_data_query.invoke(
                 {
-                    "query_type": "cadangan",
+                    "query_type": "reserves",
                     "entity_level": "invalid_level",
                 }
             )
@@ -132,7 +132,7 @@ class TestSimpleDataQuery:
 
         result = simple_data_query.invoke(
             {
-                "query_type": "cadangan",
+                "query_type": "reserves",
                 "entity_level": "work_area",
                 "entity_name": "Rokan",
                 "report_year": [2023, 2024],

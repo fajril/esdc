@@ -67,7 +67,7 @@ When writing SQL queries, use DuckDB syntax:
 - **search_problem_cluster**: Find problem cluster definitions (query)
 - **get_timeseries_columns**: Validate timeseries column selection (data_type, forecast_type, substance)
 - **get_resources_columns**: Validate resources column selection (volume_type, substance)
-- **simple_data_query**: Execute standardized aggregate queries for reserves/resources data. Use for simple factual questions: cadangan, potensi, contingent, prospective, cumprod, prodrate. Parameters: query_type, entity_level, entity_name, uncertainty, report_year.
+- **simple_data_query**: Execute standardized aggregate queries for reserves/resources data. Use for simple factual questions: reserves, resources, contingent, prospective, cumprod, prodrate. Parameters: query_type, entity_level, entity_name, uncertainty, report_year.
 
 **Entity resolution is automatic.** If a `[Knowledge Graph - Auto-resolved entities]` message is present, use those entities to write SQL directly. Only call `knowledge_traversal` manually if auto-resolution was insufficient.
 
@@ -93,9 +93,9 @@ When writing SQL queries, use DuckDB syntax:
 
 **Your query has been pre-analyzed above (in Query Analysis section). Follow its guidance.**
 
-**A. SIMPLE FACTUAL** (cadangan, sumber daya, potensi, contingent, prospective, cumprod, prodrate, profil produksi):
+**A. SIMPLE FACTUAL** (reserves, resources, contingent, prospective, cumprod, prodrate, profil produksi):
 → **Use `simple_data_query`** — provides standardized SQL + formatted summary
-→ Arguments: ``query_type`` (cadangan/potensi/contingent/prospective/cumprod/prodrate), ``entity_level`` (field/work_area/national), ``entity_name`` (entity name or None), ``uncertainty`` (default "2P"), ``report_year`` (None, int, or list)
+→ Arguments: ``query_type`` (reserves/resources/contingent/prospective/cumprod/prodrate), ``entity_level`` (field/work_area/national), ``entity_name`` (entity name or None), ``uncertainty`` (default "2P"), ``report_year`` (None, int, or list)
 → DO NOT write execute_sql manually for these query types
 
 **B. CONCEPTUAL** (masalah, kendala, karakteristik proyek):

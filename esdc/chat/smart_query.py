@@ -27,8 +27,8 @@ ENTITY_LEVEL_TABLE: dict[str, TableName] = {
 }
 
 QUERY_TYPE_DISPLAY: dict[str, str] = {
-    "cadangan": "Cadangan (Reserves)",
-    "potensi": "Potensi (Resources/GRR)",
+    "reserves": "Cadangan (Reserves)",
+    "resources": "Potensi (Resources/GRR)",
     "contingent": "Contingent Resources",
     "prospective": "Prospective Resources (Risked)",
     "cumprod": "Produksi Kumulatif",
@@ -121,8 +121,8 @@ def simple_data_query(
     """Execute a standardized aggregate query for simple factual data.
 
     Use for questions like:
-    - "berapa cadangan WK X?"
-    - "berapa potensi yang ada di WK X?"
+    - "berapa reserves WK X?"
+    - "berapa resources yang ada di WK X?"
     - "berapa contingent resources nasional terbaru?"
     - "berapa prospective resources risked lapangan Y?"
     - "berapa produksi kumulatif lapangan Z?"
@@ -131,7 +131,7 @@ def simple_data_query(
     Parameters
     ----------
     query_type : str
-        One of: ``cadangan``, ``potensi``, ``contingent``, ``prospective``,
+        One of: ``reserves``, ``resources``, ``contingent``, ``prospective``,
         ``cumprod``, ``prodrate``.
     entity_level : str
         One of: ``field``, ``work_area``, ``national``.

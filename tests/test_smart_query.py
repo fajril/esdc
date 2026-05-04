@@ -9,9 +9,9 @@ from esdc.view_builder import build_smart_query
 class TestBuildSmartQuery:
     """Tests for smart aggregate query builder."""
 
-    def test_cadangan_work_area(self):
+    def test_reserves_work_area(self):
         res = build_smart_query(
-            query_type="cadangan",
+            query_type="reserves",
             table=TableName.WA_RESOURCES,
             entity_name="Rokan",
         )
@@ -26,9 +26,9 @@ class TestBuildSmartQuery:
         assert "report_year" in sql
         assert "GROUP BY" not in sql
 
-    def test_potensi_work_area_grouped(self):
+    def test_resources_work_area_grouped(self):
         res = build_smart_query(
-            query_type="potensi",
+            query_type="resources",
             table=TableName.WA_RESOURCES,
             entity_name="Rokan",
         )
@@ -81,7 +81,7 @@ class TestBuildSmartQuery:
 
     def test_comparison_two_years(self):
         res = build_smart_query(
-            query_type="cadangan",
+            query_type="reserves",
             table=TableName.WA_RESOURCES,
             entity_name="Rokan",
             report_years=[2023, 2024],
@@ -93,7 +93,7 @@ class TestBuildSmartQuery:
 
     def test_trend_three_years(self):
         res = build_smart_query(
-            query_type="cadangan",
+            query_type="reserves",
             table=TableName.WA_RESOURCES,
             entity_name="Rokan",
             report_years=[2022, 2023, 2024],
@@ -104,7 +104,7 @@ class TestBuildSmartQuery:
 
     def test_uncertainty_1p(self):
         res = build_smart_query(
-            query_type="cadangan",
+            query_type="reserves",
             table=TableName.FIELD_RESOURCES,
             entity_name="Duri",
             uncertainty="1P",
@@ -114,7 +114,7 @@ class TestBuildSmartQuery:
 
     def test_default_uncertainty_2p(self):
         res = build_smart_query(
-            query_type="cadangan",
+            query_type="reserves",
             table=TableName.FIELD_RESOURCES,
             entity_name="Duri",
         )
@@ -123,7 +123,7 @@ class TestBuildSmartQuery:
 
     def test_national_no_entity_filter(self):
         res = build_smart_query(
-            query_type="cadangan",
+            query_type="reserves",
             table=TableName.NKRI_RESOURCES,
         )
         sql = res["sql"]
@@ -141,7 +141,7 @@ class TestBuildSmartQuery:
     def test_project_level_is_ignored(self):
         """PROJECT_RESOURCES is valid but entity filtering still works."""
         res = build_smart_query(
-            query_type="cadangan",
+            query_type="reserves",
             table=TableName.PROJECT_RESOURCES,
             entity_name="Abadi",
         )
