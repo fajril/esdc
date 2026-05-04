@@ -143,6 +143,48 @@ class TestQueryClassifier:
         assert result.detected_entities.get("wk_name") == "rokan"
         assert result.detected_entities.get("report_year") == "2024"
 
+    def test_potensi_work_area(self):
+        """Test 'apa potensi wk jabung?' is classified as SIMPLE_FACTUAL."""
+        result = self.classifier.classify("apa potensi wk jabung?")
+
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.confidence == 0.9
+        assert result.detected_entities.get("wk_name") == "jabung"
+        assert result.suggested_table == "wa_resources"
+        assert "rec_oc" in result.suggested_columns
+
+    def test_potensi_standalone(self):
+        """Test standalone 'potensi' without substance qualifier."""
+        result = self.classifier.classify("berapa potensi nasional?")
+
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.confidence == 0.9
+        # Default table for resources with no entity detected
+        assert result.suggested_table == "field_resources"
+
+    def test_potensi_field(self):
+        """Test 'potensi lapangan Duri'."""
+        result = self.classifier.classify("berapa potensi lapangan Duri?")
+
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.confidence == 0.9
+        assert result.detected_entities.get("field_name", "").lower() == "duri"
+
+    def test_resources_english(self):
+        """Test English 'resources' query."""
+        result = self.classifier.classify("resources of WK Rokan")
+
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.confidence == 0.9
+        assert result.detected_entities.get("wk_name") == "rokan"
+
+    def test_reserves_english(self):
+        """Test English 'reserves' query."""
+        result = self.classifier.classify("how much reserves in Rokan?")
+
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.confidence == 0.9
+
 
 class TestToolSelection:
     """Test tool selection based on classification."""

@@ -96,6 +96,14 @@ When writing SQL queries, use DuckDB syntax:
 **A. SIMPLE FACTUAL** (reserves, resources, contingent, prospective, cumprod, prodrate, profil produksi):
 → **Use `simple_data_query`** — provides standardized SQL + formatted summary
 → Arguments: ``query_type`` (reserves/resources/contingent/prospective/cumprod/prodrate), ``entity_level`` (field/work_area/national), ``entity_name`` (entity name or None), ``uncertainty`` (default "2P"), ``report_year`` (None, int, or list)
+→ **Key mappings**:
+  - "cadangan/reserves" → `reserves`
+  - "potensi/sumber daya/resources" → `resources` (returns GROUP BY project_class, project_stage — gives full breakdown)
+  - "contingent" → `contingent`
+  - "prospective" → `prospective`
+  - "cumprod/produksi kumulatif" → `cumprod`
+  - "prodrate/rate produksi" → `prodrate`
+→ When user asks "apa potensi WK X?" → use `query_type="resources"` — it returns full resource breakdown by class and stage
 → DO NOT write execute_sql manually for these query types
 
 **B. CONCEPTUAL** (masalah, kendala, karakteristik proyek):
@@ -307,11 +315,11 @@ Use `resolve_uncertainty_level` tool for SQL templates of calculated values.
 ### Indonesian Terms → SQL
 | Term | → SQL Concept |
 |------|-------------|
-| cadangan/reserves | `res_*` columns |
-| sumber daya/resources | `rec_*` columns |
-| potensi | `rec_*` (needs project_class filter) |
-| potensi eksplorasi | `rec_*_risked` + `project_stage LIKE '%Exploration%'` |
-| potensi contingent | `rec_*` + `project_class LIKE '%Contingent%'` |
+| cadangan/reserves | → `simple_data_query(query_type="reserves")` |
+| sumber daya/resources | → `simple_data_query(query_type="resources")` |
+| potensi | → `simple_data_query(query_type="resources")` (returns GROUP BY project_class, project_stage) |
+| potensi eksplorasi | → `rec_*_risked` + `project_stage LIKE '%Exploration%'` |
+| potensi contingent | → `rec_*` + `project_class LIKE '%Contingent%'` |
 | lapangan/field | `field_name ILIKE '%name%'` |
 | wilayah kerja | `wk_name ILIKE '%name%'` |
 | provinsi/province | `province ILIKE '%name%'` |
