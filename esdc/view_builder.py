@@ -338,14 +338,30 @@ QUERY_TYPE_PROJECT_CLASS: dict[str, str | None] = {
 }
 
 # Uncertainty level mapping: maps shorthand to DB uncert_level values
+# IMPORTANT: All values are single-value tuples. DB levels are already cumulative:
+#   2. Middle Value = sum of Low + Mid, 3. High Value = sum of Low + Mid + High
+# Using IN with multiple values would double/triple count.
 UNCERTAINTY_MAP: dict[str, tuple[str, ...]] = {
+    # Generic P-notation (works for any query type)
+    "P90": ("1. Low Value",),
+    "P50": ("2. Middle Value",),
+    "P10": ("3. High Value",),
+    # Reserves
     "1P": ("1. Low Value",),
+    "2P": ("2. Middle Value",),
+    "3P": ("3. High Value",),
+    # Contingent
     "1C": ("1. Low Value",),
-    "2P": ("1. Low Value", "2. Middle Value"),
-    "2C": ("1. Low Value", "2. Middle Value"),
-    "3P": ("1. Low Value", "2. Middle Value", "3. High Value"),
-    "3C": ("1. Low Value", "2. Middle Value", "3. High Value"),
-    "probable": ("1. Low Value", "2. Middle Value"),
+    "2C": ("2. Middle Value",),
+    "3C": ("3. High Value",),
+    # Prospective
+    "1U": ("1. Low Value",),
+    "2U": ("2. Middle Value",),
+    "3U": ("3. High Value",),
+    # GRR (Resources)
+    "1R": ("1. Low Value",),
+    "2R": ("2. Middle Value",),
+    "3R": ("3. High Value",),
 }
 
 # Entity-level filter column per table
@@ -361,7 +377,7 @@ def build_smart_query(
     query_type: str,
     table: TableName,
     entity_name: str | None = None,
-    uncertainty: str = "2P",
+    uncertainty: str = "P50",
     report_years: list[int] | None = None,
 ) -> dict[str, Any]:
     """Build a smart aggregate SQL query for standardized data retrieval.
@@ -381,7 +397,12 @@ def build_smart_query(
         Entity name to filter via ``ILIKE``.  ``None`` for national (no
         entity filter).
     uncertainty:
-        Uncertainty level shorthand.  Default ``"2P"``.
+        Uncertainty level shorthand.  Default ``"P50"``.
+        Generic: ``P90``, ``P50``, ``P10``.
+        Reserves: ``1P``, ``2P``, ``3P``.
+        Contingent: ``1C``, ``2C``, ``3C``.
+        Prospective: ``1U``, ``2U``, ``3U``.
+        GRR: ``1R``, ``2R``, ``3R``.
     report_years:
         Year filter.  ``None`` → latest year only; ``[2024]`` → single
         year; ``[2023, 2024]`` → comparison/trend mode with ``GROUP BY
@@ -420,14 +441,22 @@ def build_smart_query(
         agg_parts.append(f"SUM({vc.name}) AS {alias}")
 
     # Determine SELECT and GROUP BY
-    if group_by_cols:
+    if group_by_cols and "report_year" in group_by_cols:
+        # Multi-year comparison: report_year already in GROUP BY
         select_parts = list(group_by_cols) + agg_parts
+        group_by_clause = f"GROUP BY {', '.join(group_by_cols)}"
+    elif group_by_cols:
+        # Grouped by business columns — all rows share same year after WHERE filter
+        select_parts = (
+            list(group_by_cols) + ["MAX(report_year) AS report_year"] + agg_parts
+        )
         group_by_clause = f"GROUP BY {', '.join(group_by_cols)}"
     elif report_years and len(report_years) > 1:
         select_parts = ["report_year"] + agg_parts
         group_by_clause = "GROUP BY report_year"
     else:
-        select_parts = agg_parts
+        # Single aggregate result — add year for context
+        select_parts = ["MAX(report_year) AS report_year"] + agg_parts
         group_by_clause = ""
 
     select_clause = ",\n    ".join(select_parts)

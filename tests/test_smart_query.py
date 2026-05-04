@@ -22,8 +22,8 @@ class TestBuildSmartQuery:
         assert "reserves_bscf" in sql
         assert "wa_resources" in sql
         assert "wk_name ILIKE" in sql
-        assert "uncert_level IN" in sql
-        assert "report_year" in sql
+        assert "uncert_level = '2. Middle Value'" in sql
+        assert "MAX(report_year) AS report_year" in sql
         assert "GROUP BY" not in sql
 
     def test_resources_work_area_grouped(self):
@@ -112,14 +112,15 @@ class TestBuildSmartQuery:
         sql = res["sql"]
         assert "uncert_level = '1. Low Value'" in sql
 
-    def test_default_uncertainty_2p(self):
+    def test_default_uncertainty_p50(self):
         res = build_smart_query(
             query_type="reserves",
             table=TableName.FIELD_RESOURCES,
             entity_name="Duri",
         )
         sql = res["sql"]
-        assert "uncert_level IN ('1. Low Value', '2. Middle Value')" in sql
+        assert "uncert_level = '2. Middle Value'" in sql
+        assert "MAX(report_year) AS report_year" in sql
 
     def test_national_no_entity_filter(self):
         res = build_smart_query(
@@ -164,3 +165,84 @@ class TestBuildSmartQuery:
         )
         sql = res["sql"]
         assert "project_name ILIKE" in sql
+
+    def test_uncertainty_1c(self):
+        res = build_smart_query(
+            query_type="contingent",
+            table=TableName.NKRI_RESOURCES,
+            uncertainty="1C",
+        )
+        sql = res["sql"]
+        assert "uncert_level = '1. Low Value'" in sql
+
+    def test_uncertainty_2u(self):
+        res = build_smart_query(
+            query_type="prospective",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+            uncertainty="2U",
+        )
+        sql = res["sql"]
+        assert "uncert_level = '2. Middle Value'" in sql
+
+    def test_uncertainty_2r(self):
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+            uncertainty="2R",
+        )
+        sql = res["sql"]
+        assert "uncert_level = '2. Middle Value'" in sql
+
+    def test_uncertainty_p90_generic(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+            uncertainty="P90",
+        )
+        sql = res["sql"]
+        assert "uncert_level = '1. Low Value'" in sql
+
+    def test_uncertainty_p10_generic(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+            uncertainty="P10",
+        )
+        sql = res["sql"]
+        assert "uncert_level = '3. High Value'" in sql
+
+    def test_report_year_in_select_no_group_by(self):
+        """Reserves (no GROUP BY) should include MAX(report_year) AS report_year."""
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+        )
+        sql = res["sql"]
+        assert "MAX(report_year) AS report_year" in sql
+
+    def test_report_year_in_select_with_group_by(self):
+        """Resources (GROUP BY) should include MAX(report_year)."""
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+        )
+        sql = res["sql"]
+        assert "MAX(report_year) AS report_year" in sql
+
+    def test_report_year_in_select_comparison_mode(self):
+        """Multi-year comparison should have report_year without MAX in GROUP BY."""
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+            report_years=[2023, 2024],
+        )
+        sql = res["sql"]
+        assert "MAX(report_year)" not in sql
+        assert "GROUP BY report_year" in sql

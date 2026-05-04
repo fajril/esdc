@@ -36,14 +36,48 @@ QUERY_TYPE_DISPLAY: dict[str, str] = {
 }
 
 UNCERTAINTY_DISPLAY: dict[str, str] = {
-    "1P": "1P (Proven/Low)",
-    "2P": "2P (Probable/Mid)",
-    "3P": "3P (Possible/High)",
-    "probable": "Probable (2P-1P)",
+    "P90": "P90 (Low)",
+    "P50": "P50 (Best Estimate)",
+    "P10": "P10 (High)",
+    "1P": "1P (P90/Low)",
+    "2P": "2P (P50/Mid)",
+    "3P": "3P (P10/High)",
     "1C": "1C (Low)",
     "2C": "2C (Mid)",
     "3C": "3C (High)",
+    "1U": "1U (Low)",
+    "2U": "2U (Mid)",
+    "3U": "3U (High)",
+    "1R": "1R (Low)",
+    "2R": "2R (Mid)",
+    "3R": "3R (High)",
 }
+
+# Map (query_type, generic_input) -> context-specific label
+CONTEXT_UNCERTAINTY_MAP: dict[str, dict[str, str]] = {
+    "reserves": {"P90": "1P", "P50": "2P", "P10": "3P"},
+    "resources": {"P90": "1R", "P50": "2R", "P10": "3R"},
+    "contingent": {"P90": "1C", "P50": "2C", "P10": "3C"},
+    "prospective": {"P90": "1U", "P50": "2U", "P10": "3U"},
+    "cumprod": {"P90": "P90", "P50": "P50", "P10": "P10"},
+    "prodrate": {"P90": "P90", "P50": "P50", "P10": "P10"},
+}
+
+
+def _resolve_uncertainty_label(query_type: str, uncertainty: str) -> str:
+    """Resolve uncertainty shorthand to context-aware display label.
+
+    Generic inputs (P90/P50/P10) are converted to type-specific labels:
+      P50 + resources -> "2R (P50/Mid)"
+      P50 + reserves -> "2P (P50/Mid)"
+      P50 + contingent -> "2C (P50/Mid)"
+    Type-specific inputs (2P/2C/2U/2R) are used directly.
+    """
+    context_map = CONTEXT_UNCERTAINTY_MAP.get(query_type, {})
+    specific = context_map.get(uncertainty)
+    if specific:
+        return UNCERTAINTY_DISPLAY.get(specific, specific)
+    return UNCERTAINTY_DISPLAY.get(uncertainty, uncertainty)
 
 
 def _format_summary(
@@ -61,7 +95,7 @@ def _format_summary(
 
     entity_display = entity_name if entity_name else "Nasional"
     type_display = QUERY_TYPE_DISPLAY.get(query_type, query_type)
-    uncert_display = UNCERTAINTY_DISPLAY.get(uncertainty, uncertainty)
+    uncert_display = _resolve_uncertainty_label(query_type, uncertainty)
 
     if isinstance(report_year, list):
         year_display = f" (trend {', '.join(str(y) for y in report_year)})"
@@ -115,7 +149,7 @@ def simple_data_query(
     query_type: str,
     entity_level: str,
     entity_name: str | None = None,
-    uncertainty: str = "2P",
+    uncertainty: str = "P50",
     report_year: int | list[int] | None = None,
 ) -> str:
     """Execute a standardized aggregate query for simple factual data.
@@ -138,8 +172,12 @@ def simple_data_query(
     entity_name : str | None
         Entity name (e.g. "Rokan", "Duri").  ``None`` for national queries.
     uncertainty : str
-        Uncertainty level: ``1P``, ``2P``, ``3P``, ``probable``, ``1C``,
-        ``2C``, ``3C``.  Default ``"2P"``.
+        Uncertainty level.  Default ``"P50"``.
+        Generic: ``P90``, ``P50``, ``P10``.
+        Reserves: ``1P``, ``2P``, ``3P``.
+        Contingent: ``1C``, ``2C``, ``3C``.
+        Prospective: ``1U``, ``2U``, ``3U``.
+        GRR: ``1R``, ``2R``, ``3R``.
     report_year : int | list[int] | None
         ``None`` → latest available year. ``int`` → single year.
         ``list`` → trend/comparison across years.
@@ -224,7 +262,7 @@ def simple_data_query(
                 "query_type": query_type,
                 "entity": entity_name or "Nasional",
                 "entity_level": entity_level,
-                "uncertainty": UNCERTAINTY_DISPLAY.get(uncertainty, uncertainty),
+                "uncertainty": _resolve_uncertainty_label(query_type, uncertainty),
                 "report_year": actual_year,
                 "sql": sql,
                 "params": [str(p) for p in params],
