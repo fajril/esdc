@@ -116,10 +116,17 @@ def _format_summary(
                 continue
             val = row.get(col)
             if val is not None and isinstance(val, (int, float)):
+                # Add category prefix for resources query to distinguish types
+                if query_type == "resources" and col.startswith("resources_"):
+                    label = f"GRR {col}"
+                elif query_type == "resources" and col.startswith("reserves_"):
+                    label = f"Res {col}"
+                else:
+                    label = col
                 parts.append(
-                    f"{col}: {val:,.2f}"
+                    f"{label}: {val:,.2f}"
                     if isinstance(val, float)
-                    else f"{col}: {val:,}"
+                    else f"{label}: {val:,}"
                 )
         return ", ".join(parts)
 

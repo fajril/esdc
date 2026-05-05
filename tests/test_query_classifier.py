@@ -185,6 +185,31 @@ class TestQueryClassifier:
         assert result.query_type == QueryType.SIMPLE_FACTUAL
         assert result.confidence == 0.9
 
+    def test_contingent_query(self):
+        """Test 'berapa contingent resources nasional?' is SIMPLE_FACTUAL."""
+        result = self.classifier.classify("berapa contingent resources nasional?")
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.confidence == 0.9
+
+    def test_potensi_contingent_routes_to_contingent(self):
+        """Test 'potensi contingent WK Rokan' routes to contingent."""
+        result = self.classifier.classify("potensi contingent WK Rokan")
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.detected_entities.get("wk_name") == "rokan"
+        # The reason should mention 'contingent', not 'resources'
+        assert "contingent" in result.reason.lower()
+
+    def test_prospective_query(self):
+        """Test 'prospective resources di WK Jatibarang' is classified correctly."""
+        result = self.classifier.classify("prospective resources di WK Jatibarang")
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+
+    def test_potensi_eksplorasi_routes_to_prospective(self):
+        """Test 'potensi eksplorasi lapangan Duri' routes to prospective."""
+        result = self.classifier.classify("potensi eksplorasi lapangan Duri")
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert "prospective" in result.reason.lower()
+
 
 class TestToolSelection:
     """Test tool selection based on classification."""

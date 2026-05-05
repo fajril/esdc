@@ -2,6 +2,7 @@
 
 import pytest
 
+from esdc.chat.smart_query import _resolve_uncertainty_label
 from esdc.selection import TableName
 from esdc.view_builder import build_smart_query
 
@@ -22,7 +23,8 @@ class TestBuildSmartQuery:
         assert "reserves_bscf" in sql
         assert "wa_resources" in sql
         assert "wk_name ILIKE" in sql
-        assert "uncert_level = '2. Middle Value'" in sql
+        assert "uncert_level = ?" in sql
+        assert "2. Middle Value" in res["params"]
         assert "MAX(report_year) AS report_year" in sql
         assert "GROUP BY" not in sql
 
@@ -44,7 +46,8 @@ class TestBuildSmartQuery:
         )
         sql = res["sql"]
         assert "nkri_resources" in sql
-        assert "project_class LIKE '%Contingent%'" in sql
+        assert "project_class LIKE ?" in sql
+        assert "%Contingent%" in res["params"]
         assert "GROUP BY" not in sql
 
     def test_prospective_field(self):
@@ -56,7 +59,8 @@ class TestBuildSmartQuery:
         sql = res["sql"]
         assert "rec_oc_risked" in sql
         assert "rec_an_risked" in sql
-        assert "project_class LIKE '%Prospective%'" in sql
+        assert "project_class LIKE ?" in sql
+        assert "%Prospective%" in res["params"]
 
     def test_cumprod_field(self):
         res = build_smart_query(
@@ -77,7 +81,7 @@ class TestBuildSmartQuery:
             entity_name="Rokan",
         )
         sql = res["sql"]
-        assert "rate" in sql
+        assert "SUM(rate_grs_oc)" in sql or "SUM(rate_sls_oc)" in sql
 
     def test_comparison_two_years(self):
         res = build_smart_query(
@@ -89,7 +93,8 @@ class TestBuildSmartQuery:
         sql = res["sql"]
         assert "report_year IN (?, ?)" in sql
         assert "GROUP BY report_year" in sql
-        assert res["params"] == ["%Rokan%", 2023, 2024]
+        assert "uncert_level = ?" in sql
+        assert res["params"] == ["%Rokan%", "2. Middle Value", 2023, 2024]
 
     def test_trend_three_years(self):
         res = build_smart_query(
@@ -110,7 +115,8 @@ class TestBuildSmartQuery:
             uncertainty="1P",
         )
         sql = res["sql"]
-        assert "uncert_level = '1. Low Value'" in sql
+        assert "uncert_level = ?" in sql
+        assert "1. Low Value" in res["params"]
 
     def test_default_uncertainty_p50(self):
         res = build_smart_query(
@@ -119,7 +125,8 @@ class TestBuildSmartQuery:
             entity_name="Duri",
         )
         sql = res["sql"]
-        assert "uncert_level = '2. Middle Value'" in sql
+        assert "uncert_level = ?" in sql
+        assert "2. Middle Value" in res["params"]
         assert "MAX(report_year) AS report_year" in sql
 
     def test_national_no_entity_filter(self):
@@ -173,7 +180,8 @@ class TestBuildSmartQuery:
             uncertainty="1C",
         )
         sql = res["sql"]
-        assert "uncert_level = '1. Low Value'" in sql
+        assert "uncert_level = ?" in sql
+        assert "1. Low Value" in res["params"]
 
     def test_uncertainty_2u(self):
         res = build_smart_query(
@@ -183,7 +191,8 @@ class TestBuildSmartQuery:
             uncertainty="2U",
         )
         sql = res["sql"]
-        assert "uncert_level = '2. Middle Value'" in sql
+        assert "uncert_level = ?" in sql
+        assert "2. Middle Value" in res["params"]
 
     def test_uncertainty_2r(self):
         res = build_smart_query(
@@ -193,7 +202,8 @@ class TestBuildSmartQuery:
             uncertainty="2R",
         )
         sql = res["sql"]
-        assert "uncert_level = '2. Middle Value'" in sql
+        assert "uncert_level = ?" in sql
+        assert "2. Middle Value" in res["params"]
 
     def test_uncertainty_p90_generic(self):
         res = build_smart_query(
@@ -203,7 +213,8 @@ class TestBuildSmartQuery:
             uncertainty="P90",
         )
         sql = res["sql"]
-        assert "uncert_level = '1. Low Value'" in sql
+        assert "uncert_level = ?" in sql
+        assert "1. Low Value" in res["params"]
 
     def test_uncertainty_p10_generic(self):
         res = build_smart_query(
@@ -213,7 +224,8 @@ class TestBuildSmartQuery:
             uncertainty="P10",
         )
         sql = res["sql"]
-        assert "uncert_level = '3. High Value'" in sql
+        assert "uncert_level = ?" in sql
+        assert "3. High Value" in res["params"]
 
     def test_report_year_in_select_no_group_by(self):
         """Reserves (no GROUP BY) should include MAX(report_year) AS report_year."""
@@ -246,3 +258,56 @@ class TestBuildSmartQuery:
         sql = res["sql"]
         assert "MAX(report_year)" not in sql
         assert "GROUP BY report_year" in sql
+
+    def test_single_year_as_int(self):
+        """report_year as single int should produce report_year = ? filter."""
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+            report_years=[2024],
+        )
+        sql = res["sql"]
+        assert "report_year = ?" in sql
+        assert 2024 in res["params"]
+
+    def test_param_count_entity_with_default_year(self):
+        """Entity + default year: 3 ? params (entity, uncert, subquery)."""
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Jabung",
+        )
+        sql = res["sql"]
+        # Should have exactly 3 '?' placeholders: entity, uncert, subquery
+        assert sql.count("?") == 3
+        assert res["params"] == ["%Jabung%", "2. Middle Value", "%Jabung%"]
+
+
+class TestResolveUncertaintyLabel:
+    """Tests for context-aware uncertainty display."""
+
+    def test_p50_reserves(self):
+        assert _resolve_uncertainty_label("reserves", "P50") == "2P (P50/Mid)"
+
+    def test_p50_resources(self):
+        assert _resolve_uncertainty_label("resources", "P50") == "2R (Mid)"
+
+    def test_p50_contingent(self):
+        assert _resolve_uncertainty_label("contingent", "P50") == "2C (Mid)"
+
+    def test_p50_prospective(self):
+        assert _resolve_uncertainty_label("prospective", "P50") == "2U (Mid)"
+
+    def test_p50_cumprod(self):
+        assert _resolve_uncertainty_label("cumprod", "P50") == "P50 (Best Estimate)"
+
+    def test_specific_2p(self):
+        """Direct 2P input should use reserves label regardless of query_type."""
+        assert _resolve_uncertainty_label("resources", "2P") == "2P (P50/Mid)"
+
+    def test_specific_2c(self):
+        assert _resolve_uncertainty_label("contingent", "2C") == "2C (Mid)"
+
+    def test_p90_generic(self):
+        assert _resolve_uncertainty_label("reserves", "P90") == "1P (P90/Low)"

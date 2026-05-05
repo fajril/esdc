@@ -472,16 +472,19 @@ def build_smart_query(
         params.append(_escape_like(entity_name))
 
     # Uncertainty filter
-    uncert_levels = UNCERTAINTY_MAP.get(uncertainty, UNCERTAINTY_MAP["2P"])
+    uncert_levels = UNCERTAINTY_MAP.get(uncertainty, UNCERTAINTY_MAP["P50"])
     if len(uncert_levels) == 1:
-        conditions.append(f"uncert_level = '{uncert_levels[0]}'")
+        conditions.append("uncert_level = ?")
+        params.append(uncert_levels[0])
     else:
-        placeholders = ", ".join(f"'{lvl}'" for lvl in uncert_levels)
+        placeholders = ", ".join("?" for _ in uncert_levels)
         conditions.append(f"uncert_level IN ({placeholders})")
+        params.extend(uncert_levels)
 
     # Project class filter
     if project_class_filter:
-        conditions.append(f"project_class LIKE '%{project_class_filter}%'")
+        conditions.append("project_class LIKE ?")
+        params.append(f"%{project_class_filter}%")
 
     # Report year filter / fallback
     report_years_used = report_years
@@ -494,15 +497,16 @@ def build_smart_query(
         params.extend(report_years)
     else:
         # Fallback: latest year, scoped by entity filter if provided
-        subquery_filter = ""
         if filter_col and entity_name:
-            subquery_filter = (
-                f"WHERE {filter_col} ILIKE '%{_escape_like(entity_name).strip('%')}%'"
+            subquery = (
+                f"SELECT MAX(report_year) FROM {view_def.table_name} "
+                f"WHERE {filter_col} ILIKE ?"
             )
-        sql_filter = (
-            f"SELECT MAX(report_year) FROM {view_def.table_name} {subquery_filter}"
-        )
-        conditions.append(f"report_year = ({sql_filter})")
+            conditions.append(f"report_year = ({subquery})")
+            params.append(_escape_like(entity_name))
+        else:
+            subquery = f"SELECT MAX(report_year) FROM {view_def.table_name}"
+            conditions.append(f"report_year = ({subquery})")
         report_years_used = None
 
     if conditions:
