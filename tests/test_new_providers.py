@@ -327,6 +327,74 @@ class TestOpenAICompatibleCreateLLMNoLeak:
         )
 
 
+class TestAnthropicCreateLLMNoLeak:
+    """Ensure config kwarg doesn't leak into ChatAnthropic constructor."""
+
+    @patch("esdc.providers.anthropic.ChatAnthropic")
+    def test_create_llm_config_not_passed_to_chatanthropic(self, mock_chat_cls):
+        from esdc.providers.anthropic import AnthropicProvider
+        from esdc.providers.base import ProviderConfig
+
+        mock_instance = MagicMock()
+        mock_instance._esdc_context_length = 0
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(
+            AnthropicProvider,
+            "get_actual_context_length",
+            return_value=0,
+        ):
+            AnthropicProvider.create_llm(
+                model="claude-sonnet-4-6",
+                api_key="test-key",
+                config=ProviderConfig(
+                    name="test",
+                    provider_type="anthropic",
+                    model="claude-sonnet-4-6",
+                    api_key="test-key",
+                ),
+            )
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        assert "config" not in call_kwargs, (
+            f"'config' leaked into ChatAnthropic kwargs: {call_kwargs.keys()}"
+        )
+
+
+class TestGroqCreateLLMNoLeak:
+    """Ensure config kwarg doesn't leak into ChatGroq constructor."""
+
+    @patch("esdc.providers.groq.ChatGroq")
+    def test_create_llm_config_not_passed_to_chatgroq(self, mock_chat_cls):
+        from esdc.providers.groq import GroqProvider
+        from esdc.providers.base import ProviderConfig
+
+        mock_instance = MagicMock()
+        mock_instance._esdc_context_length = 0
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(
+            GroqProvider,
+            "get_actual_context_length",
+            return_value=0,
+        ):
+            GroqProvider.create_llm(
+                model="llama-3.3-70b-versatile",
+                api_key="gsk-test",
+                config=ProviderConfig(
+                    name="test",
+                    provider_type="groq",
+                    model="llama-3.3-70b-versatile",
+                    api_key="gsk-test",
+                ),
+            )
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        assert "config" not in call_kwargs, (
+            f"'config' leaked into ChatGroq kwargs: {call_kwargs.keys()}"
+        )
+
+
 class TestProviderRegistry:
     """Tests for provider registry."""
 
