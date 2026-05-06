@@ -58,3 +58,35 @@ def test_openai_provider_config():
     assert config.name == "test_openai"
     assert config.provider_type == "openai"
     assert config.model == "gpt-4o-mini"
+
+
+class TestOllamaCreateLLMNoLeak:
+    """Ensure config kwarg doesn't leak into ChatOllama constructor."""
+
+    @patch("esdc.providers.ollama.ChatOllama")
+    def test_create_llm_config_not_passed_to_chatollama(self, mock_chat_cls):
+        from esdc.providers.ollama import OllamaProvider
+
+        mock_instance = MagicMock()
+        mock_instance._esdc_context_length = 0
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(
+            OllamaProvider,
+            "get_actual_context_length",
+            return_value=0,
+        ):
+            OllamaProvider.create_llm(
+                model="llama3.2",
+                base_url="http://localhost:11434",
+                config=ProviderConfig(
+                    name="test",
+                    provider_type="ollama",
+                    model="llama3.2",
+                ),
+            )
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        assert "config" not in call_kwargs, (
+            f"'config' leaked into ChatOllama kwargs: {call_kwargs.keys()}"
+        )

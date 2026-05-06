@@ -172,6 +172,7 @@ class OllamaProvider(Provider):
         base_url: str | None = None,
         temperature: float = 0.0,
         reasoning_effort: str | None = None,
+        config: ProviderConfig | None = None,
         **kwargs,
     ) -> ChatOllama:
         """Create a ChatOllama instance.
@@ -186,8 +187,10 @@ class OllamaProvider(Provider):
                 - "none": reasoning=False (disable thinking)
                 - "low"/"medium"/"high": reasoning=True with intensity level
                   (string intensity only supported by gpt-oss cloud model)
+            config: Provider config (consumed to prevent leak into ChatOllama)
             **kwargs: Additional keyword arguments passed to ChatOllama.
         """
+        _ = config  # consumed — prevents leak into ChatOllama kwargs
         if not model:
             model = cls.get_default_model(base_url)
 
