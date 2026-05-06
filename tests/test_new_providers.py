@@ -255,7 +255,9 @@ class TestGroqProvider:
 
         assert GroqProvider.get_context_length("llama-3.3-70b-versatile") == 128000
         assert GroqProvider.get_context_length("mixtral-8x7b") == 32768
-        assert GroqProvider.get_context_length("unknown-model") == 4096
+        assert (
+            GroqProvider.get_context_length("unknown-model") == DEFAULT_CONTEXT_LENGTH
+        )
 
     @patch("esdc.providers.groq.ChatGroq")
     def test_create_llm(self, mock_chat_cls):
@@ -289,6 +291,110 @@ class TestGroqProvider:
         call_kwargs = mock_chat_cls.call_args.kwargs
         assert "reasoning_effort" not in call_kwargs
         assert "extra_body" not in call_kwargs
+
+
+class TestOpenAICompatibleCreateLLMNoLeak:
+    """Ensure config kwarg doesn't leak into ChatOpenAI constructor."""
+
+    @patch("esdc.providers.openai_compatible.ChatOpenAI")
+    def test_create_llm_config_not_passed_to_chatopenai(self, mock_chat_cls):
+        from esdc.providers.base import ProviderConfig
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        mock_instance = MagicMock()
+        mock_instance._esdc_context_length = 0
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(
+            OpenAICompatibleProvider,
+            "get_context_length_from_api",
+            return_value=0,
+        ):
+            OpenAICompatibleProvider.create_llm(
+                model="test-model",
+                base_url="http://localhost:11434/v1",
+                api_key="test-key",
+                config=ProviderConfig(
+                    name="test",
+                    provider_type="openai_compatible",
+                    model="test-model",
+                    base_url="http://localhost:11434/v1",
+                    api_key="test-key",
+                ),
+            )
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        assert "config" not in call_kwargs, (
+            f"'config' leaked into ChatOpenAI kwargs: {call_kwargs.keys()}"
+        )
+
+
+class TestAnthropicCreateLLMNoLeak:
+    """Ensure config kwarg doesn't leak into ChatAnthropic constructor."""
+
+    @patch("esdc.providers.anthropic.ChatAnthropic")
+    def test_create_llm_config_not_passed_to_chatanthropic(self, mock_chat_cls):
+        from esdc.providers.anthropic import AnthropicProvider
+        from esdc.providers.base import ProviderConfig
+
+        mock_instance = MagicMock()
+        mock_instance._esdc_context_length = 0
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(
+            AnthropicProvider,
+            "get_actual_context_length",
+            return_value=0,
+        ):
+            AnthropicProvider.create_llm(
+                model="claude-sonnet-4-6",
+                api_key="test-key",
+                config=ProviderConfig(
+                    name="test",
+                    provider_type="anthropic",
+                    model="claude-sonnet-4-6",
+                    api_key="test-key",
+                ),
+            )
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        assert "config" not in call_kwargs, (
+            f"'config' leaked into ChatAnthropic kwargs: {call_kwargs.keys()}"
+        )
+
+
+class TestGroqCreateLLMNoLeak:
+    """Ensure config kwarg doesn't leak into ChatGroq constructor."""
+
+    @patch("esdc.providers.groq.ChatGroq")
+    def test_create_llm_config_not_passed_to_chatgroq(self, mock_chat_cls):
+        from esdc.providers.base import ProviderConfig
+        from esdc.providers.groq import GroqProvider
+
+        mock_instance = MagicMock()
+        mock_instance._esdc_context_length = 0
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(
+            GroqProvider,
+            "get_actual_context_length",
+            return_value=0,
+        ):
+            GroqProvider.create_llm(
+                model="llama-3.3-70b-versatile",
+                api_key="gsk-test",
+                config=ProviderConfig(
+                    name="test",
+                    provider_type="groq",
+                    model="llama-3.3-70b-versatile",
+                    api_key="gsk-test",
+                ),
+            )
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        assert "config" not in call_kwargs, (
+            f"'config' leaked into ChatGroq kwargs: {call_kwargs.keys()}"
+        )
 
 
 class TestProviderRegistry:
@@ -338,3 +444,145 @@ class TestProviderRegistry:
         assert "google" in ProviderType.__args__
         assert "azure_openai" in ProviderType.__args__
         assert "groq" in ProviderType.__args__
+
+
+class TestOpenAICompatibleContextLength:
+    """Test context length resolution for OpenAI-compatible providers."""
+
+    @staticmethod
+    def _make_model_obj(
+        id: str = "test-model",
+        dict_extra: dict | None = None,
+        model_extra: dict | None = None,
+    ):
+        class FakeModel:
+            pass
+
+        obj = FakeModel()
+        obj.id = id
+        if dict_extra:
+            for k, v in dict_extra.items():
+                obj.__dict__[k] = v
+        obj.model_extra = model_extra or {}
+        return obj
+
+    def test_extract_context_length_from_meta_n_ctx_train(self):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        model_obj = self._make_model_obj(
+            id="Qwen3.6-27B-Q4_K_M.gguf",
+            model_extra={
+                "meta": {
+                    "n_ctx_train": 262144,
+                    "n_vocab": 248320,
+                    "n_embd": 5120,
+                }
+            },
+        )
+
+        result = OpenAICompatibleProvider._extract_context_length(model_obj)
+        assert result == 262144
+
+    def test_extract_context_length_from_top_level_max_model_len(self):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        model_obj = self._make_model_obj(
+            dict_extra={"max_model_len": 32768},
+            model_extra={},
+        )
+
+        result = OpenAICompatibleProvider._extract_context_length(model_obj)
+        assert result == 32768
+
+    def test_extract_context_length_from_model_extra_top_level(self):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        model_obj = self._make_model_obj(
+            model_extra={"max_model_len": 65536},
+        )
+
+        result = OpenAICompatibleProvider._extract_context_length(model_obj)
+        assert result == 65536
+
+    def test_extract_context_length_returns_zero_when_no_metadata(self):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        model_obj = self._make_model_obj(model_extra={})
+
+        result = OpenAICompatibleProvider._extract_context_length(model_obj)
+        assert result == 0
+
+    def test_get_context_length_static_dict_prefix_match(self):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        assert (
+            OpenAICompatibleProvider.get_context_length("Qwen3.6-27B-Q4_K_M.gguf")
+            == 262144
+        )
+        assert (
+            OpenAICompatibleProvider.get_context_length("Qwen2.5-Coder-32B") == 128000
+        )
+        assert OpenAICompatibleProvider.get_context_length("deepseek-v3") == 128000
+
+    def test_get_context_length_falls_back_to_default(self):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        assert (
+            OpenAICompatibleProvider.get_context_length("unknown-model")
+            == DEFAULT_CONTEXT_LENGTH
+        )
+        assert DEFAULT_CONTEXT_LENGTH == 32768
+
+    @patch("esdc.providers.openai_compatible.OpenAI")
+    def test_get_context_length_from_api_reads_n_ctx_train(self, mock_openai_cls):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        mock_model = self._make_model_obj(
+            id="Qwen3.6-27B-Q4_K_M.gguf",
+            model_extra={
+                "meta": {
+                    "n_ctx_train": 262144,
+                    "n_vocab": 248320,
+                    "n_embd": 5120,
+                }
+            },
+        )
+
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [mock_model]
+        mock_openai_cls.return_value = mock_client
+
+        result = OpenAICompatibleProvider.get_context_length_from_api(
+            "Qwen3.6-27B-Q4_K_M.gguf",
+            base_url="http://localhost:8888/v1",
+        )
+        assert result == 262144
+
+    @patch("esdc.providers.openai_compatible.OpenAI")
+    def test_get_context_length_api_fallback_to_static(self, mock_openai_cls):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        mock_client = MagicMock()
+        mock_client.models.list.side_effect = Exception("API error")
+        mock_openai_cls.return_value = mock_client
+
+        result = OpenAICompatibleProvider.get_actual_context_length(
+            "Qwen3.6-27B-Q4_K_M.gguf",
+            base_url="http://localhost:8888/v1",
+        )
+        assert result == 262144
+
+    @patch("esdc.providers.openai_compatible.OpenAI")
+    def test_get_context_length_api_fallback_to_default(self, mock_openai_cls):
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        mock_client = MagicMock()
+        mock_client.models.list.side_effect = Exception("API error")
+        mock_openai_cls.return_value = mock_client
+
+        result = OpenAICompatibleProvider.get_actual_context_length(
+            "totally-unknown-model",
+            base_url="http://localhost:8888/v1",
+        )
+        assert result == DEFAULT_CONTEXT_LENGTH
+        assert result == 32768

@@ -144,6 +144,7 @@ class OllamaCloudProvider(OllamaProvider):
         base_url: str | None = None,
         temperature: float = 0.0,
         reasoning_effort: str | None = None,
+        config: ProviderConfig | None = None,
         **kwargs: Any,
     ) -> ChatOllama:
         """Create a ChatOllama instance for Ollama Cloud.
@@ -160,7 +161,6 @@ class OllamaCloudProvider(OllamaProvider):
         straightforward to audit.
         """
         api_key = kwargs.pop("api_key", None)
-        config = kwargs.pop("config", None)
         effective_api_key = cls._resolve_api_key(api_key, config)
 
         effective_base_url = base_url or cls.DEFAULT_BASE_URL

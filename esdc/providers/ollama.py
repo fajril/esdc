@@ -7,7 +7,12 @@ from typing import Any
 from langchain_ollama import ChatOllama
 
 # Local
-from esdc.providers.base import Provider, ProviderConfig, _extract_model_info
+from esdc.providers.base import (
+    DEFAULT_CONTEXT_LENGTH,
+    Provider,
+    ProviderConfig,
+    _extract_model_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +88,11 @@ class OllamaProvider(Provider):
             if model_base == key.lower():
                 return value
         logger.debug(
-            f"📊 No hardcoded context length for {model_base}, using default 4096"
+            "No hardcoded context length for %s, using default %d",
+            model_base,
+            DEFAULT_CONTEXT_LENGTH,
         )
-        return 4096
+        return DEFAULT_CONTEXT_LENGTH
 
     @classmethod
     def get_context_length_from_api(
@@ -172,6 +179,7 @@ class OllamaProvider(Provider):
         base_url: str | None = None,
         temperature: float = 0.0,
         reasoning_effort: str | None = None,
+        config: ProviderConfig | None = None,
         **kwargs,
     ) -> ChatOllama:
         """Create a ChatOllama instance.
@@ -186,8 +194,10 @@ class OllamaProvider(Provider):
                 - "none": reasoning=False (disable thinking)
                 - "low"/"medium"/"high": reasoning=True with intensity level
                   (string intensity only supported by gpt-oss cloud model)
+            config: Provider config (consumed to prevent leak into ChatOllama)
             **kwargs: Additional keyword arguments passed to ChatOllama.
         """
+        _ = config  # consumed — prevents leak into ChatOllama kwargs
         if not model:
             model = cls.get_default_model(base_url)
 

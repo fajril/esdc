@@ -81,6 +81,7 @@ class AnthropicProvider(Provider):
         api_key: str | None = None,
         temperature: float = 0.0,
         reasoning_effort: str | None = None,
+        config: ProviderConfig | None = None,
         **kwargs,
     ) -> ChatAnthropic:
         """Create a ChatAnthropic instance.
@@ -91,8 +92,10 @@ class AnthropicProvider(Provider):
             temperature: Sampling temperature
             reasoning_effort: Reasoning effort level.
                 Passed via ``extra_body`` when set.
+            config: Provider config (consumed to prevent leak into ChatAnthropic).
             **kwargs: Additional keyword arguments passed to ChatAnthropic.
         """
+        _ = config  # consumed — prevents leak into ChatAnthropic kwargs
         if not model:
             model = cls.get_default_model()
 

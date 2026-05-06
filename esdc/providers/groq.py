@@ -7,7 +7,7 @@ from typing import Any
 from langchain_groq import ChatGroq
 
 # Local
-from esdc.providers.base import Provider, ProviderConfig
+from esdc.providers.base import DEFAULT_CONTEXT_LENGTH, Provider, ProviderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +73,11 @@ class GroqProvider(Provider):
             if key in model_clean:
                 return value
         logger.debug(
-            "[INFERENCE] groq_get_context_length | model=%s | fallback=4096",
+            "[INFERENCE] groq_get_context_length | model=%s | fallback=%d",
             model_clean,
+            DEFAULT_CONTEXT_LENGTH,
         )
-        return 4096
+        return DEFAULT_CONTEXT_LENGTH
 
     @classmethod
     def is_configured(cls, config: ProviderConfig) -> bool:
@@ -91,6 +92,7 @@ class GroqProvider(Provider):
         base_url: str | None = None,
         temperature: float = 0.0,
         reasoning_effort: str | None = None,
+        config: ProviderConfig | None = None,
         **kwargs,
     ) -> ChatGroq:
         """Create a ChatGroq instance.
@@ -101,10 +103,13 @@ class GroqProvider(Provider):
             base_url: Base URL for Groq API
             temperature: Sampling temperature
             reasoning_effort: Reasoning effort level. Ignored for Groq.
+            config: Provider config (consumed to prevent leak into ChatGroq)
             **kwargs: Additional keyword arguments passed to ChatGroq.
         """
         if not model:
             model = cls.get_default_model()
+
+        _ = config  # consumed — prevents leak into ChatGroq kwargs
 
         if reasoning_effort is not None:
             logger.debug(
