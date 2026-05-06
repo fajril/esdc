@@ -44,6 +44,7 @@ class OpenAICompatibleProvider(Provider):
         api_key: str | None = None,
         temperature: float = 0.0,
         reasoning_effort: str | None = None,
+        config: ProviderConfig | None = None,
         **kwargs,
     ) -> ChatOpenAI:
         """Create a ChatOpenAI instance with custom base URL.
@@ -55,8 +56,10 @@ class OpenAICompatibleProvider(Provider):
             temperature: Sampling temperature
             reasoning_effort: Reasoning effort level passed as extra_body
                 parameter. Supported by some OpenAI-compatible backends.
+            config: Provider config (consumed to prevent leak into ChatOpenAI)
             **kwargs: Additional keyword arguments passed to ChatOpenAI.
         """
+        _ = config  # consumed — prevents leak into ChatOpenAI kwargs
         if not model:
             raise ValueError("model is required for OpenAI Compatible API provider")
         if not base_url:

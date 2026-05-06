@@ -291,6 +291,42 @@ class TestGroqProvider:
         assert "extra_body" not in call_kwargs
 
 
+class TestOpenAICompatibleCreateLLMNoLeak:
+    """Ensure config kwarg doesn't leak into ChatOpenAI constructor."""
+
+    @patch("esdc.providers.openai_compatible.ChatOpenAI")
+    def test_create_llm_config_not_passed_to_chatopenai(self, mock_chat_cls):
+        from esdc.providers.base import ProviderConfig
+        from esdc.providers.openai_compatible import OpenAICompatibleProvider
+
+        mock_instance = MagicMock()
+        mock_instance._esdc_context_length = 0
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(
+            OpenAICompatibleProvider,
+            "get_context_length_from_api",
+            return_value=0,
+        ):
+            OpenAICompatibleProvider.create_llm(
+                model="test-model",
+                base_url="http://localhost:11434/v1",
+                api_key="test-key",
+                config=ProviderConfig(
+                    name="test",
+                    provider_type="openai_compatible",
+                    model="test-model",
+                    base_url="http://localhost:11434/v1",
+                    api_key="test-key",
+                ),
+            )
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        assert "config" not in call_kwargs, (
+            f"'config' leaked into ChatOpenAI kwargs: {call_kwargs.keys()}"
+        )
+
+
 class TestProviderRegistry:
     """Tests for provider registry."""
 
