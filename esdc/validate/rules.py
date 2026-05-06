@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -13,35 +14,48 @@ from esdc.configs import Config
 from esdc.dbmanager import get_duckdb_connection
 from esdc.selection import Severity
 
-LATEX_UNICODE_MAP: dict[str, str] = {
-    r"\implies": "->",
-    r"\land": "&",
-    r"\lor": "|",
-    r"\forall": "for all",
-    r"\in": "in",
-    r"\exists": "exists",
-    r"\neg": "not",
+# Simple LaTeX tokens that do NOT take arguments.
+_LATEX_TOKEN_MAP: dict[str, str] = {
+    r"\implies": " -> ",
+    r"\land": " & ",
+    r"\lor": " | ",
+    r"\forall": " for all ",
+    r"\in": " in ",
+    r"\exists": " exists ",
+    r"\neg": " not ",
     r"\quad": "  ",
     r"\;": " ",
     r"\,": " ",
-    r"\text{": "",
-    r"}": "",
-    r"\Delta": "delta",
-    r"\sum": "sum",
-    r"\times": "x",
-    r"\leq": "<=",
-    r"\geq": ">=",
-    r"\neq": "!=",
+    r"\Delta": "delta ",
+    r"\sum": "sum ",
+    r"\times": " x ",
+    r"\leq": " <= ",
+    r"\geq": " >= ",
+    r"\neq": " != ",
     r"\\": "",
     r"$": "",
 }
 
+# Regex to strip LaTeX commands that take a single braced argument,
+# e.g. \text{project_name}, \mathbf{x}, \mathrm{val}.
+_COMMAND_ARG_RE: re.Pattern[str] = re.compile(
+    r"\\(?:text|mathbf|mathrm|mathit|mathcal)\{([^}]*)\}"
+)
+
 
 def render_formal(formal: str) -> str:
-    """Render LaTeX formal notation as plain-text approximation."""
+    """Render LaTeX formal notation as plain-text approximation.
+
+    Processing order matters: commands with arguments are stripped
+    first so that the surrounding braces are handled correctly.
+    Remaining ``{`` and ``}`` characters (LaTeX grouping) are removed
+    after all command processing.
+    """
     result = formal.replace("  ", " ")
-    for latex_token, unicode_char in LATEX_UNICODE_MAP.items():
-        result = result.replace(latex_token, unicode_char)
+    result = _COMMAND_ARG_RE.sub(r"\1", result)
+    for token, replacement in _LATEX_TOKEN_MAP.items():
+        result = result.replace(token, replacement)
+    result = result.replace("{", "").replace("}", "")
     return result.strip()
 
 
@@ -99,8 +113,14 @@ class ValidationRule(ABC):
         ...
 
     @abstractmethod
-    def generate_fixes(self, violations: list[Violation]) -> list[str]:
-        """Build SQL UPDATE strings for each violation."""
+    def generate_fixes(
+        self, violations: list[Violation]
+    ) -> list[tuple[str, list[object]]]:
+        """Build parameterized SQL UPDATE statements for each violation.
+
+        Returns a list of (sql, params) tuples so that callers can use
+        ``conn.execute(sql, params)`` safely.
+        """
         ...
 
 
@@ -182,6 +202,7 @@ def run_validation(
     conn = get_duckdb_connection(db_path, read_only=not force_fix)
 
     try:
+        any_fix_applied = False
         for rule_cls in rule_classes:
             rule = rule_cls()
             violations = rule.check(conn, year=year)
@@ -194,18 +215,15 @@ def run_validation(
                         f"skipping auto-fix (manual review required)[/yellow]"
                     )
                 else:
-                    fix_sqls = rule.generate_fixes(violations)
-                    for fix_sql in fix_sqls:
+                    fix_items = rule.generate_fixes(violations)
+                    for i, (fix_sql, fix_params) in enumerate(fix_items):
                         try:
-                            conn.execute(fix_sql)
+                            conn.execute(fix_sql, fix_params)
                             fix_applied_count += 1
+                            violations[i].fix_applied = True
+                            any_fix_applied = True
                         except duckdb.Error:
                             logging.exception("Fix failed for %s", rule.rule_id)
-                    if fix_applied_count:
-                        conn.execute("CHECKPOINT")
-
-                    for v in violations[:fix_applied_count]:
-                        v.fix_applied = True
 
             result = ValidationResult(
                 rule_id=rule.rule_id,
@@ -219,6 +237,9 @@ def run_validation(
                 fix_applied_count=fix_applied_count,
             )
             results.append(result)
+
+        if any_fix_applied:
+            conn.execute("CHECKPOINT")
     finally:
         conn.close()
 

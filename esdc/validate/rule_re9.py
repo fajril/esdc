@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-import duckdb
+import typing
+
+if typing.TYPE_CHECKING:
+    import duckdb
 
 from esdc.selection import Severity
 from esdc.validate.rules import ValidationRule, Violation, register_rule
@@ -106,16 +109,19 @@ class RE9001(ValidationRule):
 
         return violations
 
-    def generate_fixes(self, violations: list[Violation]) -> list[str]:
+    def generate_fixes(
+        self, violations: list[Violation]
+    ) -> list[tuple[str, list[object]]]:
         set_clause = ", ".join(f"{c} = 0" for c in self.ZERO_COLUMNS)
-        fixes: list[str] = []
+        fixes: list[tuple[str, list[object]]] = []
         for v in violations:
             name = v.identifiers["project_name"]
-            report_year = v.identifiers["report_year"]
-            fixes.append(
+            report_year = int(v.identifiers["report_year"])
+            sql = (
                 f"UPDATE project_resources SET {set_clause}"
-                f" WHERE project_name = '{name}'"
-                f" AND report_year = {report_year}"
-                f" AND project_isactive = 0"
+                " WHERE project_name = ?"
+                " AND report_year = ?"
+                " AND project_isactive = 0"
             )
+            fixes.append((sql, [name, report_year]))
         return fixes

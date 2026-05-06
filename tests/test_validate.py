@@ -153,14 +153,15 @@ class TestRE9001:
         violations = rule.check(conn)
         fixes = rule.generate_fixes(violations)
         assert len(fixes) == 1
-        fixes[0] = fixes[0].replace(" ViolProj", " ViolProj")  # normalise spaces
-        assert "UPDATE project_resources" in fixes[0]
-        assert "rec_oil = 0" in fixes[0]
-        assert "prj_ioip = 0" in fixes[0]
-        assert "project_name = 'ViolProj'" in fixes[0]
+        fix_sql, fix_params = fixes[0]
+        assert "UPDATE project_resources" in fix_sql
+        assert "rec_oil = 0" in fix_sql
+        assert "prj_ioip = 0" in fix_sql
+        assert "project_name = ?" in fix_sql
+        assert fix_params == ["ViolProj", 2024]
 
         # Execute fix and verify
-        conn.execute(fixes[0])
+        conn.execute(fix_sql, fix_params)
         result = conn.execute(
             "SELECT rec_oil, prj_ioip FROM project_resources "
             "WHERE project_name = 'ViolProj'"

@@ -1,6 +1,5 @@
 """ESDC validation framework for business rules."""
 
-from esdc.selection import Severity
 from esdc.validate.rules import (
     ValidationResult,
     ValidationRule,
@@ -23,5 +22,4 @@ __all__ = [
     "ValidationResult",
     "ValidationRule",
     "Violation",
-    "Severity",
 ]
