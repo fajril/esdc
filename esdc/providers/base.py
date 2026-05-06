@@ -17,7 +17,7 @@ ProviderType = Literal[
     "ollama_cloud",
 ]
 
-DEFAULT_CONTEXT_LENGTH = 4096
+DEFAULT_CONTEXT_LENGTH = 32768
 
 
 def _extract_model_info(info: Any) -> dict[str, Any]:

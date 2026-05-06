@@ -7,7 +7,12 @@ from typing import Any
 from langchain_ollama import ChatOllama
 
 # Local
-from esdc.providers.base import Provider, ProviderConfig, _extract_model_info
+from esdc.providers.base import (
+    DEFAULT_CONTEXT_LENGTH,
+    Provider,
+    ProviderConfig,
+    _extract_model_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +88,11 @@ class OllamaProvider(Provider):
             if model_base == key.lower():
                 return value
         logger.debug(
-            f"📊 No hardcoded context length for {model_base}, using default 4096"
+            "No hardcoded context length for %s, using default %d",
+            model_base,
+            DEFAULT_CONTEXT_LENGTH,
         )
-        return 4096
+        return DEFAULT_CONTEXT_LENGTH
 
     @classmethod
     def get_context_length_from_api(

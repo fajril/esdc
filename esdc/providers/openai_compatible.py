@@ -11,6 +11,18 @@ class OpenAICompatibleProvider(Provider):
 
     NAME = "OpenAI Compatible API"
 
+    CONTEXT_LENGTHS = {
+        "qwen3.6": 262144,
+        "qwen2.5": 128000,
+        "qwen2": 131072,
+        "deepseek": 128000,
+        "llama3": 128000,
+        "mistral": 32000,
+        "mixtral": 32000,
+        "phi4": 128000,
+        "command-r": 128000,
+    }
+
     @classmethod
     def list_models(
         cls, base_url: str | None = None, api_key: str | None = None, **kwargs: Any
@@ -89,8 +101,13 @@ class OpenAICompatibleProvider(Provider):
     ) -> int:
         """Fetch context length from OpenAI-compatible /v1/models API.
 
-        Some OpenAI-compatible servers (e.g. vLLM) include ``max_model_len``
-        in model metadata. If found, return it; otherwise 0.
+        Checked in order:
+
+        1. Top-level ``__dict__`` fields (e.g. vLLM exposes ``max_model_len``).
+        2. Pydantic ``model_extra`` top-level fields (some servers inject custom
+           fields that land here rather than ``__dict__``).
+        3. Nested ``model_extra["meta"]`` dict (llama-cpp-python / llama-server
+           exposes ``n_ctx_train`` inside a ``meta`` object).
         """
         try:
             if not base_url:
@@ -98,12 +115,39 @@ class OpenAICompatibleProvider(Provider):
             client = OpenAI(base_url=base_url, api_key=api_key or "none")
             for m in client.models.list():
                 if m.id == model:
-                    extra = getattr(m, "__dict__", {})
-                    for key in ("max_model_len", "context_length", "max_tokens"):
-                        if key in extra and extra[key]:
-                            return int(extra[key])
+                    ctx = cls._extract_context_length(m)
+                    if ctx > 0:
+                        return ctx
         except Exception:
             pass
+        return 0
+
+    @classmethod
+    def _extract_context_length(cls, model_object: Any) -> int:
+        """Extract context length from a model object returned by /v1/models.
+
+        Searches multiple locations where OpenAI-compatible servers expose
+        context window information.
+        """
+        # Level 1: top-level __dict__ fields (vLLM style: max_model_len)
+        extra = getattr(model_object, "__dict__", {})
+        for key in ("max_model_len", "context_length", "max_tokens"):
+            if key in extra and extra[key]:
+                return int(extra[key])
+
+        # Level 2: Pydantic model_extra top-level fields
+        model_extra = getattr(model_object, "model_extra", None) or {}
+        for key in ("max_model_len", "context_length", "max_tokens"):
+            if key in model_extra and model_extra[key]:
+                return int(model_extra[key])
+
+        # Level 3: nested meta object (llama-server / llama-cpp-python)
+        meta = model_extra.get("meta", {}) if isinstance(model_extra, dict) else {}
+        if isinstance(meta, dict):
+            for key in ("n_ctx_train", "context_length", "max_model_len", "max_tokens"):
+                if key in meta and meta[key]:
+                    return int(meta[key])
+
         return 0
 
     @classmethod
