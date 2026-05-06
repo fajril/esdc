@@ -69,7 +69,8 @@ from esdc.dbmanager import (  # noqa: E402
     load_data_to_db,
     run_query,
 )
-from esdc.selection import ApiVer, FileType, TableName  # noqa: E402
+from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
+from esdc.validate import render_formal, run_validation
 
 TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
@@ -1153,6 +1154,177 @@ def load_kg() -> None:
             "[red]Failed to build knowledge graph. Check logs for details.[/red]"
         )
     manager.close()
+
+
+@app.command(name="validate")
+def validate(
+    rule: Annotated[
+        list[str] | None,
+        typer.Option("--rule", "-r", help="Specific rule ID(s) to run (e.g., RE9001)."),
+    ] = None,
+    group: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--group",
+            "-g",
+            help="Rule group(s) to run (e.g., RE9).",
+        ),
+    ] = None,
+    force_fix: Annotated[
+        bool,
+        typer.Option(
+            "--force-fix",
+            help="Apply fixes to violations (writes to DB).",
+        ),
+    ] = False,
+    severity: Annotated[
+        str | None,
+        typer.Option(
+            "--severity",
+            help="Filter by severity: strict, warning, info.",
+        ),
+    ] = None,
+    year: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--year",
+            min=2019,
+            help="Filter by report year(s). Can specify multiple.",
+        ),
+    ] = None,
+) -> None:
+    """Validate ESDC data against business rules.
+
+    Rules are organized by group IDs (RE0-RE9).  Each rule has a unique
+    rule ID such as ``RE9001`` defined via a formal mathematical
+    expression.
+
+    Examples:
+    --------
+    Run all rules::
+
+        esdc validate
+
+    Run a specific group::
+
+        esdc validate --group RE9
+
+    Run a specific rule::
+
+        esdc validate --rule RE9001
+
+    Fix violations in the database::
+
+        esdc validate --force-fix
+
+    Filter by severity::
+
+        esdc validate --severity strict
+
+    Validate a specific year::
+
+        esdc validate --year 2024
+    """
+    # Import rules so that the @register_rule decorator fires.
+    import esdc.validate.rule_re9  # noqa: F401
+
+    if force_fix:
+        rich.print(
+            "[bold red]Warning: --force-fix will modify the database![/bold red]"
+        )
+        rich.print("[dim]Press Ctrl+C to cancel, or Enter to continue...[/dim]")
+        try:
+            input()
+        except KeyboardInterrupt:
+            raise typer.Abort() from None
+
+    results = run_validation(
+        rule_ids=rule,
+        groups=group,
+        force_fix=force_fix,
+        year=year,
+    )
+
+    if severity and results:
+        try:
+            sev = Severity(severity)
+            results = [r for r in results if r.severity == sev]
+        except ValueError:
+            rich.print(
+                f"[red]Unknown severity: {severity}. Use: strict, warning, info[/red]"
+            )
+            raise typer.Exit(1) from None
+
+    if not results:
+        rich.print("[green]No validation rules matched.[/green]")
+        return
+
+    total_violations = 0
+    total_fixed = 0
+
+    for result in results:
+        total_violations += result.total_violations
+        total_fixed += result.fix_applied_count
+
+        icon = {
+            Severity.STRICT: "⛔",
+            Severity.WARNING: "🟡",
+            Severity.INFO: "🔵",
+        }.get(result.severity, "⚪")
+
+        rich.print(f"\n{icon} [bold]{result.rule_id}[/bold]: {result.description}")
+
+        formal_rendered = render_formal(result.formal)
+        if formal_rendered:
+            rich.print(f"   {formal_rendered}")
+
+        fixable_text = "Yes" if result.is_fixable else "No"
+        fixable_style = "green" if result.is_fixable else "yellow"
+        rich.print(f"   Fixable: [{fixable_style}]{fixable_text}[/{fixable_style}]")
+
+        if result.total_violations == 0:
+            rich.print("   [green]0 violations[/green]")
+            continue
+
+        rich.print(f"   Violations: [bold]{result.total_violations}[/bold]")
+
+        for v in result.violations[:20]:
+            ids_text = ", ".join(f"{k}={val}" for k, val in v.identifiers.items())
+            rich.print(f"   - {ids_text}")
+
+            nonzero = {
+                k: val
+                for k, val in v.current_values.items()
+                if val is not None and val != 0 and k != "project_isactive"
+            }
+            if nonzero:
+                cols_text = ", ".join(f"{k}={val}" for k, val in nonzero.items())
+                rich.print(f"     {cols_text}")
+            if v.fix_applied:
+                rich.print("     [green]✓ Fixed[/green]")
+
+        if result.total_violations > 20:
+            rich.print(f"   ... and {result.total_violations - 20} more")
+
+    rich.print("")
+    if total_violations == 0:
+        rich.print("[green]✓ All validations passed![/green]")
+    elif force_fix and total_fixed > 0:
+        rich.print(
+            f"[green]✓ Applied {total_fixed} fixes out of "
+            f"{total_violations} violations[/green]"
+        )
+        if total_fixed < total_violations:
+            remaining = total_violations - total_fixed
+            rich.print(
+                f"[yellow]⚠ {remaining} violation(s) remaining "
+                f"(manual review required)[/yellow]"
+            )
+    else:
+        rich.print(
+            f"[yellow]⚠ Found {total_violations} violation(s). "
+            f"Use --force-fix to apply fixes.[/yellow]"
+        )
 
 
 if __name__ == "__main__":
