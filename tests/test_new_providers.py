@@ -366,8 +366,8 @@ class TestGroqCreateLLMNoLeak:
 
     @patch("esdc.providers.groq.ChatGroq")
     def test_create_llm_config_not_passed_to_chatgroq(self, mock_chat_cls):
-        from esdc.providers.groq import GroqProvider
         from esdc.providers.base import ProviderConfig
+        from esdc.providers.groq import GroqProvider
 
         mock_instance = MagicMock()
         mock_instance._esdc_context_length = 0

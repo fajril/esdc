@@ -91,6 +91,7 @@ class GroqProvider(Provider):
         base_url: str | None = None,
         temperature: float = 0.0,
         reasoning_effort: str | None = None,
+        config: ProviderConfig | None = None,
         **kwargs,
     ) -> ChatGroq:
         """Create a ChatGroq instance.
@@ -101,10 +102,13 @@ class GroqProvider(Provider):
             base_url: Base URL for Groq API
             temperature: Sampling temperature
             reasoning_effort: Reasoning effort level. Ignored for Groq.
+            config: Provider config (consumed to prevent leak into ChatGroq)
             **kwargs: Additional keyword arguments passed to ChatGroq.
         """
         if not model:
             model = cls.get_default_model()
+
+        _ = config  # consumed — prevents leak into ChatGroq kwargs
 
         if reasoning_effort is not None:
             logger.debug(
