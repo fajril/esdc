@@ -248,6 +248,21 @@ def reindex_fts() -> None:
         conn.close()
 
 
+def get_last_updated(conn: duckdb.DuckDBPyConnection) -> str | None:
+    """Retrieve the last_updated timestamp from the _metadata table.
+
+    Returns the ISO 8601 timestamp string of the last successful data fetch,
+    or None if the _metadata table does not exist or has no entry.
+    """
+    try:
+        result = conn.execute(
+            "SELECT value FROM _metadata WHERE key = 'last_updated'"
+        ).fetchone()
+        return result[0] if result else None
+    except duckdb.Error:
+        return None
+
+
 def load_data_to_db(
     content: list[list[str]], header: list[str], table_name: str
 ) -> None:
@@ -312,6 +327,9 @@ def load_data_to_db(
             if table_name in ("project_resources", "project_timeseries"):
                 status.update(_status("building search indexes"))
                 _create_fts_indexes(conn)
+
+            status.update(_status("recording metadata"))
+            _execute_sql_script(conn, "create_table_metadata.sql")
 
             status.update(_status("checkpointing"))
             conn.execute("CHECKPOINT")

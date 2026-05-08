@@ -1141,6 +1141,27 @@ DATABASE_SCHEMA: dict[str, dict] = {
             },
         },
     },
+    "_metadata": {
+        "description": (
+            "Metadata table storing database update timestamps and configuration. "
+            "Query this table to find when data was last refreshed via esdc fetch. "
+            "Key rows: 'last_updated' = ISO 8601 timestamp of the last successful data fetch."
+        ),
+        "primary_key": ["key"],
+        "columns": {
+            "key": {
+                "type": "VARCHAR",
+                "description": "Metadata key name. Known keys: 'last_updated'.",
+            },
+            "value": {
+                "type": "VARCHAR",
+                "description": (
+                    "Metadata value. For 'last_updated', an ISO 8601 timestamp "
+                    "(e.g. '2025-01-15 14:30:00')."
+                ),
+            },
+        },
+    },
 }
 
 

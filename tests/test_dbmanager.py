@@ -3,9 +3,11 @@ import pandas as pd
 import pytest
 
 from esdc.dbmanager import (
+    _execute_sql_script,
     _load_sql_script,
     check_indexes,
     check_table_stats,
+    get_last_updated,
     invalidate_sql_cache,
     load_data_to_db,
     run_query,
@@ -323,4 +325,51 @@ class TestVerifyIndexes:
 
         assert len(result["btree"]) == 4
         assert all(not bt["functional"] for bt in result["btree"])
+        conn.close()
+
+
+class TestGetLastUpdated:
+    """Tests for get_last_updated()."""
+
+    def test_get_last_updated_returns_timestamp(self, tmp_path):
+        """Test get_last_updated returns timestamp from _metadata table."""
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+        conn.execute("INSTALL vss")
+        conn.execute("LOAD vss")
+        _execute_sql_script(conn, "create_table_metadata.sql")
+
+        result = get_last_updated(conn)
+        assert result is not None
+        assert len(result) > 0
+        conn.close()
+
+    def test_get_last_updated_returns_none_when_no_table(self, tmp_path):
+        """Test get_last_updated returns None when _metadata table does not exist."""
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+        conn.execute("INSTALL vss")
+        conn.execute("LOAD vss")
+
+        result = get_last_updated(conn)
+        assert result is None
+        conn.close()
+
+    def test_get_last_updated_updates_on_second_call(self, tmp_path):
+        """Test that re-running metadata SQL updates the timestamp."""
+        import time
+
+        conn = duckdb.connect(str(tmp_path / "test.db"))
+        conn.execute("INSTALL vss")
+        conn.execute("LOAD vss")
+
+        _execute_sql_script(conn, "create_table_metadata.sql")
+        first = get_last_updated(conn)
+
+        time.sleep(1.1)
+
+        _execute_sql_script(conn, "create_table_metadata.sql")
+        second = get_last_updated(conn)
+
+        assert first is not None
+        assert second is not None
+        assert second >= first
         conn.close()

@@ -500,6 +500,12 @@ def list_tables() -> str:
             for view in views:
                 output += f"  - {view[0]}\n"
 
+        from esdc.dbmanager import get_last_updated
+
+        last_updated = get_last_updated(conn)
+        if last_updated:
+            output += f"\nData last updated: {last_updated}\n"
+
         cache.set(cache_key, output)
         logger.debug("[CACHE] stored | tool=list_tables key=%s", cache_key[:16])
         return output

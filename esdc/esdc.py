@@ -999,17 +999,27 @@ def status(
             check_indexes,
             check_table_stats,
             get_duckdb_connection,
+            get_last_updated,
         )
 
         conn = get_duckdb_connection(db_file)
         try:
             status = check_indexes(conn)
             table_stats = check_table_stats(conn)
+            last_updated = get_last_updated(conn)
         finally:
             conn.close()
     except Exception as e:
         rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
         return
+
+    if last_updated:
+        rich.print(f"[bold]Last updated:[/bold] {last_updated}")
+    else:
+        from datetime import datetime
+
+        mtime = datetime.fromtimestamp(db_file.stat().st_mtime)
+        rich.print(f"[bold]Last updated:[/bold] {mtime:%Y-%m-%d %H:%M:%S} (file mtime)")
 
     rich.print()
     rich.print("[bold]Tables:[/bold]")

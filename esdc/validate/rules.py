@@ -182,11 +182,7 @@ def run_validation(
 
     # Resolve rule classes from rule_ids, groups, or all
     if rule_ids:
-        rule_classes = [
-            cls
-            for rid in rule_ids
-            if (cls := get_rule(rid)) is not None
-        ]
+        rule_classes = [cls for rid in rule_ids if (cls := get_rule(rid)) is not None]
     elif groups:
         rule_classes: list[type[ValidationRule]] = []
         for g in groups:

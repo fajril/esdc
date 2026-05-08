@@ -272,8 +272,7 @@ class TestValidateCommand:
         # Verify fix applied
         conn2 = duckdb.connect(str(db_path))
         rows = conn2.execute(
-            "SELECT rec_oil, prj_ioip FROM project_resources "
-            "WHERE project_name = 'Bad'"
+            "SELECT rec_oil, prj_ioip FROM project_resources WHERE project_name = 'Bad'"
         ).fetchall()
         assert len(rows) == 1
         assert rows[0] == (0.0, 0.0)

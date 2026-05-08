@@ -64,6 +64,12 @@ class TestStatusCommand:
             assert result.exit_code == 0
             assert "Database exists: No" in result.stdout
 
+    def test_status_shows_last_updated(self):
+        """Test status shows Last updated line."""
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        assert "Last updated" in result.stdout
+
 
 class TestShowCommand:
     """Tests for show command."""
