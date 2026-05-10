@@ -137,10 +137,6 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
             logging.info("Skipping FTS index for %s (0 rows)", table_name)
             continue
 
-        fts_schema = f"fts_main_{table_name}"
-        with contextlib.suppress(duckdb.Error):
-            conn.execute(f"DROP SCHEMA IF EXISTS {fts_schema} CASCADE")
-
         id_col = config["id_col"]
         actual_columns = {
             row[0]

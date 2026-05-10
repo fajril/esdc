@@ -65,6 +65,7 @@ from esdc.configs import Config  # noqa: E402
 from esdc.console import console  # noqa: E402
 from esdc.dbmanager import (  # noqa: E402
     _ensure_duckdb_database,
+    _execute_sql_script,
     get_duckdb_connection,
     load_data_to_db,
     run_query,
@@ -559,6 +560,9 @@ def _append_to_table(
                 f"VALUES ({placeholders})"
             )
             conn.executemany(insert_stmt, content)
+
+            status.update(_status("recording metadata"))
+            _execute_sql_script(conn, "create_table_metadata.sql")
 
             # ------------------------------------------------------------------
             # Work around DuckDB HNSW checkpoint crash: drop the index before
