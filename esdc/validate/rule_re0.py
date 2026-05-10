@@ -200,7 +200,7 @@ class RE0OrderingRule(ValidationRule):
             severity=self.severity,
             table="project_resources",
             year=year,
-            extra_columns=["low_val", "high_val"],
+            extra_columns=["val_ref", "val_cmp"],
         )
 
     def generate_fixes(
@@ -483,7 +483,7 @@ class RE0SameRowOrderingRule(ValidationRule):
             severity=self.severity,
             table="project_resources",
             year=year,
-            extra_columns=["low_val", "high_val"],
+            extra_columns=["val_ref", "val_cmp"],
         )
 
     def generate_fixes(
@@ -660,7 +660,7 @@ class RE0ImplicationRule(ValidationRule):
             severity=self.severity,
             table="project_resources",
             year=year,
-            extra_columns=["cond_val", "result_val"],
+            extra_columns=["val_ref", "val_cmp"],
         )
 
     def generate_fixes(
@@ -757,7 +757,7 @@ class RE0ReserveVsPlaceRule(ValidationRule):
             severity=self.severity,
             table="project_resources",
             year=year,
-            extra_columns=["place_val", "reserve_val", "cumprod_val"],
+            extra_columns=["val_ref", "val_cmp", "val_sum"],
         )
 
     def generate_fixes(

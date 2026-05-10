@@ -41,7 +41,12 @@ VOL_COLUMNS = {
     "cprd_gn": "cprd_grs_gn",
 }
 
-IDENTIFIER_COLS: list[str] = ["report_year", "project_name", "wk_name"]
+IDENTIFIER_COLS: list[str] = [
+    "report_year",
+    "project_name",
+    "wk_name",
+    "field_name",
+]
 
 
 def _add_year_filter(sql: str, year: list[int] | None) -> str:
@@ -54,18 +59,11 @@ def _add_year_filter(sql: str, year: list[int] | None) -> str:
     if not year:
         return sql
     year_list = ", ".join(str(y) for y in year)
-    # Self-join queries have " JOIN " and an ON clause with aliases l./h.
     is_self_join = " JOIN " in sql and ("l." in sql or "h." in sql)
     if is_self_join:
-        if "l.report_year" in sql:
-            return sql.replace(
-                "AND h.uncert_level",
-                f"AND l.report_year IN ({year_list}) AND h.uncert_level",
-                1,
-            )
         return sql.replace(
-            "WHERE",
-            f"WHERE l.report_year IN ({year_list}) AND",
+            "AND h.uncert_level",
+            f"AND l.report_year IN ({year_list}) AND h.uncert_level",
             1,
         )
     if "WHERE" in sql:
@@ -100,14 +98,16 @@ def build_ordering_sql(
     """Build SQL for Category B: low_col <= high_col across uncert_levels.
 
     Uses self-join to compare values at different uncertainty levels.
+    Joins on project_id (which uniquely identifies a project-wk combination)
+    to avoid cross-product false violations from shared project names.
     Returns rows where COALESCE(low_col, 0) > COALESCE(high_col, 0).
     """
     ident_l = ", ".join(f"l.{c}" for c in IDENTIFIER_COLS)
     return (
-        f"SELECT {ident_l}, l.{low_col} AS low_val, h.{high_col} AS high_val"
+        f"SELECT {ident_l}, l.{low_col} AS val_ref, h.{high_col} AS val_cmp"
         f" FROM {table} l"
         f" JOIN {table} h"
-        f" ON l.project_name = h.project_name"
+        f" ON l.project_id = h.project_id"
         f" AND l.report_year = h.report_year"
         f" AND l.uncert_level = '{_uncert_value(low_uncert)}'"
         f" AND h.uncert_level = '{_uncert_value(high_uncert)}'"
@@ -127,8 +127,8 @@ def build_same_row_ordering_sql(
     Returns rows where COALESCE(low_col, 0) > COALESCE(high_col, 0).
     """
     return (
-        f"SELECT {', '.join(IDENTIFIER_COLS)}, {low_col} AS low_val,"
-        f" {high_col} AS high_val"
+        f"SELECT {', '.join(IDENTIFIER_COLS)}, {low_col} AS val_ref,"
+        f" {high_col} AS val_cmp"
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
         f" AND COALESCE({low_col}, 0) > COALESCE({high_col}, 0)"
@@ -145,13 +145,14 @@ def build_implication_sql(
     """Build SQL for Category E: if cond_col > 0 then result_col > 0.
 
     Self-join: find rows where the condition is satisfied but the result is zero.
+    Joins on project_id to avoid cross-product false violations.
     """
     ident_h = ", ".join(f"h.{c}" for c in IDENTIFIER_COLS)
     return (
-        f"SELECT {ident_h}, h.{cond_col} AS cond_val, l.{result_col} AS result_val"
+        f"SELECT {ident_h}, h.{cond_col} AS val_ref, l.{result_col} AS val_cmp"
         f" FROM {table} h"
         f" JOIN {table} l"
-        f" ON h.project_name = l.project_name"
+        f" ON h.project_id = l.project_id"
         f" AND h.report_year = l.report_year"
         f" AND h.uncert_level = '{_uncert_value(cond_uncert)}'"
         f" AND l.uncert_level = '{_uncert_value(result_uncert)}'"
@@ -174,9 +175,9 @@ def build_reserve_vs_place_sql(
     """
     return (
         f"SELECT {', '.join(IDENTIFIER_COLS)},"
-        f" {place_col} AS place_val,"
-        f" {reserve_col} AS reserve_val,"
-        f" {cumprod_col} AS cumprod_val"
+        f" {place_col} AS val_ref,"
+        f" {reserve_col} AS val_cmp,"
+        f" {cumprod_col} AS val_sum"
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
         f" AND COALESCE({place_col}, 0) > 0"

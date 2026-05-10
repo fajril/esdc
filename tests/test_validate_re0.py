@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import duckdb
 
+from esdc.selection import Severity
 from esdc.validate.rule_re0_helpers import (
     IDENTIFIER_COLS,
     VOL_COLUMNS,
@@ -23,7 +24,7 @@ from esdc.validate.rule_re0_helpers import (
 class TestBuildNonNegativeSql:
     def test_basic(self):
         sql = build_non_negative_sql("prj_ioip", UncertLevel.LOW)
-        assert "SELECT report_year, project_name, wk_name, prj_ioip" in sql
+        assert "SELECT report_year, project_name, wk_name, field_name, prj_ioip" in sql
         assert "WHERE uncert_level = '1. Low Value'" in sql
         assert "COALESCE(prj_ioip, 0) < 0" in sql
 
@@ -43,14 +44,16 @@ class TestBuildOrderingSql:
         )
         assert "FROM project_resources l" in sql
         assert "JOIN project_resources h" in sql
+        assert "ON l.project_id = h.project_id" in sql
+        assert "AND l.report_year = h.report_year" in sql
         assert "l.uncert_level = '1. Low Value'" in sql
         assert "h.uncert_level = '2. Middle Value'" in sql
         assert "COALESCE(l.prj_ioip, 0) > COALESCE(h.prj_ioip, 0)" in sql
 
     def test_different_columns(self):
         sql = build_ordering_sql("rec_oil", "rec_oil", UncertLevel.LOW, UncertLevel.MID)
-        assert "l.rec_oil AS low_val" in sql
-        assert "h.rec_oil AS high_val" in sql
+        assert "l.rec_oil AS val_ref" in sql
+        assert "h.rec_oil AS val_cmp" in sql
 
     def test_custom_table(self):
         sql = build_ordering_sql(
@@ -65,6 +68,8 @@ class TestBuildSameRowOrderingSql:
         assert "FROM project_resources" in sql
         assert "uncert_level = '1. Low Value'" in sql
         assert "COALESCE(res_oil, 0) > COALESCE(rec_oil, 0)" in sql
+        assert "res_oil AS val_ref" in sql
+        assert "rec_oil AS val_cmp" in sql
 
 
 class TestBuildImplicationSql:
@@ -74,6 +79,8 @@ class TestBuildImplicationSql:
         )
         assert "FROM project_resources h" in sql
         assert "JOIN project_resources l" in sql
+        assert "ON h.project_id = l.project_id" in sql
+        assert "AND h.report_year = l.report_year" in sql
         assert "h.uncert_level = '3. High Value'" in sql
         assert "l.uncert_level = '1. Low Value'" in sql
         assert "COALESCE(h.res_oil, 0) > 0" in sql
@@ -83,8 +90,8 @@ class TestBuildImplicationSql:
         sql = build_implication_sql(
             "res_con", UncertLevel.HIGH, "res_con", UncertLevel.LOW
         )
-        assert "h.res_con AS cond_val" in sql
-        assert "l.res_con AS result_val" in sql
+        assert "h.res_con AS val_ref" in sql
+        assert "l.res_con AS val_cmp" in sql
 
 
 class TestBuildReserveVsPlaceSql:
@@ -99,6 +106,9 @@ class TestBuildReserveVsPlaceSql:
             "COALESCE(res_oil, 0) + COALESCE(cprd_grs_oil, 0) >= COALESCE(prj_ioip, 0)"
             in sql
         )
+        assert "prj_ioip AS val_ref" in sql
+        assert "res_oil AS val_cmp" in sql
+        assert "cprd_grs_oil AS val_sum" in sql
 
 
 class TestAddYearFilter:
@@ -122,6 +132,13 @@ class TestAddYearFilter:
         result = _add_year_filter(base, [2024])
         assert "WHERE report_year IN (2024)" in result
 
+    def test_self_join_year_filter(self):
+        sql = build_ordering_sql(
+            "prj_ioip", "prj_ioip", UncertLevel.LOW, UncertLevel.MID
+        )
+        result = _add_year_filter(sql, [2024])
+        assert "l.report_year IN (2024)" in result
+
 
 class TestExecuteAndBuildViolations:
     def test_builds_violations(self, tmp_path):
@@ -132,17 +149,19 @@ class TestExecuteAndBuildViolations:
                 report_year INTEGER,
                 project_name TEXT,
                 wk_name TEXT,
+                field_name TEXT,
+                project_id TEXT,
                 uncert_level TEXT,
                 prj_ioip REAL
             )
         """)
         conn.execute(
             "INSERT INTO project_resources"
-            " VALUES (2024, 'BadProj', 'WK1', '1. Low Value', -100)"
+            " VALUES (2024, 'BadProj', 'WK1', 'FLD1', 'P-001', '1. Low Value', -100)"
         )
         conn.execute(
             "INSERT INTO project_resources"
-            " VALUES (2024, 'GoodProj', 'WK1', '1. Low Value', 100)"
+            " VALUES (2024, 'GoodProj', 'WK1', 'FLD2', 'P-002', '1. Low Value', 100)"
         )
 
         sql = build_non_negative_sql("prj_ioip", UncertLevel.LOW)
@@ -151,7 +170,7 @@ class TestExecuteAndBuildViolations:
             sql,
             rule_id="RE0001",
             description="test",
-            severity="strict",
+            severity=Severity.STRICT,
             table="project_resources",
             year=None,
             extra_columns=["prj_ioip"],
@@ -173,17 +192,19 @@ class TestExecuteAndBuildViolations:
                 report_year INTEGER,
                 project_name TEXT,
                 wk_name TEXT,
+                field_name TEXT,
+                project_id TEXT,
                 uncert_level TEXT,
                 prj_ioip REAL
             )
         """)
         conn.execute(
             "INSERT INTO project_resources"
-            " VALUES (2023, 'Old', 'WK1', '1. Low Value', -50)"
+            " VALUES (2023, 'Old', 'WK1', 'FLD1', 'P-001', '1. Low Value', -50)"
         )
         conn.execute(
             "INSERT INTO project_resources"
-            " VALUES (2024, 'New', 'WK1', '1. Low Value', -60)"
+            " VALUES (2024, 'New', 'WK1', 'FLD2', 'P-002', '1. Low Value', -60)"
         )
 
         sql = build_non_negative_sql("prj_ioip", UncertLevel.LOW)
@@ -192,7 +213,7 @@ class TestExecuteAndBuildViolations:
             sql,
             rule_id="RE0001",
             description="test",
-            severity="strict",
+            severity=Severity.STRICT,
             table="project_resources",
             year=[2024],
             extra_columns=["prj_ioip"],
@@ -211,13 +232,15 @@ class TestExecuteAndBuildViolations:
                 report_year INTEGER,
                 project_name TEXT,
                 wk_name TEXT,
+                field_name TEXT,
+                project_id TEXT,
                 uncert_level TEXT,
                 prj_ioip REAL
             )
         """)
         conn.execute(
             "INSERT INTO project_resources"
-            " VALUES (2024, 'Good', 'WK1', '1. Low Value', 100)"
+            " VALUES (2024, 'Good', 'WK1', 'FLD1', 'P-001', '1. Low Value', 100)"
         )
 
         sql = build_non_negative_sql("prj_ioip", UncertLevel.LOW)
@@ -226,7 +249,7 @@ class TestExecuteAndBuildViolations:
             sql,
             rule_id="RE0001",
             description="test",
-            severity="strict",
+            severity=Severity.STRICT,
             table="project_resources",
             year=None,
             extra_columns=["prj_ioip"],
@@ -246,7 +269,12 @@ class TestConstants:
         assert UncertLevel.HIGH == "3. High Value"
 
     def test_identifier_cols(self):
-        assert IDENTIFIER_COLS == ["report_year", "project_name", "wk_name"]
+        assert IDENTIFIER_COLS == [
+            "report_year",
+            "project_name",
+            "wk_name",
+            "field_name",
+        ]
 
     def test_vol_columns(self):
         assert VOL_COLUMNS["ioip"] == "prj_ioip"
@@ -265,6 +293,8 @@ def _create_re0_test_table(conn: duckdb.DuckDBPyConnection) -> None:
             report_year INTEGER,
             project_name TEXT,
             wk_name TEXT,
+            field_name TEXT,
+            project_id TEXT,
             uncert_level TEXT,
             prj_ioip REAL,
             prj_igip REAL,
@@ -303,14 +333,21 @@ def _insert_full_row(
     cprd_con: float | None = 0,
     cprd_ga: float | None = 0,
     cprd_gn: float | None = 0,
+    wk_name: str = "WK1",
+    field_name: str = "FLD1",
+    project_id: str | None = None,
 ) -> None:
+    if project_id is None:
+        project_id = f"P-{hash((year, name, wk_name)) & 0xFFFFFF:06X}"
     conn.execute(
         "INSERT INTO project_resources"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             year,
             name,
-            "WK1",
+            wk_name,
+            field_name,
+            project_id,
             uncert,
             ioip,
             igip,
@@ -410,8 +447,8 @@ class TestCategoryBOrdering:
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0003"
         assert violations[0].identifiers["project_name"] == "Bad"
-        assert violations[0].current_values["low_val"] == 300.0
-        assert violations[0].current_values["high_val"] == 200.0
+        assert violations[0].current_values["val_ref"] == 300.0
+        assert violations[0].current_values["val_cmp"] == 200.0
         conn.close()
 
     def test_re0003_no_violations_when_equal(self, tmp_path):
@@ -469,6 +506,67 @@ class TestCategoryBOrdering:
         assert violations[0].identifiers["report_year"] == "2024"
         conn.close()
 
+    def test_no_cross_work_area_false_violations(self, tmp_path):
+        """Same project_name with different wk_name should NOT cross-join."""
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        # Same project_name, two work areas — each has valid ordering
+        # WK1: IOIP Low=100, Mid=200 (valid)
+        # WK2: IOIP Low=500, Mid=600 (valid)
+        # Without project_id join, this would produce a false violation
+        # (Low from WK2 vs Mid from WK1: 500 > 200)
+        _insert_full_row(
+            conn,
+            2024,
+            "SharedProj",
+            UncertLevel.LOW,
+            ioip=100,
+            wk_name="WK1",
+            field_name="FLD1",
+            project_id="P-AAA",
+        )
+        _insert_full_row(
+            conn,
+            2024,
+            "SharedProj",
+            UncertLevel.MID,
+            ioip=200,
+            wk_name="WK1",
+            field_name="FLD1",
+            project_id="P-AAA",
+        )
+        _insert_full_row(
+            conn,
+            2024,
+            "SharedProj",
+            UncertLevel.LOW,
+            ioip=500,
+            wk_name="WK2",
+            field_name="FLD2",
+            project_id="P-BBB",
+        )
+        _insert_full_row(
+            conn,
+            2024,
+            "SharedProj",
+            UncertLevel.MID,
+            ioip=600,
+            wk_name="WK2",
+            field_name="FLD2",
+            project_id="P-BBB",
+        )
+
+        from esdc.validate.rule_re0 import RE0003
+
+        rule = RE0003()
+        violations = rule.check(conn)
+
+        # No violations because each project_id has valid Low <= Mid ordering
+        assert len(violations) == 0
+        conn.close()
+
 
 class TestCategoryCReservesVsResources:
     """Tests for RE0031-RE0042 (same-row reserves <= resources)."""
@@ -489,8 +587,8 @@ class TestCategoryCReservesVsResources:
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0031"
         assert violations[0].identifiers["project_name"] == "Bad"
-        assert violations[0].current_values["low_val"] == 300.0
-        assert violations[0].current_values["high_val"] == 200.0
+        assert violations[0].current_values["val_ref"] == 300.0
+        assert violations[0].current_values["val_cmp"] == 200.0
         conn.close()
 
     def test_re0031_different_uncert_levels(self, tmp_path):
@@ -536,8 +634,8 @@ class TestCategoryEImplication:
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0049"
         assert violations[0].identifiers["project_name"] == "Bad"
-        assert violations[0].current_values["cond_val"] == 100.0
-        assert violations[0].current_values["result_val"] == 0.0
+        assert violations[0].current_values["val_ref"] == 100.0
+        assert violations[0].current_values["val_cmp"] == 0.0
         conn.close()
 
     def test_re0049_no_violation_when_3p_zero(self, tmp_path):
@@ -552,6 +650,63 @@ class TestCategoryEImplication:
 
         rule = RE0049()
         violations = rule.check(conn)
+        assert len(violations) == 0
+        conn.close()
+
+    def test_no_cross_work_area_false_violations(self, tmp_path):
+        """Same project_name with different wk_name should NOT cross-join."""
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        # WK1: 3P=100, 1P=50 (valid)
+        # WK2: 3P=0, 1P=0 (valid, no implication triggered)
+        _insert_full_row(
+            conn,
+            2024,
+            "SharedProj",
+            UncertLevel.HIGH,
+            res_oil=100,
+            wk_name="WK1",
+            field_name="FLD1",
+            project_id="P-AAA",
+        )
+        _insert_full_row(
+            conn,
+            2024,
+            "SharedProj",
+            UncertLevel.LOW,
+            res_oil=50,
+            wk_name="WK1",
+            field_name="FLD1",
+            project_id="P-AAA",
+        )
+        _insert_full_row(
+            conn,
+            2024,
+            "SharedProj",
+            UncertLevel.HIGH,
+            res_oil=0,
+            wk_name="WK2",
+            field_name="FLD2",
+            project_id="P-BBB",
+        )
+        _insert_full_row(
+            conn,
+            2024,
+            "SharedProj",
+            UncertLevel.LOW,
+            res_oil=0,
+            wk_name="WK2",
+            field_name="FLD2",
+            project_id="P-BBB",
+        )
+
+        from esdc.validate.rule_re0 import RE0049
+
+        rule = RE0049()
+        violations = rule.check(conn)
+
         assert len(violations) == 0
         conn.close()
 
@@ -594,9 +749,9 @@ class TestCategoryFReserveVsPlace:
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0053"
         assert violations[0].identifiers["project_name"] == "Bad"
-        assert violations[0].current_values["place_val"] == 1000.0
-        assert violations[0].current_values["reserve_val"] == 800.0
-        assert violations[0].current_values["cumprod_val"] == 300.0
+        assert violations[0].current_values["val_ref"] == 1000.0
+        assert violations[0].current_values["val_cmp"] == 800.0
+        assert violations[0].current_values["val_sum"] == 300.0
         conn.close()
 
     def test_re0053_no_violation_when_ioip_zero(self, tmp_path):

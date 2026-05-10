@@ -66,7 +66,7 @@ class RE9001(ValidationRule):
     ) -> list[Violation]:
         nonzero = " OR ".join(f"COALESCE({c}, 0) != 0" for c in self.ZERO_COLUMNS)
         cols = ", ".join(
-            ["report_year", "project_name", "wk_name", "project_isactive"]
+            ["report_year", "project_name", "wk_name", "field_name", "project_isactive"]
             + self.ZERO_COLUMNS
         )
         sql = (
@@ -84,8 +84,9 @@ class RE9001(ValidationRule):
             report_year = row[0]
             project_name = row[1]
             wk_name = row[2]
-            is_active = row[3]
-            volumes = row[4:]
+            field_name = row[3]
+            is_active = row[4]
+            volumes = row[5:]
 
             current: dict[str, object] = {"project_isactive": is_active}
             for i, col in enumerate(self.ZERO_COLUMNS):
@@ -99,9 +100,10 @@ class RE9001(ValidationRule):
                     severity=self.severity,
                     table=self.applies_to_tables[0],
                     identifiers={
-                        "project_name": str(project_name),
                         "report_year": str(report_year),
+                        "project_name": str(project_name),
                         "wk_name": str(wk_name),
+                        "field_name": str(field_name),
                     },
                     current_values=current,
                 )
