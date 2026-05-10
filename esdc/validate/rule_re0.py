@@ -18,8 +18,11 @@ if typing.TYPE_CHECKING:
 
 from esdc.selection import Severity
 from esdc.validate.rule_re0_helpers import (
+    FIELD_IDENTIFIER_COLS,
     UncertLevel,
     _execute_and_build_violations,
+    build_field_non_negative_sql,
+    build_field_ordering_sql,
     build_implication_sql,
     build_non_negative_sql,
     build_ordering_sql,
@@ -37,6 +40,7 @@ class RE0NonNegativeRule(ValidationRule):
     """Base: column value must be >= 0 at given uncertainty level.
 
     Violation when COALESCE(column, 0) < 0 at the given uncert_level.
+    Operates on project_resources at the project level.
     """
 
     is_fixable = False
@@ -68,21 +72,101 @@ class RE0NonNegativeRule(ValidationRule):
         return []
 
 
+class RE0FieldNonNegativeRule(ValidationRule):
+    """Base: SUM(column) per field must be >= 0 at given uncertainty level.
+
+    Aggregates column values across all projects within each field,
+    then flags fields where the total is negative.
+    Operates on field_resources.
+    """
+
+    is_fixable = False
+    applies_to_tables = ["field_resources"]
+    severity = Severity.STRICT
+    column: str
+    uncert: UncertLevel
+
+    def check(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        year: list[int] | None = None,
+    ) -> list[Violation]:
+        sql = build_field_non_negative_sql(self.column, self.uncert)
+        return _execute_and_build_violations(
+            conn,
+            sql,
+            rule_id=self.rule_id,
+            description=self.description,
+            severity=self.severity,
+            table="field_resources",
+            year=year,
+            extra_columns=["val_ref"],
+            identifier_cols=FIELD_IDENTIFIER_COLS,
+        )
+
+    def generate_fixes(
+        self, violations: list[Violation]
+    ) -> list[tuple[str, list[object]]]:
+        return []
+
+
+class RE0FieldOrderingRule(ValidationRule):
+    """Base: SUM(low_col) <= SUM(high_col) per field across uncert_levels.
+
+    Uses CTE aggregation and self-join to compare totals at different
+    uncertainty levels within the same field.
+    Operates on field_resources.
+    """
+
+    is_fixable = False
+    applies_to_tables = ["field_resources"]
+    severity = Severity.STRICT
+    low_col: str
+    high_col: str
+    low_uncert: UncertLevel
+    high_uncert: UncertLevel
+
+    def check(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        year: list[int] | None = None,
+    ) -> list[Violation]:
+        sql = build_field_ordering_sql(
+            self.low_col, self.high_col, self.low_uncert, self.high_uncert
+        )
+        return _execute_and_build_violations(
+            conn,
+            sql,
+            rule_id=self.rule_id,
+            description=self.description,
+            severity=self.severity,
+            table="field_resources",
+            year=year,
+            extra_columns=["val_ref", "val_cmp"],
+            identifier_cols=FIELD_IDENTIFIER_COLS,
+        )
+
+    def generate_fixes(
+        self, violations: list[Violation]
+    ) -> list[tuple[str, list[object]]]:
+        return []
+
+
 @register_rule
-class RE0001(RE0NonNegativeRule):
+class RE0001(RE0FieldNonNegativeRule):
     rule_id = "RE0001"
     description = "IOIP: Low Case must be greater than or equal to zero"
     formal = r"$N^{\text{P90}} \geq 0$"
-    column = "prj_ioip"
+    column = "ioip"
     uncert = UncertLevel.LOW
 
 
 @register_rule
-class RE0002(RE0NonNegativeRule):
+class RE0002(RE0FieldNonNegativeRule):
     rule_id = "RE0002"
     description = "IGIP: Low Case must be greater than or equal to zero"
     formal = r"$G^{\text{P90}} \geq 0$"
-    column = "prj_igip"
+    column = "igip"
     uncert = UncertLevel.LOW
 
 
@@ -209,49 +293,49 @@ class RE0OrderingRule(ValidationRule):
         return []
 
 
-# --- In-Place ordering (RE0003-RE0006) ---
+# --- In-Place ordering (RE0003-RE0006): field-level ---
 
 
 @register_rule
-class RE0003(RE0OrderingRule):
+class RE0003(RE0FieldOrderingRule):
     rule_id = "RE0003"
     description = "IOIP: Low Case must be less than or equal to Mid Case"
     formal = r"$N^{\text{P90}} \leq N^{\text{P50}}$"
-    low_col = "prj_ioip"
-    high_col = "prj_ioip"
+    low_col = "ioip"
+    high_col = "ioip"
     low_uncert = UncertLevel.LOW
     high_uncert = UncertLevel.MID
 
 
 @register_rule
-class RE0004(RE0OrderingRule):
+class RE0004(RE0FieldOrderingRule):
     rule_id = "RE0004"
     description = "IOIP: Mid Case must be less than or equal to High Case"
     formal = r"$N^{\text{P50}} \leq N^{\text{P10}}$"
-    low_col = "prj_ioip"
-    high_col = "prj_ioip"
+    low_col = "ioip"
+    high_col = "ioip"
     low_uncert = UncertLevel.MID
     high_uncert = UncertLevel.HIGH
 
 
 @register_rule
-class RE0005(RE0OrderingRule):
+class RE0005(RE0FieldOrderingRule):
     rule_id = "RE0005"
     description = "IGIP: Low Case must be less than or equal to Mid Case"
     formal = r"$G^{\text{P90}} \leq G^{\text{P50}}$"
-    low_col = "prj_igip"
-    high_col = "prj_igip"
+    low_col = "igip"
+    high_col = "igip"
     low_uncert = UncertLevel.LOW
     high_uncert = UncertLevel.MID
 
 
 @register_rule
-class RE0006(RE0OrderingRule):
+class RE0006(RE0FieldOrderingRule):
     rule_id = "RE0006"
     description = "IGIP: Mid Case must be less than or equal to High Case"
     formal = r"$G^{\text{P50}} \leq G^{\text{P10}}$"
-    low_col = "prj_igip"
-    high_col = "prj_igip"
+    low_col = "igip"
+    high_col = "igip"
     low_uncert = UncertLevel.MID
     high_uncert = UncertLevel.HIGH
 

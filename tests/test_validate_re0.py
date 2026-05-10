@@ -6,11 +6,14 @@ import duckdb
 
 from esdc.selection import Severity
 from esdc.validate.rule_re0_helpers import (
+    FIELD_IDENTIFIER_COLS,
     IDENTIFIER_COLS,
     VOL_COLUMNS,
     UncertLevel,
     _add_year_filter,
     _execute_and_build_violations,
+    build_field_non_negative_sql,
+    build_field_ordering_sql,
     build_implication_sql,
     build_non_negative_sql,
     build_ordering_sql,
@@ -109,6 +112,58 @@ class TestBuildReserveVsPlaceSql:
         assert "prj_ioip AS val_ref" in sql
         assert "res_oil AS val_cmp" in sql
         assert "cprd_grs_oil AS val_sum" in sql
+
+
+class TestBuildFieldNonNegativeSql:
+    def test_basic(self):
+        sql = build_field_non_negative_sql("ioip", UncertLevel.LOW)
+        assert "SELECT report_year, wk_name, field_name" in sql
+        assert "SUM(COALESCE(ioip, 0)) AS val_ref" in sql
+        assert "FROM field_resources" in sql
+        assert "GROUP BY report_year, wk_name, field_name, uncert_level" in sql
+        assert "HAVING SUM(COALESCE(ioip, 0)) < 0" in sql
+
+    def test_with_custom_table(self):
+        sql = build_field_non_negative_sql("igip", UncertLevel.LOW, table="my_table")
+        assert "FROM my_table" in sql
+
+    def test_different_uncert(self):
+        sql = build_field_non_negative_sql("ioip", UncertLevel.HIGH)
+        assert "uncert_level = '3. High Value'" in sql
+
+
+class TestBuildFieldOrderingSql:
+    def test_basic(self):
+        sql = build_field_ordering_sql("ioip", "ioip", UncertLevel.LOW, UncertLevel.MID)
+        assert "WITH field_agg AS" in sql
+        assert "SUM(COALESCE(ioip, 0)) AS ioip" in sql
+        assert "GROUP BY report_year, wk_name, field_name, uncert_level" in sql
+        assert "FROM field_agg l" in sql
+        assert "JOIN field_agg h" in sql
+        assert "ON l.wk_name = h.wk_name" in sql
+        assert "AND l.field_name = h.field_name" in sql
+        assert "l.uncert_level = '1. Low Value'" in sql
+        assert "h.uncert_level = '2. Middle Value'" in sql
+        assert "l.ioip AS val_ref" in sql
+        assert "h.ioip AS val_cmp" in sql
+
+    def test_different_columns(self):
+        sql = build_field_ordering_sql(
+            "igip", "igip", UncertLevel.MID, UncertLevel.HIGH
+        )
+        assert "SUM(COALESCE(igip, 0)) AS igip" in sql
+        assert "l.igip AS val_ref" in sql
+        assert "h.igip AS val_cmp" in sql
+
+    def test_custom_table(self):
+        sql = build_field_ordering_sql(
+            "ioip",
+            "ioip",
+            UncertLevel.LOW,
+            UncertLevel.MID,
+            table="my_table",
+        )
+        assert "FROM my_table" in sql
 
 
 class TestAddYearFilter:
@@ -276,6 +331,13 @@ class TestConstants:
             "field_name",
         ]
 
+    def test_field_identifier_cols(self):
+        assert FIELD_IDENTIFIER_COLS == [
+            "report_year",
+            "wk_name",
+            "field_name",
+        ]
+
     def test_vol_columns(self):
         assert VOL_COLUMNS["ioip"] == "prj_ioip"
         assert VOL_COLUMNS["res_oil"] == "res_oil"
@@ -367,16 +429,92 @@ def _insert_full_row(
     )
 
 
-class TestCategoryANonNegative:
-    """Tests for RE0001, RE0002, RE0007-RE0014 (non-negative checks)."""
+def _create_field_test_table(conn: duckdb.DuckDBPyConnection) -> None:
+    """Create a field_resources table for field-level RE0 testing."""
+    conn.execute("""
+        CREATE TABLE field_resources (
+            report_year INTEGER,
+            wk_name TEXT,
+            field_name TEXT,
+            uncert_level TEXT,
+            ioip REAL,
+            igip REAL,
+            rec_oil REAL,
+            rec_con REAL,
+            rec_ga REAL,
+            rec_gn REAL,
+            res_oil REAL,
+            res_con REAL,
+            res_ga REAL,
+            res_gn REAL,
+            cprd_grs_oil REAL,
+            cprd_grs_con REAL,
+            cprd_grs_ga REAL,
+            cprd_grs_gn REAL
+        )
+    """)
+
+
+def _insert_field_row(
+    conn: duckdb.DuckDBPyConnection,
+    year: int,
+    wk_name: str,
+    field_name: str,
+    uncert: str,
+    ioip: float | None = 0,
+    igip: float | None = 0,
+    rec_oil: float | None = 0,
+    rec_con: float | None = 0,
+    rec_ga: float | None = 0,
+    rec_gn: float | None = 0,
+    res_oil: float | None = 0,
+    res_con: float | None = 0,
+    res_ga: float | None = 0,
+    res_gn: float | None = 0,
+    cprd_oil: float | None = 0,
+    cprd_con: float | None = 0,
+    cprd_ga: float | None = 0,
+    cprd_gn: float | None = 0,
+) -> None:
+    conn.execute(
+        "INSERT INTO field_resources"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            year,
+            wk_name,
+            field_name,
+            uncert,
+            ioip,
+            igip,
+            rec_oil,
+            rec_con,
+            rec_ga,
+            rec_gn,
+            res_oil,
+            res_con,
+            res_ga,
+            res_gn,
+            cprd_oil,
+            cprd_con,
+            cprd_ga,
+            cprd_gn,
+        ],
+    )
+
+
+# --- Field-level RE0 rule tests ---
+
+
+class TestFieldLevelNonNegative:
+    """Tests for RE0001, RE0002 (field-level non-negative checks)."""
 
     def test_re0001_finds_negative_ioip(self, tmp_path):
         db_path = tmp_path / "test.duckdb"
         conn = duckdb.connect(str(db_path))
-        _create_re0_test_table(conn)
+        _create_field_test_table(conn)
 
-        _insert_full_row(conn, 2024, "Good", UncertLevel.LOW, ioip=100)
-        _insert_full_row(conn, 2024, "Bad", UncertLevel.LOW, ioip=-50)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", ioip=100)
+        _insert_field_row(conn, 2024, "WK1", "FLD2", "1. Low Value", ioip=-50)
 
         from esdc.validate.rule_re0 import RE0001
 
@@ -385,24 +523,131 @@ class TestCategoryANonNegative:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0001"
-        assert violations[0].identifiers["project_name"] == "Bad"
-        assert violations[0].current_values["prj_ioip"] == -50.0
+        assert violations[0].identifiers["wk_name"] == "WK1"
+        assert violations[0].identifiers["field_name"] == "FLD2"
+        assert violations[0].current_values["val_ref"] == -50.0
         conn.close()
 
     def test_re0001_no_violations(self, tmp_path):
         db_path = tmp_path / "test.duckdb"
         conn = duckdb.connect(str(db_path))
-        _create_re0_test_table(conn)
+        _create_field_test_table(conn)
 
-        _insert_full_row(conn, 2024, "Good1", UncertLevel.LOW, ioip=100)
-        _insert_full_row(conn, 2024, "Good2", UncertLevel.LOW, ioip=0)
-        _insert_full_row(conn, 2024, "Good3", UncertLevel.LOW, ioip=None)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", ioip=100)
+        _insert_field_row(conn, 2024, "WK1", "FLD2", "1. Low Value", ioip=0)
 
         from esdc.validate.rule_re0 import RE0001
 
         rule = RE0001()
         violations = rule.check(conn)
         assert len(violations) == 0
+        conn.close()
+
+    def test_re0001_aggregates_multiline_field(self, tmp_path):
+        """Field with multiple project entries: SUM should be checked."""
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_field_test_table(conn)
+
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", ioip=200)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", ioip=-300)
+
+        from esdc.validate.rule_re0 import RE0001
+
+        rule = RE0001()
+        violations = rule.check(conn)
+        assert len(violations) == 1
+        assert violations[0].identifiers["field_name"] == "FLD1"
+        assert violations[0].current_values["val_ref"] == -100.0
+        conn.close()
+
+    def test_re0002_finds_negative_igip(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_field_test_table(conn)
+
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", igip=-10)
+
+        from esdc.validate.rule_re0 import RE0002
+
+        rule = RE0002()
+        violations = rule.check(conn)
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0002"
+        conn.close()
+
+
+class TestFieldLevelOrdering:
+    """Tests for RE0003-RE0006 (field-level ordering checks)."""
+
+    def test_re0003_ioip_low_le_mid(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_field_test_table(conn)
+
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", ioip=100)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "2. Middle Value", ioip=50)
+
+        from esdc.validate.rule_re0 import RE0003
+
+        rule = RE0003()
+        violations = rule.check(conn)
+        assert len(violations) == 1
+        assert violations[0].identifiers["field_name"] == "FLD1"
+        assert violations[0].current_values["val_ref"] == 100.0
+        assert violations[0].current_values["val_cmp"] == 50.0
+        conn.close()
+
+    def test_re0003_no_violations_when_equal(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_field_test_table(conn)
+
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", ioip=100)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "2. Middle Value", ioip=100)
+
+        from esdc.validate.rule_re0 import RE0003
+
+        rule = RE0003()
+        violations = rule.check(conn)
+        assert len(violations) == 0
+        conn.close()
+
+    def test_re0005_igip_low_le_mid(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_field_test_table(conn)
+
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", igip=200)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "2. Middle Value", igip=150)
+
+        from esdc.validate.rule_re0 import RE0005
+
+        rule = RE0005()
+        violations = rule.check(conn)
+        assert len(violations) == 1
+        assert violations[0].current_values["val_ref"] == 200.0
+        assert violations[0].current_values["val_cmp"] == 150.0
+        conn.close()
+
+    def test_field_ordering_aggregates_multiline(self, tmp_path):
+        """Two entries for same field: SUM should be compared."""
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_field_test_table(conn)
+
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", ioip=200)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "1. Low Value", ioip=100)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "2. Middle Value", ioip=150)
+        _insert_field_row(conn, 2024, "WK1", "FLD1", "2. Middle Value", ioip=50)
+
+        from esdc.validate.rule_re0 import RE0003
+
+        rule = RE0003()
+        violations = rule.check(conn)
+        assert len(violations) == 1
+        assert violations[0].current_values["val_ref"] == 300.0
+        assert violations[0].current_values["val_cmp"] == 200.0
         conn.close()
 
     def test_re0011_finds_negative_reserves(self, tmp_path):
@@ -429,15 +674,13 @@ class TestCategoryBOrdering:
     def test_re0003_ioip_low_le_mid(self, tmp_path):
         db_path = tmp_path / "test.duckdb"
         conn = duckdb.connect(str(db_path))
-        _create_re0_test_table(conn)
+        _create_field_test_table(conn)
 
-        # Good: Low=100, Mid=200
-        _insert_full_row(conn, 2024, "Good", UncertLevel.LOW, ioip=100)
-        _insert_full_row(conn, 2024, "Good", UncertLevel.MID, ioip=200)
+        _insert_field_row(conn, 2024, "WK1", "Good", "1. Low Value", ioip=100)
+        _insert_field_row(conn, 2024, "WK1", "Good", "2. Middle Value", ioip=200)
 
-        # Bad: Low=300, Mid=200
-        _insert_full_row(conn, 2024, "Bad", UncertLevel.LOW, ioip=300)
-        _insert_full_row(conn, 2024, "Bad", UncertLevel.MID, ioip=200)
+        _insert_field_row(conn, 2024, "WK1", "Bad", "1. Low Value", ioip=300)
+        _insert_field_row(conn, 2024, "WK1", "Bad", "2. Middle Value", ioip=200)
 
         from esdc.validate.rule_re0 import RE0003
 
@@ -446,7 +689,8 @@ class TestCategoryBOrdering:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0003"
-        assert violations[0].identifiers["project_name"] == "Bad"
+        assert violations[0].identifiers["wk_name"] == "WK1"
+        assert violations[0].identifiers["field_name"] == "Bad"
         assert violations[0].current_values["val_ref"] == 300.0
         assert violations[0].current_values["val_cmp"] == 200.0
         conn.close()
@@ -454,10 +698,10 @@ class TestCategoryBOrdering:
     def test_re0003_no_violations_when_equal(self, tmp_path):
         db_path = tmp_path / "test.duckdb"
         conn = duckdb.connect(str(db_path))
-        _create_re0_test_table(conn)
+        _create_field_test_table(conn)
 
-        _insert_full_row(conn, 2024, "Equal", UncertLevel.LOW, ioip=100)
-        _insert_full_row(conn, 2024, "Equal", UncertLevel.MID, ioip=100)
+        _insert_field_row(conn, 2024, "WK1", "Equal", "1. Low Value", ioip=100)
+        _insert_field_row(conn, 2024, "WK1", "Equal", "2. Middle Value", ioip=100)
 
         from esdc.validate.rule_re0 import RE0003
 
@@ -489,13 +733,13 @@ class TestCategoryBOrdering:
     def test_year_filter(self, tmp_path):
         db_path = tmp_path / "test.duckdb"
         conn = duckdb.connect(str(db_path))
-        _create_re0_test_table(conn)
+        _create_field_test_table(conn)
 
-        _insert_full_row(conn, 2023, "Old", UncertLevel.LOW, ioip=300)
-        _insert_full_row(conn, 2023, "Old", UncertLevel.MID, ioip=200)
+        _insert_field_row(conn, 2023, "WK1", "Old", "1. Low Value", ioip=300)
+        _insert_field_row(conn, 2023, "WK1", "Old", "2. Middle Value", ioip=200)
 
-        _insert_full_row(conn, 2024, "New", UncertLevel.LOW, ioip=300)
-        _insert_full_row(conn, 2024, "New", UncertLevel.MID, ioip=200)
+        _insert_field_row(conn, 2024, "WK1", "New", "1. Low Value", ioip=300)
+        _insert_field_row(conn, 2024, "WK1", "New", "2. Middle Value", ioip=200)
 
         from esdc.validate.rule_re0 import RE0003
 

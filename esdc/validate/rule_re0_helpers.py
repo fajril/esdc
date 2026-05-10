@@ -48,12 +48,20 @@ IDENTIFIER_COLS: list[str] = [
     "field_name",
 ]
 
+FIELD_IDENTIFIER_COLS: list[str] = [
+    "report_year",
+    "wk_name",
+    "field_name",
+]
+
 
 def _add_year_filter(sql: str, year: list[int] | None) -> str:
     """Append year filter to SQL query.
 
     For self-join queries (e.g., project_resources l JOIN project_resources h),
     the year filter is added to the ON clause using a qualified column name.
+    For CTE-based queries (field-level aggregation), the year filter is added
+    inside the CTE WHERE clause.
     For simple queries, the year filter is added to the WHERE clause.
     """
     if not year:
@@ -69,6 +77,30 @@ def _add_year_filter(sql: str, year: list[int] | None) -> str:
     if "WHERE" in sql:
         return sql.replace("WHERE", f"WHERE report_year IN ({year_list}) AND", 1)
     return sql + f" WHERE report_year IN ({year_list})"
+
+
+def _add_year_filter_cte(sql: str, year: list[int] | None) -> str:
+    """Add year filter inside CTE for field-level aggregation queries.
+
+    Inserts the year filter into the CTE's WHERE clause (before GROUP BY).
+    """
+    if not year:
+        return sql
+    year_list = ", ".join(str(y) for y in year)
+    if "WHERE" in sql:
+        return sql.replace("WHERE", f"WHERE report_year IN ({year_list}) AND", 1)
+    if "GROUP BY" in sql:
+        return sql.replace(
+            "GROUP BY",
+            f"WHERE report_year IN ({year_list}) GROUP BY",
+            1,
+        )
+    return sql
+
+
+# ---------------------------------------------------------------------------
+# Project-level SQL builders (project_resources table)
+# ---------------------------------------------------------------------------
 
 
 def build_non_negative_sql(
@@ -186,6 +218,74 @@ def build_reserve_vs_place_sql(
     )
 
 
+# ---------------------------------------------------------------------------
+# Field-level SQL builders (field_resources table)
+# ---------------------------------------------------------------------------
+
+
+def build_field_non_negative_sql(
+    column: str,
+    uncert: UncertLevel | str,
+    table: str = "field_resources",
+) -> str:
+    """Build SQL for field-level: SUM(column) per field >= 0 at given uncert_level.
+
+    Aggregates column values across all projects within each field,
+    then returns fields where the total is negative.
+    """
+    ident = ", ".join(FIELD_IDENTIFIER_COLS)
+    return (
+        f"SELECT {ident},"
+        f" SUM(COALESCE({column}, 0)) AS val_ref"
+        f" FROM {table}"
+        f" WHERE uncert_level = '{_uncert_value(uncert)}'"
+        f" GROUP BY {ident}, uncert_level"
+        f" HAVING SUM(COALESCE({column}, 0)) < 0"
+    )
+
+
+def build_field_ordering_sql(
+    low_col: str,
+    high_col: str,
+    low_uncert: UncertLevel | str,
+    high_uncert: UncertLevel | str,
+    table: str = "field_resources",
+) -> str:
+    """Build SQL for field-level ordering: SUM(low_col) <= SUM(high_col).
+
+    Uses CTE to aggregate values per (wk_name, field_name, uncert_level),
+    then self-joins to compare across uncertainty levels.
+    Returns rows where the aggregated low > aggregated high.
+    """
+    ident = ", ".join(FIELD_IDENTIFIER_COLS)
+    ident_l = ", ".join(f"l.{c}" for c in FIELD_IDENTIFIER_COLS)
+    low_uv = _uncert_value(low_uncert)
+    high_uv = _uncert_value(high_uncert)
+    return (
+        f"WITH field_agg AS ("
+        f" SELECT {ident}, uncert_level,"
+        f" SUM(COALESCE({low_col}, 0)) AS {low_col},"
+        f" SUM(COALESCE({high_col}, 0)) AS {high_col}"
+        f" FROM {table}"
+        f" GROUP BY {ident}, uncert_level"
+        f")"
+        f" SELECT {ident_l}, l.{low_col} AS val_ref, h.{high_col} AS val_cmp"
+        f" FROM field_agg l"
+        f" JOIN field_agg h"
+        f" ON l.wk_name = h.wk_name"
+        f" AND l.field_name = h.field_name"
+        f" AND l.report_year = h.report_year"
+        f" AND l.uncert_level = '{low_uv}'"
+        f" AND h.uncert_level = '{high_uv}'"
+        f" WHERE l.{low_col} > h.{high_col}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Violation builder
+# ---------------------------------------------------------------------------
+
+
 def _execute_and_build_violations(
     conn: duckdb.DuckDBPyConnection,
     sql: str,
@@ -195,12 +295,14 @@ def _execute_and_build_violations(
     table: str,
     year: list[int] | None,
     extra_columns: list[str] | None = None,
+    identifier_cols: list[str] | None = None,
 ) -> list[Violation]:
     """Execute SQL query and build Violation objects from results.
 
     This helper centralises the row-to-Violation conversion pattern
     used by all RE0 rule factories.
     """
+    id_cols = identifier_cols or IDENTIFIER_COLS
     sql = _add_year_filter(sql, year)
     try:
         rows = conn.execute(sql).fetchall()
@@ -210,14 +312,11 @@ def _execute_and_build_violations(
 
     violations: list[Violation] = []
     for row in rows:
-        identifiers = {
-            IDENTIFIER_COLS[i]: str(row[i]) for i in range(len(IDENTIFIER_COLS))
-        }
+        identifiers = {id_cols[i]: str(row[i]) for i in range(len(id_cols))}
         current_values: dict[str, object] = {}
 
-        # Extra columns start after the identifier columns
         extra_cols = extra_columns or []
-        base = len(IDENTIFIER_COLS)
+        base = len(id_cols)
         for i, col_name in enumerate(extra_cols):
             current_values[col_name] = row[base + i]
 
