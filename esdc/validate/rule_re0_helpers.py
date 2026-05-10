@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import logging
+from enum import Enum
 
 import duckdb
 
+from esdc.selection import Severity
 from esdc.validate.rules import Violation
 
 logger = logging.getLogger(__name__)
 
-# Uncertainty level constants
-UNCERT_LOW = "1. Low Value"
-UNCERT_MID = "2. Middle Value"
-UNCERT_HIGH = "3. High Value"
+
+class UncertLevel(str, Enum):
+    LOW = "1. Low Value"
+    MID = "2. Middle Value"
+    HIGH = "3. High Value"
+
+
+def _uncert_value(uncert: UncertLevel | str) -> str:
+    return uncert.value if isinstance(uncert, UncertLevel) else uncert
+
 
 # Column name mapping for rule definitions
 VOL_COLUMNS = {
@@ -37,19 +45,37 @@ IDENTIFIER_COLS: list[str] = ["report_year", "project_name", "wk_name"]
 
 
 def _add_year_filter(sql: str, year: list[int] | None) -> str:
-    """Append year filter to SQL query."""
+    """Append year filter to SQL query.
+
+    For self-join queries (e.g., project_resources l JOIN project_resources h),
+    the year filter is added to the ON clause using a qualified column name.
+    For simple queries, the year filter is added to the WHERE clause.
+    """
     if not year:
         return sql
     year_list = ", ".join(str(y) for y in year)
+    # Self-join queries have " JOIN " and an ON clause with aliases l./h.
+    is_self_join = " JOIN " in sql and ("l." in sql or "h." in sql)
+    if is_self_join:
+        if "l.report_year" in sql:
+            return sql.replace(
+                "AND h.uncert_level",
+                f"AND l.report_year IN ({year_list}) AND h.uncert_level",
+                1,
+            )
+        return sql.replace(
+            "WHERE",
+            f"WHERE l.report_year IN ({year_list}) AND",
+            1,
+        )
     if "WHERE" in sql:
-        # Insert year filter right after WHERE
         return sql.replace("WHERE", f"WHERE report_year IN ({year_list}) AND", 1)
     return sql + f" WHERE report_year IN ({year_list})"
 
 
 def build_non_negative_sql(
     column: str,
-    uncert: str,
+    uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
     """Build SQL for Category A: column >= 0 at given uncert_level.
@@ -59,7 +85,7 @@ def build_non_negative_sql(
     return (
         f"SELECT {', '.join(IDENTIFIER_COLS)}, {column}"
         f" FROM {table}"
-        f" WHERE uncert_level = '{uncert}'"
+        f" WHERE uncert_level = '{_uncert_value(uncert)}'"
         f" AND COALESCE({column}, 0) < 0"
     )
 
@@ -67,8 +93,8 @@ def build_non_negative_sql(
 def build_ordering_sql(
     low_col: str,
     high_col: str,
-    low_uncert: str,
-    high_uncert: str,
+    low_uncert: UncertLevel | str,
+    high_uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
     """Build SQL for Category B: low_col <= high_col across uncert_levels.
@@ -83,8 +109,8 @@ def build_ordering_sql(
         f" JOIN {table} h"
         f" ON l.project_name = h.project_name"
         f" AND l.report_year = h.report_year"
-        f" AND l.uncert_level = '{low_uncert}'"
-        f" AND h.uncert_level = '{high_uncert}'"
+        f" AND l.uncert_level = '{_uncert_value(low_uncert)}'"
+        f" AND h.uncert_level = '{_uncert_value(high_uncert)}'"
         f" WHERE COALESCE(l.{low_col}, 0) > COALESCE(h.{high_col}, 0)"
     )
 
@@ -92,7 +118,7 @@ def build_ordering_sql(
 def build_same_row_ordering_sql(
     low_col: str,
     high_col: str,
-    uncert: str,
+    uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
     """Build SQL for same-row ordering: low_col <= high_col at same uncert_level.
@@ -104,16 +130,16 @@ def build_same_row_ordering_sql(
         f"SELECT {', '.join(IDENTIFIER_COLS)}, {low_col} AS low_val,"
         f" {high_col} AS high_val"
         f" FROM {table}"
-        f" WHERE uncert_level = '{uncert}'"
+        f" WHERE uncert_level = '{_uncert_value(uncert)}'"
         f" AND COALESCE({low_col}, 0) > COALESCE({high_col}, 0)"
     )
 
 
 def build_implication_sql(
     cond_col: str,
-    cond_uncert: str,
+    cond_uncert: UncertLevel | str,
     result_col: str,
-    result_uncert: str,
+    result_uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
     """Build SQL for Category E: if cond_col > 0 then result_col > 0.
@@ -127,8 +153,8 @@ def build_implication_sql(
         f" JOIN {table} l"
         f" ON h.project_name = l.project_name"
         f" AND h.report_year = l.report_year"
-        f" AND h.uncert_level = '{cond_uncert}'"
-        f" AND l.uncert_level = '{result_uncert}'"
+        f" AND h.uncert_level = '{_uncert_value(cond_uncert)}'"
+        f" AND l.uncert_level = '{_uncert_value(result_uncert)}'"
         f" WHERE COALESCE(h.{cond_col}, 0) > 0"
         f" AND COALESCE(l.{result_col}, 0) = 0"
     )
@@ -138,7 +164,7 @@ def build_reserve_vs_place_sql(
     place_col: str,
     reserve_col: str,
     cumprod_col: str,
-    uncert: str,
+    uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
     """Build SQL for Category F: if place > 0, then reserve + cumprod < place.
@@ -152,7 +178,7 @@ def build_reserve_vs_place_sql(
         f" {reserve_col} AS reserve_val,"
         f" {cumprod_col} AS cumprod_val"
         f" FROM {table}"
-        f" WHERE uncert_level = '{uncert}'"
+        f" WHERE uncert_level = '{_uncert_value(uncert)}'"
         f" AND COALESCE({place_col}, 0) > 0"
         f" AND COALESCE({reserve_col}, 0) + COALESCE({cumprod_col}, 0)"
         f" >= COALESCE({place_col}, 0)"
@@ -164,7 +190,7 @@ def _execute_and_build_violations(
     sql: str,
     rule_id: str,
     description: str,
-    severity: str,
+    severity: Severity,
     table: str,
     year: list[int] | None,
     extra_columns: list[str] | None = None,
