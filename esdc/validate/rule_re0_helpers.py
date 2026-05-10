@@ -54,6 +54,14 @@ FIELD_IDENTIFIER_COLS: list[str] = [
     "field_name",
 ]
 
+AGGREGATION_CONSISTENCY_IDENTIFIER_COLS: list[str] = [
+    "report_year",
+    "wk_name",
+    "field_name",
+    "project_stage",
+    "project_class",
+]
+
 
 def _add_year_filter(sql: str, year: list[int] | None) -> str:
     """Append year filter to SQL query.
@@ -63,6 +71,8 @@ def _add_year_filter(sql: str, year: list[int] | None) -> str:
     For CTE-based queries (field-level aggregation), the year filter is added
     inside the CTE WHERE clause.
     For simple queries, the year filter is added to the WHERE clause.
+    For cross-table joins (e.g., field_resources fr JOIN project_resources pr),
+    the year filter uses the fr alias.
     """
     if not year:
         return sql
@@ -72,6 +82,13 @@ def _add_year_filter(sql: str, year: list[int] | None) -> str:
         return sql.replace(
             "AND h.uncert_level",
             f"AND l.report_year IN ({year_list}) AND h.uncert_level",
+            1,
+        )
+    is_cross_join = "fr." in sql and "pr." in sql
+    if is_cross_join:
+        return sql.replace(
+            "WHERE fr.uncert_level",
+            f"WHERE fr.report_year IN ({year_list}) AND fr.uncert_level",
             1,
         )
     if "WHERE" in sql:
@@ -278,6 +295,46 @@ def build_field_ordering_sql(
         f" AND l.uncert_level = '{low_uv}'"
         f" AND h.uncert_level = '{high_uv}'"
         f" WHERE l.{low_col} > h.{high_col}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Aggregation consistency SQL builder (cross-table)
+# ---------------------------------------------------------------------------
+
+
+def build_aggregation_consistency_sql(
+    column: str,
+    project_column: str,
+    uncert: UncertLevel | str,
+    tolerance: float = 0.001,
+) -> str:
+    """Build SQL for Category D: SUM(project_column) must equal field column.
+
+    Joins field_resources with project_resources on the GROUP BY keys
+    (wk_id, field_id, report_year, project_stage, project_class, uncert_level)
+    and checks that the sum of project-level values matches the field-level
+    aggregated value within the given tolerance.
+
+    Returns rows where ABS(SUM(project_column) - field_column) > tolerance.
+    """
+    ident = ", ".join(f"fr.{c}" for c in AGGREGATION_CONSISTENCY_IDENTIFIER_COLS)
+    group_ident = ", ".join(f"fr.{c}" for c in AGGREGATION_CONSISTENCY_IDENTIFIER_COLS)
+    return (
+        f"SELECT {ident},"
+        f" SUM(pr.{project_column}) AS val_sum,"
+        f" fr.{column} AS val_field"
+        f" FROM field_resources fr"
+        f" JOIN project_resources pr"
+        f" ON fr.wk_id = pr.wk_id"
+        f" AND fr.field_id = pr.field_id"
+        f" AND fr.report_year = pr.report_year"
+        f" AND fr.project_stage = pr.project_stage"
+        f" AND fr.project_class = pr.project_class"
+        f" AND fr.uncert_level = pr.uncert_level"
+        f" WHERE fr.uncert_level = '{_uncert_value(uncert)}'"
+        f" GROUP BY {group_ident}, fr.{column}"
+        f" HAVING ABS(SUM(pr.{project_column}) - fr.{column}) > {tolerance}"
     )
 
 

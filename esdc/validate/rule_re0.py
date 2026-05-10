@@ -1,8 +1,9 @@
 """RE0xxx rules: Volumetric validation.
 
-This module registers 52 validation rules (RE0001-RE0042, RE0049-RE0058)
-covering non-negative checks, ordering constraints, reserves-resources
-coherence, implication checks, and in-place vs reserves+production bounds.
+This module registers 58 validation rules (RE0001-RE0048, RE0049-RE0058)
+covering non-negative checks, ordering constraints, aggregation consistency,
+reserves-resources coherence, implication checks, and in-place vs
+reserves+production bounds.
 
 Each category has an abstract parent class that concrete rules inherit from,
 sharing the check/generate_fixes logic while differing only in column names
@@ -18,9 +19,11 @@ if typing.TYPE_CHECKING:
 
 from esdc.selection import Severity
 from esdc.validate.rule_re0_helpers import (
+    AGGREGATION_CONSISTENCY_IDENTIFIER_COLS,
     FIELD_IDENTIFIER_COLS,
     UncertLevel,
     _execute_and_build_violations,
+    build_aggregation_consistency_sql,
     build_field_non_negative_sql,
     build_field_ordering_sql,
     build_implication_sql,
@@ -705,6 +708,112 @@ class RE0042(RE0SameRowOrderingRule):
     formal = r"$\Delta G_{ps}^{\text{3P}} \leq \Delta G_{pn}^{\text{3R}}$"
     low_col = "res_gn"
     high_col = "rec_gn"
+    uncert = UncertLevel.HIGH
+
+
+# ---------------------------------------------------------------------------
+# Category D: Aggregation consistency (6 rules)
+# ---------------------------------------------------------------------------
+
+
+class RE0AggregationConsistencyRule(ValidationRule):
+    """Base: SUM(project_column) per field must equal field_resources column.
+
+    Violation when ABS(SUM(project_column) - field_column) > 0.001.
+    Joins field_resources with project_resources on the GROUP BY keys
+    (wk_id, field_id, report_year, project_stage, project_class, uncert_level).
+    """
+
+    is_fixable = False
+    applies_to_tables = ["field_resources", "project_resources"]
+    severity = Severity.STRICT
+    column: str
+    project_column: str
+    uncert: UncertLevel
+
+    def check(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        year: list[int] | None = None,
+    ) -> list[Violation]:
+        sql = build_aggregation_consistency_sql(
+            self.column, self.project_column, self.uncert
+        )
+        return _execute_and_build_violations(
+            conn,
+            sql,
+            rule_id=self.rule_id,
+            description=self.description,
+            severity=self.severity,
+            table="field_resources",
+            year=year,
+            extra_columns=["val_sum", "val_field"],
+            identifier_cols=AGGREGATION_CONSISTENCY_IDENTIFIER_COLS,
+        )
+
+    def generate_fixes(
+        self, violations: list[Violation]
+    ) -> list[tuple[str, list[object]]]:
+        return []
+
+
+@register_rule
+class RE0043(RE0AggregationConsistencyRule):
+    rule_id = "RE0043"
+    description = "IOIP Low: Sum of Project IOIP Low must be equal to IOIP Low"
+    formal = r"$\sum_{i=1}^n N_{\text{prj},i}^{\text{P90}} = N^{\text{P90}}$"
+    column = "ioip"
+    project_column = "prj_ioip"
+    uncert = UncertLevel.LOW
+
+
+@register_rule
+class RE0044(RE0AggregationConsistencyRule):
+    rule_id = "RE0044"
+    description = "IOIP Mid: Sum of Project IOIP Mid must be equal to IOIP Mid"
+    formal = r"$\sum_{i=1}^n N_{\text{prj},i}^{\text{P50}} = N^{\text{P50}}$"
+    column = "ioip"
+    project_column = "prj_ioip"
+    uncert = UncertLevel.MID
+
+
+@register_rule
+class RE0045(RE0AggregationConsistencyRule):
+    rule_id = "RE0045"
+    description = "IOIP High: Sum of Project IOIP High must be equal to IOIP High"
+    formal = r"$\sum_{i=1}^n N_{\text{prj},i}^{\text{P10}} = N^{\text{P10}}$"
+    column = "ioip"
+    project_column = "prj_ioip"
+    uncert = UncertLevel.HIGH
+
+
+@register_rule
+class RE0046(RE0AggregationConsistencyRule):
+    rule_id = "RE0046"
+    description = "IGIP Low: Sum of Project IGIP Low must be equal to IGIP Low"
+    formal = r"$\sum_{i=1}^n G_{\text{prj},i}^{\text{P90}} = G^{\text{P90}}$"
+    column = "igip"
+    project_column = "prj_igip"
+    uncert = UncertLevel.LOW
+
+
+@register_rule
+class RE0047(RE0AggregationConsistencyRule):
+    rule_id = "RE0047"
+    description = "IGIP Mid: Sum of Project IGIP Mid must be equal to IGIP Mid"
+    formal = r"$\sum_{i=1}^n G_{\text{prj},i}^{\text{P50}} = G^{\text{P50}}$"
+    column = "igip"
+    project_column = "prj_igip"
+    uncert = UncertLevel.MID
+
+
+@register_rule
+class RE0048(RE0AggregationConsistencyRule):
+    rule_id = "RE0048"
+    description = "IGIP High: Sum of Project IGIP High must be equal to IGIP High"
+    formal = r"$\sum_{i=1}^n G_{\text{prj},i}^{\text{P10}} = G^{\text{P10}}$"
+    column = "igip"
+    project_column = "prj_igip"
     uncert = UncertLevel.HIGH
 
 

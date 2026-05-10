@@ -6,12 +6,14 @@ import duckdb
 
 from esdc.selection import Severity
 from esdc.validate.rule_re0_helpers import (
+    AGGREGATION_CONSISTENCY_IDENTIFIER_COLS,
     FIELD_IDENTIFIER_COLS,
     IDENTIFIER_COLS,
     VOL_COLUMNS,
     UncertLevel,
     _add_year_filter,
     _execute_and_build_violations,
+    build_aggregation_consistency_sql,
     build_field_non_negative_sql,
     build_field_ordering_sql,
     build_implication_sql,
@@ -166,6 +168,38 @@ class TestBuildFieldOrderingSql:
         assert "FROM my_table" in sql
 
 
+class TestBuildAggregationConsistencySql:
+    def test_basic(self):
+        sql = build_aggregation_consistency_sql("ioip", "prj_ioip", UncertLevel.LOW)
+        assert "FROM field_resources fr" in sql
+        assert "JOIN project_resources pr" in sql
+        assert "ON fr.wk_id = pr.wk_id" in sql
+        assert "AND fr.field_id = pr.field_id" in sql
+        assert "AND fr.report_year = pr.report_year" in sql
+        assert "AND fr.project_stage = pr.project_stage" in sql
+        assert "AND fr.project_class = pr.project_class" in sql
+        assert "AND fr.uncert_level = pr.uncert_level" in sql
+        assert "WHERE fr.uncert_level = '1. Low Value'" in sql
+        assert "SUM(pr.prj_ioip) AS val_sum" in sql
+        assert "fr.ioip AS val_field" in sql
+        assert "HAVING ABS(SUM(pr.prj_ioip) - fr.ioip) > 0.001" in sql
+
+    def test_different_column(self):
+        sql = build_aggregation_consistency_sql("igip", "prj_igip", UncertLevel.MID)
+        assert "SUM(pr.prj_igip) AS val_sum" in sql
+        assert "fr.igip AS val_field" in sql
+        assert "fr.uncert_level = '2. Middle Value'" in sql
+
+    def test_identifier_columns(self):
+        assert AGGREGATION_CONSISTENCY_IDENTIFIER_COLS == [
+            "report_year",
+            "wk_name",
+            "field_name",
+            "project_stage",
+            "project_class",
+        ]
+
+
 class TestAddYearFilter:
     def test_no_year(self):
         base = "SELECT * FROM table WHERE x = 1"
@@ -193,6 +227,12 @@ class TestAddYearFilter:
         )
         result = _add_year_filter(sql, [2024])
         assert "l.report_year IN (2024)" in result
+
+    def test_cross_join_year_filter(self):
+        sql = build_aggregation_consistency_sql("ioip", "prj_ioip", UncertLevel.LOW)
+        result = _add_year_filter(sql, [2024])
+        assert "fr.report_year IN (2024)" in result
+        assert "AND fr.uncert_level" in result
 
 
 class TestExecuteAndBuildViolations:
@@ -854,6 +894,424 @@ class TestCategoryCReservesVsResources:
         conn.close()
 
 
+def _create_agg_test_tables(conn: duckdb.DuckDBPyConnection) -> None:
+    """Create project_resources and field_resources for agg consistency tests."""
+    conn.execute("""
+        CREATE TABLE project_resources (
+            id INTEGER,
+            report_year INTEGER,
+            report_date TEXT,
+            report_status TEXT,
+            project_name TEXT,
+            project_stage TEXT,
+            project_class TEXT,
+            project_level TEXT,
+            uncert_level TEXT,
+            wk_id TEXT,
+            wk_name TEXT,
+            field_id TEXT,
+            field_name TEXT,
+            prj_ioip REAL,
+            prj_igip REAL,
+            res_oil REAL,
+            res_con REAL,
+            res_ga REAL,
+            res_gn REAL,
+            rec_oil REAL,
+            rec_con REAL,
+            rec_ga REAL,
+            rec_gn REAL,
+            cprd_grs_oil REAL,
+            cprd_grs_con REAL,
+            cprd_grs_ga REAL,
+            cprd_grs_gn REAL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE field_resources (
+            report_year INTEGER,
+            wk_id TEXT,
+            wk_name TEXT,
+            field_id TEXT,
+            field_name TEXT,
+            project_stage TEXT,
+            project_class TEXT,
+            uncert_level TEXT,
+            ioip REAL,
+            igip REAL,
+            res_oil REAL,
+            res_con REAL,
+            res_ga REAL,
+            res_gn REAL,
+            rec_oil REAL,
+            rec_con REAL,
+            rec_ga REAL,
+            rec_gn REAL,
+            cprd_grs_oil REAL,
+            cprd_grs_con REAL,
+            cprd_grs_ga REAL,
+            cprd_grs_gn REAL
+        )
+    """)
+
+
+def _insert_project_row(
+    conn: duckdb.DuckDBPyConnection,
+    year: int,
+    wk_id: str,
+    wk_name: str,
+    field_id: str,
+    field_name: str,
+    project_name: str,
+    project_stage: str,
+    project_class: str,
+    uncert: str,
+    prj_ioip: float | None = None,
+    prj_igip: float | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO project_resources"
+        " (id, report_year, report_date, report_status, project_name,"
+        "  project_stage, project_class, project_level, uncert_level,"
+        "  wk_id, wk_name, field_id, field_name,"
+        "  prj_ioip, prj_igip,"
+        "  res_oil, res_con, res_ga, res_gn,"
+        "  rec_oil, rec_con, rec_ga, rec_gn,"
+        "  cprd_grs_oil, cprd_grs_con, cprd_grs_ga, cprd_grs_gn)"
+        " VALUES (?, ?, '2024-01-01', 'ACTIVE', ?,"
+        "         ?, ?, 'LEVEL 1', ?,"
+        "         ?, ?, ?, ?,"
+        "         ?, ?,"
+        "         0, 0, 0, 0,"
+        "         0, 0, 0, 0,"
+        "         0, 0, 0, 0)",
+        [
+            1,
+            year,
+            project_name,
+            project_stage,
+            project_class,
+            uncert,
+            wk_id,
+            wk_name,
+            field_id,
+            field_name,
+            prj_ioip,
+            prj_igip,
+        ],
+    )
+
+
+def _insert_field_row_agg(
+    conn: duckdb.DuckDBPyConnection,
+    year: int,
+    wk_id: str,
+    wk_name: str,
+    field_id: str,
+    field_name: str,
+    project_stage: str,
+    project_class: str,
+    uncert: str,
+    ioip: float | None = None,
+    igip: float | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO field_resources"
+        " (report_year, wk_id, wk_name, field_id, field_name,"
+        "  project_stage, project_class, uncert_level,"
+        "  ioip, igip,"
+        "  res_oil, res_con, res_ga, res_gn,"
+        "  rec_oil, rec_con, rec_ga, rec_gn,"
+        "  cprd_grs_oil, cprd_grs_con, cprd_grs_ga, cprd_grs_gn)"
+        " VALUES (?, ?, ?, ?, ?,"
+        "         ?, ?, ?,"
+        "         ?, ?,"
+        "         0, 0, 0, 0,"
+        "         0, 0, 0, 0,"
+        "         0, 0, 0, 0)",
+        [
+            year,
+            wk_id,
+            wk_name,
+            field_id,
+            field_name,
+            project_stage,
+            project_class,
+            uncert,
+            ioip,
+            igip,
+        ],
+    )
+
+
+class TestCategoryDAggregationConsistency:
+    """Tests for RE0043-RE0048 (SUM(project) must equal field value)."""
+
+    def test_re0043_mismatch_detected(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_agg_test_tables(conn)
+
+        _insert_project_row(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "Proj A",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            prj_ioip=100,
+        )
+        _insert_project_row(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "Proj B",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            prj_ioip=200,
+        )
+        _insert_field_row_agg(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            ioip=500,
+        )
+
+        from esdc.validate.rule_re0 import RE0043
+
+        rule = RE0043()
+        violations = rule.check(conn)
+
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0043"
+        assert violations[0].identifiers["field_name"] == "Field One"
+        assert violations[0].current_values["val_sum"] == 300.0
+        assert violations[0].current_values["val_field"] == 500.0
+        conn.close()
+
+    def test_re0043_no_violation_when_equal(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_agg_test_tables(conn)
+
+        _insert_project_row(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "Proj A",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            prj_ioip=100,
+        )
+        _insert_project_row(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "Proj B",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            prj_ioip=200,
+        )
+        _insert_field_row_agg(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            ioip=300,
+        )
+
+        from esdc.validate.rule_re0 import RE0043
+
+        rule = RE0043()
+        violations = rule.check(conn)
+        assert len(violations) == 0
+        conn.close()
+
+    def test_re0043_tolerance_not_triggered(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_agg_test_tables(conn)
+
+        _insert_project_row(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "Proj A",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            prj_ioip=100,
+        )
+        _insert_project_row(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "Proj B",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            prj_ioip=200,
+        )
+        _insert_field_row_agg(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            ioip=300.0005,
+        )
+
+        from esdc.validate.rule_re0 import RE0043
+
+        rule = RE0043()
+        violations = rule.check(conn)
+        assert len(violations) == 0
+        conn.close()
+
+    def test_re0046_igip_mismatch(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_agg_test_tables(conn)
+
+        _insert_project_row(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "Proj A",
+            "DEVELOPMENT",
+            "CLASS B",
+            UncertLevel.LOW,
+            prj_igip=50,
+        )
+        _insert_field_row_agg(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field One",
+            "DEVELOPMENT",
+            "CLASS B",
+            UncertLevel.LOW,
+            igip=100,
+        )
+
+        from esdc.validate.rule_re0 import RE0046
+
+        rule = RE0046()
+        violations = rule.check(conn)
+
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0046"
+        conn.close()
+
+    def test_year_filter(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_agg_test_tables(conn)
+
+        _insert_project_row(
+            conn,
+            2023,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field Old",
+            "Proj A",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            prj_ioip=100,
+        )
+        _insert_field_row_agg(
+            conn,
+            2023,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field Old",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            ioip=500,
+        )
+
+        _insert_project_row(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field New",
+            "Proj B",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            prj_ioip=200,
+        )
+        _insert_field_row_agg(
+            conn,
+            2024,
+            "WK1",
+            "Work Area 1",
+            "F1",
+            "Field New",
+            "DISCOVERED",
+            "CLASS A",
+            UncertLevel.LOW,
+            ioip=600,
+        )
+
+        from esdc.validate.rule_re0 import RE0043
+
+        rule = RE0043()
+        violations = rule.check(conn, year=[2024])
+
+        assert len(violations) == 1
+        assert violations[0].identifiers["report_year"] == "2024"
+        conn.close()
+
+
 class TestCategoryEImplication:
     """Tests for RE0049-RE0052 (if 3P > 0 then 1P > 0)."""
 
@@ -1054,11 +1512,11 @@ class TestRegistry:
 
         rules = get_all_rules()
         re0_rules = [r for r in rules if r.rule_id.startswith("RE0")]
-        assert len(re0_rules) == 52
+        assert len(re0_rules) == 58
 
         rule_ids = sorted(r.rule_id for r in re0_rules)
         expected = (
-            [f"RE{i:04d}" for i in range(1, 43)]  # RE0001-RE0042
+            [f"RE{i:04d}" for i in range(1, 49)]  # RE0001-RE0048
             + [f"RE{i:04d}" for i in range(49, 59)]  # RE0049-RE0058
         )
         assert rule_ids == expected
