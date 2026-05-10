@@ -59,14 +59,27 @@ def _ensure_duckdb_database(db_path: Path) -> None:
         db_path.unlink()
 
 
-def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
-    """Create Full-Text Search indexes for fast text matching."""
+def _create_fts_indexes(
+    conn: duckdb.DuckDBPyConnection,
+) -> dict[str, str]:
+    """Create Full-Text Search indexes for fast text matching.
+
+    Returns a dict mapping table names to their FTS creation result:
+    "ok" on success, or an error message on failure.
+    """
+    fts_results: dict[str, str] = {}
+
     try:
         conn.execute("INSTALL fts")
         conn.execute("LOAD fts")
     except duckdb.Error:
         logging.warning("FTS extension not available, skipping FTS index creation")
-        return
+        for config in [
+            {"table": "project_resources"},
+            {"table": "project_timeseries"},
+        ]:
+            fts_results[config["table"]] = "FTS extension not available"
+        return fts_results
 
     fts_configs = [
         {
@@ -128,6 +141,7 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 "Skipping FTS index for %s (table not yet loaded)",
                 table_name or "<empty>",
             )
+            fts_results[table_name or "<empty>"] = "table not loaded"
             continue
 
         row_count = (
@@ -135,6 +149,7 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
         )[0]
         if row_count == 0:
             logging.info("Skipping FTS index for %s (0 rows)", table_name)
+            fts_results[table_name] = "skipped (0 rows)"
             continue
 
         id_col = config["id_col"]
@@ -155,8 +170,10 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
             )
         if not available_cols:
             logging.warning("No valid FTS columns for %s, skipping", table_name)
+            fts_results[table_name] = "no valid FTS columns"
             continue
         cols_str = ", ".join(f"'{c}'" for c in available_cols)
+        console.print(f"  Building FTS index for {table_name} ({row_count:,} rows)...")
         try:
             conn.execute(
                 f"PRAGMA create_fts_index('{table_name}', "
@@ -164,6 +181,8 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 f"lower=1, strip_accents=1, overwrite=1)"
             )
             logging.info("FTS index created for %s", table_name)
+            fts_results[table_name] = "ok"
+            console.print(f"  [green]✓[/green] FTS index: {table_name}")
         except duckdb.Error as e:
             error_msg = str(e)
             if "Catalog Error" in error_msg and "does not exist" in error_msg:
@@ -174,6 +193,8 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 )
             else:
                 logging.warning("Failed to create FTS index for %s: %s", table_name, e)
+            fts_results[table_name] = str(e)
+            console.print(f"  [red]✗[/red] FTS index: {table_name} — {e}")
 
     btree_indexes = [
         (
@@ -198,6 +219,8 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
         ),
     ]
 
+    if any(t in existing_tables for _, t, _ in btree_indexes):
+        console.print("  Creating B-tree indexes...")
     for idx_name, table_name, columns in btree_indexes:
         if table_name not in existing_tables:
             continue
@@ -208,6 +231,8 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
             logging.debug("B-tree index created: %s", idx_name)
         except duckdb.Error as e:
             logging.warning("Failed to create B-tree index %s: %s", idx_name, e)
+
+    return fts_results
 
 
 def reindex_fts() -> None:
@@ -226,20 +251,63 @@ def reindex_fts() -> None:
         logging.error("Database not found at %s. Run 'esdc fetch' first.", db_path)
         return
 
+    start_time = time.monotonic()
+
+    def _step(step: str) -> str:
+        elapsed = time.monotonic() - start_time
+        return f"[dim]Rebuilding indexes: {step} [elapsed {elapsed:.1f}s][/dim]"
+
+    console.print("[bold]Rebuilding search indexes...[/bold]")
     logging.info("Rebuilding FTS indexes on %s", db_path)
     conn = get_duckdb_connection(db_path)
     try:
-        conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
-        _create_fts_indexes(conn)
-        conn.execute("CHECKPOINT")
+        with console.status(_step("dropping HNSW index")):
+            conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
+
+        with console.status(_step("building FTS indexes")):
+            fts_results = _create_fts_indexes(conn)
+
+        with console.status(_step("creating B-tree indexes")):
+            pass  # B-tree indexes already created inside _create_fts_indexes
+
+        with console.status(_step("checkpointing")):
+            conn.execute("CHECKPOINT")
+
+        elapsed = time.monotonic() - start_time
         logging.info("FTS indexes rebuilt successfully.")
-        console.print(
-            "[yellow]:warning:  HNSW embedding index has been dropped. "
-            "Run `[dim]esdc reload --embeddings-only[/dim]` "
-            "to regenerate embeddings.[/yellow]"
-        )
+
+        fts_ok = [t for t, r in fts_results.items() if r == "ok"]
+        fts_failed = [t for t, r in fts_results.items() if r != "ok"]
+
+        if fts_ok and not fts_failed:
+            console.print(
+                f"[green]✓[/green] Search indexes rebuilt "
+                f"({', '.join(fts_ok)}) in {elapsed:.1f}s"
+            )
+        elif fts_ok and fts_failed:
+            for t in fts_failed:
+                console.print(
+                    f"[red]✗[/red] FTS index: {t} — {fts_results[t]}"
+                )
+            console.print(
+                "[yellow]:warning:  HNSW embedding index dropped "
+                "(required for checkpoint). "
+                "Run `[dim]esdc reload --embeddings-only[/dim]` "
+                "to regenerate.[/yellow]"
+            )
+        else:
+            console.print(
+                f"[red]✗[/red] FTS indexes failed in {elapsed:.1f}s"
+            )
+            console.print(
+                "[yellow]:warning:  HNSW embedding index dropped "
+                "(required for checkpoint). "
+                "Run `[dim]esdc reload --embeddings-only[/dim]` "
+                "to regenerate.[/yellow]"
+            )
     except duckdb.Error as e:
         logging.error("Failed to rebuild FTS indexes: %s", e)
+        console.print(f"[red]✗[/red] Failed to rebuild indexes: {e}")
     finally:
         conn.close()
 
