@@ -43,7 +43,7 @@ from esdc.validate.rules import ValidationRule, Violation, register_rule
 class RE0NonNegativeRule(ValidationRule):
     """Base: column value must be >= 0 at given uncertainty level.
 
-    Violation when COALESCE(column, 0) < 0 at the given uncert_level.
+    Violation when COALESCE(column, 0) < -TOLERANCE at the given uncert_level.
     Operates on project_resources at the project level.
     """
 
@@ -82,7 +82,7 @@ class RE0FieldNonNegativeRule(ValidationRule):
     """Base: SUM(column) per field must be >= 0 at given uncertainty level.
 
     Aggregates column values across all projects within each field,
-    then flags fields where the total is negative.
+    then flags fields where the total is < -TOLERANCE.
     Operates on field_resources.
     """
 
@@ -123,6 +123,7 @@ class RE0FieldOrderingRule(ValidationRule):
 
     Uses CTE aggregation and self-join to compare totals at different
     uncertainty levels within the same field.
+    Violation when validated - compared > TOLERANCE.
     Operates on field_resources.
     """
 
@@ -269,8 +270,8 @@ class RE0014(RE0NonNegativeRule):
 class RE0OrderingRule(ValidationRule):
     """Base: validated_column <= compared_column across uncertainty levels.
 
-    Violation when COALESCE(validated_column, 0) > COALESCE(compared_column, 0)
-    across two uncert_level rows for the same project+year.
+    Violation when COALESCE(validated_column, 0) - COALESCE(compared_column, 0)
+    > TOLERANCE across two uncert_level rows for the same project+year.
     """
 
     is_fixable = False
@@ -560,8 +561,8 @@ class RE0030(RE0OrderingRule):
 class RE0SameRowOrderingRule(ValidationRule):
     """Base: validated_column <= compared_column within same row.
 
-    Violation when COALESCE(validated_column, 0) > COALESCE(compared_column, 0)
-    within the same row (same uncert_level).
+    Violation when COALESCE(validated_column, 0) - COALESCE(compared_column, 0)
+    > TOLERANCE within the same row (same uncert_level).
     """
 
     is_fixable = False
@@ -577,7 +578,7 @@ class RE0SameRowOrderingRule(ValidationRule):
         year: list[int] | None = None,
     ) -> list[Violation]:
         sql = build_same_row_ordering_sql(
-            self.validated_column, self.compared_column, self.uncert
+            self.validated_column, self.compared_column, self.uncert,
         )
         return _execute_and_build_violations(
             conn,
@@ -949,7 +950,8 @@ class RE0ReserveVsPlaceRule(ValidationRule):
     """Base: if place > 0, then reserve + cumprod < place.
 
     Violation when validated_column > 0 and
-    COALESCE(reserve_col, 0) + COALESCE(cumprod_col, 0) >= validated_column.
+    COALESCE(place, 0) - COALESCE(reserve_col, 0) - COALESCE(cumprod_col, 0)
+    < TOLERANCE.
     """
 
     is_fixable = False
@@ -966,7 +968,7 @@ class RE0ReserveVsPlaceRule(ValidationRule):
         year: list[int] | None = None,
     ) -> list[Violation]:
         sql = build_reserve_vs_place_sql(
-            self.validated_column, self.reserve_col, self.cumprod_col, self.uncert
+            self.validated_column, self.reserve_col, self.cumprod_col, self.uncert,
         )
         return _execute_and_build_violations(
             conn,

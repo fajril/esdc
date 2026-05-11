@@ -23,6 +23,7 @@ from esdc.validate.rule_re0_helpers import (
     build_same_row_ordering_sql,
     build_zero_implication_sql,
 )
+from esdc.validate.rules import TOLERANCE
 
 # --- Helper SQL building tests ---
 
@@ -32,7 +33,7 @@ class TestBuildNonNegativeSql:
         sql = build_non_negative_sql("prj_ioip", UncertLevel.LOW)
         assert "SELECT report_year, project_name, wk_name, field_name, prj_ioip" in sql
         assert "WHERE uncert_level = '1. Low Value'" in sql
-        assert "COALESCE(prj_ioip, 0) < 0" in sql
+        assert f"COALESCE(prj_ioip, 0) < -{TOLERANCE}" in sql
 
     def test_with_custom_table(self):
         sql = build_non_negative_sql("res_oil", UncertLevel.LOW, table="my_table")
@@ -41,6 +42,14 @@ class TestBuildNonNegativeSql:
     def test_different_uncert(self):
         sql = build_non_negative_sql("rec_ga", UncertLevel.MID)
         assert "uncert_level = '2. Middle Value'" in sql
+
+    def test_default_tolerance(self):
+        sql = build_non_negative_sql("prj_ioip", UncertLevel.LOW)
+        assert f"< -{TOLERANCE}" in sql
+
+    def test_custom_tolerance(self):
+        sql = build_non_negative_sql("prj_ioip", UncertLevel.LOW, tolerance=0.01)
+        assert "< -0.01" in sql
 
 
 class TestBuildOrderingSql:
@@ -54,7 +63,7 @@ class TestBuildOrderingSql:
         assert "AND l.report_year = h.report_year" in sql
         assert "l.uncert_level = '1. Low Value'" in sql
         assert "h.uncert_level = '2. Middle Value'" in sql
-        assert "COALESCE(l.prj_ioip, 0) > COALESCE(h.prj_ioip, 0)" in sql
+        assert f"COALESCE(l.prj_ioip, 0) - COALESCE(h.prj_ioip, 0) > {TOLERANCE}" in sql
 
     def test_different_columns(self):
         sql = build_ordering_sql("rec_oil", "rec_oil", UncertLevel.LOW, UncertLevel.MID)
@@ -67,15 +76,37 @@ class TestBuildOrderingSql:
         )
         assert "FROM my_table l" in sql
 
+    def test_default_tolerance(self):
+        sql = build_ordering_sql(
+            "prj_ioip", "prj_ioip", UncertLevel.LOW, UncertLevel.MID
+        )
+        assert f"> {TOLERANCE}" in sql
+
+    def test_custom_tolerance(self):
+        sql = build_ordering_sql(
+            "rec_oil", "rec_oil", UncertLevel.LOW, UncertLevel.MID, tolerance=0.01
+        )
+        assert "> 0.01" in sql
+
 
 class TestBuildSameRowOrderingSql:
     def test_basic(self):
         sql = build_same_row_ordering_sql("res_oil", "rec_oil", UncertLevel.LOW)
         assert "FROM project_resources" in sql
         assert "uncert_level = '1. Low Value'" in sql
-        assert "COALESCE(res_oil, 0) > COALESCE(rec_oil, 0)" in sql
+        assert f"COALESCE(res_oil, 0) - COALESCE(rec_oil, 0) > {TOLERANCE}" in sql
         assert "res_oil AS val_ref" in sql
         assert "rec_oil AS val_cmp" in sql
+
+    def test_default_tolerance(self):
+        sql = build_same_row_ordering_sql("res_oil", "rec_oil", UncertLevel.LOW)
+        assert f"> {TOLERANCE}" in sql
+
+    def test_custom_tolerance(self):
+        sql = build_same_row_ordering_sql(
+            "res_oil", "rec_oil", UncertLevel.LOW, tolerance=0.01
+        )
+        assert "> 0.01" in sql
 
 
 class TestBuildImplicationSql:
@@ -139,7 +170,8 @@ class TestBuildReserveVsPlaceSql:
         assert "uncert_level = '1. Low Value'" in sql
         assert "COALESCE(prj_ioip, 0) > 0" in sql
         assert (
-            "COALESCE(res_oil, 0) + COALESCE(cprd_grs_oil, 0) >= COALESCE(prj_ioip, 0)"
+            f"COALESCE(prj_ioip, 0) - COALESCE(res_oil, 0)"
+            f" - COALESCE(cprd_grs_oil, 0) < {TOLERANCE}"
             in sql
         )
         assert "prj_ioip AS val_ref" in sql
@@ -154,7 +186,7 @@ class TestBuildFieldNonNegativeSql:
         assert "SUM(COALESCE(ioip, 0)) AS val_ref" in sql
         assert "FROM field_resources" in sql
         assert "GROUP BY report_year, wk_name, field_name, uncert_level" in sql
-        assert "HAVING SUM(COALESCE(ioip, 0)) < 0" in sql
+        assert f"HAVING SUM(COALESCE(ioip, 0)) < -{TOLERANCE}" in sql
 
     def test_with_custom_table(self):
         sql = build_field_non_negative_sql("igip", UncertLevel.LOW, table="my_table")
@@ -213,7 +245,7 @@ class TestBuildAggregationConsistencySql:
         assert "WHERE fr.uncert_level = '1. Low Value'" in sql
         assert "SUM(pr.prj_ioip) AS val_sum" in sql
         assert "fr.ioip AS val_field" in sql
-        assert "HAVING ABS(SUM(pr.prj_ioip) - fr.ioip) > 0.001" in sql
+        assert f"HAVING ABS(SUM(pr.prj_ioip) - fr.ioip) > {TOLERANCE}" in sql
 
     def test_different_column(self):
         sql = build_aggregation_consistency_sql("igip", "prj_igip", UncertLevel.MID)
@@ -264,6 +296,18 @@ class TestAddYearFilter:
         result = _add_year_filter(sql, [2024])
         assert "fr.report_year IN (2024)" in result
         assert "AND fr.uncert_level" in result
+
+    def test_pr_ts_join_year_filter(self):
+        from esdc.validate.rule_re1_helpers import (
+            build_forecast_sum_equals_reserve_sql,
+        )
+
+        sql = build_forecast_sum_equals_reserve_sql(
+            "slf_oil", "res_oil", UncertLevel.MID
+        )
+        result = _add_year_filter(sql, [2024])
+        assert "pr.report_year IN (2024)" in result
+        assert "AND pr.uncert_level" in result
 
 
 class TestExecuteAndBuildViolations:

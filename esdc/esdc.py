@@ -1261,6 +1261,7 @@ def validate(
     """
     # Import rules so that the @register_rule decorator fires.
     import esdc.validate.rule_re0  # noqa: F401
+    import esdc.validate.rule_re1  # noqa: F401
     import esdc.validate.rule_re9  # noqa: F401
 
     if force_fix:

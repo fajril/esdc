@@ -8,7 +8,7 @@ from enum import Enum
 import duckdb
 
 from esdc.selection import Severity
-from esdc.validate.rules import Violation
+from esdc.validate.rules import TOLERANCE, Violation
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,13 @@ def _add_year_filter(sql: str, year: list[int] | None) -> str:
             f"AND l.report_year IN ({year_list}) AND h.uncert_level",
             1,
         )
+    is_pr_ts_join = "pr." in sql and "ts." in sql
+    if is_pr_ts_join:
+        return sql.replace(
+            "WHERE pr.uncert_level",
+            f"WHERE pr.report_year IN ({year_list}) AND pr.uncert_level",
+            1,
+        )
     is_cross_join = "fr." in sql and "pr." in sql
     if is_cross_join:
         return sql.replace(
@@ -124,16 +131,18 @@ def build_non_negative_sql(
     validated_column: str,
     uncert: UncertLevel | str,
     table: str = "project_resources",
+    tolerance: float = TOLERANCE,
 ) -> str:
     """Build SQL for Category A: column >= 0 at given uncert_level.
 
-    Returns rows where COALESCE(column, 0) < 0.
+    Returns rows where COALESCE(column, 0) < -tolerance.
+    Values between -tolerance and 0 are treated as zero (floating point noise).
     """
     return (
         f"SELECT {', '.join(IDENTIFIER_COLS)}, {validated_column}"
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
-        f" AND COALESCE({validated_column}, 0) < 0"
+        f" AND COALESCE({validated_column}, 0) < -{tolerance}"
     )
 
 
@@ -143,6 +152,7 @@ def build_ordering_sql(
     low_uncert: UncertLevel | str,
     high_uncert: UncertLevel | str,
     table: str = "project_resources",
+    tolerance: float = TOLERANCE,
 ) -> str:
     """Build SQL for Category B: validated_column <= compared_column.
 
@@ -151,7 +161,7 @@ def build_ordering_sql(
     Joins on project_id (which uniquely identifies a project-wk combination)
     to avoid cross-product false violations from shared project names.
     Returns rows where COALESCE(validated_column, 0)
-    > COALESCE(compared_column, 0).
+    - COALESCE(compared_column, 0) > tolerance.
     """
     ident_l = ", ".join(f"l.{c}" for c in IDENTIFIER_COLS)
     return (
@@ -164,7 +174,8 @@ def build_ordering_sql(
         f" AND l.report_year = h.report_year"
         f" AND l.uncert_level = '{_uncert_value(low_uncert)}'"
         f" AND h.uncert_level = '{_uncert_value(high_uncert)}'"
-        f" WHERE COALESCE(l.{validated_column}, 0) > COALESCE(h.{compared_column}, 0)"
+        f" WHERE COALESCE(l.{validated_column}, 0)"
+        f" - COALESCE(h.{compared_column}, 0) > {tolerance}"
     )
 
 
@@ -173,12 +184,13 @@ def build_same_row_ordering_sql(
     compared_column: str,
     uncert: UncertLevel | str,
     table: str = "project_resources",
+    tolerance: float = TOLERANCE,
 ) -> str:
     """Build SQL for same-row ordering: validated_column <= compared_column.
 
     Used when both values are in the same row (e.g., res_oil vs rec_oil).
     Returns rows where COALESCE(validated_column, 0)
-    > COALESCE(compared_column, 0).
+    - COALESCE(compared_column, 0) > tolerance.
     """
     return (
         f"SELECT {', '.join(IDENTIFIER_COLS)},"
@@ -186,7 +198,8 @@ def build_same_row_ordering_sql(
         f" {compared_column} AS val_cmp"
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
-        f" AND COALESCE({validated_column}, 0) > COALESCE({compared_column}, 0)"
+        f" AND COALESCE({validated_column}, 0)"
+        f" - COALESCE({compared_column}, 0) > {tolerance}"
     )
 
 
@@ -252,11 +265,12 @@ def build_reserve_vs_place_sql(
     cumprod_col: str,
     uncert: UncertLevel | str,
     table: str = "project_resources",
+    tolerance: float = TOLERANCE,
 ) -> str:
     """Build SQL for Category F: if place > 0, then reserve + cumprod < place.
 
     All values are in the same row (same uncert_level).
-    Returns rows where place > 0 AND (reserve + cumprod) >= place.
+    Returns rows where place > 0 AND place - (reserve + cumprod) < tolerance.
     """
     return (
         f"SELECT {', '.join(IDENTIFIER_COLS)},"
@@ -266,8 +280,8 @@ def build_reserve_vs_place_sql(
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
         f" AND COALESCE({validated_column}, 0) > 0"
-        f" AND COALESCE({reserve_col}, 0) + COALESCE({cumprod_col}, 0)"
-        f" >= COALESCE({validated_column}, 0)"
+        f" AND COALESCE({validated_column}, 0) - COALESCE({reserve_col}, 0)"
+        f" - COALESCE({cumprod_col}, 0) < {tolerance}"
     )
 
 
@@ -280,11 +294,12 @@ def build_field_non_negative_sql(
     validated_column: str,
     uncert: UncertLevel | str,
     table: str = "field_resources",
+    tolerance: float = TOLERANCE,
 ) -> str:
     """Build SQL for field-level: SUM(column) per field >= 0 at given uncert_level.
 
     Aggregates column values across all projects within each field,
-    then returns fields where the total is negative.
+    then returns fields where the total is < -tolerance.
     """
     ident = ", ".join(FIELD_IDENTIFIER_COLS)
     return (
@@ -293,7 +308,7 @@ def build_field_non_negative_sql(
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
         f" GROUP BY {ident}, uncert_level"
-        f" HAVING SUM(COALESCE({validated_column}, 0)) < 0"
+        f" HAVING SUM(COALESCE({validated_column}, 0)) < -{tolerance}"
     )
 
 
@@ -303,12 +318,13 @@ def build_field_ordering_sql(
     low_uncert: UncertLevel | str,
     high_uncert: UncertLevel | str,
     table: str = "field_resources",
+    tolerance: float = TOLERANCE,
 ) -> str:
     """Build SQL for field-level ordering: SUM(validated_col) <= SUM(compared_col).
 
     Uses CTE to aggregate values per (wk_name, field_name, uncert_level),
     then self-joins to compare across uncertainty levels.
-    Returns rows where the aggregated validated > aggregated compared.
+    Returns rows where validated - compared > tolerance.
     """
     ident = ", ".join(FIELD_IDENTIFIER_COLS)
     ident_l = ", ".join(f"l.{c}" for c in FIELD_IDENTIFIER_COLS)
@@ -332,7 +348,7 @@ def build_field_ordering_sql(
         f" AND l.report_year = h.report_year"
         f" AND l.uncert_level = '{low_uv}'"
         f" AND h.uncert_level = '{high_uv}'"
-        f" WHERE l.{validated_column} > h.{compared_column}"
+        f" WHERE l.{validated_column} - h.{compared_column} > {tolerance}"
     )
 
 
@@ -345,7 +361,7 @@ def build_aggregation_consistency_sql(
     validated_column: str,
     compared_column: str,
     uncert: UncertLevel | str,
-    tolerance: float = 0.001,
+    tolerance: float = TOLERANCE,
 ) -> str:
     """Build SQL for Category D: SUM(compared_column) must equal validated_column.
 
@@ -393,6 +409,7 @@ def _execute_and_build_violations(
     identifier_cols: list[str] | None = None,
     validated_column: str = "",
     compared_columns: list[str] | None = None,
+    rule_group: str = "RE0",
 ) -> list[Violation]:
     """Execute SQL query and build Violation objects from results.
 
@@ -420,7 +437,7 @@ def _execute_and_build_violations(
         violations.append(
             Violation(
                 rule_id=rule_id,
-                rule_group="RE0",
+                rule_group=rule_group,
                 description=description,
                 severity=severity,
                 table=table,
@@ -428,6 +445,6 @@ def _execute_and_build_violations(
                 compared_columns=compared_columns or [],
                 identifiers=identifiers,
                 current_values=current_values,
-            )
+            ),
         )
     return violations

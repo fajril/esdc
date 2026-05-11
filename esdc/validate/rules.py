@@ -14,6 +14,8 @@ from esdc.configs import Config
 from esdc.dbmanager import get_duckdb_connection
 from esdc.selection import Severity
 
+TOLERANCE: float = 0.001
+
 # Simple LaTeX tokens that do NOT take arguments.
 _LATEX_TOKEN_MAP: dict[str, str] = {
     r"\implies": " -> ",
