@@ -21,6 +21,7 @@ from esdc.validate.rule_re0_helpers import (
     build_ordering_sql,
     build_reserve_vs_place_sql,
     build_same_row_ordering_sql,
+    build_zero_implication_sql,
 )
 
 # --- Helper SQL building tests ---
@@ -97,6 +98,36 @@ class TestBuildImplicationSql:
         )
         assert "h.res_con AS val_ref" in sql
         assert "l.res_con AS val_cmp" in sql
+
+
+class TestBuildZeroImplicationSql:
+    def test_basic(self):
+        sql = build_zero_implication_sql(
+            "prj_ioip", UncertLevel.LOW, "prj_ioip", UncertLevel.MID
+        )
+        assert "FROM project_resources h" in sql
+        assert "JOIN project_resources l" in sql
+        assert "ON h.project_id = l.project_id" in sql
+        assert "AND h.report_year = l.report_year" in sql
+        assert "h.uncert_level = '1. Low Value'" in sql
+        assert "l.uncert_level = '2. Middle Value'" in sql
+        assert "COALESCE(h.prj_ioip, 0) = 0" in sql
+        assert "COALESCE(l.prj_ioip, 0) != 0" in sql
+
+    def test_different_columns(self):
+        sql = build_zero_implication_sql(
+            "prj_igip", UncertLevel.LOW, "prj_igip", UncertLevel.HIGH
+        )
+        assert "h.prj_igip" in sql
+        assert "l.prj_igip" in sql
+        assert "l.uncert_level = '3. High Value'" in sql
+
+    def test_year_filter(self):
+        sql = build_zero_implication_sql(
+            "prj_ioip", UncertLevel.LOW, "prj_ioip", UncertLevel.MID
+        )
+        filtered = _add_year_filter(sql, [2024])
+        assert "l.report_year IN (2024)" in filtered
 
 
 class TestBuildReserveVsPlaceSql:
@@ -1526,7 +1557,181 @@ class TestCategoryFReserveVsPlace:
         conn.close()
 
 
-class TestRegistry:
+class TestCategoryGZeroImplication:
+    """Tests for RE0059-RE0062 (if P90=0 then P50/P10=0)."""
+
+    def test_re0059_ioip_zero_implies_mid_zero(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        # Bad: P90=0, P50=500
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.LOW, ioip=0)
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.MID, ioip=500)
+
+        # Good: P90=0, P50=0
+        _insert_full_row(conn, 2024, "Good", UncertLevel.LOW, ioip=0)
+        _insert_full_row(conn, 2024, "Good", UncertLevel.MID, ioip=0)
+
+        from esdc.validate.rule_re0 import RE0059
+
+        rule = RE0059()
+        violations = rule.check(conn)
+
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0059"
+        assert violations[0].validated_column == "prj_ioip"
+        assert violations[0].compared_columns == ["prj_ioip"]
+        assert violations[0].identifiers["project_name"] == "Bad"
+        conn.close()
+
+    def test_re0059_pass_when_both_zero(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        _insert_full_row(conn, 2024, "OK", UncertLevel.LOW, ioip=0)
+        _insert_full_row(conn, 2024, "OK", UncertLevel.MID, ioip=0)
+
+        from esdc.validate.rule_re0 import RE0059
+
+        rule = RE0059()
+        violations = rule.check(conn)
+        assert len(violations) == 0
+        conn.close()
+
+    def test_re0059_pass_when_cond_nonzero(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        # P90>0: any P50 value is fine (zero-implication doesn't apply)
+        _insert_full_row(conn, 2024, "OK", UncertLevel.LOW, ioip=100)
+        _insert_full_row(conn, 2024, "OK", UncertLevel.MID, ioip=500)
+
+        from esdc.validate.rule_re0 import RE0059
+
+        rule = RE0059()
+        violations = rule.check(conn)
+        assert len(violations) == 0
+        conn.close()
+
+    def test_re0062_igip_zero_implies_high_zero(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.LOW, igip=0)
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.HIGH, igip=1000)
+
+        from esdc.validate.rule_re0 import RE0062
+
+        rule = RE0062()
+        violations = rule.check(conn)
+
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0062"
+        assert violations[0].validated_column == "prj_igip"
+        conn.close()
+
+
+class TestProjectLevelOrdering:
+    """Tests for RE0063-RE0066 (project-level IOIP/IGIP ordering)."""
+
+    def test_re0063_ioip_low_le_mid(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        # Bad: P90 > P50
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.LOW, ioip=1500)
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.MID, ioip=1000)
+
+        # Good: P90 <= P50
+        _insert_full_row(conn, 2024, "Good", UncertLevel.LOW, ioip=500)
+        _insert_full_row(conn, 2024, "Good", UncertLevel.MID, ioip=1000)
+
+        from esdc.validate.rule_re0 import RE0063
+
+        rule = RE0063()
+        violations = rule.check(conn)
+
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0063"
+        assert violations[0].validated_column == "prj_ioip"
+        assert violations[0].compared_columns == ["prj_ioip"]
+        assert violations[0].identifiers["project_name"] == "Bad"
+        assert violations[0].current_values["val_ref"] == 1500.0
+        assert violations[0].current_values["val_cmp"] == 1000.0
+        conn.close()
+
+    def test_re0063_pass_when_ordered(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        _insert_full_row(conn, 2024, "OK", UncertLevel.LOW, ioip=500)
+        _insert_full_row(conn, 2024, "OK", UncertLevel.MID, ioip=1000)
+
+        from esdc.validate.rule_re0 import RE0063
+
+        rule = RE0063()
+        violations = rule.check(conn)
+        assert len(violations) == 0
+        conn.close()
+
+    def test_re0064_ioip_mid_le_high(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.MID, ioip=2000)
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.HIGH, ioip=1500)
+
+        from esdc.validate.rule_re0 import RE0064
+
+        rule = RE0064()
+        violations = rule.check(conn)
+
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0064"
+        conn.close()
+
+    def test_re0065_igip_low_le_mid(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.LOW, igip=1500)
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.MID, igip=1000)
+
+        from esdc.validate.rule_re0 import RE0065
+
+        rule = RE0065()
+        violations = rule.check(conn)
+
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0065"
+        assert violations[0].validated_column == "prj_igip"
+        conn.close()
+
+    def test_re0066_igip_mid_le_high(self, tmp_path):
+        db_path = tmp_path / "test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _create_re0_test_table(conn)
+
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.MID, igip=2000)
+        _insert_full_row(conn, 2024, "Bad", UncertLevel.HIGH, igip=1500)
+
+        from esdc.validate.rule_re0 import RE0066
+
+        rule = RE0066()
+        violations = rule.check(conn)
+
+        assert len(violations) == 1
+        assert violations[0].rule_id == "RE0066"
+        conn.close()
+
     """Test that all RE0 rules are properly registered."""
 
     def test_all_re0_rules_registered(self):
@@ -1534,11 +1739,11 @@ class TestRegistry:
 
         rules = get_all_rules()
         re0_rules = [r for r in rules if r.rule_id.startswith("RE0")]
-        assert len(re0_rules) == 58
+        assert len(re0_rules) == 66
 
         rule_ids = sorted(r.rule_id for r in re0_rules)
         expected = (
             [f"RE{i:04d}" for i in range(1, 49)]  # RE0001-RE0048
-            + [f"RE{i:04d}" for i in range(49, 59)]  # RE0049-RE0058
+            + [f"RE{i:04d}" for i in range(49, 67)]  # RE0049-RE0066
         )
         assert rule_ids == expected

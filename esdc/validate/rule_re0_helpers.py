@@ -218,6 +218,34 @@ def build_implication_sql(
     )
 
 
+def build_zero_implication_sql(
+    validated_column: str,
+    cond_uncert: UncertLevel | str,
+    compared_column: str,
+    result_uncert: UncertLevel | str,
+    table: str = "project_resources",
+) -> str:
+    """Build SQL for Category G: if validated_column=0 then compared_column=0.
+
+    Self-join: find rows where condition column is zero but result column
+    is non-zero. Joins on project_id to avoid cross-product false violations.
+    """
+    ident_h = ", ".join(f"h.{c}" for c in IDENTIFIER_COLS)
+    return (
+        f"SELECT {ident_h},"
+        f" h.{validated_column} AS val_ref,"
+        f" l.{compared_column} AS val_cmp"
+        f" FROM {table} h"
+        f" JOIN {table} l"
+        f" ON h.project_id = l.project_id"
+        f" AND h.report_year = l.report_year"
+        f" AND h.uncert_level = '{_uncert_value(cond_uncert)}'"
+        f" AND l.uncert_level = '{_uncert_value(result_uncert)}'"
+        f" WHERE COALESCE(h.{validated_column}, 0) = 0"
+        f" AND COALESCE(l.{compared_column}, 0) != 0"
+    )
+
+
 def build_reserve_vs_place_sql(
     validated_column: str,
     reserve_col: str,

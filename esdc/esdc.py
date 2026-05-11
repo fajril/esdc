@@ -1207,12 +1207,19 @@ def validate(
         ),
     ] = None,
     save: Annotated[
-        str | None,
+        bool,
         typer.Option(
-            "--save",
-            help="Save violations to file. Formats: xlsx, csv, json.",
+            "--save/--no-save",
+            help="Save violations to file.",
         ),
-    ] = None,
+    ] = False,
+    save_format: Annotated[
+        str,
+        typer.Option(
+            "--save-format",
+            help="Save format: xlsx, csv, json.",
+        ),
+    ] = "xlsx",
 ) -> None:
     """Validate ESDC data against business rules.
 
@@ -1248,10 +1255,9 @@ def validate(
 
     Save violations to file::
 
-        esdc validate --save xlsx
-        esdc validate --save csv
-        esdc validate --save json
         esdc validate --save
+        esdc validate --save --save-format csv
+        esdc validate --save --save-format json
     """
     # Import rules so that the @register_rule decorator fires.
     import esdc.validate.rule_re0  # noqa: F401
@@ -1354,8 +1360,8 @@ def validate(
             f"Use --force-fix to apply fixes.[/yellow]"
         )
 
-    if save is not None:
-        _save_violations(results, save)
+    if save:
+        _save_violations(results, save_format)
 
 
 def _save_violations(results: list[ValidationResult], fmt: str) -> None:

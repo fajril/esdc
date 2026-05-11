@@ -1,9 +1,9 @@
 """RE0xxx rules: Volumetric validation.
 
-This module registers 58 validation rules (RE0001-RE0048, RE0049-RE0058)
+This module registers 66 validation rules (RE0001-RE0066)
 covering non-negative checks, ordering constraints, aggregation consistency,
-reserves-resources coherence, implication checks, and in-place vs
-reserves+production bounds.
+reserves-resources coherence, implication checks, zero-implies-zero checks,
+and in-place vs reserves+production bounds.
 
 Each category has an abstract parent class that concrete rules inherit from,
 sharing the check/generate_fixes logic while differing only in column names
@@ -31,6 +31,7 @@ from esdc.validate.rule_re0_helpers import (
     build_ordering_sql,
     build_reserve_vs_place_sql,
     build_same_row_ordering_sql,
+    build_zero_implication_sql,
 )
 from esdc.validate.rules import ValidationRule, Violation, register_rule
 
@@ -1068,3 +1069,155 @@ class RE0058(RE0ReserveVsPlaceRule):
     reserve_col = "res_gn"
     cumprod_col = "cprd_grs_gn"
     uncert = UncertLevel.HIGH
+
+
+# ---------------------------------------------------------------------------
+# Category G: Zero-implies-zero checks (4 rules)
+# ---------------------------------------------------------------------------
+
+
+class RE0ZeroImplicationRule(ValidationRule):
+    """Base: if validated_column is zero, compared_column must also be zero.
+
+    Violation when COALESCE(validated_column, 0) = 0
+    but COALESCE(compared_column, 0) != 0,
+    across two uncert_level rows for the same project+year.
+    """
+
+    is_fixable = False
+    applies_to_tables = ["project_resources"]
+    severity = Severity.STRICT
+    validated_column: str
+    compared_column: str
+    cond_uncert: UncertLevel
+    result_uncert: UncertLevel
+
+    def check(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        year: list[int] | None = None,
+    ) -> list[Violation]:
+        sql = build_zero_implication_sql(
+            self.validated_column,
+            self.cond_uncert,
+            self.compared_column,
+            self.result_uncert,
+        )
+        return _execute_and_build_violations(
+            conn,
+            sql,
+            rule_id=self.rule_id,
+            description=self.description,
+            severity=self.severity,
+            table="project_resources",
+            year=year,
+            extra_columns=["val_ref", "val_cmp"],
+            validated_column=self.validated_column,
+            compared_columns=[self.compared_column],
+        )
+
+    def generate_fixes(
+        self, violations: list[Violation]
+    ) -> list[tuple[str, list[object]]]:
+        return []
+
+
+@register_rule
+class RE0059(RE0ZeroImplicationRule):
+    rule_id = "RE0059"
+    description = "Project IOIP P50: Must equal zero when P90 equals zero"
+    formal = (
+        r"$N_{\text{prj}}^{\text{P90}} = 0 \implies N_{\text{prj}}^{\text{P50}} = 0$"  # noqa: E501
+    )
+    validated_column = "prj_ioip"
+    compared_column = "prj_ioip"
+    cond_uncert = UncertLevel.LOW
+    result_uncert = UncertLevel.MID
+
+
+@register_rule
+class RE0060(RE0ZeroImplicationRule):
+    rule_id = "RE0060"
+    description = "Project IOIP P10: Must equal zero when P90 equals zero"
+    formal = (
+        r"$N_{\text{prj}}^{\text{P90}} = 0 \implies N_{\text{prj}}^{\text{P10}} = 0$"  # noqa: E501
+    )
+    validated_column = "prj_ioip"
+    compared_column = "prj_ioip"
+    cond_uncert = UncertLevel.LOW
+    result_uncert = UncertLevel.HIGH
+
+
+@register_rule
+class RE0061(RE0ZeroImplicationRule):
+    rule_id = "RE0061"
+    description = "Project IGIP P50: Must equal zero when P90 equals zero"
+    formal = (
+        r"$G_{\text{prj}}^{\text{P90}} = 0 \implies G_{\text{prj}}^{\text{P50}} = 0$"  # noqa: E501
+    )
+    validated_column = "prj_igip"
+    compared_column = "prj_igip"
+    cond_uncert = UncertLevel.LOW
+    result_uncert = UncertLevel.MID
+
+
+@register_rule
+class RE0062(RE0ZeroImplicationRule):
+    rule_id = "RE0062"
+    description = "Project IGIP P10: Must equal zero when P90 equals zero"
+    formal = (
+        r"$G_{\text{prj}}^{\text{P90}} = 0 \implies G_{\text{prj}}^{\text{P10}} = 0$"  # noqa: E501
+    )
+    validated_column = "prj_igip"
+    compared_column = "prj_igip"
+    cond_uncert = UncertLevel.LOW
+    result_uncert = UncertLevel.HIGH
+
+
+# ---------------------------------------------------------------------------
+# Project-level ordering (RE0063-RE0066)
+# ---------------------------------------------------------------------------
+
+
+@register_rule
+class RE0063(RE0OrderingRule):
+    rule_id = "RE0063"
+    description = "Project IOIP P90: Must be less than or equal to P50"
+    formal = r"$N_{\text{prj}}^{\text{P90}} \leq N_{\text{prj}}^{\text{P50}}$"
+    validated_column = "prj_ioip"
+    compared_column = "prj_ioip"
+    low_uncert = UncertLevel.LOW
+    high_uncert = UncertLevel.MID
+
+
+@register_rule
+class RE0064(RE0OrderingRule):
+    rule_id = "RE0064"
+    description = "Project IOIP P50: Must be less than or equal to P10"
+    formal = r"$N_{\text{prj}}^{\text{P50}} \leq N_{\text{prj}}^{\text{P10}}$"
+    validated_column = "prj_ioip"
+    compared_column = "prj_ioip"
+    low_uncert = UncertLevel.MID
+    high_uncert = UncertLevel.HIGH
+
+
+@register_rule
+class RE0065(RE0OrderingRule):
+    rule_id = "RE0065"
+    description = "Project IGIP P90: Must be less than or equal to P50"
+    formal = r"$G_{\text{prj}}^{\text{P90}} \leq G_{\text{prj}}^{\text{P50}}$"
+    validated_column = "prj_igip"
+    compared_column = "prj_igip"
+    low_uncert = UncertLevel.LOW
+    high_uncert = UncertLevel.MID
+
+
+@register_rule
+class RE0066(RE0OrderingRule):
+    rule_id = "RE0066"
+    description = "Project IGIP P50: Must be less than or equal to P10"
+    formal = r"$G_{\text{prj}}^{\text{P50}} \leq G_{\text{prj}}^{\text{P10}}$"
+    validated_column = "prj_igip"
+    compared_column = "prj_igip"
+    low_uncert = UncertLevel.MID
+    high_uncert = UncertLevel.HIGH
