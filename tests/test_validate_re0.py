@@ -269,11 +269,15 @@ class TestExecuteAndBuildViolations:
             table="project_resources",
             year=None,
             extra_columns=["prj_ioip"],
+            validated_column="ioip",
+            compared_columns=[],
         )
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0001"
         assert violations[0].rule_group == "RE0"
+        assert violations[0].validated_column == "ioip"
+        assert violations[0].compared_columns == []
         assert violations[0].identifiers["project_name"] == "BadProj"
         assert violations[0].current_values["prj_ioip"] == -100.0
 
@@ -312,6 +316,8 @@ class TestExecuteAndBuildViolations:
             table="project_resources",
             year=[2024],
             extra_columns=["prj_ioip"],
+            validated_column="ioip",
+            compared_columns=[],
         )
 
         assert len(violations) == 1
@@ -563,6 +569,8 @@ class TestFieldLevelNonNegative:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0001"
+        assert violations[0].validated_column == "ioip"
+        assert violations[0].compared_columns == []
         assert violations[0].identifiers["wk_name"] == "WK1"
         assert violations[0].identifiers["field_name"] == "FLD2"
         assert violations[0].current_values["val_ref"] == -50.0
@@ -633,6 +641,8 @@ class TestFieldLevelOrdering:
         rule = RE0003()
         violations = rule.check(conn)
         assert len(violations) == 1
+        assert violations[0].validated_column == "ioip"
+        assert violations[0].compared_columns == ["ioip"]
         assert violations[0].identifiers["field_name"] == "FLD1"
         assert violations[0].current_values["val_ref"] == 100.0
         assert violations[0].current_values["val_cmp"] == 50.0
@@ -704,6 +714,8 @@ class TestFieldLevelOrdering:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0011"
+        assert violations[0].validated_column == "res_oil"
+        assert violations[0].compared_columns == []
         assert violations[0].current_values["res_oil"] == -10.0
         conn.close()
 
@@ -729,6 +741,8 @@ class TestCategoryBOrdering:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0003"
+        assert violations[0].validated_column == "ioip"
+        assert violations[0].compared_columns == ["ioip"]
         assert violations[0].identifiers["wk_name"] == "WK1"
         assert violations[0].identifiers["field_name"] == "Bad"
         assert violations[0].current_values["val_ref"] == 300.0
@@ -870,6 +884,8 @@ class TestCategoryCReservesVsResources:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0031"
+        assert violations[0].validated_column == "res_oil"
+        assert violations[0].compared_columns == ["rec_oil"]
         assert violations[0].identifiers["project_name"] == "Bad"
         assert violations[0].current_values["val_ref"] == 300.0
         assert violations[0].current_values["val_cmp"] == 200.0
@@ -1098,6 +1114,8 @@ class TestCategoryDAggregationConsistency:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0043"
+        assert violations[0].validated_column == "ioip"
+        assert violations[0].compared_columns == ["prj_ioip"]
         assert violations[0].identifiers["field_name"] == "Field One"
         assert violations[0].current_values["val_sum"] == 300.0
         assert violations[0].current_values["val_field"] == 500.0
@@ -1335,6 +1353,8 @@ class TestCategoryEImplication:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0049"
+        assert violations[0].validated_column == "res_oil"
+        assert violations[0].compared_columns == ["res_oil"]
         assert violations[0].identifiers["project_name"] == "Bad"
         assert violations[0].current_values["val_ref"] == 100.0
         assert violations[0].current_values["val_cmp"] == 0.0
@@ -1450,6 +1470,8 @@ class TestCategoryFReserveVsPlace:
 
         assert len(violations) == 1
         assert violations[0].rule_id == "RE0053"
+        assert violations[0].validated_column == "prj_ioip"
+        assert violations[0].compared_columns == ["res_oil", "cprd_grs_oil"]
         assert violations[0].identifiers["project_name"] == "Bad"
         assert violations[0].current_values["val_ref"] == 1000.0
         assert violations[0].current_values["val_cmp"] == 800.0

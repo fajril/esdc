@@ -1378,6 +1378,7 @@ def _save_violations(results: list[ValidationResult], fmt: str) -> None:
                     "wk_name": v.identifiers.get("wk_name", ""),
                     "field_name": v.identifiers.get("field_name", ""),
                     "project_name": v.identifiers.get("project_name", ""),
+                    "validated_column": v.validated_column,
                     "severity": v.severity.value,
                     "rule_id": v.rule_id,
                     "description": v.description,

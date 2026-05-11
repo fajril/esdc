@@ -99,6 +99,8 @@ class RE9001(ValidationRule):
                     description=self.description,
                     severity=self.severity,
                     table=self.applies_to_tables[0],
+                    validated_column="project_isactive",
+                    compared_columns=[],
                     identifiers={
                         "report_year": str(report_year),
                         "project_name": str(project_name),

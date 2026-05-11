@@ -121,7 +121,7 @@ def _add_year_filter_cte(sql: str, year: list[int] | None) -> str:
 
 
 def build_non_negative_sql(
-    column: str,
+    validated_column: str,
     uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
@@ -130,88 +130,96 @@ def build_non_negative_sql(
     Returns rows where COALESCE(column, 0) < 0.
     """
     return (
-        f"SELECT {', '.join(IDENTIFIER_COLS)}, {column}"
+        f"SELECT {', '.join(IDENTIFIER_COLS)}, {validated_column}"
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
-        f" AND COALESCE({column}, 0) < 0"
+        f" AND COALESCE({validated_column}, 0) < 0"
     )
 
 
 def build_ordering_sql(
-    low_col: str,
-    high_col: str,
+    validated_column: str,
+    compared_column: str,
     low_uncert: UncertLevel | str,
     high_uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
-    """Build SQL for Category B: low_col <= high_col across uncert_levels.
+    """Build SQL for Category B: validated_column <= compared_column.
 
+    Compares values at different uncertainty levels.
     Uses self-join to compare values at different uncertainty levels.
     Joins on project_id (which uniquely identifies a project-wk combination)
     to avoid cross-product false violations from shared project names.
-    Returns rows where COALESCE(low_col, 0) > COALESCE(high_col, 0).
+    Returns rows where COALESCE(validated_column, 0)
+    > COALESCE(compared_column, 0).
     """
     ident_l = ", ".join(f"l.{c}" for c in IDENTIFIER_COLS)
     return (
-        f"SELECT {ident_l}, l.{low_col} AS val_ref, h.{high_col} AS val_cmp"
+        f"SELECT {ident_l},"
+        f" l.{validated_column} AS val_ref,"
+        f" h.{compared_column} AS val_cmp"
         f" FROM {table} l"
         f" JOIN {table} h"
         f" ON l.project_id = h.project_id"
         f" AND l.report_year = h.report_year"
         f" AND l.uncert_level = '{_uncert_value(low_uncert)}'"
         f" AND h.uncert_level = '{_uncert_value(high_uncert)}'"
-        f" WHERE COALESCE(l.{low_col}, 0) > COALESCE(h.{high_col}, 0)"
+        f" WHERE COALESCE(l.{validated_column}, 0) > COALESCE(h.{compared_column}, 0)"
     )
 
 
 def build_same_row_ordering_sql(
-    low_col: str,
-    high_col: str,
+    validated_column: str,
+    compared_column: str,
     uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
-    """Build SQL for same-row ordering: low_col <= high_col at same uncert_level.
+    """Build SQL for same-row ordering: validated_column <= compared_column.
 
     Used when both values are in the same row (e.g., res_oil vs rec_oil).
-    Returns rows where COALESCE(low_col, 0) > COALESCE(high_col, 0).
+    Returns rows where COALESCE(validated_column, 0)
+    > COALESCE(compared_column, 0).
     """
     return (
-        f"SELECT {', '.join(IDENTIFIER_COLS)}, {low_col} AS val_ref,"
-        f" {high_col} AS val_cmp"
+        f"SELECT {', '.join(IDENTIFIER_COLS)},"
+        f" {validated_column} AS val_ref,"
+        f" {compared_column} AS val_cmp"
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
-        f" AND COALESCE({low_col}, 0) > COALESCE({high_col}, 0)"
+        f" AND COALESCE({validated_column}, 0) > COALESCE({compared_column}, 0)"
     )
 
 
 def build_implication_sql(
-    cond_col: str,
+    validated_column: str,
     cond_uncert: UncertLevel | str,
-    result_col: str,
+    compared_column: str,
     result_uncert: UncertLevel | str,
     table: str = "project_resources",
 ) -> str:
-    """Build SQL for Category E: if cond_col > 0 then result_col > 0.
+    """Build SQL for Category E: if validated_column > 0 then compared_column > 0.
 
     Self-join: find rows where the condition is satisfied but the result is zero.
     Joins on project_id to avoid cross-product false violations.
     """
     ident_h = ", ".join(f"h.{c}" for c in IDENTIFIER_COLS)
     return (
-        f"SELECT {ident_h}, h.{cond_col} AS val_ref, l.{result_col} AS val_cmp"
+        f"SELECT {ident_h},"
+        f" h.{validated_column} AS val_ref,"
+        f" l.{compared_column} AS val_cmp"
         f" FROM {table} h"
         f" JOIN {table} l"
         f" ON h.project_id = l.project_id"
         f" AND h.report_year = l.report_year"
         f" AND h.uncert_level = '{_uncert_value(cond_uncert)}'"
         f" AND l.uncert_level = '{_uncert_value(result_uncert)}'"
-        f" WHERE COALESCE(h.{cond_col}, 0) > 0"
-        f" AND COALESCE(l.{result_col}, 0) = 0"
+        f" WHERE COALESCE(h.{validated_column}, 0) > 0"
+        f" AND COALESCE(l.{compared_column}, 0) = 0"
     )
 
 
 def build_reserve_vs_place_sql(
-    place_col: str,
+    validated_column: str,
     reserve_col: str,
     cumprod_col: str,
     uncert: UncertLevel | str,
@@ -224,14 +232,14 @@ def build_reserve_vs_place_sql(
     """
     return (
         f"SELECT {', '.join(IDENTIFIER_COLS)},"
-        f" {place_col} AS val_ref,"
+        f" {validated_column} AS val_ref,"
         f" {reserve_col} AS val_cmp,"
         f" {cumprod_col} AS val_sum"
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
-        f" AND COALESCE({place_col}, 0) > 0"
+        f" AND COALESCE({validated_column}, 0) > 0"
         f" AND COALESCE({reserve_col}, 0) + COALESCE({cumprod_col}, 0)"
-        f" >= COALESCE({place_col}, 0)"
+        f" >= COALESCE({validated_column}, 0)"
     )
 
 
@@ -241,7 +249,7 @@ def build_reserve_vs_place_sql(
 
 
 def build_field_non_negative_sql(
-    column: str,
+    validated_column: str,
     uncert: UncertLevel | str,
     table: str = "field_resources",
 ) -> str:
@@ -253,26 +261,26 @@ def build_field_non_negative_sql(
     ident = ", ".join(FIELD_IDENTIFIER_COLS)
     return (
         f"SELECT {ident},"
-        f" SUM(COALESCE({column}, 0)) AS val_ref"
+        f" SUM(COALESCE({validated_column}, 0)) AS val_ref"
         f" FROM {table}"
         f" WHERE uncert_level = '{_uncert_value(uncert)}'"
         f" GROUP BY {ident}, uncert_level"
-        f" HAVING SUM(COALESCE({column}, 0)) < 0"
+        f" HAVING SUM(COALESCE({validated_column}, 0)) < 0"
     )
 
 
 def build_field_ordering_sql(
-    low_col: str,
-    high_col: str,
+    validated_column: str,
+    compared_column: str,
     low_uncert: UncertLevel | str,
     high_uncert: UncertLevel | str,
     table: str = "field_resources",
 ) -> str:
-    """Build SQL for field-level ordering: SUM(low_col) <= SUM(high_col).
+    """Build SQL for field-level ordering: SUM(validated_col) <= SUM(compared_col).
 
     Uses CTE to aggregate values per (wk_name, field_name, uncert_level),
     then self-joins to compare across uncertainty levels.
-    Returns rows where the aggregated low > aggregated high.
+    Returns rows where the aggregated validated > aggregated compared.
     """
     ident = ", ".join(FIELD_IDENTIFIER_COLS)
     ident_l = ", ".join(f"l.{c}" for c in FIELD_IDENTIFIER_COLS)
@@ -281,12 +289,14 @@ def build_field_ordering_sql(
     return (
         f"WITH field_agg AS ("
         f" SELECT {ident}, uncert_level,"
-        f" SUM(COALESCE({low_col}, 0)) AS {low_col},"
-        f" SUM(COALESCE({high_col}, 0)) AS {high_col}"
+        f" SUM(COALESCE({validated_column}, 0)) AS {validated_column},"
+        f" SUM(COALESCE({compared_column}, 0)) AS {compared_column}"
         f" FROM {table}"
         f" GROUP BY {ident}, uncert_level"
         f")"
-        f" SELECT {ident_l}, l.{low_col} AS val_ref, h.{high_col} AS val_cmp"
+        f" SELECT {ident_l},"
+        f" l.{validated_column} AS val_ref,"
+        f" h.{compared_column} AS val_cmp"
         f" FROM field_agg l"
         f" JOIN field_agg h"
         f" ON l.wk_name = h.wk_name"
@@ -294,7 +304,7 @@ def build_field_ordering_sql(
         f" AND l.report_year = h.report_year"
         f" AND l.uncert_level = '{low_uv}'"
         f" AND h.uncert_level = '{high_uv}'"
-        f" WHERE l.{low_col} > h.{high_col}"
+        f" WHERE l.{validated_column} > h.{compared_column}"
     )
 
 
@@ -304,26 +314,26 @@ def build_field_ordering_sql(
 
 
 def build_aggregation_consistency_sql(
-    column: str,
-    project_column: str,
+    validated_column: str,
+    compared_column: str,
     uncert: UncertLevel | str,
     tolerance: float = 0.001,
 ) -> str:
-    """Build SQL for Category D: SUM(project_column) must equal field column.
+    """Build SQL for Category D: SUM(compared_column) must equal validated_column.
 
     Joins field_resources with project_resources on the GROUP BY keys
     (wk_id, field_id, report_year, project_stage, project_class, uncert_level)
     and checks that the sum of project-level values matches the field-level
     aggregated value within the given tolerance.
 
-    Returns rows where ABS(SUM(project_column) - field_column) > tolerance.
+    Returns rows where ABS(SUM(compared_column) - validated_column) > tolerance.
     """
     ident = ", ".join(f"fr.{c}" for c in AGGREGATION_CONSISTENCY_IDENTIFIER_COLS)
     group_ident = ", ".join(f"fr.{c}" for c in AGGREGATION_CONSISTENCY_IDENTIFIER_COLS)
     return (
         f"SELECT {ident},"
-        f" SUM(pr.{project_column}) AS val_sum,"
-        f" fr.{column} AS val_field"
+        f" SUM(pr.{compared_column}) AS val_sum,"
+        f" fr.{validated_column} AS val_field"
         f" FROM field_resources fr"
         f" JOIN project_resources pr"
         f" ON fr.wk_id = pr.wk_id"
@@ -333,8 +343,8 @@ def build_aggregation_consistency_sql(
         f" AND fr.project_class = pr.project_class"
         f" AND fr.uncert_level = pr.uncert_level"
         f" WHERE fr.uncert_level = '{_uncert_value(uncert)}'"
-        f" GROUP BY {group_ident}, fr.{column}"
-        f" HAVING ABS(SUM(pr.{project_column}) - fr.{column}) > {tolerance}"
+        f" GROUP BY {group_ident}, fr.{validated_column}"
+        f" HAVING ABS(SUM(pr.{compared_column}) - fr.{validated_column}) > {tolerance}"
     )
 
 
@@ -353,6 +363,8 @@ def _execute_and_build_violations(
     year: list[int] | None,
     extra_columns: list[str] | None = None,
     identifier_cols: list[str] | None = None,
+    validated_column: str = "",
+    compared_columns: list[str] | None = None,
 ) -> list[Violation]:
     """Execute SQL query and build Violation objects from results.
 
@@ -384,6 +396,8 @@ def _execute_and_build_violations(
                 description=description,
                 severity=severity,
                 table=table,
+                validated_column=validated_column,
+                compared_columns=compared_columns or [],
                 identifiers=identifiers,
                 current_values=current_values,
             )

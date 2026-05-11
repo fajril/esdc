@@ -322,6 +322,8 @@ class TestDataclasses:
             description="test",
             severity=Severity.STRICT,
             table="project_resources",
+            validated_column="project_isactive",
+            compared_columns=[],
             identifiers={"a": "1"},
             current_values={"b": 2},
         )

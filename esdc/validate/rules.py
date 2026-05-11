@@ -68,6 +68,8 @@ class Violation:
     description: str
     severity: Severity
     table: str
+    validated_column: str
+    compared_columns: list[str]
     identifiers: dict[str, str]
     current_values: dict[str, object]
     fix_sql: str | None = None
