@@ -23,6 +23,7 @@ from esdc.validate.rule_re0_helpers import (
     build_same_row_ordering_sql,
     build_zero_implication_sql,
 )
+from esdc.validate.rule_re2_helpers import build_eur_bounds_sql
 from esdc.validate.rules import TOLERANCE
 
 # --- Helper SQL building tests ---
@@ -308,6 +309,25 @@ class TestAddYearFilter:
         result = _add_year_filter(sql, [2024])
         assert "pr.report_year IN (2024)" in result
         assert "AND pr.uncert_level" in result
+
+    def test_field_self_join_year_filter(self):
+        sql = build_eur_bounds_sql(
+            "ioip", "rec_oil", "cprd_sls_oil",
+            UncertLevel.HIGH, UncertLevel.MID,
+        )
+        result = _add_year_filter(sql, [2024])
+        assert "fr_result.report_year IN (2024)" in result
+        assert "AND fr_result.uncert_level" in result
+
+    def test_material_balance_year_filter(self):
+        from esdc.validate.rule_re2_helpers import build_material_balance_sql
+
+        sql = build_material_balance_sql(
+            "rec_oil", ["dcpy_um_oil"], "cprd_sls_oil", UncertLevel.MID
+        )
+        result = _add_year_filter(sql, [2025])
+        assert "curr.report_year IN (2025)" in result
+        assert "AND curr.uncert_level" in result
 
 
 class TestExecuteAndBuildViolations:

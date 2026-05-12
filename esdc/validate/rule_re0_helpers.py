@@ -98,6 +98,20 @@ def _add_year_filter(sql: str, year: list[int] | None) -> str:
             f"WHERE fr.report_year IN ({year_list}) AND fr.uncert_level",
             1,
         )
+    is_field_self_join = "fr_result." in sql and "fr_cond." in sql
+    if is_field_self_join:
+        return sql.replace(
+            "WHERE fr_result.uncert_level",
+            f"WHERE fr_result.report_year IN ({year_list}) AND fr_result.uncert_level",
+            1,
+        )
+    is_material_balance = "curr." in sql and "prev." in sql
+    if is_material_balance:
+        return sql.replace(
+            "WHERE curr.uncert_level",
+            f"WHERE curr.report_year IN ({year_list}) AND curr.uncert_level",
+            1,
+        )
     if "WHERE" in sql:
         return sql.replace("WHERE", f"WHERE report_year IN ({year_list}) AND", 1)
     return sql + f" WHERE report_year IN ({year_list})"
