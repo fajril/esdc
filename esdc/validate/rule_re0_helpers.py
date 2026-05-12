@@ -62,6 +62,12 @@ AGGREGATION_CONSISTENCY_IDENTIFIER_COLS: list[str] = [
     "project_class",
 ]
 
+FIELD_TOTAL_IDENTIFIER_COLS: list[str] = [
+    "report_year",
+    "wk_name",
+    "field_name",
+]
+
 
 def _add_year_filter(sql: str, year: list[int] | None) -> str:
     """Append year filter to SQL query.

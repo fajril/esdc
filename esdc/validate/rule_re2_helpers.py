@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from esdc.validate.rule_re0_helpers import (
-    AGGREGATION_CONSISTENCY_IDENTIFIER_COLS,
     IDENTIFIER_COLS,
     _uncert_value,
 )
 from esdc.validate.rules import TOLERANCE
+
+AGG_IDENT = "fr_result.wk_id, fr_result.field_id, fr_result.report_year"
+AGG_SELECT = (
+    "MIN(fr_result.report_year) AS report_year,"
+    " MIN(fr_result.wk_name) AS wk_name,"
+    " MIN(fr_result.field_name) AS field_name"
+)
 
 
 def build_material_balance_sql(
@@ -61,30 +67,29 @@ def build_eur_bounds_sql(
     result_uncert: str,
     tolerance: float = TOLERANCE,
 ) -> str:
-    """Build SQL for RE2025/RE2026: field in-place > EUR when EUR > 0.
+    """Build SQL for RE2025/RE2026: total inplace > total EUR when EUR > 0.
 
-    Self-joins field_resources on (wk_id, field_id, report_year, project_stage,
-    project_class). fr_result at result_uncert, fr_cond at cond_uncert.
-    EUR = rec + cprd_sls (computed, not using pre-calculated eur column).
-    Violation when EUR > 0 AND field_column <= EUR.
+    Aggregates across ALL project_class and project_stage per field.
+    EUR = SUM(rec) + SUM(cprd_sls) computed across the entire field.
+    Inplace = SUM(field_column) across the entire field.
+    Violation when EUR > 0 AND inplace <= EUR.
     """
-    ident = ", ".join(f"fr_result.{c}" for c in AGGREGATION_CONSISTENCY_IDENTIFIER_COLS)
+    eur_cond = f"(SUM(fr_cond.{eur_rec_column}) + SUM(fr_cond.{eur_cprd_column}))"
+    inplace_result = f"SUM(fr_result.{field_column})"
     return (
-        f"SELECT {ident},"
-        f" fr_result.{field_column} AS val_ref,"
-        f" (fr_cond.{eur_rec_column} + fr_cond.{eur_cprd_column}) AS val_cmp"
+        f"SELECT {AGG_SELECT},"
+        f" {inplace_result} AS val_ref,"
+        f" {eur_cond} AS val_cmp"
         f" FROM field_resources fr_result"
         f" JOIN field_resources fr_cond"
         f" ON fr_result.wk_id = fr_cond.wk_id"
         f" AND fr_result.field_id = fr_cond.field_id"
         f" AND fr_result.report_year = fr_cond.report_year"
-        f" AND fr_result.project_stage = fr_cond.project_stage"
-        f" AND fr_result.project_class = fr_cond.project_class"
         f" WHERE fr_result.uncert_level = '{_uncert_value(result_uncert)}'"
         f" AND fr_cond.uncert_level = '{_uncert_value(cond_uncert)}'"
-        f" AND (fr_cond.{eur_rec_column} + fr_cond.{eur_cprd_column}) > {tolerance}"
-        f" AND fr_result.{field_column}"
-        f" - (fr_cond.{eur_rec_column} + fr_cond.{eur_cprd_column}) < {tolerance}"
+        f" GROUP BY {AGG_IDENT}"
+        f" HAVING {eur_cond} > {tolerance}"
+        f" AND {inplace_result} - {eur_cond} < {tolerance}"
     )
 
 
@@ -96,28 +101,27 @@ def build_eur_implication_sql(
     result_uncert: str,
     tolerance: float = TOLERANCE,
 ) -> str:
-    """Build SQL for RE2027/RE2028: if EUR > 0 then field > 0.
+    """Build SQL for RE2027/RE2028: if total EUR > 0 then total inplace > 0.
 
-    Self-joins field_resources on (wk_id, field_id, report_year, project_stage,
-    project_class). fr_result at result_uncert, fr_cond at cond_uncert.
-    Violation when EUR > 0 but field_column = 0.
+    Aggregates across ALL project_class and project_stage per field.
+    Violation when EUR > 0 but inplace = 0.
     """
-    ident = ", ".join(f"fr_result.{c}" for c in AGGREGATION_CONSISTENCY_IDENTIFIER_COLS)
+    eur_cond = f"(SUM(fr_cond.{eur_rec_column}) + SUM(fr_cond.{eur_cprd_column}))"
+    inplace_result = f"SUM(fr_result.{field_column})"
     return (
-        f"SELECT {ident},"
-        f" (fr_cond.{eur_rec_column} + fr_cond.{eur_cprd_column}) AS val_ref,"
-        f" fr_result.{field_column} AS val_cmp"
+        f"SELECT {AGG_SELECT},"
+        f" {eur_cond} AS val_ref,"
+        f" {inplace_result} AS val_cmp"
         f" FROM field_resources fr_result"
         f" JOIN field_resources fr_cond"
         f" ON fr_result.wk_id = fr_cond.wk_id"
         f" AND fr_result.field_id = fr_cond.field_id"
         f" AND fr_result.report_year = fr_cond.report_year"
-        f" AND fr_result.project_stage = fr_cond.project_stage"
-        f" AND fr_result.project_class = fr_cond.project_class"
         f" WHERE fr_result.uncert_level = '{_uncert_value(result_uncert)}'"
         f" AND fr_cond.uncert_level = '{_uncert_value(cond_uncert)}'"
-        f" AND (fr_cond.{eur_rec_column} + fr_cond.{eur_cprd_column}) > {tolerance}"
-        f" AND COALESCE(fr_result.{field_column}, 0) <= {tolerance}"
+        f" GROUP BY {AGG_IDENT}"
+        f" HAVING {eur_cond} > {tolerance}"
+        f" AND COALESCE({inplace_result}, 0) <= {tolerance}"
     )
 
 
@@ -129,27 +133,26 @@ def build_eur_greater_than_sql(
     result_uncert: str,
     tolerance: float = TOLERANCE,
 ) -> str:
-    """Build SQL for RE2029/RE2030: field > EUR when EUR > 0.
+    """Build SQL for RE2029/RE2030: total inplace > total EUR when EUR > 0.
 
-    Self-joins field_resources on (wk_id, field_id, report_year, project_stage,
-    project_class). Both sides at the same uncert_level (row joins with itself).
-    Violation when EUR > 0 AND field_column <= EUR.
+    Aggregates across ALL project_class and project_stage per field.
+    Both sides at the same uncert_level (rows aggregate with each other).
+    Violation when EUR > 0 AND inplace <= EUR.
     """
-    ident = ", ".join(f"fr_result.{c}" for c in AGGREGATION_CONSISTENCY_IDENTIFIER_COLS)
+    eur_cond = f"(SUM(fr_cond.{eur_rec_column}) + SUM(fr_cond.{eur_cprd_column}))"
+    inplace_result = f"SUM(fr_result.{field_column})"
     return (
-        f"SELECT {ident},"
-        f" fr_result.{field_column} AS val_ref,"
-        f" (fr_cond.{eur_rec_column} + fr_cond.{eur_cprd_column}) AS val_cmp"
+        f"SELECT {AGG_SELECT},"
+        f" {inplace_result} AS val_ref,"
+        f" {eur_cond} AS val_cmp"
         f" FROM field_resources fr_result"
         f" JOIN field_resources fr_cond"
         f" ON fr_result.wk_id = fr_cond.wk_id"
         f" AND fr_result.field_id = fr_cond.field_id"
         f" AND fr_result.report_year = fr_cond.report_year"
-        f" AND fr_result.project_stage = fr_cond.project_stage"
-        f" AND fr_result.project_class = fr_cond.project_class"
         f" WHERE fr_result.uncert_level = '{_uncert_value(result_uncert)}'"
         f" AND fr_cond.uncert_level = '{_uncert_value(cond_uncert)}'"
-        f" AND (fr_cond.{eur_rec_column} + fr_cond.{eur_cprd_column}) > {tolerance}"
-        f" AND fr_result.{field_column}"
-        f" - (fr_cond.{eur_rec_column} + fr_cond.{eur_cprd_column}) < {tolerance}"
+        f" GROUP BY {AGG_IDENT}"
+        f" HAVING {eur_cond} > {tolerance}"
+        f" AND {inplace_result} - {eur_cond} < {tolerance}"
     )

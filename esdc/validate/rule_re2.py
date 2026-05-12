@@ -20,7 +20,7 @@ if typing.TYPE_CHECKING:
 
 from esdc.selection import Severity
 from esdc.validate.rule_re0_helpers import (
-    AGGREGATION_CONSISTENCY_IDENTIFIER_COLS,
+    FIELD_TOTAL_IDENTIFIER_COLS,
     UncertLevel,
     _execute_and_build_violations,
 )
@@ -659,11 +659,11 @@ class RE2024(RE2MaterialBalanceRule):
 
 
 class RE2EurBoundsRule(ValidationRule):
-    """Base: field in-place > EUR when EUR > 0.
+    """Base: total in-place > total EUR when EUR > 0.
 
-    Self-joins field_resources on (wk_id, field_id, report_year, project_stage,
-    project_class). fr_result at result_uncert, fr_cond at cond_uncert.
-    EUR = rec + cprd_sls (computed).
+    Aggregates across ALL project_class and project_stage per field.
+    fr_result at result_uncert, fr_cond at cond_uncert.
+    EUR = SUM(rec) + SUM(cprd_sls) across entire field.
     """
 
     is_fixable = False
@@ -696,7 +696,7 @@ class RE2EurBoundsRule(ValidationRule):
             table="field_resources",
             year=year,
             extra_columns=["val_ref", "val_cmp"],
-            identifier_cols=AGGREGATION_CONSISTENCY_IDENTIFIER_COLS,
+            identifier_cols=FIELD_TOTAL_IDENTIFIER_COLS,
             validated_column=self.field_column,
             compared_columns=[self.eur_rec_column, self.eur_cprd_column],
             rule_group="RE2",
@@ -709,11 +709,11 @@ class RE2EurBoundsRule(ValidationRule):
 
 
 class RE2EurImplicationRule(ValidationRule):
-    """Base: if EUR > 0 then field > 0.
+    """Base: if total EUR > 0 then total in-place > 0.
 
-    Self-joins field_resources on (wk_id, field_id, report_year, project_stage,
-    project_class). fr_result at result_uncert, fr_cond at cond_uncert.
-    Violation when EUR > 0 but field_column = 0.
+    Aggregates across ALL project_class and project_stage per field.
+    fr_result at result_uncert, fr_cond at cond_uncert.
+    Violation when total EUR > 0 but total in-place = 0.
     """
 
     is_fixable = False
@@ -746,7 +746,7 @@ class RE2EurImplicationRule(ValidationRule):
             table="field_resources",
             year=year,
             extra_columns=["val_ref", "val_cmp"],
-            identifier_cols=AGGREGATION_CONSISTENCY_IDENTIFIER_COLS,
+            identifier_cols=FIELD_TOTAL_IDENTIFIER_COLS,
             validated_column=self.field_column,
             compared_columns=[self.eur_rec_column, self.eur_cprd_column],
             rule_group="RE2",
@@ -759,11 +759,11 @@ class RE2EurImplicationRule(ValidationRule):
 
 
 class RE2EurGreaterThanRule(ValidationRule):
-    """Base: field > EUR when EUR > 0.
+    """Base: total in-place > total EUR when EUR > 0.
 
-    Self-joins field_resources on (wk_id, field_id, report_year, project_stage,
-    project_class). Both sides at the same uncert_level (row joins with itself).
-    Violation when field_column <= EUR given EUR > 0.
+    Aggregates across ALL project_class and project_stage per field.
+    Both sides at the same uncert_level (rows aggregate with each other).
+    Violation when total in-place <= total EUR given EUR > 0.
     """
 
     is_fixable = False
@@ -796,7 +796,7 @@ class RE2EurGreaterThanRule(ValidationRule):
             table="field_resources",
             year=year,
             extra_columns=["val_ref", "val_cmp"],
-            identifier_cols=AGGREGATION_CONSISTENCY_IDENTIFIER_COLS,
+            identifier_cols=FIELD_TOTAL_IDENTIFIER_COLS,
             validated_column=self.field_column,
             compared_columns=[self.eur_rec_column, self.eur_cprd_column],
             rule_group="RE2",

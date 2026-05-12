@@ -157,21 +157,41 @@ class TestBuildEurBoundsSql:
         assert "fr_cond.rec_oil" in sql
         assert "fr_cond.cprd_sls_oil" in sql
 
-    def test_no_group_by_or_having(self):
+    def test_group_by_and_having(self):
         sql = build_eur_bounds_sql(
             "ioip", "rec_oil", "cprd_sls_oil",
             UncertLevel.HIGH, UncertLevel.MID,
         )
-        assert "GROUP BY" not in sql
-        assert "HAVING" not in sql
+        assert "GROUP BY" in sql
+        assert "HAVING" in sql
 
-    def test_violation_conditions_in_where(self):
+    def test_no_project_class_or_stage_in_join(self):
         sql = build_eur_bounds_sql(
             "ioip", "rec_oil", "cprd_sls_oil",
             UncertLevel.HIGH, UncertLevel.MID,
         )
-        assert f"(fr_cond.rec_oil + fr_cond.cprd_sls_oil) > {TOLERANCE}" in sql
-        assert f"< {TOLERANCE}" in sql
+        assert "project_class" not in sql
+        assert "project_stage" not in sql
+
+    def test_aggregates_with_sum(self):
+        sql = build_eur_bounds_sql(
+            "ioip", "rec_oil", "cprd_sls_oil",
+            UncertLevel.HIGH, UncertLevel.MID,
+        )
+        assert "SUM(fr_result.ioip)" in sql
+        assert "SUM(fr_cond.rec_oil)" in sql
+        assert "SUM(fr_cond.cprd_sls_oil)" in sql
+
+    def test_violation_conditions_in_having(self):
+        sql = build_eur_bounds_sql(
+            "ioip", "rec_oil", "cprd_sls_oil",
+            UncertLevel.HIGH, UncertLevel.MID,
+        )
+        assert (
+            f"(SUM(fr_cond.rec_oil) + SUM(fr_cond.cprd_sls_oil))"
+            f" > {TOLERANCE}" in sql
+        )
+        assert "HAVING" in sql
 
 
 class TestBuildEurImplicationSql:
@@ -208,6 +228,23 @@ class TestBuildEurImplicationSql:
         )
         assert f"> {TOLERANCE}" in sql
         assert f"<= {TOLERANCE}" in sql
+        assert "HAVING" in sql
+
+    def test_group_by_and_having(self):
+        sql = build_eur_implication_sql(
+            "igip", "rec_con", "cprd_sls_con",
+            UncertLevel.HIGH, UncertLevel.LOW,
+        )
+        assert "GROUP BY" in sql
+        assert "HAVING" in sql
+
+    def test_no_project_class_or_stage_in_join(self):
+        sql = build_eur_implication_sql(
+            "igip", "rec_con", "cprd_sls_con",
+            UncertLevel.HIGH, UncertLevel.LOW,
+        )
+        assert "project_class" not in sql
+        assert "project_stage" not in sql
 
 
 class TestBuildEurGreaterThanSql:
@@ -237,13 +274,41 @@ class TestBuildEurGreaterThanSql:
         assert "fr_result.uncert_level = '1. Low Value'" in sql
         assert "fr_cond.uncert_level = '1. Low Value'" in sql
 
-    def test_violation_conditions_in_where(self):
+    def test_group_by_and_having(self):
         sql = build_eur_greater_than_sql(
             "ioip", "rec_oil", "cprd_sls_oil",
             UncertLevel.LOW, UncertLevel.LOW,
         )
-        assert f"> {TOLERANCE}" in sql
-        assert f"< {TOLERANCE}" in sql
+        assert "GROUP BY" in sql
+        assert "HAVING" in sql
+
+    def test_no_project_class_or_stage_in_join(self):
+        sql = build_eur_greater_than_sql(
+            "ioip", "rec_oil", "cprd_sls_oil",
+            UncertLevel.LOW, UncertLevel.LOW,
+        )
+        assert "project_class" not in sql
+        assert "project_stage" not in sql
+
+    def test_aggregates_with_sum(self):
+        sql = build_eur_greater_than_sql(
+            "ioip", "rec_oil", "cprd_sls_oil",
+            UncertLevel.LOW, UncertLevel.LOW,
+        )
+        assert "SUM(fr_result.ioip)" in sql
+        assert "SUM(fr_cond.rec_oil)" in sql
+        assert "SUM(fr_cond.cprd_sls_oil)" in sql
+
+    def test_violation_conditions_in_having(self):
+        sql = build_eur_greater_than_sql(
+            "ioip", "rec_oil", "cprd_sls_oil",
+            UncertLevel.LOW, UncertLevel.LOW,
+        )
+        assert (
+            f"(SUM(fr_cond.rec_oil) + SUM(fr_cond.cprd_sls_oil))"
+            f" > {TOLERANCE}" in sql
+        )
+        assert "SUM(fr_result.ioip)" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -720,7 +785,7 @@ class TestEurBounds:
     """Integration tests for RE2025/RE2026 (EUR bounds)."""
 
     def test_re2025_no_violation(self):
-        """IOIP Mid > Oil EUR(P10) => no violation."""
+        """IOIP Mid total > Oil EUR(P10) total => no violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -741,7 +806,7 @@ class TestEurBounds:
             conn.close()
 
     def test_re2025_violation(self):
-        """IOIP Mid <= Oil EUR(P10) => violation."""
+        """IOIP Mid total <= Oil EUR(P10) total => violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -804,8 +869,80 @@ class TestEurBounds:
             assert len(violations) == 0
             conn.close()
 
+    def test_re2025_multi_class_sums_eur_across_project_classes(self):
+        """RE2025: IOIP Mid aggregates across project_class and project_stage.
+
+        Two project_classes each contribute to EUR. Total EUR = 600+400=1000.
+        Total IOIP Mid = 900+600=1500 > 1000 => no violation.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conn = duckdb.connect(f"{tmpdir}/test.duckdb")
+            _create_re2_field_test_table(conn)
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                ioip=900, project_class="COMM", project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                ioip=600, project_class="CONT", project_stage="EXP",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "3. High Value",
+                rec_oil=400, cprd_sls_oil=200, project_class="COMM",
+                project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "3. High Value",
+                rec_oil=300, cprd_sls_oil=100, project_class="CONT",
+                project_stage="EXP",
+            )
+
+            from esdc.validate.rule_re2 import RE2025
+
+            rule = RE2025()
+            violations = rule.check(conn)
+            assert len(violations) == 0
+            conn.close()
+
+    def test_re2025_multi_class_violation_when_total_eur_exceeds_ioip(self):
+        """RE2025: Total EUR across classes exceeds total IOIP => violation.
+
+        COMM: ioip=300, rec=400, cprd=100 => eur=500
+        CONT: ioip=300, rec=400, cprd=100 => eur=500
+        Total IOIP = 600, Total EUR = 1000 => violation.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conn = duckdb.connect(f"{tmpdir}/test.duckdb")
+            _create_re2_field_test_table(conn)
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                ioip=300, project_class="COMM", project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                ioip=300, project_class="CONT", project_stage="EXP",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "3. High Value",
+                rec_oil=400, cprd_sls_oil=100, project_class="COMM",
+                project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "3. High Value",
+                rec_oil=400, cprd_sls_oil=100, project_class="CONT",
+                project_stage="EXP",
+            )
+
+            from esdc.validate.rule_re2 import RE2025
+
+            rule = RE2025()
+            violations = rule.check(conn)
+            assert len(violations) == 1
+            assert violations[0].rule_id == "RE2025"
+            conn.close()
+
     def test_re2026_no_violation(self):
-        """IGIP Mid > NAG EUR(P10) => no violation."""
+        """IGIP Mid total > NAG EUR(P10) total => no violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -826,7 +963,7 @@ class TestEurBounds:
             conn.close()
 
     def test_re2026_violation(self):
-        """IGIP Mid <= NAG EUR(P10) => violation."""
+        """IGIP Mid total <= NAG EUR(P10) total => violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -852,7 +989,7 @@ class TestEurImplication:
     """Integration tests for RE2027/RE2028 (EUR implication)."""
 
     def test_re2027_no_violation(self):
-        """Condensate EUR > 0 and IGIP Low > 0 => no violation."""
+        """Condensate EUR total > 0 and IGIP Low total > 0 => no violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -873,7 +1010,7 @@ class TestEurImplication:
             conn.close()
 
     def test_re2027_violation(self):
-        """Condensate EUR > 0 and IGIP Low = 0 => violation."""
+        """Condensate EUR total > 0 and IGIP Low total = 0 => violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -894,8 +1031,40 @@ class TestEurImplication:
             assert violations[0].rule_id == "RE2027"
             conn.close()
 
+    def test_re2027_multi_class_sums_eur(self):
+        """RE2027: EUR is summed across project_class and project_stage.
+
+        COMM: rec_con=300, cprd_sls_con=200 => EUR=500
+        CONT: rec_con=200, cprd_sls_con=100 => EUR=300
+        Total EUR = 800, IGIP Low = 500 => no violation.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conn = duckdb.connect(f"{tmpdir}/test.duckdb")
+            _create_re2_field_test_table(conn)
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                igip=500, project_class="COMM", project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "3. High Value",
+                rec_con=300, cprd_sls_con=200, project_class="COMM",
+                project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "3. High Value",
+                rec_con=200, cprd_sls_con=100, project_class="CONT",
+                project_stage="EXP",
+            )
+
+            from esdc.validate.rule_re2 import RE2027
+
+            rule = RE2027()
+            violations = rule.check(conn)
+            assert len(violations) == 0
+            conn.close()
+
     def test_re2028_no_violation(self):
-        """Assoc Gas EUR > 0 and IOIP Low > 0 => no violation."""
+        """Assoc Gas EUR total > 0 and IOIP Low total > 0 => no violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -916,7 +1085,7 @@ class TestEurImplication:
             conn.close()
 
     def test_re2028_violation(self):
-        """Assoc Gas EUR > 0 and IOIP Low = 0 => violation."""
+        """Assoc Gas EUR total > 0 and IOIP Low total = 0 => violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -942,7 +1111,7 @@ class TestEurGreaterThan:
     """Integration tests for RE2029/RE2030 (EUR greater than)."""
 
     def test_re2029_no_violation(self):
-        """IOIP Low > Oil EUR(P90) => no violation."""
+        """IOIP Low total > Oil EUR(P90) total => no violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -959,7 +1128,7 @@ class TestEurGreaterThan:
             conn.close()
 
     def test_re2029_violation(self):
-        """IOIP Low <= Oil EUR(P90) => violation."""
+        """IOIP Low total <= Oil EUR(P90) total => violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -976,8 +1145,65 @@ class TestEurGreaterThan:
             assert violations[0].rule_id == "RE2029"
             conn.close()
 
+    def test_re2029_multi_class_sums_across_project_classes(self):
+        """RE2029: IOIP Low and EUR are summed across project_class and project_stage.
+
+        COMM DEV: ioip=800, rec_oil=300, cprd_sls_oil=100 => EUR=400
+        CONT EXP: ioip=800, rec_oil=300, cprd_sls_oil=200 => EUR=500
+        Total ioip = 1600, Total EUR = 900 => ioip > EUR => no violation.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conn = duckdb.connect(f"{tmpdir}/test.duckdb")
+            _create_re2_field_test_table(conn)
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                ioip=800, rec_oil=300, cprd_sls_oil=100,
+                project_class="COMM", project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                ioip=800, rec_oil=300, cprd_sls_oil=200,
+                project_class="CONT", project_stage="EXP",
+            )
+
+            from esdc.validate.rule_re2 import RE2029
+
+            rule = RE2029()
+            violations = rule.check(conn)
+            assert len(violations) == 0
+            conn.close()
+
+    def test_re2029_multi_class_violation(self):
+        """RE2029: Multi-class total EUR exceeds total ioip => violation.
+
+        COMM DEV: ioip=300, rec_oil=400, cprd_sls_oil=100 => EUR=500
+        CONT EXP: ioip=300, rec_oil=400, cprd_sls_oil=100 => EUR=500
+        Total ioip = 600, Total EUR = 1000 => violation.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            conn = duckdb.connect(f"{tmpdir}/test.duckdb")
+            _create_re2_field_test_table(conn)
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                ioip=300, rec_oil=400, cprd_sls_oil=100,
+                project_class="COMM", project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                ioip=300, rec_oil=400, cprd_sls_oil=100,
+                project_class="CONT", project_stage="EXP",
+            )
+
+            from esdc.validate.rule_re2 import RE2029
+
+            rule = RE2029()
+            violations = rule.check(conn)
+            assert len(violations) == 1
+            assert violations[0].rule_id == "RE2029"
+            conn.close()
+
     def test_re2030_no_violation(self):
-        """IGIP Low > NAG EUR(P90) => no violation."""
+        """IGIP Low total > NAG EUR(P90) total => no violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
@@ -994,7 +1220,7 @@ class TestEurGreaterThan:
             conn.close()
 
     def test_re2030_violation(self):
-        """IGIP Low <= NAG EUR(P90) => violation."""
+        """IGIP Low total <= NAG EUR(P90) total => violation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
