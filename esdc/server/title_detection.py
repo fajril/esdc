@@ -62,26 +62,40 @@ def get_ancillary_type(input_messages: str | list) -> str | None:
 
 
 def extract_user_query(input_messages: str | list) -> str:
-    r"""Extract the original user query from an ancillary request.
+    r"""Extract the original first user query from an ancillary request.
 
-    The request format is:
-    '### Task:\n<instructions>\n\nUser: <actual query>\n\nTitle:'
+    Handles OpenWebUI payloads that contain the entire chat history.
+    Uses case-insensitive matching for USER:.
 
-    Works for both title and tag generation requests.
-
-    Returns the user query portion, or the full text as fallback.
+    Returns the first user query portion, or the full text as fallback.
     """
     text = _extract_text_from_input(input_messages)
     if not text:
         return ""
 
-    if "User:" in text:
-        user_start = text.find("User:")
-        query_part = text[user_start + 5 :].strip()
-        for ending in ("\n\nTitle:", "\n\nTags:"):
-            if ending in query_part:
-                query_part = query_part[: query_part.find(ending)].strip()
-        return query_part
+    lower = text.lower()
+    if "user:" in lower:
+        user_start = lower.find("user:")
+        text_after = text[user_start + 5 :]
+
+        end_positions = []
+        for marker in (
+            "\nassistant:",
+            "\n<chat_history>",
+            "\nuser:",
+            "\ntitle:",
+            "\ntags:",
+            "\n\ntitle:",
+            "\n\ntags:",
+        ):
+            pos = text_after.lower().find(marker)
+            if pos != -1:
+                end_positions.append(pos)
+        if end_positions:
+            query = text_after[: min(end_positions)].strip()
+            query = query.replace("</chat_history>", "").strip()
+            return query
+        return text_after.strip()
 
     return text
 

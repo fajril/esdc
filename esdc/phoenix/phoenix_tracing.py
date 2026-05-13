@@ -24,8 +24,15 @@ def setup_phoenix_tracing() -> bool:
         logger.debug("Phoenix tracing already initialized, skipping")
         return True
 
-    from opentelemetry import trace as trace_api
-    from phoenix.otel import register
+    try:
+        from opentelemetry import trace as trace_api
+        from phoenix.otel import register
+    except ImportError:
+        logger.warning(
+            "Phoenix dependencies not installed. "
+            "Install with: pip install esdc[phoenix]"
+        )
+        return False
 
     tracer_provider = register(
         endpoint=config.collector_endpoint,

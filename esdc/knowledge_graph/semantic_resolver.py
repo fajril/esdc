@@ -137,6 +137,9 @@ class SemanticResolver:
                 )
             """)
 
+            # Create B-tree indexes on embedding contextual columns for fast filtering
+            self._create_embedding_indexes()
+
             logger.info(
                 "[Semantic] embeddings table created with dimension %d", embedding_dim
             )
@@ -231,21 +234,10 @@ class SemanticResolver:
                 # Generate embeddings
                 embeddings = self._embedding_manager.generate_embeddings_batch(texts)
 
-                # Store in DuckDB with all contextual columns
-                for _j, (row, embedding) in enumerate(
-                    zip(batch, embeddings, strict=True)
-                ):
-                    conn.execute(
-                        f"""
-                        INSERT OR REPLACE INTO {self.EMBEDDING_TABLE}
-                        (project_id, report_year, table_name, field_name, project_name,
-                         pod_name, wk_name, province, basin128, project_class,
-                         project_stage,
-                         project_level, operator_name, operator_group, wk_subgroup,
-                         wk_regionisasi_ngi, wk_area_perwakilan_skkmigas,
-                         project_remarks, embedding)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                # Store in DuckDB with all contextual columns using bulk insert
+                data_to_insert = []
+                for row, embedding in zip(batch, embeddings, strict=True):
+                    data_to_insert.append(
                         [
                             row[0],  # project_id
                             row[1],  # report_year
@@ -266,8 +258,20 @@ class SemanticResolver:
                             row[15],  # wk_area_perwakilan_skkmigas
                             row[16],  # project_remarks
                             embedding,
-                        ],
+                        ]
                     )
+                conn.executemany(
+                    f"""
+                    INSERT OR REPLACE INTO {self.EMBEDDING_TABLE}
+                    (project_id, report_year, table_name, field_name, project_name,
+                     pod_name, wk_name, province, basin128, project_class,
+                     project_stage, project_level, operator_name, operator_group,
+                     wk_subgroup, wk_regionisasi_ngi,
+                     wk_area_perwakilan_skkmigas, project_remarks, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    data_to_insert,
+                )
 
                 logger.debug(
                     "[Semantic] batch %d/%d processed",
@@ -312,6 +316,33 @@ class SemanticResolver:
             logger.info("[Semantic] HNSW index created")
         except Exception as e:
             logger.error("[Semantic] HNSW index failed | error=%s", e)
+
+    def _create_embedding_indexes(self) -> None:
+        """Create B-tree indexes on embedding contextual columns for fast filtering."""
+        conn = self._get_connection()
+
+        embedding_indexes = [
+            ("idx_emb_field_name", "field_name"),
+            ("idx_emb_wk_name", "wk_name"),
+            ("idx_emb_province", "province"),
+            ("idx_emb_report_year", "report_year"),
+            ("idx_emb_project_class", "project_class"),
+            ("idx_emb_project_stage", "project_stage"),
+            ("idx_emb_project_level", "project_level"),
+            ("idx_emb_operator_name", "operator_name"),
+            ("idx_emb_operator_group", "operator_group"),
+            ("idx_emb_basin128", "basin128"),
+        ]
+
+        for idx_name, column in embedding_indexes:
+            try:
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} "
+                    f"ON {self.EMBEDDING_TABLE}({column})"
+                )
+                logger.debug("[Semantic] B-tree index created: %s", idx_name)
+            except Exception as e:
+                logger.warning("[Semantic] Failed to create index %s: %s", idx_name, e)
 
     def search_by_text(
         self,
@@ -539,3 +570,245 @@ class SemanticResolver:
         if self._conn:
             self._conn.close()
             self._conn = None
+
+    # =============================================================================
+    # Hybrid Search Methods (vector + BM25 with RRF)
+    # =============================================================================
+
+    def _keyword_search(
+        self,
+        query: str,
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """BM25/FTS keyword search on project_remarks.
+
+        Uses DuckDB FTS index for keyword-based relevance scoring.
+
+        Args:
+            query: Search query text
+            limit: Max results
+            filters: Same filter format as search_by_embedding
+
+        Returns:
+            List of result dicts with bm25_score
+        """
+        conn = self._get_connection()
+
+        try:
+            escaped_query = query.replace("'", "''")
+            where_conditions = ["table_name = 'project_resources'"]
+            where_params: list[Any] = []
+
+            if filters:
+                if "report_year" in filters:
+                    where_conditions.append("report_year = ?")
+                    where_params.append(filters["report_year"])
+                for col in (
+                    "field_name",
+                    "wk_name",
+                    "province",
+                    "basin128",
+                    "operator_name",
+                    "operator_group",
+                ):
+                    if col in filters:
+                        where_conditions.append(f"{col} ILIKE ?")
+                        where_params.append(f"%{filters[col]}%")
+
+            where_clause = " AND ".join(where_conditions)
+
+            sql = f"""
+                SELECT
+                    pe.project_id,
+                    pe.report_year,
+                    pe.field_name,
+                    pe.project_name,
+                    pe.pod_name,
+                    pe.wk_name,
+                    pe.province,
+                    pe.basin128,
+                    pe.project_class,
+                    pe.project_stage,
+                    pe.project_level,
+                    pe.operator_name,
+                    pe.operator_group,
+                    pe.project_remarks,
+                    fts_main_project_resources.match_bm25(
+                        pe.project_id || '-' || CAST(pe.report_year AS VARCHAR),
+                        '{escaped_query}'
+                    ) as bm25_score
+                FROM {self.EMBEDDING_TABLE} pe
+                WHERE {where_clause}
+                AND EXISTS (
+                    SELECT 1 FROM project_resources pr
+                    WHERE fts_main_project_resources.match_bm25(
+                        pr.uuid, '{escaped_query}'
+                    ) IS NOT NULL
+                    AND pr.project_id = pe.project_id
+                    AND pr.report_year = pe.report_year
+                )
+                ORDER BY bm25_score DESC
+                LIMIT ?
+            """
+            params = [*where_params, limit]
+            result = conn.execute(sql, params).fetchall()
+
+            results = []
+            for row in result:
+                results.append(
+                    {
+                        "project_id": row[0],
+                        "report_year": row[1],
+                        "field_name": row[2],
+                        "project_name": row[3],
+                        "pod_name": row[4],
+                        "wk_name": row[5],
+                        "province": row[6],
+                        "basin128": row[7],
+                        "project_class": row[8],
+                        "project_stage": row[9],
+                        "project_level": row[10],
+                        "operator_name": row[11],
+                        "operator_group": row[12],
+                        "project_remarks": row[13][:200] + "..."
+                        if len(row[13]) > 200
+                        else row[13],
+                        "bm25_score": round(float(row[14] or 0), 4),
+                    }
+                )
+
+            return results
+
+        except Exception as e:
+            logger.warning(
+                "[Semantic] keyword search failed, returning empty | error=%s", e
+            )
+            return []
+
+    def _merge_rrf(
+        self,
+        semantic_results: list[dict[str, Any]],
+        keyword_results: list[dict[str, Any]],
+        semantic_weight: float = 0.7,
+        keyword_weight: float = 0.3,
+        k: int = 60,
+    ) -> list[dict[str, Any]]:
+        """Merge semantic and keyword results using Reciprocal Rank Fusion.
+
+        Args:
+            semantic_results: Results from vector similarity search
+            keyword_results: Results from BM25/FTS keyword search
+            semantic_weight: Weight for semantic scores (0-1)
+            keyword_weight: Weight for keyword scores (0-1)
+            k: RRF constant (standard: 60)
+
+        Returns:
+            Merged and deduplicated results sorted by combined score
+        """
+        if not semantic_results and not keyword_results:
+            return []
+
+        scored: dict[tuple[str, int], dict[str, Any]] = {}
+
+        for rank, result in enumerate(semantic_results):
+            key = (result.get("project_id", ""), result.get("report_year", 0))
+            rrf_score = semantic_weight / (k + rank + 1)
+            if key not in scored:
+                scored[key] = dict(result)
+                scored[key]["score"] = 0.0
+            scored[key]["score"] += rrf_score
+            scored[key]["semantic_rank"] = rank + 1
+            scored[key]["semantic_similarity"] = result.get("similarity", 0.0)
+
+        for rank, result in enumerate(keyword_results):
+            key = (result.get("project_id", ""), result.get("report_year", 0))
+            rrf_score = keyword_weight / (k + rank + 1)
+            if key not in scored:
+                scored[key] = dict(result)
+                scored[key]["score"] = 0.0
+            scored[key]["score"] += rrf_score
+            scored[key]["keyword_rank"] = rank + 1
+            scored[key]["bm25_score"] = result.get("bm25_score", 0.0)
+
+        merged = sorted(scored.values(), key=lambda x: x["score"], reverse=True)
+        return merged
+
+    def hybrid_search(
+        self,
+        query: str,
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+        semantic_weight: float = 0.7,
+        keyword_weight: float = 0.3,
+    ) -> dict[str, Any]:
+        """Hybrid search combining vector similarity and BM25 keyword search.
+
+        Runs both search paths and merges results using Reciprocal Rank Fusion (RRF).
+        This provides:
+        - Exact keyword matches (field names, technical terms)
+        - Semantic matches (conceptually similar project_remarks)
+
+        Args:
+            query: Natural language query
+            limit: Max results to return
+            filters: Optional metadata filters
+            semantic_weight: Weight for semantic scores (default 0.7)
+            keyword_weight: Weight for keyword scores (default 0.3)
+
+        Returns:
+            Dict with status, count, results
+        """
+        # Check if embeddings are available
+        query_embedding = self._embedding_manager.generate_embedding(query)
+
+        semantic_results_raw = self.search_by_embedding(
+            query_embedding, limit * 2, filters
+        )
+
+        # If embeddings not available, return not_available
+        if semantic_results_raw.get("status") == "not_available":
+            return {
+                "status": "not_available",
+                "message": (
+                    "No embeddings found. Run 'esdc reload' to generate embeddings."
+                ),
+                "results": [],
+            }
+
+        keyword_results_raw = self._keyword_search(query, limit * 2, filters)
+
+        semantic_items = []
+        if semantic_results_raw.get("status") == "success":
+            semantic_items = semantic_results_raw.get("results", [])
+
+        merged = self._merge_rrf(
+            semantic_items,
+            keyword_results_raw,
+            semantic_weight,
+            keyword_weight,
+        )
+
+        results = merged[:limit]
+
+        # Clean up internal scoring fields, keep unified score as similarity
+        for r in results:
+            r.pop("similarity", None)
+            r.pop("bm25_score", None)
+            r.pop("semantic_rank", None)
+            r.pop("keyword_rank", None)
+            r["similarity"] = round(r.pop("score", 0), 4)
+
+        if not results:
+            return {
+                "status": "no_results",
+                "query": query,
+                "results": [],
+            }
+
+        return {
+            "status": "success",
+            "query": query,
+            "count": len(results),
+            "results": results,
+        }

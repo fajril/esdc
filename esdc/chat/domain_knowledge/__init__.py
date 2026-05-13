@@ -32,9 +32,6 @@ from .functions import (
     build_aggregate_query,
     build_report_year_filter,
     build_sql_pattern,
-    build_timeseries_query,
-    calculate_eol_year,
-    calculate_peak_production_year,
     convert_volume_units,
     detect_report_year_from_query,
     detect_substance_from_query,
@@ -56,7 +53,6 @@ from .functions import (
     get_volume_columns,
     is_forecast_data,
     resolve_concept,
-    # should_include_remarks,  # Removed - no longer used
     should_use_risked_columns,
 )
 
@@ -178,11 +174,8 @@ __all__ = [
     "get_project_class_filter",
     "get_columns_for_substance",
     "format_response_value",
-    "calculate_peak_production_year",
-    "calculate_eol_year",
     "get_onstream_year",
     "convert_volume_units",
-    "build_timeseries_query",
     "format_timeseries_response",
     "get_timeseries_columns",
     "get_resources_columns",

@@ -43,11 +43,24 @@ ESDC_TOOLS_DESCRIPTION = (
 )
 
 
+def _ensure_phoenix_available() -> None:
+    """Raise RuntimeError if Phoenix evals dependencies are not installed."""
+    try:
+        import phoenix.evals  # noqa: F401
+    except ImportError as exc:
+        msg = (
+            "Phoenix evals dependencies not installed. "
+            "Install with: pip install esdc[phoenix]"
+        )
+        raise RuntimeError(msg) from exc
+
+
 def _create_judge_llm() -> PhoenixLLM:
     global _judge_llm
     if _judge_llm is not None:
         return _judge_llm
 
+    _ensure_phoenix_available()
     from phoenix.evals import LLM
 
     from esdc.configs import Config
@@ -62,13 +75,22 @@ def _create_judge_llm() -> PhoenixLLM:
     provider_type: str = provider_config["provider_type"]
     model_name: str = provider_config["model"]
 
-    if provider_type == "ollama":
+    if provider_type in ("ollama", "groq", "azure_openai"):
         base_url = provider_config.get("base_url") or "http://localhost:11434/v1"
+        if provider_type == "groq":
+            base_url = (
+                provider_config.get("base_url") or "https://api.groq.com/openai/v1"
+            )
+        elif provider_type == "azure_openai":
+            base_url = provider_config.get("base_url") or ""
+        api_key = provider_config.get("api_key") or (
+            "ollama" if provider_type == "ollama" else ""
+        )
         _judge_llm = LLM(
             provider="openai",
             model=model_name,
             base_url=base_url,
-            api_key="ollama",
+            api_key=api_key,
         )
     elif provider_type == "openai_compatible":
         base_url = provider_config["base_url"]
@@ -101,6 +123,7 @@ def get_tool_selection_evaluator(
     temperature: float = 0.0,
 ) -> ToolSelectionEvaluator:
     """Return a tool selection evaluator using the judge LLM."""
+    _ensure_phoenix_available()
     from phoenix.evals.metrics import ToolSelectionEvaluator
 
     return ToolSelectionEvaluator(llm=_create_judge_llm(), temperature=temperature)
@@ -110,6 +133,7 @@ def get_tool_invocation_evaluator(
     temperature: float = 0.0,
 ) -> ToolInvocationEvaluator:
     """Return a tool invocation evaluator using the judge LLM."""
+    _ensure_phoenix_available()
     from phoenix.evals.metrics import ToolInvocationEvaluator
 
     return ToolInvocationEvaluator(llm=_create_judge_llm(), temperature=temperature)
@@ -119,6 +143,7 @@ def get_tool_response_handling_evaluator(
     temperature: float = 0.0,
 ) -> ToolResponseHandlingEvaluator:
     """Return a tool response handling evaluator using the judge LLM."""
+    _ensure_phoenix_available()
     from phoenix.evals.metrics import ToolResponseHandlingEvaluator
 
     return ToolResponseHandlingEvaluator(
@@ -132,6 +157,7 @@ def run_evaluations(
     project_name: str | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Run selected evaluators against a spans DataFrame."""
+    _ensure_phoenix_available()
     from phoenix.evals import evaluate_dataframe
     from phoenix.trace import suppress_tracing
 

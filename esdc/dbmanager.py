@@ -1,12 +1,14 @@
 import contextlib
 import logging
 import shutil
+import time
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 
 from esdc.configs import Config
+from esdc.console import console
 from esdc.db_security import SQLSanitizer, _load_sql_script
 from esdc.selection import TableName
 
@@ -57,14 +59,27 @@ def _ensure_duckdb_database(db_path: Path) -> None:
         db_path.unlink()
 
 
-def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
-    """Create Full-Text Search indexes for fast text matching."""
+def _create_fts_indexes(
+    conn: duckdb.DuckDBPyConnection,
+) -> dict[str, str]:
+    """Create Full-Text Search indexes for fast text matching.
+
+    Returns a dict mapping table names to their FTS creation result:
+    "ok" on success, or an error message on failure.
+    """
+    fts_results: dict[str, str] = {}
+
     try:
         conn.execute("INSTALL fts")
         conn.execute("LOAD fts")
     except duckdb.Error:
         logging.warning("FTS extension not available, skipping FTS index creation")
-        return
+        for config in [
+            {"table": "project_resources"},
+            {"table": "project_timeseries"},
+        ]:
+            fts_results[config["table"]] = "FTS extension not available"
+        return fts_results
 
     fts_configs = [
         {
@@ -79,6 +94,14 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 "operator_name",
                 "project_remarks",
                 "vol_remarks",
+                "basin86",
+                "wk_id",
+                "field_id",
+                "field_name_previous",
+                "project_name_previous",
+                "pod_name",
+                "operator_group",
+                "wk_subgroup",
             ],
         },
         {
@@ -93,6 +116,12 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
                 "operator_name",
                 "project_remarks",
                 "vol_remarks",
+                "basin86_id",
+                "wk_id",
+                "field_id",
+                "pod_name",
+                "operator_group",
+                "wk_subgroup",
             ],
         },
     ]
@@ -107,22 +136,65 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
 
     for config in fts_configs:
         table_name = config["table"]
-        if table_name not in existing_tables:
+        if not table_name or table_name not in existing_tables:
             logging.debug(
-                "Skipping FTS index for %s (table not yet loaded)", table_name
+                "Skipping FTS index for %s (table not yet loaded)",
+                table_name or "<empty>",
             )
+            fts_results[table_name or "<empty>"] = "table not loaded"
+            continue
+
+        row_count = (
+            conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone() or (0,)
+        )[0]
+        if row_count == 0:
+            logging.info("Skipping FTS index for %s (0 rows)", table_name)
+            fts_results[table_name] = "skipped (0 rows)"
             continue
 
         id_col = config["id_col"]
-        cols_str = ", ".join(f"'{c}'" for c in config["index_cols"])
+        actual_columns = {
+            row[0]
+            for row in conn.execute(
+                f"SELECT column_name FROM information_schema.columns "
+                f"WHERE table_name = '{table_name}'"
+            ).fetchall()
+        }
+        available_cols = [c for c in config["index_cols"] if c in actual_columns]
+        if len(available_cols) != len(config["index_cols"]):
+            missing = [c for c in config["index_cols"] if c not in actual_columns]
+            logging.warning(
+                "Skipping missing FTS columns for %s: %s",
+                table_name,
+                missing,
+            )
+        if not available_cols:
+            logging.warning("No valid FTS columns for %s, skipping", table_name)
+            fts_results[table_name] = "no valid FTS columns"
+            continue
+        cols_str = ", ".join(f"'{c}'" for c in available_cols)
+        console.print(f"  Building FTS index for {table_name} ({row_count:,} rows)...")
         try:
             conn.execute(
-                f"PRAGMA create_fts_index('{table_name}', '{id_col}', "
-                f"{cols_str}, lower=1, strip_accents=1, overwrite=1)"
+                f"PRAGMA create_fts_index('{table_name}', "
+                f"'{id_col}', {cols_str}, "
+                f"lower=1, strip_accents=1, overwrite=1)"
             )
-            logging.debug("FTS index created for %s", table_name)
+            logging.info("FTS index created for %s", table_name)
+            fts_results[table_name] = "ok"
+            console.print(f"  [green]✓[/green] FTS index: {table_name}")
         except duckdb.Error as e:
-            logging.warning("Failed to create FTS index for %s: %s", table_name, e)
+            error_msg = str(e)
+            if "Catalog Error" in error_msg and "does not exist" in error_msg:
+                logging.error(
+                    "DuckDB FTS index creation failed for '%s'. Original error: %s",
+                    table_name,
+                    error_msg,
+                )
+            else:
+                logging.warning("Failed to create FTS index for %s: %s", table_name, e)
+            fts_results[table_name] = str(e)
+            console.print(f"  [red]✗[/red] FTS index: {table_name} — {e}")
 
     btree_indexes = [
         (
@@ -147,6 +219,8 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
         ),
     ]
 
+    if any(t in existing_tables for _, t, _ in btree_indexes):
+        console.print("  Creating B-tree indexes...")
     for idx_name, table_name, columns in btree_indexes:
         if table_name not in existing_tables:
             continue
@@ -158,28 +232,95 @@ def _create_fts_indexes(conn: duckdb.DuckDBPyConnection) -> None:
         except duckdb.Error as e:
             logging.warning("Failed to create B-tree index %s: %s", idx_name, e)
 
+    return fts_results
+
 
 def reindex_fts() -> None:
     """Rebuild FTS and B-tree indexes on existing database tables.
 
     Connects to the existing DuckDB database and creates/recreates
     Full-Text Search indexes and B-tree indexes without reloading data.
+
+    Drops the HNSW embedding index before checkpointing to avoid
+    DuckDB internal errors with duplicate keys in HNSW wrappers.
+    Users must run ``esdc reload --embeddings-only`` afterward to
+    regenerate embeddings.
     """
     db_path = Config.get_db_file()
     if not db_path.exists():
         logging.error("Database not found at %s. Run 'esdc fetch' first.", db_path)
         return
 
+    start_time = time.monotonic()
+
+    def _step(step: str) -> str:
+        elapsed = time.monotonic() - start_time
+        return f"[dim]Rebuilding indexes: {step} [elapsed {elapsed:.1f}s][/dim]"
+
+    console.print("[bold]Rebuilding search indexes...[/bold]")
     logging.info("Rebuilding FTS indexes on %s", db_path)
     conn = get_duckdb_connection(db_path)
     try:
-        _create_fts_indexes(conn)
-        conn.execute("CHECKPOINT")
+        with console.status(_step("dropping HNSW index")):
+            conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
+
+        with console.status(_step("building FTS indexes")):
+            fts_results = _create_fts_indexes(conn)
+
+        with console.status(_step("creating B-tree indexes")):
+            pass  # B-tree indexes already created inside _create_fts_indexes
+
+        with console.status(_step("checkpointing")):
+            conn.execute("CHECKPOINT")
+
+        elapsed = time.monotonic() - start_time
         logging.info("FTS indexes rebuilt successfully.")
+
+        fts_ok = [t for t, r in fts_results.items() if r == "ok"]
+        fts_failed = [t for t, r in fts_results.items() if r != "ok"]
+
+        if fts_ok and not fts_failed:
+            console.print(
+                f"[green]✓[/green] Search indexes rebuilt "
+                f"({', '.join(fts_ok)}) in {elapsed:.1f}s"
+            )
+        elif fts_ok and fts_failed:
+            for t in fts_failed:
+                console.print(f"[red]✗[/red] FTS index: {t} — {fts_results[t]}")
+            console.print(
+                "[yellow]:warning:  HNSW embedding index dropped "
+                "(required for checkpoint). "
+                "Run `[dim]esdc reload --embeddings-only[/dim]` "
+                "to regenerate.[/yellow]"
+            )
+        else:
+            console.print(f"[red]✗[/red] FTS indexes failed in {elapsed:.1f}s")
+            console.print(
+                "[yellow]:warning:  HNSW embedding index dropped "
+                "(required for checkpoint). "
+                "Run `[dim]esdc reload --embeddings-only[/dim]` "
+                "to regenerate.[/yellow]"
+            )
     except duckdb.Error as e:
         logging.error("Failed to rebuild FTS indexes: %s", e)
+        console.print(f"[red]✗[/red] Failed to rebuild indexes: {e}")
     finally:
         conn.close()
+
+
+def get_last_updated(conn: duckdb.DuckDBPyConnection) -> str | None:
+    """Retrieve the last_updated timestamp from the _metadata table.
+
+    Returns the ISO 8601 timestamp string of the last successful data fetch,
+    or None if the _metadata table does not exist or has no entry.
+    """
+    try:
+        result = conn.execute(
+            "SELECT value FROM _metadata WHERE key = 'last_updated'"
+        ).fetchone()
+        return result[0] if result else None
+    except duckdb.Error:
+        return None
 
 
 def load_data_to_db(
@@ -200,59 +341,66 @@ def load_data_to_db(
         "project_resources": "create_table_project_resources.sql",
         "project_timeseries": "create_table_project_timeseries.sql",
     }
-    logging.info("Connecting to the database.")
+    start_time = time.monotonic()
+    label = f"Loading {table_name}" if len(content) > 1000 else f"{table_name}"
+
+    def _status(step: str) -> str:
+        elapsed = time.monotonic() - start_time
+        return f"[dim]{label}: {step} [elapsed {elapsed:.1f}s][/dim]"
+
     _ensure_duckdb_database(Config.get_db_file())
     if not Config.get_db_dir().exists():
         Config.get_db_dir().mkdir(parents=True, exist_ok=True)
-        logging.info("Database does not exist. Creating new database.")
-        logging.debug("Database location: %s", Config.get_db_dir())
     conn = get_duckdb_connection(Config.get_db_file())
-    try:
-        logging.debug("creating table %s in database", table_name)
-        _execute_sql_script(conn, create_table_query[table_name])
-        column_names = ", ".join(["?" for _ in header])
-        insert_stmt = (
-            f"INSERT INTO {table_name} ({', '.join(header)}) VALUES ({column_names})"
-        )
-        logging.debug("Inserting table data %s into the database.", table_name)
+
+    with console.status(_status("preparing")) as status:
         try:
-            conn.executemany(insert_stmt, content)
-        except duckdb.Error as e:
-            logging.debug("insert statement: %s", insert_stmt)
-            raise duckdb.Error(str(e)) from e
+            status.update(_status("creating schema"))
+            _execute_sql_script(conn, create_table_query[table_name])
 
-        logging.debug("Creating uuid column for table %s", table_name)
-        _execute_sql_script(
-            conn,
-            "create_column_uuid.sql",
-            replacements={"{table_name}": table_name},
-        )
+            status.update(_status(f"inserting {len(content):,} rows"))
+            placeholders = ", ".join(["?" for _ in header])
+            stmt = (
+                f"INSERT INTO {table_name} "
+                f"({', '.join(header)}) VALUES ({placeholders})"
+            )
+            conn.executemany(stmt, content)
 
-        if table_name == "project_resources":
-            logging.debug("Creating project_uuid column.")
-            _execute_sql_script(conn, "create_project_resources_uuid.sql")
+            status.update(_status("creating uuid columns"))
+            _execute_sql_script(
+                conn,
+                "create_column_uuid.sql",
+                replacements={"{table_name}": table_name},
+            )
 
-            logging.debug("Creating is_discovered column.")
-            _execute_sql_script(conn, "create_project_resources_is_discovered.sql")
+            if table_name == "project_resources":
+                status.update(_status("creating resource views"))
+                _execute_sql_script(conn, "create_project_resources_uuid.sql")
+                _execute_sql_script(conn, "create_project_resources_is_discovered.sql")
+                _execute_sql_script(conn, "create_project_resources_project_stage.sql")
+                _execute_sql_script(conn, "create_esdc_view.sql")
 
-            logging.debug("Creating project_stage column.")
-            _execute_sql_script(conn, "create_project_resources_project_stage.sql")
+            if table_name == "project_timeseries":
+                status.update(_status("creating timeseries views"))
+                _execute_sql_script(conn, "create_timeseries_views.sql")
 
-            logging.debug("Creating table view for field, working area, nkri.")
-            _execute_sql_script(conn, "create_esdc_view.sql")
+            if table_name in ("project_resources", "project_timeseries"):
+                status.update(_status("building search indexes"))
+                _create_fts_indexes(conn)
 
-        if table_name == "project_timeseries":
-            logging.debug("Creating timeseries views for field, wa, nkri.")
-            _execute_sql_script(conn, "create_timeseries_views.sql")
+            status.update(_status("recording metadata"))
+            _execute_sql_script(conn, "create_table_metadata.sql")
 
-        if table_name in ("project_resources", "project_timeseries"):
-            logging.debug("Creating FTS indexes for text search.")
-            _create_fts_indexes(conn)
+            status.update(_status("checkpointing"))
+            conn.execute("CHECKPOINT")
 
-        conn.execute("CHECKPOINT")
-        logging.info("Table %s is loaded into database.", table_name)
-    finally:
-        conn.close()
+            elapsed = time.monotonic() - start_time
+            console.print(
+                f"[green]✓[/green] {label}: "
+                f"{len(content):,} rows loaded in {elapsed:.1f}s"
+            )
+        finally:
+            conn.close()
 
     invalidate_sql_cache()
     from esdc.chat.tools import invalidate_tool_cache, reset_sql_cache
@@ -346,6 +494,262 @@ def _execute_sql_script(
     statements = [s.strip() for s in sql_content.split(";") if s.strip()]
     for stmt in statements:
         conn.execute(stmt)
+
+
+def check_indexes(conn: duckdb.DuckDBPyConnection) -> dict:
+    """Check the status of FTS, B-tree, and embedding indexes.
+
+    Returns a dict with keys:
+        fts_indexes: list of dicts with table, exists, column_count
+        btree_indexes: list of dicts with name, table, exists
+        embeddings: dict with table_exists, row_count, hnsw_exists
+    """
+    result: dict = {
+        "fts_indexes": [],
+        "btree_indexes": [],
+        "embeddings": {
+            "table_exists": False,
+            "row_count": 0,
+            "hnsw_exists": False,
+        },
+    }
+
+    fts_tables = ["project_resources", "project_timeseries"]
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+
+    fts_schemas = {
+        row[0]
+        for row in conn.execute(
+            "SELECT schema_name FROM information_schema.schemata "
+            "WHERE schema_name LIKE 'fts_main_%'"
+        ).fetchall()
+    }
+
+    for table in fts_tables:
+        fts_schema = f"fts_main_{table}"
+        col_count = 0
+        if fts_schema in fts_schemas:
+            try:
+                cols = conn.execute(
+                    f"SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_schema = '{fts_schema}' AND table_name = 'fields'"
+                ).fetchall()
+                col_count = len(cols)
+            except duckdb.Error:
+                col_count = 0
+        result["fts_indexes"].append(
+            {
+                "table": table,
+                "exists": fts_schema in fts_schemas,
+                "column_count": col_count,
+            }
+        )
+
+    btree_expected = [
+        ("idx_project_resources_report_year", "project_resources"),
+        ("idx_project_resources_agg", "project_resources"),
+        ("idx_project_timeseries_report_year", "project_timeseries"),
+        ("idx_project_timeseries_agg", "project_timeseries"),
+    ]
+
+    existing_indexes = {
+        row[0]
+        for row in conn.execute("SELECT index_name FROM duckdb_indexes()").fetchall()
+    }
+
+    for idx_name, table in btree_expected:
+        result["btree_indexes"].append(
+            {
+                "name": idx_name,
+                "table": table,
+                "exists": idx_name in existing_indexes,
+            }
+        )
+
+    if "project_embeddings" in existing_tables:
+        result["embeddings"]["table_exists"] = True
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM project_embeddings").fetchone()
+            result["embeddings"]["row_count"] = (row or (0,))[0]
+        except duckdb.Error:
+            result["embeddings"]["row_count"] = 0
+
+    result["embeddings"]["hnsw_exists"] = "idx_hnsw_embeddings" in existing_indexes
+
+    return result
+
+
+def check_table_stats(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Check row counts per report_year for each data table.
+
+    Returns list of dicts with keys:
+        table: table name
+        total: total row count
+        years: list of (report_year, count) tuples
+    """
+    tables = ["project_resources", "project_timeseries"]
+    result = []
+
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+
+    for table in tables:
+        if table not in existing_tables:
+            result.append({"table": table, "total": 0, "years": []})
+            continue
+
+        total = (conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() or (0,))[0]
+        rows = conn.execute(
+            f"SELECT report_year, COUNT(*) FROM {table} "
+            f"GROUP BY report_year ORDER BY report_year"
+        ).fetchall()
+
+        result.append(
+            {
+                "table": table,
+                "total": total,
+                "years": [(row[0], row[1]) for row in rows],
+            }
+        )
+
+    return result
+
+
+def verify_indexes(conn: duckdb.DuckDBPyConnection) -> dict:
+    """Run functional verification on FTS, HNSW, and B-tree indexes.
+
+    Returns a dict with keys:
+        fts: list of dicts with table, functional, result_count
+        hnsw: dict with functional, result_count
+        btree: list of dicts with name, functional
+    """
+    result: dict = {
+        "fts": [],
+        "hnsw": {"functional": False, "result_count": 0},
+        "btree": [],
+    }
+
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+
+    fts_schemas = {
+        row[0]
+        for row in conn.execute(
+            "SELECT schema_name FROM information_schema.schemata "
+            "WHERE schema_name LIKE 'fts_main_%'"
+        ).fetchall()
+    }
+
+    fts_tests = [
+        ("project_resources", "duri"),
+        ("project_timeseries", "duri"),
+    ]
+    for table, test_query in fts_tests:
+        fts_schema = f"fts_main_{table}"
+        if table not in existing_tables or fts_schema not in fts_schemas:
+            result["fts"].append(
+                {"table": table, "functional": False, "result_count": 0}
+            )
+            continue
+
+        try:
+            conn.execute("INSTALL fts")
+            conn.execute("LOAD fts")
+        except duckdb.Error:
+            pass
+
+        try:
+            count = (
+                conn.execute(
+                    f"SELECT COUNT(*) FROM {table} "
+                    f"WHERE {fts_schema}.match_bm25(uuid, '{test_query}') "
+                    f"IS NOT NULL"
+                ).fetchone()
+                or (0,)
+            )[0]
+            result["fts"].append(
+                {
+                    "table": table,
+                    "functional": count > 0,
+                    "result_count": count,
+                }
+            )
+        except duckdb.Error:
+            result["fts"].append(
+                {"table": table, "functional": False, "result_count": 0}
+            )
+
+    if "project_embeddings" in existing_tables:
+        try:
+            dim = (
+                conn.execute(
+                    "SELECT array_length(embedding) FROM project_embeddings LIMIT 1"
+                ).fetchone()
+                or (0,)
+            )[0]
+
+            import numpy as np
+
+            test_vec = ",".join(str(v) for v in np.random.rand(dim))
+            count = (
+                conn.execute(
+                    f"SELECT COUNT(*) FROM project_embeddings "
+                    f"WHERE array_cosine_similarity(embedding, "
+                    f"[{test_vec}]::FLOAT[{dim}]) > 0.5"
+                ).fetchone()
+                or (0,)
+            )[0]
+            result["hnsw"] = {"functional": True, "result_count": count}
+        except (duckdb.Error, Exception):
+            result["hnsw"] = {"functional": False, "result_count": 0}
+
+    btree_expected = [
+        ("idx_project_resources_report_year", "project_resources"),
+        ("idx_project_resources_agg", "project_resources"),
+        ("idx_project_timeseries_report_year", "project_timeseries"),
+        ("idx_project_timeseries_agg", "project_timeseries"),
+    ]
+
+    existing_indexes = {
+        row[0]
+        for row in conn.execute("SELECT index_name FROM duckdb_indexes()").fetchall()
+    }
+
+    for idx_name, table in btree_expected:
+        if table not in existing_tables:
+            result["btree"].append({"name": idx_name, "functional": False})
+            continue
+
+        if idx_name not in existing_indexes:
+            result["btree"].append({"name": idx_name, "functional": False})
+            continue
+
+        try:
+            col = "report_year" if "report_year" in idx_name else "wk_id"
+            conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {col} = 2024 LIMIT 1"
+            ).fetchone()
+            result["btree"].append({"name": idx_name, "functional": True})
+        except duckdb.Error:
+            result["btree"].append({"name": idx_name, "functional": False})
+
+    return result
 
 
 def invalidate_sql_cache() -> None:

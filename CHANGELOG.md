@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Auto-reindex after `esdc fetch`** — FTS and B-tree indexes are rebuilt automatically after data loading, ensuring ILIKE queries return correct results for newly-fetched data
+  - Default behavior: reindex is ON after every fetch (both full-replace and per-year append modes)
+  - Use `--no-reindex` flag on `esdc fetch` to skip reindexing if desired
+  - Fixes ILIKE queries returning no results after `esdc fetch --year` because FTS index was stale
+- **FTS zero-row fallback** — when an FTS-rewritten query returns 0 rows, the system automatically retries with the original ILIKE query, ensuring results are never lost due to FTS stemming/stopword issues
+- **FTS index without stemmer/stopwords** — FTS indexes are now created with `stemmer=''` and `stopwords=''` so that short keywords like "Duri" are matched exactly without being filtered by English stemming rules
+
+### Added
+
+- **New LLM Providers**: Anthropic (Claude), Google (Gemini), Azure OpenAI, Groq, Ollama Cloud
+  - Added `AnthropicProvider` via `langchain-anthropic` (`ChatAnthropic`)
+  - Added `GoogleProvider` via `langchain-google-genai` (`ChatGoogleGenerativeAI`)
+  - Added `AzureOpenAIProvider` via `langchain-openai` (`AzureChatOpenAI`)
+  - Added `GroqProvider` via `langchain-groq` (`ChatGroq`)
+  - Added `OllamaCloudProvider` — direct cloud access without local daemon
+    - Uses OpenAI-compatible endpoint `https://ollama.com/v1`
+    - Discovery models via API (no `:cloud` suffix in model names)
+    - Requires API key only (no base_url configuration needed)
+  - All providers follow existing `Provider` ABC pattern with tool calling, streaming, and context length detection
+  - Updated `ProviderType` Literal in `base.py` to include new providers
+  - Updated registry in `__init__.py` (`PROVIDER_CLASSES`, `PROVIDER_NAMES`)
+  - Added wizard setup screens for each new provider
+  - Updated CLI `esdc provider add` to accept new provider types
+  - Updated Phoenix evals to route Groq and Azure OpenAI through OpenAI-compatible judge LLM
+  - Added comprehensive unit tests in `tests/test_new_providers.py`
+
+### Changed
+
+- **Updated Default Models for 2026**:
+  - `AnthropicProvider`: default now `claude-sonnet-4-6` (was deprecated `claude-3-5-sonnet-20241022`)
+    - Added `claude-sonnet-4-6` (1M context) and `claude-opus-4-7` to `CONTEXT_LENGTHS`
+  - `GoogleProvider`: default now `gemini-2.5-flash` (was deprecated `gemini-1.5-pro`)
+    - Added `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-pro`, `gemini-2.0-flash` to mappings
+  - `GroqProvider`: added `llama-4-scout`, `qwen-qwq-32b`, `mistral-saba-24b` to `CONTEXT_LENGTHS`
+  - All deprecated/retired models removed from `list_models()` (Claude 3.5 retired Oct 2025, Gemini 2.0 Flash retired Jun 2026)
+
+- **Refactored Configuration Wizard (`esdc configs`)**:
+  - Replaced `textual` TUI with `questionary`-based interactive prompts
+  - Deleted `esdc/chat/wizard.py` (854 baris) and `esdc/commands/provider.py` (131 baris)
+  - Deleted `tests/test_wizard.py` (276 baris)
+  - Created `esdc/config_wizard.py` (~440 baris) with unified menu-driven wizard
+  - All provider CRUD (add, edit, remove, set default, test) centralized in `esdc configs`
+  - Model dropdown fetched live from provider API during setup
+  - General config editing with automatic widget detection (dropdown for enums/booleans, password for api_key, etc.)
+  - Standalone "Test connection" menu for testing existing providers
+  - Professional menu layout with grouped sections and visual separators
+  - **Single instance per provider type**: max 1 provider per type (kecuali `openai_compatible`)
+    - Saat add provider yang sudah ada, tanya overwrite: "Provider 'X' (openai) already exists. Overwrite?"
+    - Auto-set default provider saat pertama kali add (kalau belum ada default)
+    - CLI: `esdc configs --set-default-provider <name>` untuk non-interactive switch
+  - **Colorful UI** (Blue Grey palette): key-value distinct, Rich Panel header, questionary Style
+  - Removed `esdc chat --setup` — now displays "Run 'esdc configs'" redirect message
+  - Added `--show` / `-s` flag to `esdc configs` for non-interactive config display
+
+- Added `langchain-anthropic>=0.3.0`, `langchain-google-genai>=2.0.0`, `langchain-groq>=0.2.0`
+- Added `questionary>=2.0.0`
+
+## [0.7.0] - 2026-05-13
+
+### Changed
+
+- **Phoenix/OTel dependencies are now optional** — install with `pip install esdc[phoenix]`
+  - Moved 6 Phoenix/OTel packages from core dependencies to `[project.optional-dependencies]`
+  - Core install is ~19 packages lighter and faster
+  - All Phoenix imports are wrapped in `try/except ImportError` with helpful warning messages
+  - Dev environment still includes Phoenix via `esdc[phoenix]` in dependency groups
+  - `esdc validate` completely unaffected (Phoenix was only used in `esdc chat` and `esdc serve`)
+  - If `phoenix.enabled: true` in config but dependencies not installed, a warning is logged and tracing is skipped gracefully
+
 ## [0.6.0] - 2026-04-22
 
 ### Added
@@ -29,6 +102,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Persist Code Interpreter images via OpenWebUI file upload
   - Detect images from stdout and directory scan (not just inline savefig)
   - Auto-append image markdown when LLM omits it from final response
+  - **Enforce direct DB access for visualization**: Code Interpreter MUST query `DB_PATH` directly; separate `execute_sql` before visualization is forbidden
+
+- **Dynamic Multi-Year Timeseries Fetch**:
+  - Removed hardcoded `report_year = 2024` in API URL builder
+  - Timeseries now fetched for all available report years (>= 2020) detected from `project_resources`
+  - Added `--year` option to `esdc fetch` for updating specific year(s) in both `project_resources` and `project_timeseries`
+  - Full-replace mode on plain `esdc fetch`; append/upsert mode on `esdc fetch --year YYYY`
 
 - **System Prompt & Domain Knowledge**:
   - Added MSTB↔BSCF (BOE) unit conversions to system prompt
@@ -37,9 +117,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Clarified uncertainty rules for all volume types
   - Updated prompt length limit from 25000 to 26000 for expanded uncertainty rules
 
+- **Database Performance Optimization**:
+  - Refactored embeddings generation from row-by-row to bulk insert using `executemany()` (~10x faster)
+  - Added B-tree indexes on `project_embeddings` contextual columns for fast semantic search filtering
+  - Added FTS indexes on 16 columns (was 8) for enhanced text search
+
 - **Config System**:
   - Added config descriptions and enums
   - Added reasoning_content detection from ChatOllama `additional_kwargs`
+
+- **OpenWebUI v0.9.0 Compatibility**:
+  - Source context metadata in `function_call_output` items — enables OpenWebUI inline citations for tool results
+  - Incomplete status handling — emits `response.incomplete` with partial output on interrupted/timed-out responses
+  - Reasoning content preservation in multi-turn input — preserves `reasoning_content` from previous assistant turns via `additional_kwargs`
+  - Responses citation visibility — populates `annotations` in `output_text` content parts for source citations
+  - Hybrid search (vector + BM25 with RRF) — combines semantic similarity with keyword scoring for improved recall
+  - Richer tool result content types — JSON-serializes dict/list tool results instead of Python repr
 
 ### Changed
 

@@ -36,17 +36,18 @@ import io
 import json
 import logging
 import os
+import time
 import warnings
 from collections.abc import Iterable
 from contextlib import closing
 from datetime import date
+from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
 import requests
 import rich
 import typer
-from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
@@ -59,14 +60,18 @@ from rich.progress import (
 )
 from tabulate import tabulate
 
-console = Console()
-
-from esdc.chat.app import ESDCChatApp  # noqa: E402
 from esdc.commands.configs import configs_app  # noqa: E402
-from esdc.commands.provider import provider_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
-from esdc.dbmanager import load_data_to_db, run_query  # noqa: E402
-from esdc.selection import ApiVer, FileType, TableName  # noqa: E402
+from esdc.console import console  # noqa: E402
+from esdc.dbmanager import (  # noqa: E402
+    _ensure_duckdb_database,
+    _execute_sql_script,
+    get_duckdb_connection,
+    load_data_to_db,
+    run_query,
+)
+from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
+from esdc.validate import ValidationResult, run_validation
 
 TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
@@ -74,7 +79,6 @@ TABLES: tuple[TableName, TableName] = (
 )
 
 app = typer.Typer(no_args_is_help=False)
-app.add_typer(provider_app, name="provider")
 app.add_typer(configs_app, name="configs")
 
 
@@ -130,16 +134,43 @@ def fetch(
         "--no-reload",
         help="Only download data, skip loading into database (implies --save).",
     ),
+    no_reindex: bool = typer.Option(
+        False,
+        "--no-reindex",
+        help=(
+            "Skip rebuilding FTS and B-tree indexes after loading data. "
+            "By default, indexes are rebuilt automatically so ILIKE text "
+            "searches work correctly for the newly-fetched data."
+        ),
+    ),
+    year: Annotated[
+        list[int] | None,
+        typer.Option(
+            help=(
+                "Specific report year(s) to fetch. "
+                "Can specify multiple: --year 2024 --year 2025"
+            )
+        ),
+    ] = None,
 ) -> None:
     """Fetch data from ESDC and optionally load into the database.
 
-    By default, downloads data and loads it into the database.
+    By default, downloads data and loads it into the database, then
+    rebuilds FTS/B-tree indexes so ILIKE text searches work correctly.
+    Use --no-reindex to skip index rebuilding after loading.
     Use --no-reload to download and save data without loading into the database.
+    Use --year to fetch and update specific year(s) for both resources and
+    timeseries.
     """
     username, password = Config.get_credentials()
 
+    if year:
+        year = sorted(set(year))
+        logging.info("Will fetch data for specific year(s): %s", year)
+
     should_save = save or no_reload
     should_reload = not no_reload
+    should_reindex = not no_reindex
 
     if filetype == "csv":
         load_esdc_data(
@@ -148,6 +179,8 @@ def fetch(
             reload=should_reload,
             username=username,
             password=password,
+            years=year,
+            reindex=should_reindex,
         )
     elif filetype == "json":
         load_esdc_data(
@@ -156,6 +189,8 @@ def fetch(
             reload=should_reload,
             username=username,
             password=password,
+            years=year,
+            reindex=should_reindex,
         )
     else:
         logging.warning("File type %s is not available.", filetype)
@@ -430,12 +465,172 @@ def show(
         logging.warning("Unable to show data. The query is none.")
 
 
+def _detect_report_years(db_path: Path, min_year: int = 2020) -> list[int]:
+    """Query available report_year from project_resources, starting from min_year."""
+    if not db_path.exists():
+        logging.warning(
+            "Database not found at %s. Cannot detect report years.", db_path
+        )
+        return []
+
+    try:
+        conn = get_duckdb_connection(db_path, read_only=True)
+        try:
+            result = conn.execute(
+                f"SELECT DISTINCT report_year FROM project_resources "
+                f"WHERE report_year >= {min_year} ORDER BY report_year"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        years = [row[0] for row in result if row[0] is not None]
+        logging.info(
+            "Detected report years (>= %d) for timeseries: %s", min_year, years
+        )
+        return years
+    except Exception:
+        logging.exception("Failed to detect report years from database.")
+        return []
+
+
+_CREATE_TABLE_SCRIPTS = {
+    "project_resources": "create_table_project_resources.sql",
+    "project_timeseries": "create_table_project_timeseries.sql",
+}
+
+
+def _append_to_table(
+    table_name: str,
+    header: list[str],
+    content: list[list[str]],
+    append_years: list[int],
+) -> None:
+    """Append data: delete existing rows for given years, then insert new rows."""
+    start_time = time.monotonic()
+    db_path = Config.get_db_file()
+    _ensure_duckdb_database(db_path)
+    if not Config.get_db_dir().exists():
+        Config.get_db_dir().mkdir(parents=True, exist_ok=True)
+
+    year_label = ", ".join(str(y) for y in append_years)
+
+    def _status(step: str) -> str:
+        elapsed = time.monotonic() - start_time
+        return (
+            f"[dim]{table_name} ({year_label}): {step} [elapsed {elapsed:.1f}s][/dim]"
+        )
+
+    with console.status(_status("preparing")) as status:
+        conn = get_duckdb_connection(db_path)
+        try:
+            # Ensure table exists; only create if missing
+            status.update(_status("creating schema"))
+            schema_stmt = (
+                "SELECT 1 FROM information_schema.tables "
+                f"WHERE table_name = '{table_name}'"
+            )
+            table_exists = conn.execute(schema_stmt).fetchone()
+
+            if not table_exists:
+                status.update(_status("creating table"))
+                from esdc.db_security import _load_sql_script
+
+                script_name = _CREATE_TABLE_SCRIPTS.get(table_name)
+                if script_name is None:
+                    raise ValueError(
+                        f"No create script mapped for table '{table_name}'"
+                    )
+                create_sql = _load_sql_script(script_name)
+                statements = [s.strip() for s in create_sql.split(";") if s.strip()]
+                for stmt in statements:
+                    conn.execute(stmt)
+
+            # Delete existing rows for the specified years
+            status.update(_status("deleting old rows"))
+            delete_stmt = (
+                f"DELETE FROM {table_name} WHERE report_year IN ({year_label})"
+            )
+            conn.execute(delete_stmt)
+
+            # Insert new rows
+            status.update(_status(f"inserting {len(content):,} rows"))
+            placeholders = ", ".join(["?" for _ in header])
+            insert_stmt = (
+                f"INSERT INTO {table_name} ({', '.join(header)}) "
+                f"VALUES ({placeholders})"
+            )
+            conn.executemany(insert_stmt, content)
+
+            status.update(_status("recording metadata"))
+            _execute_sql_script(conn, "create_table_metadata.sql")
+
+            # ------------------------------------------------------------------
+            # Work around DuckDB HNSW checkpoint crash: drop the index before
+            # CHECKPOINT.  The index will be rebuilt by
+            # `esdc reload --embeddings-only` when embeddings are regenerated
+            # for the updated data.
+            # ------------------------------------------------------------------
+            status.update(_status("checkpointing"))
+            conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
+            conn.execute("CHECKPOINT")
+
+            elapsed = time.monotonic() - start_time
+            console.print(
+                f"[green]✓[/green] {table_name} ({year_label}): "
+                f"{len(content):,} rows updated in {elapsed:.1f}s"
+            )
+        finally:
+            conn.close()
+
+
+def _fetch_and_parse_table(
+    table: TableName,
+    filetype: FileType,
+    to_file: bool,
+    username: str,
+    password: str,
+    report_year: int | None = None,
+) -> tuple[list[list[str]], list[str]] | None:
+    """Download and parse a single table."""
+    url = esdc_url_builder(
+        table_name=table, file_type=filetype, report_year=report_year
+    )
+    logging.info("downloading from %s", url)
+    data = esdc_downloader(url, username, password)
+    if data is None:
+        logging.warning("Failed to download %s data.", table.value)
+        return None
+
+    if to_file:
+        filename = table.value
+        if report_year is not None:
+            filename = f"{table.value}_{report_year}"
+        save_path = Config.get_db_dir() / f"{filename}.{filetype.value}"
+        logging.debug("Save data as %s", save_path)
+        with open(save_path, "wb") as f:
+            _ = f.write(data)
+
+    if filetype == FileType.CSV:
+        decoded_data = data.decode("utf-8").splitlines()
+        return _read_csv(decoded_data)
+    elif filetype == FileType.JSON:
+        parsed_json = json.loads(data)
+        if not parsed_json:
+            return None
+        header = list(parsed_json[0].keys())
+        content = [list(item.values()) for item in parsed_json]
+        return content, header
+    return None
+
+
 def load_esdc_data(
     filetype: FileType = FileType.CSV,
     to_file: bool = True,
     reload: bool = True,
     username: str = "",
     password: str = "",
+    years: list[int] | None = None,
+    reindex: bool = True,
 ) -> None:
     """Download data from the ESDC API and optionally load into the database.
 
@@ -452,34 +647,99 @@ def load_esdc_data(
         The username for authenticating with the ESDC API.
     password : str
         The password for authenticating with the ESDC API.
+    years : list[int] | None
+        Specific report year(s) to fetch. When provided both
+        ``project_resources`` and ``project_timeseries`` are updated for
+        those years using append mode.
+    reindex : bool
+        If True (default), rebuild FTS and B-tree indexes after loading data.
+        This ensures ILIKE text searches work correctly for the newly-fetched data.
+        Set to False to skip reindexing (e.g. via --no-reindex).
     """
-    for table in TABLES:
-        logging.info("Downloading %s table.", table.value)
-        url = esdc_url_builder(table_name=table, file_type=filetype)
-        logging.info("downloading from %s", url)
-        data = esdc_downloader(url, username, password)
-        if data is None:
-            logging.warning("Failed to download %s data.", table.value)
-            break
-        if to_file:
-            save_path = Config.get_db_dir() / f"{table.value}.{filetype.value}"
-            logging.debug("Save data as %s", save_path)
-            with open(save_path, "wb") as f:
-                _ = f.write(data)
+    # ------------------------------------------------------------------
+    # 1) Full-replace mode (default)
+    # ------------------------------------------------------------------
+    if years is None:
+        # Resources: full replace
+        resources_result = _fetch_and_parse_table(
+            TableName.PROJECT_RESOURCES,
+            filetype,
+            to_file,
+            username,
+            password,
+        )
+        if resources_result is not None and reload:
+            load_data_to_db(
+                resources_result[0],
+                resources_result[1],
+                TableName.PROJECT_RESOURCES.value,
+            )
 
-        if not reload:
-            logging.info("Skipping database load for %s (--no-reload).", table.value)
-            continue
+        # Detect years from DB after resources loaded
+        timeseries_years = _detect_report_years(Config.get_db_file(), min_year=2020)
+        if not timeseries_years:
+            logging.warning("No report years found for timeseries. Skipping.")
+            return
 
-        if filetype == FileType.CSV:
-            decoded_data = data.decode("utf-8").splitlines()
-            content, header = _read_csv(decoded_data)
-            load_data_to_db(content, header, table.value)
-        elif filetype == FileType.JSON:
-            parsed_json = json.loads(data)
-            header = parsed_json[0].keys()
-            content = [list(item.values()) for item in parsed_json]
-            load_data_to_db(content, header, table.value)
+        # Timeseries: full replace, fetching per year
+        all_timeseries_content: list[list[str]] = []
+        timeseries_header: list[str] = []
+        for year in timeseries_years:
+            result = _fetch_and_parse_table(
+                TableName.PROJECT_TIMESERIES,
+                filetype,
+                to_file,
+                username,
+                password,
+                report_year=year,
+            )
+            if result is not None:
+                all_timeseries_content.extend(result[0])
+                timeseries_header = result[1]
+
+        if all_timeseries_content and reload:
+            load_data_to_db(
+                all_timeseries_content,
+                timeseries_header,
+                TableName.PROJECT_TIMESERIES.value,
+            )
+
+        # Full-replace mode: load_data_to_db already calls _create_fts_indexes,
+        # but we still reindex here as a safety pass when flag is set.
+        if reload and reindex:
+            from esdc.dbmanager import reindex_fts
+
+            reindex_fts()
+
+        return
+
+    # ------------------------------------------------------------------
+    # 2) Per-year append mode (--year)
+    # ------------------------------------------------------------------
+    if reload:
+        console.print(
+            "[dim]Per-year mode: updating project_resources and "
+            f"project_timeseries for years {years}[/dim]"
+        )
+
+    for year in sorted(set(years)):
+        for table in TABLES:
+            result = _fetch_and_parse_table(
+                table,
+                filetype,
+                to_file,
+                username,
+                password,
+                report_year=year,
+            )
+            if result is None or not reload:
+                continue
+            _append_to_table(table.value, result[1], result[0], [year])
+
+    if reload and reindex:
+        from esdc.dbmanager import reindex_fts
+
+        reindex_fts()
 
 
 def esdc_url_builder(
@@ -528,8 +788,6 @@ def esdc_url_builder(
     # TODO this is temporary fix since as of 2024-07-06
     # the API for time series does not support all year selection
     # remove this conditional if the API for project_timeseries is fixed.
-    if table_name == TableName.PROJECT_TIMESERIES:
-        report_year = 2024
     if report_year is not None:
         url = f"{url}&report-year={report_year}"
     url = f"{url}&output={file_type.value}"
@@ -691,23 +949,35 @@ def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
 @app.command(name="chat")
 def chat(setup: bool = False):
     """Start the interactive chat TUI."""
-    from esdc.chat.wizard import WizardApp
     from esdc.configs import Config
 
     if setup or not Config.has_chat_config():
-        rich.print("[bold]Running setup wizard...[/bold]")
-        WizardApp.run()
+        rich.print(
+            "[bold yellow]No provider configured.[/bold yellow] "
+            "Run '[cyan]esdc configs[/cyan]' to set one up."
+        )
+        return
 
     if Config.has_chat_config():
+        from esdc.chat.app import ESDCChatApp
+
         app = ESDCChatApp()
         app.run()
     else:
         rich.print("[yellow]Setup incomplete. Chat cannot start.[/yellow]")
 
 
-@app.command(name="db-info")
-def db_info() -> None:
-    """Show database location and configuration."""
+@app.command(name="status")
+def status(
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help="Run functional verification on indexes (slower).",
+        ),
+    ] = False,
+) -> None:
+    """Show database location, configuration, and index status."""
     db_dir = Config.get_db_dir()
     db_file = Config.get_db_file()
 
@@ -719,12 +989,124 @@ def db_info() -> None:
     if os.environ.get("ESDC_DB_FILE"):
         rich.print("  (from [cyan]ESDC_DB_FILE[/cyan] environment variable)")
 
-    if db_file.exists():
-        rich.print("[green]Database exists: Yes[/green]")
-    else:
+    if not db_file.exists():
         rich.print(
-            "[yellow]Database exists: No[/yellow] (run '[cyan]esdc fetch --save[/cyan]' to create)"  # noqa: E501
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
         )
+        return
+
+    rich.print("[green]Database exists: Yes[/green]")
+
+    try:
+        from esdc.dbmanager import (
+            check_indexes,
+            check_table_stats,
+            get_duckdb_connection,
+            get_last_updated,
+        )
+
+        conn = get_duckdb_connection(db_file)
+        try:
+            status = check_indexes(conn)
+            table_stats = check_table_stats(conn)
+            last_updated = get_last_updated(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
+        return
+
+    if last_updated:
+        rich.print(f"[bold]Last updated:[/bold] {last_updated}")
+    else:
+        from datetime import datetime
+
+        mtime = datetime.fromtimestamp(db_file.stat().st_mtime)
+        rich.print(f"[bold]Last updated:[/bold] {mtime:%Y-%m-%d %H:%M:%S} (file mtime)")
+
+    rich.print()
+    rich.print("[bold]Tables:[/bold]")
+    for ts in table_stats:
+        if not ts["years"]:
+            icon = "[red]❌[/red]"
+            rich.print(f"  {icon} {ts['table']}: not loaded")
+            continue
+        icon = "[green]✅[/green]"
+        rich.print(f"  {icon} {ts['table']} ({ts['total']:,} rows):")
+        for year, count in ts["years"]:
+            rich.print(f"      {year}: {count:,} rows")
+
+    rich.print()
+    rich.print("[bold]FTS Indexes:[/bold]")
+    for fts in status["fts_indexes"]:
+        icon = "[green]✅[/green]" if fts["exists"] else "[red]❌[/red]"
+        detail = ""
+        if fts["exists"]:
+            detail = f" ({fts['column_count']} columns)"
+        rich.print(f"  {icon} FTS {fts['table']}{detail}")
+
+    rich.print()
+    rich.print("[bold]B-tree Indexes:[/bold]")
+    for bt in status["btree_indexes"]:
+        icon = "[green]✅[/green]" if bt["exists"] else "[red]❌[/red]"
+        rich.print(f"  {icon} {bt['name']}")
+
+    rich.print()
+    rich.print("[bold]Embeddings:[/bold]")
+    emb = status["embeddings"]
+    table_icon = "[green]✅[/green]" if emb["table_exists"] else "[red]❌[/red]"
+    rich.print(f"  {table_icon} project_embeddings table", end="")
+    if emb["table_exists"]:
+        rich.print(f" ({emb['row_count']:,} rows)")
+    else:
+        rich.print()
+    hnsw_icon = "[green]✅[/green]" if emb["hnsw_exists"] else "[red]❌[/red]"
+    rich.print(f"  {hnsw_icon} HNSW index idx_hnsw_embeddings")
+
+    if not verify:
+        return
+
+    rich.print()
+    rich.print("[bold]Verification:[/bold]")
+
+    try:
+        from esdc.dbmanager import verify_indexes
+
+        conn = get_duckdb_connection(db_file)
+        try:
+            vf = verify_indexes(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]  Could not verify indexes: {e}[/yellow]")
+        return
+
+    for fts in vf["fts"]:
+        if fts["functional"]:
+            icon = "[green]✅[/green]"
+            detail = f"functional ({fts['result_count']} results)"
+        else:
+            icon = "[red]❌[/red]"
+            detail = "not functional"
+        rich.print(f"  {icon} FTS {fts['table']}: {detail}")
+
+    if vf["hnsw"]["functional"]:
+        icon = "[green]✅[/green]"
+        detail = f"functional ({vf['hnsw']['result_count']} results)"
+    else:
+        icon = "[red]❌[/red]"
+        detail = "not functional"
+    rich.print(f"  {icon} HNSW search: {detail}")
+
+    for bt in vf["btree"]:
+        if bt["functional"]:
+            icon = "[green]✅[/green]"
+            detail = "query OK"
+        else:
+            icon = "[yellow]⚠[/yellow]"
+            detail = "not verified (compound index)"
+        rich.print(f"  {icon} {bt['name']}: {detail}")
 
 
 @app.command(name="serve")
@@ -786,6 +1168,313 @@ def load_kg() -> None:
             "[red]Failed to build knowledge graph. Check logs for details.[/red]"
         )
     manager.close()
+
+
+@app.command(name="validate")
+def validate(
+    rule: Annotated[
+        list[str] | None,
+        typer.Option("--rule", "-r", help="Specific rule ID(s) to run (e.g., RE9001)."),
+    ] = None,
+    group: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--group",
+            "-g",
+            help="Rule group(s) to run (e.g., RE9).",
+        ),
+    ] = None,
+    force_fix: Annotated[
+        bool,
+        typer.Option(
+            "--force-fix",
+            help="Apply fixes to violations (writes to DB).",
+        ),
+    ] = False,
+    severity: Annotated[
+        str | None,
+        typer.Option(
+            "--severity",
+            help="Filter by severity: strict, warning, info.",
+        ),
+    ] = None,
+    year: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--year",
+            min=2019,
+            help="Filter by report year(s). Can specify multiple.",
+        ),
+    ] = None,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help=(
+                "Verbosity level: "
+                "0=group summary (default), "
+                "1=per-rule summary, "
+                "2=full detail."
+            ),
+        ),
+    ] = 0,
+    save: Annotated[
+        bool,
+        typer.Option(
+            "--save/--no-save",
+            help="Save violations to file.",
+        ),
+    ] = False,
+    save_format: Annotated[
+        str,
+        typer.Option(
+            "--save-format",
+            help="Save format: xlsx, csv, json.",
+        ),
+    ] = "xlsx",
+) -> None:
+    """Validate ESDC data against business rules.
+
+    Rules are organized by group IDs (RE0-RE9).  Each rule has a unique
+    rule ID such as ``RE9001`` defined via a formal mathematical
+    expression.
+
+    Verbosity levels:
+        0 (default): Group summary only — total violations per rule group.
+        1 (-v): Per-rule summary — rule ID, formula, and violation count.
+        2 (-vv): Full detail — individual violations with values.
+
+    Examples:
+    --------
+    Run all rules (group summary only)::
+
+        esdc validate
+
+    Per-rule summary::
+
+        esdc validate -v
+
+    Full detail with individual violations::
+
+        esdc validate -vv
+
+    Run a specific group::
+
+        esdc validate --group RE9
+
+    Run a specific rule::
+
+        esdc validate --rule RE9001
+
+    Fix violations in the database::
+
+        esdc validate --force-fix
+
+    Filter by severity::
+
+        esdc validate --severity strict
+
+    Validate a specific year::
+
+        esdc validate --year 2024
+
+    Save violations to file::
+
+        esdc validate --save
+        esdc validate --save --save-format csv
+        esdc validate --save --save-format json
+    """
+    # Validate severity early so invalid value fails fast
+    if severity:
+        try:
+            Severity(severity)
+        except ValueError:
+            rich.print(
+                f"[red]Unknown severity: {severity}. Use: strict, warning, info[/red]"
+            )
+            raise typer.Exit(1) from None
+
+    # Import rules so that the @register_rule decorator fires.
+    import esdc.validate.rule_re0  # noqa: F401
+    import esdc.validate.rule_re1  # noqa: F401
+    import esdc.validate.rule_re2  # noqa: F401
+    import esdc.validate.rule_re9  # noqa: F401
+
+    if force_fix:
+        rich.print(
+            "[bold red]Warning: --force-fix will modify the database![/bold red]"
+        )
+        rich.print("[dim]Press Ctrl+C to cancel, or Enter to continue...[/dim]")
+        try:
+            input()
+        except KeyboardInterrupt:
+            raise typer.Abort() from None
+
+    results = run_validation(
+        rule_ids=rule,
+        groups=group,
+        force_fix=force_fix,
+        year=year,
+    )
+
+    if severity:
+        results = [r for r in results if r.severity == Severity(severity)]
+
+    if not results:
+        rich.print("[green]No validation rules matched.[/green]")
+        return
+
+    total_violations = sum(r.total_violations for r in results)
+    total_fixed = sum(r.fix_applied_count for r in results)
+    results_with_violations = [r for r in results if r.total_violations > 0]
+
+    if verbose >= 2:
+        _print_full_detail(results_with_violations)
+    elif verbose == 1:
+        _print_rule_summary(results_with_violations)
+
+    # Always print group summary (and total) unless verbose >= 2
+    # which already includes a per-rule summary ending with totals.
+    if verbose < 2:
+        _print_group_summary(results)
+
+    rich.print("")
+    if total_violations == 0:
+        rich.print("[green]✓ All validations passed![/green]")
+    elif force_fix and total_fixed > 0:
+        rich.print(
+            f"[green]✓ Applied {total_fixed} fixes out of "
+            f"{total_violations} violations[/green]"
+        )
+        if total_fixed < total_violations:
+            remaining = total_violations - total_fixed
+            rich.print(
+                f"[yellow]⚠ {remaining} violation(s) remaining "
+                f"(manual review required)[/yellow]"
+            )
+    else:
+        rich.print(
+            f"[yellow]⚠ Found {total_violations} violation(s). "
+            f"Use --force-fix to apply fixes.[/yellow]"
+        )
+
+    if save:
+        _save_violations(results, save_format)
+
+
+def _severity_icon(severity: Severity) -> str:
+    icons = {
+        Severity.STRICT: "⛔",
+        Severity.WARNING: "🟡",
+        Severity.INFO: "🔵",
+    }
+    return icons.get(severity, "⚪")
+
+
+def _print_group_summary(results: list[ValidationResult]) -> None:
+    from collections import defaultdict
+
+    group_totals: dict[str, int] = defaultdict(int)
+    for r in results:
+        group_totals[r.rule_group] += r.total_violations
+
+    for group in sorted(group_totals):
+        total = group_totals[group]
+        rich.print(f"  {group}: {total:,} violations")
+
+    total = sum(group_totals.values())
+    rich.print(f"  Total: {total:,} violations")
+
+
+def _print_rule_summary(results: list[ValidationResult]) -> None:
+    for result in results:
+        icon = _severity_icon(result.severity)
+        rich.print(f"\n{icon} [bold]{result.rule_id}[/bold]: {result.description}")
+
+        if result.formal:
+            rich.print(f"   {result.formal}")
+
+        rich.print(f"   Violations: [bold]{result.total_violations}[/bold]")
+
+
+def _print_full_detail(results: list[ValidationResult]) -> None:
+    for result in results:
+        icon = _severity_icon(result.severity)
+        rich.print(f"\n{icon} [bold]{result.rule_id}[/bold]: {result.description}")
+
+        if result.formal:
+            rich.print(f"   {result.formal}")
+
+        fixable_text = "Yes" if result.is_fixable else "No"
+        fixable_style = "green" if result.is_fixable else "yellow"
+        rich.print(f"   Fixable: [{fixable_style}]{fixable_text}[/{fixable_style}]")
+
+        rich.print(f"   Violations: [bold]{result.total_violations}[/bold]")
+
+        for v in result.violations[:20]:
+            ids_text = ", ".join(f"{k}={val}" for k, val in v.identifiers.items())
+            rich.print(f"   - {ids_text}")
+
+            shown = {
+                k: val
+                for k, val in v.current_values.items()
+                if val is not None and k != "project_isactive"
+            }
+            if shown:
+                cols_text = ", ".join(f"{k}={val}" for k, val in shown.items())
+                rich.print(f"     {cols_text}")
+            if v.fix_applied:
+                rich.print("     [green]✓ Fixed[/green]")
+
+        if result.total_violations > 20:
+            rich.print(f"   ... and {result.total_violations - 20} more")
+
+
+def _save_violations(results: list[ValidationResult], fmt: str) -> None:
+    """Collect all violations into a DataFrame and save to file."""
+    from datetime import datetime
+
+    import pandas as pd
+
+    fmt = (fmt or "xlsx").strip().lower()
+    if fmt not in ("xlsx", "csv", "json"):
+        rich.print(f"[red]Unknown format: {fmt}. Use xlsx, csv, or json.[/red]")
+        raise typer.Exit(1) from None
+
+    rows: list[dict[str, object]] = []
+    for result in results:
+        for v in result.violations:
+            rows.append(
+                {
+                    "report_year": v.identifiers.get("report_year", ""),
+                    "wk_name": v.identifiers.get("wk_name", ""),
+                    "field_name": v.identifiers.get("field_name", ""),
+                    "project_name": v.identifiers.get("project_name", ""),
+                    "validated_column": v.validated_column,
+                    "severity": v.severity.value,
+                    "rule_id": v.rule_id,
+                    "description": v.description,
+                }
+            )
+
+    if not rows:
+        rich.print("[green]No violations to save.[/green]")
+        return
+
+    df = pd.DataFrame(rows)
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    filename = f"val_result_{timestamp}.{fmt}"
+
+    if fmt == "xlsx":
+        df.to_excel(filename, index=False, engine="openpyxl")
+    elif fmt == "csv":
+        df.to_csv(filename, index=False)
+    elif fmt == "json":
+        df.to_json(filename, orient="records", indent=2)
+
+    rich.print(f"[green]Saved {len(rows)} violations to {filename}[/green]")
 
 
 if __name__ == "__main__":

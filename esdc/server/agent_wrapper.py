@@ -320,13 +320,18 @@ async def generate_streaming_response(
             "model": provider_config.get("model"),
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
+            "reasoning_effort": "none",
         }
         llm = create_llm_from_config(provider_config_obj)
 
         if anc_type == "tags":
             result = await generate_conversation_tags(llm, user_query)
+            # Wrap in JSON format expected by OpenWebUI
+            result_json = json.dumps({"tags": result})
         else:
             result = await generate_conversation_title(llm, user_query)
+            # Wrap in JSON format expected by OpenWebUI
+            result_json = json.dumps({"title": result})
 
         logger.info(
             "[%s] ANCILLARY: completed, type=%s, result=%r",
@@ -335,7 +340,7 @@ async def generate_streaming_response(
             result[:80],
         )
 
-        for chunk in create_ancillary_chat_stream_chunks(result):
+        for chunk in create_ancillary_chat_stream_chunks(result_json):
             yield chunk
         return
 
@@ -569,13 +574,18 @@ async def generate_response(
             "model": provider_config.get("model"),
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
+            "reasoning_effort": "none",
         }
         llm = create_llm_from_config(provider_config_obj)
 
         if anc_type == "tags":
             result = await generate_conversation_tags(llm, user_query)
+            # Wrap in JSON format expected by OpenWebUI
+            result_json = json.dumps({"tags": result})
         else:
             result = await generate_conversation_title(llm, user_query)
+            # Wrap in JSON format expected by OpenWebUI
+            result_json = json.dumps({"title": result})
 
         logger.info(
             "[chatcmpl-%s] ANCILLARY: completed, type=%s, result=%r",
@@ -583,7 +593,7 @@ async def generate_response(
             anc_type,
             result[:80],
         )
-        return create_ancillary_chat_response(result)
+        return create_ancillary_chat_response(result_json)
 
     try:
         provider_config = Config.get_provider_config()

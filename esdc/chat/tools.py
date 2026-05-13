@@ -316,7 +316,22 @@ def _execute_sql_sync(query: str, db_path: str | None = None) -> str:
             logger.debug("[SQL] rows_fetched | count=%d", len(rows))
 
             if not rows:
-                return "Query executed successfully. No results returned."
+                has_fts_rewrite = query != original_query and (
+                    "match_bm25" in query or "fts_main_" in query
+                )
+                if has_fts_rewrite:
+                    logger.debug(
+                        "[FTS] zero_results_with_fts | falling back to original query"
+                    )
+                    result = conn.execute(original_query)
+                    if result.description:
+                        rows = result.fetchall()
+                        query = original_query
+                        logger.debug("[FTS] fallback_rows | count=%d", len(rows))
+                    if not rows:
+                        return "Query executed successfully. No results returned."
+                else:
+                    return "Query executed successfully. No results returned."
 
             max_rows = 50
             total_rows = len(rows)
@@ -484,6 +499,12 @@ def list_tables() -> str:
             output += "\nViews:\n"
             for view in views:
                 output += f"  - {view[0]}\n"
+
+        from esdc.dbmanager import get_last_updated
+
+        last_updated = get_last_updated(conn)
+        if last_updated:
+            output += f"\nData last updated: {last_updated}\n"
 
         cache.set(cache_key, output)
         logger.debug("[CACHE] stored | tool=list_tables key=%s", cache_key[:16])
@@ -864,9 +885,11 @@ def get_resources_columns(
        - Columns: rec_oil, rec_con, rec_ga, rec_gn, rec_oc, rec_an, rec_mboe
        - Includes Reserves + GRR + Contingent + Prospective
 
-    3. Risked Resources (rec_*_risked): Prospective resources with GCF applied
+    3. Risked Resources (rec_*_risked): Universal shortcut for all resource classes
        - Columns: rec_oil_risked, rec_con_risked, etc.
-       - Only applies to prospective resources
+       - GRR/Contingent: GCF=1, identical to rec_*
+       - Prospective: GCF<1, differs from rec_*
+       - Use for "all resources" without project_class filter
 
     PREFIX CONFUSION:
     - res_* = Reserves (commercial only, "cadangan")
@@ -1442,7 +1465,13 @@ def resolve_spatial(
 def semantic_search(
     query: Annotated[
         str,
-        "Natural language query to search for semantically similar documents.",
+        "Bilingual Indonesian/English concept query (5+ words) describing issues, "
+        "problems, or characteristics in project_remarks. The database contains "
+        "bilingual remarks (Indonesian narrative + English technical terms). "
+        "Examples: 'proyek dengan masalah reservoir heterogen', "
+        "'kendala teknis water injection'. "
+        "DO NOT use for keyword matching on project_name (EOR, waterflood, water cut) "
+        "or single words. For those, use execute_sql with ILIKE on project_name.",
     ],
     limit: Annotated[
         int,
@@ -1574,7 +1603,7 @@ def semantic_search(
     resolver = SemanticResolver()
 
     try:
-        result = resolver.search_by_text(
+        result = resolver.hybrid_search(
             query=query,
             limit=limit,
             filters=filters if filters else None,

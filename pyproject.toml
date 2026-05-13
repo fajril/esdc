@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esdc"
-version = "0.6.0"
+version = "0.7.0"
 description = "IRIS - Intelligent Reservoir Inference System for Indonesian oil & gas reserves database"
 requires-python = ">=3.10,<3.15"
 authors = [
@@ -45,13 +45,20 @@ dependencies = [
     "real-ladybug>=0.15.3",
     # Machine Learning
     "scikit-learn>=1.3.0",
-    # Observability & Evaluation (Arize Phoenix)
-    "arize-phoenix-otel>=0.5",
-    "openinference-instrumentation-langchain>=0.1.30",
-    "opentelemetry-api>=1.27",
-    "opentelemetry-sdk>=1.27",
-    "opentelemetry-exporter-otlp>=1.27",
+    "langchain-anthropic>=0.3.0",
+    "langchain-google-genai>=2.0.0",
+    "langchain-groq>=0.2.0",
+    "questionary>=2.0.0",
+]
+
+[project.optional-dependencies]
+phoenix = [
     "arize-phoenix>=14.8.0",
+    "arize-phoenix-otel>=0.15.0",
+    "openinference-instrumentation-langchain>=0.1.62",
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp>=1.27.0",
 ]
 
 [project.urls]
@@ -62,6 +69,7 @@ esdc = "esdc.esdc:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
+exclude = ["screenshot*", "tests*", "docs*"]
 
 [tool.setuptools.package-data]
 esdc = ["sql/*", "chat/domain_knowledge/*.yaml"]
@@ -118,10 +126,12 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["N806"]  # Mock variable names use convention like MockClient
+"tests/**" = ["N806", "E501"]  # Mock variable names use convention like MockClient; long SQL in tests
+"esdc/validate/rule_re*.py" = ["E501"]  # Long LaTeX formal strings
 
 [dependency-groups]
 dev = [
+    "esdc[phoenix]",
     "pytest>=8.4.2",
     "pytest-asyncio>=0.23.0",
     "pytest-mock>=3.15.1",
@@ -140,4 +150,3 @@ markers = [
     "integration: tests that require external services or real database",
     "allow_provider_config: skip the autouse provider config mock",
 ]
-

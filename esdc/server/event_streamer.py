@@ -83,6 +83,7 @@ async def astream_agent_events(
     token_count = 0
     pending_tool_calls: list[dict[str, Any]] = []
     seen_image_markdowns: list[str] = []
+    has_chat_model_end = False
 
     try:
         async for event in agent.astream_events(
@@ -129,6 +130,7 @@ async def astream_agent_events(
                     yield {"type": "reasoning_token", "content": reasoning_content}
 
             elif event_type == "on_chat_model_end":
+                has_chat_model_end = True
                 output = data.get("output")
                 if output and isinstance(output, AIMessage):
                     content = output.content or ""
@@ -252,6 +254,17 @@ async def astream_agent_events(
             return
 
         raise
+
+    # If no chat_model_end and no tokens streamed, yield a fallback event
+    if not has_chat_model_end and token_count == 0 and first_token_time is None:
+        logger.warning("[STREAM] No LLM tokens streamed, yielding fallback")
+        yield {
+            "type": "message_complete",
+            "ai_message": AIMessage(
+                content="Maaf, saya tidak dapat memproses permintaan "
+                "Anda. Silakan coba lagi."
+            ),
+        }
 
     total_ms = (time.perf_counter() - stream_start) * 1000
     logger.debug(

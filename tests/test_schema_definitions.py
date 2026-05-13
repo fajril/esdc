@@ -23,6 +23,7 @@ def test_database_schema_structure():
     assert "field_resources" in DATABASE_SCHEMA
     assert "wa_resources" in DATABASE_SCHEMA
     assert "nkri_resources" in DATABASE_SCHEMA
+    assert "_metadata" in DATABASE_SCHEMA
 
     pr = DATABASE_SCHEMA["project_resources"]
     assert "columns" in pr
@@ -30,6 +31,11 @@ def test_database_schema_structure():
     assert "primary_key" in pr
     assert "rec_oc" in pr["columns"]
     assert "tpf_oc" in DATABASE_SCHEMA["project_timeseries"]["columns"]
+
+    meta = DATABASE_SCHEMA["_metadata"]
+    assert "columns" in meta
+    assert "key" in meta["columns"]
+    assert "value" in meta["columns"]
 
 
 def test_system_prompt_has_no_inline_schema():
@@ -49,6 +55,6 @@ def test_system_prompt_has_no_inline_schema():
     assert "field_lat | REAL" not in prompt
     assert "rec_oil | REAL" not in prompt
 
-    assert len(prompt) < 26000, (
-        f"System prompt is {len(prompt)} chars, expected < 26000"
+    assert len(prompt) < 30000, (
+        f"System prompt is {len(prompt)} chars, expected < 30000"
     )

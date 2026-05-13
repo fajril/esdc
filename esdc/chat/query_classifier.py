@@ -46,10 +46,39 @@ class QueryClassifier:
                 r"total\s+cadangan",
                 r"cadangan\s+(?:minyak|gas|oil|gas)",
                 r"cadangan\s+(?:lapangan|field|wk|wilayah)",
+                r"cadangan\s+(?:nasional|indonesia)",
+                r"\bcadangan\b",
+                r"berapa\s+reserves",
+                r"reserves\s+(?:of|in)",
             ],
             "columns": ["res_oc", "res_an", "res_oil", "res_ga", "res_gn"],
             "tables": ["field_resources", "wa_resources", "project_resources"],
             "project_class": "Reserves & GRR",
+        },
+        "contingent": {
+            "patterns": [
+                r"potensi\s+contingent",
+                r"contingent\s+resources?",
+                r"contingent\b",
+                r"sumber\s+daya\s+contingent",
+                r"potensi\s+(?:tidak\s+)?terkategorikan",
+            ],
+            "columns": ["rec_oc", "rec_an", "rec_oil", "rec_ga", "rec_gn"],
+            "tables": ["field_resources", "wa_resources", "project_resources"],
+            "project_class": "Contingent",
+        },
+        "prospective": {
+            "patterns": [
+                r"potensi\s+prospective",
+                r"potensi\s+eksplorasi",
+                r"prospective\s+resources?",
+                r"prospective\b",
+                r"sumber\s+daya\s+prospective",
+                r"sumber\s+daya\s+eksplorasi",
+            ],
+            "columns": ["rec_oc", "rec_an", "rec_oil", "rec_ga", "rec_gn"],
+            "tables": ["field_resources", "wa_resources", "project_resources"],
+            "project_class": "Prospective",
         },
         "resources": {
             "patterns": [
@@ -58,6 +87,13 @@ class QueryClassifier:
                 r"total\s+sumber\s+daya",
                 r"sumber\s+daya\s+(?:minyak|gas)",
                 r"potensi\s+(?:minyak|gas)",
+                r"\bpotensi\b",
+                r"berapa\s+potensi",
+                r"jumlah\s+potensi",
+                r"total\s+potensi",
+                r"potensi\s+(?:lapangan|field|wk|wilayah|kerja)",
+                r"apa\s+potensi",
+                r"resources\b",
             ],
             "columns": ["rec_oc", "rec_an", "rec_oil", "rec_ga", "rec_gn"],
             "tables": ["field_resources", "wa_resources", "project_resources"],
@@ -277,19 +313,27 @@ class QueryClassifier:
 
     def _suggest_table(self, query_category: str, entities: dict[str, str]) -> str:
         """Suggest optimal table based on query type and entities."""
+        _resource_categories = (
+            "reserves",
+            "resources",
+            "contingent",
+            "prospective",
+            "inplace",
+        )
+
         if "field_name" in entities:
-            if query_category in ("reserves", "resources", "inplace"):
+            if query_category in _resource_categories:
                 return "field_resources"
             elif query_category == "production_profile":
                 return "field_timeseries"
 
         if "wk_name" in entities:
-            if query_category in ("reserves", "resources"):
+            if query_category in _resource_categories:
                 return "wa_resources"
             elif query_category == "production_profile":
                 return "wa_timeseries"
 
-        if query_category in ("reserves", "resources"):
+        if query_category in _resource_categories:
             return "field_resources"
 
         return "project_resources"
@@ -318,7 +362,11 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
     Returns:
         List of LangChain tool names to bind for this query
     """
-    base_tools = ["Knowledge Traversal", "SQL Executor"] + _SCHEMA_TOOLS
+    base_tools = [
+        "Knowledge Traversal",
+        "SQL Executor",
+        "Simple Data Query",
+    ] + _SCHEMA_TOOLS
 
     if classification.query_type in (
         QueryType.SIMPLE_FACTUAL,

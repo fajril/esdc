@@ -1,0 +1,313 @@
+"""Tests for build_smart_query() in view_builder.py."""
+
+import pytest
+
+from esdc.chat.smart_query import _resolve_uncertainty_label
+from esdc.selection import TableName
+from esdc.view_builder import build_smart_query
+
+
+class TestBuildSmartQuery:
+    """Tests for smart aggregate query builder."""
+
+    def test_reserves_work_area(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+        )
+        sql = res["sql"]
+        assert "SUM(res_oc)" in sql
+        assert "reserves_mstb" in sql
+        assert "SUM(res_an)" in sql
+        assert "reserves_bscf" in sql
+        assert "wa_resources" in sql
+        assert "wk_name ILIKE" in sql
+        assert "uncert_level = ?" in sql
+        assert "2. Middle Value" in res["params"]
+        assert "MAX(report_year) AS report_year" in sql
+        assert "GROUP BY" not in sql
+
+    def test_resources_work_area_grouped(self):
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+        )
+        sql = res["sql"]
+        assert "SUM(rec_oc_risked)" in sql
+        assert "SUM(rec_an_risked)" in sql
+        assert "GROUP BY project_class, project_stage" in sql
+
+    def test_contingent_national(self):
+        res = build_smart_query(
+            query_type="contingent",
+            table=TableName.NKRI_RESOURCES,
+        )
+        sql = res["sql"]
+        assert "nkri_resources" in sql
+        assert "project_class LIKE ?" in sql
+        assert "%Contingent%" in res["params"]
+        assert "GROUP BY" not in sql
+
+    def test_prospective_field(self):
+        res = build_smart_query(
+            query_type="prospective",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+        )
+        sql = res["sql"]
+        assert "rec_oc_risked" in sql
+        assert "rec_an_risked" in sql
+        assert "project_class LIKE ?" in sql
+        assert "%Prospective%" in res["params"]
+
+    def test_cumprod_field(self):
+        res = build_smart_query(
+            query_type="cumprod",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+        )
+        sql = res["sql"]
+        # field_resources cumprod detail does NOT include gross cumprod columns
+        assert "SUM(cprd_sls_oc)" in sql
+        assert "SUM(cprd_sls_an)" in sql
+        assert "cprd_grs" not in sql
+
+    def test_prodrate_work_area(self):
+        res = build_smart_query(
+            query_type="prodrate",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+        )
+        sql = res["sql"]
+        assert "SUM(rate_grs_oc)" in sql or "SUM(rate_sls_oc)" in sql
+
+    def test_comparison_two_years(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+            report_years=[2023, 2024],
+        )
+        sql = res["sql"]
+        assert "report_year IN (?, ?)" in sql
+        assert "GROUP BY report_year" in sql
+        assert "uncert_level = ?" in sql
+        assert res["params"] == ["%Rokan%", "2. Middle Value", 2023, 2024]
+
+    def test_trend_three_years(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+            report_years=[2022, 2023, 2024],
+        )
+        sql = res["sql"]
+        assert "report_year IN (?, ?, ?)" in sql
+        assert "GROUP BY report_year" in sql
+
+    def test_uncertainty_1p(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+            uncertainty="1P",
+        )
+        sql = res["sql"]
+        assert "uncert_level = ?" in sql
+        assert "1. Low Value" in res["params"]
+
+    def test_default_uncertainty_p50(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+        )
+        sql = res["sql"]
+        assert "uncert_level = ?" in sql
+        assert "2. Middle Value" in res["params"]
+        assert "MAX(report_year) AS report_year" in sql
+
+    def test_national_no_entity_filter(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.NKRI_RESOURCES,
+        )
+        sql = res["sql"]
+        assert "ILIKE" not in sql
+        assert "nkri_resources" in sql
+
+    def test_invalid_query_type_raises(self):
+        with pytest.raises(ValueError, match="Invalid query_type"):
+            build_smart_query(
+                query_type="invalid",
+                table=TableName.WA_RESOURCES,
+                entity_name="Rokan",
+            )
+
+    def test_sql_is_valid_with_entity_filter(self):
+        """Subquery must have space between table name and WHERE.
+
+        Regression: build_smart_query produced malformed SQL like
+        'FROM wa_resourcesWHERE wk_name ...' when report_years was None
+        and an entity_name was provided.
+        """
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Jabung",
+        )
+        sql = res["sql"]
+        # The subquery should be "FROM wa_resources WHERE ...", not "wa_resourcesWHERE"
+        assert "resources WHERE" in sql
+        assert "resourcesWHERE" not in sql
+
+    def test_project_level_is_ignored(self):
+        """PROJECT_RESOURCES is valid but entity filtering still works."""
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.PROJECT_RESOURCES,
+            entity_name="Abadi",
+        )
+        sql = res["sql"]
+        assert "project_name ILIKE" in sql
+
+    def test_uncertainty_1c(self):
+        res = build_smart_query(
+            query_type="contingent",
+            table=TableName.NKRI_RESOURCES,
+            uncertainty="1C",
+        )
+        sql = res["sql"]
+        assert "uncert_level = ?" in sql
+        assert "1. Low Value" in res["params"]
+
+    def test_uncertainty_2u(self):
+        res = build_smart_query(
+            query_type="prospective",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+            uncertainty="2U",
+        )
+        sql = res["sql"]
+        assert "uncert_level = ?" in sql
+        assert "2. Middle Value" in res["params"]
+
+    def test_uncertainty_2r(self):
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+            uncertainty="2R",
+        )
+        sql = res["sql"]
+        assert "uncert_level = ?" in sql
+        assert "2. Middle Value" in res["params"]
+
+    def test_uncertainty_p90_generic(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+            uncertainty="P90",
+        )
+        sql = res["sql"]
+        assert "uncert_level = ?" in sql
+        assert "1. Low Value" in res["params"]
+
+    def test_uncertainty_p10_generic(self):
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.FIELD_RESOURCES,
+            entity_name="Duri",
+            uncertainty="P10",
+        )
+        sql = res["sql"]
+        assert "uncert_level = ?" in sql
+        assert "3. High Value" in res["params"]
+
+    def test_report_year_in_select_no_group_by(self):
+        """Reserves (no GROUP BY) should include MAX(report_year) AS report_year."""
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+        )
+        sql = res["sql"]
+        assert "MAX(report_year) AS report_year" in sql
+
+    def test_report_year_in_select_with_group_by(self):
+        """Resources (GROUP BY) should include MAX(report_year)."""
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+        )
+        sql = res["sql"]
+        assert "MAX(report_year) AS report_year" in sql
+
+    def test_report_year_in_select_comparison_mode(self):
+        """Multi-year comparison should have report_year without MAX in GROUP BY."""
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+            report_years=[2023, 2024],
+        )
+        sql = res["sql"]
+        assert "MAX(report_year)" not in sql
+        assert "GROUP BY report_year" in sql
+
+    def test_single_year_as_int(self):
+        """report_year as single int should produce report_year = ? filter."""
+        res = build_smart_query(
+            query_type="reserves",
+            table=TableName.WA_RESOURCES,
+            entity_name="Rokan",
+            report_years=[2024],
+        )
+        sql = res["sql"]
+        assert "report_year = ?" in sql
+        assert 2024 in res["params"]
+
+    def test_param_count_entity_with_default_year(self):
+        """Entity + default year: 3 ? params (entity, uncert, subquery)."""
+        res = build_smart_query(
+            query_type="resources",
+            table=TableName.WA_RESOURCES,
+            entity_name="Jabung",
+        )
+        sql = res["sql"]
+        # Should have exactly 3 '?' placeholders: entity, uncert, subquery
+        assert sql.count("?") == 3
+        assert res["params"] == ["%Jabung%", "2. Middle Value", "%Jabung%"]
+
+
+class TestResolveUncertaintyLabel:
+    """Tests for context-aware uncertainty display."""
+
+    def test_p50_reserves(self):
+        assert _resolve_uncertainty_label("reserves", "P50") == "2P (P50/Mid)"
+
+    def test_p50_resources(self):
+        assert _resolve_uncertainty_label("resources", "P50") == "2R (Mid)"
+
+    def test_p50_contingent(self):
+        assert _resolve_uncertainty_label("contingent", "P50") == "2C (Mid)"
+
+    def test_p50_prospective(self):
+        assert _resolve_uncertainty_label("prospective", "P50") == "2U (Mid)"
+
+    def test_p50_cumprod(self):
+        assert _resolve_uncertainty_label("cumprod", "P50") == "P50 (Best Estimate)"
+
+    def test_specific_2p(self):
+        """Direct 2P input should use reserves label regardless of query_type."""
+        assert _resolve_uncertainty_label("resources", "2P") == "2P (P50/Mid)"
+
+    def test_specific_2c(self):
+        assert _resolve_uncertainty_label("contingent", "2C") == "2C (Mid)"
+
+    def test_p90_generic(self):
+        assert _resolve_uncertainty_label("reserves", "P90") == "1P (P90/Low)"

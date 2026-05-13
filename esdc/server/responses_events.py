@@ -104,6 +104,34 @@ def create_response_failed_event(
     }
 
 
+def create_response_incomplete_event(
+    sequence_number: int,
+    response_id: str,
+    model: str,
+    output: list[dict[str, Any]],
+    error: dict[str, Any],
+) -> dict[str, Any]:
+    """Event: response.incomplete.
+
+    Emitted when a response is interrupted but has partial output.
+    Per Open Responses spec and OpenWebUI v0.9.0: clients should
+    display partial results and offer regeneration.
+    """
+    return {
+        "type": "response.incomplete",
+        "sequence_number": sequence_number,
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "created_at": time.time(),
+            "model": model,
+            "status": "incomplete",
+            "output": output,
+            "error": error,
+        },
+    }
+
+
 # =============================================================================
 # Output Item Events
 # =============================================================================

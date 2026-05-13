@@ -28,6 +28,7 @@ from esdc.chat.query_classifier import (
     format_classification_for_prompt,
     get_tools_for_classification,
 )
+from esdc.chat.smart_query import simple_data_query
 from esdc.chat.tools import (
     execute_cypher,
     execute_sql,
@@ -55,67 +56,117 @@ _context_length_cache: dict[str, int] = {}
 def _detect_context_length(llm: BaseChatModel) -> int:
     """Auto-detect model context length from LLM instance.
 
-    Checks provider-specific APIs (Ollama, OpenAI) and caches results.
-    Returns the full model context length — the system prompt is stored
-    separately in AgentState and doesn't compete with messages for the
-    context budget, so no reservation is needed.
-    """
-    model_key = ""
-    model_context_length = 0
+    Priority:
+    1. Check ``_esdc_context_length`` metadata set by the provider's
+       ``create_llm()``. This is dynamically fetched from provider APIs
+       (Ollama API, Anthropic API, etc.) and is the source of truth.
+    2. Fallback to ``isinstance()`` detection + static dicts (legacy).
+    3. Fallback to ``DEFAULT_CONTEXT_LENGTH``.
 
+    Results are cached by a deterministic model key.
+    """
+    # ── Priority 1: provider metadata ──────────────────────────
+    val: int = 0
+    try:
+        raw = getattr(llm, "_esdc_context_length", 0)
+        if isinstance(raw, int) and raw > 0:
+            val = raw
+    except AttributeError:
+        pass
+
+    if val > 0:
+        logger.info(
+            "[CONTEXT_LENGTH] from_provider_metadata | context_length=%d",
+            val,
+        )
+        return val
+
+    # Build a cache key from the LLM instance's identity.
+    model_key = ""
     try:
         from langchain_ollama import ChatOllama
 
         if isinstance(llm, ChatOllama):
             model = getattr(llm, "model", "")
-            base_url = str(getattr(llm, "base_url", "http://localhost:11434"))
-            model_key = f"ollama:{model}@{base_url}"
-
-            if model_key in _context_length_cache:
-                return _context_length_cache[model_key]
-
-            from esdc.providers.ollama import OllamaProvider
-
-            model_context_length = OllamaProvider.get_context_length_from_api(
-                model, base_url
-            )
+            model_key = f"ollama:{model}"
     except ImportError:
         pass
 
-    if model_context_length == 0:
+    if not model_key:
         try:
             from langchain_openai import ChatOpenAI
 
             if isinstance(llm, ChatOpenAI):
-                model_name = getattr(llm, "model_name", "")
-                model_key = f"openai:{model_name}"
-
-                if model_key in _context_length_cache:
-                    return _context_length_cache[model_key]
-
-                from esdc.providers.openai import OpenAIProvider
-
-                model_context_length = OpenAIProvider.get_context_length(model_name)
+                model_key = f"openai:{llm.model_name}"
         except ImportError:
             pass
 
-    if model_context_length == 0:
-        from esdc.providers.base import DEFAULT_CONTEXT_LENGTH
+    if not model_key:
+        try:
+            from langchain_anthropic import ChatAnthropic
 
-        model_context_length = DEFAULT_CONTEXT_LENGTH
-        logger.debug(
-            "[CONTEXT_LENGTH] using_default | context_length=%d",
-            model_context_length,
-        )
+            if isinstance(llm, ChatAnthropic):
+                model_key = f"anthropic:{llm.model}"
+        except ImportError:
+            pass
 
-    _context_length_cache[model_key] = model_context_length
+    if not model_key:
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
 
-    logger.info(
-        "[CONTEXT_LENGTH] detected | model_key=%s | context_length=%d",
-        model_key,
+            if isinstance(llm, ChatGoogleGenerativeAI):
+                model_key = f"google:{llm.model}"
+        except ImportError:
+            pass
+
+    if not model_key:
+        try:
+            from langchain_openai import AzureChatOpenAI
+
+            if isinstance(llm, AzureChatOpenAI):
+                model_key = f"azure_openai:{llm.azure_deployment}"  # type: ignore[attr-defined]
+        except ImportError:
+            pass
+
+    if not model_key:
+        try:
+            from langchain_groq import ChatGroq
+
+            if isinstance(llm, ChatGroq):
+                model_key = f"groq:{llm.model}"  # type: ignore[attr-defined]
+        except ImportError:
+            pass
+
+    if model_key:
+        if model_key in _context_length_cache:
+            return _context_length_cache[model_key]
+
+        # ── Priority 2: static provider dicts ────────────────────
+        from esdc.providers import get_provider
+
+        provider_type = model_key.split(":")[0]
+        provider_cls = get_provider(provider_type)
+        if provider_cls is not None:
+            model_name = model_key.split(":", 1)[1]
+            model_context_length = provider_cls.get_actual_context_length(model_name)
+            if model_context_length > 0:
+                _context_length_cache[model_key] = model_context_length
+                logger.info(
+                    "[CONTEXT_LENGTH] from_provider_static | "
+                    "model_key=%s | context_length=%d",
+                    model_key,
+                    model_context_length,
+                )
+                return model_context_length
+
+    # ── Priority 3: default fallback ─────────────────────────
+    from esdc.providers.base import DEFAULT_CONTEXT_LENGTH
+
+    model_context_length = DEFAULT_CONTEXT_LENGTH
+    logger.debug(
+        "[CONTEXT_LENGTH] using_default | context_length=%d",
         model_context_length,
     )
-
     return model_context_length
 
 
@@ -137,26 +188,38 @@ async def generate_conversation_title(
         Short title (max 50 chars) summarizing the conversation
     """
     prompt = (
-        "Generate a very short title (max 50 characters) "
-        "summarizing this user query.\n"
-        "The title should be concise and descriptive. "
-        "Respond with ONLY the title,\n"
-        "no quotes or explanation.\n\n"
-        "Examples:\n"
+        "Buatkan judul singkat (maks. 50 karakter) yang merangkum "
+        "pertanyaan user berikut dalam BAHASA yang SAMA dengan "
+        "pertanyaan user.\n"
+        "Judul harus ringkas dan padat.\n\n"
+        "INSTRUCTION: Selalu respons dalam format JSON berikut (tanpa markdown):\n"
+        '{{"title": "judul ringkas di sini"}}\n\n'
+        "Contoh:\n"
+        '- "berapa cadangan nasional" -> '
+        '{{"title": "Cadangan nasional"}}\n'
+        '- "buatkan profil produksi EOR" -> '
+        '{{"title": "Profil produksi EOR"}}\n'
+        '- "berapa cadangan lapangan Duri" -> '
+        '{{"title": "Cadangan lapangan Duri"}}\n'
         '- "how much oil reserves in Rokan field" -> '
-        '"Rokan Field Oil Reserves"\n'
+        '{{"title": "Oil Reserves Rokan Field"}}\n'
         '- "list all working areas with gas production" -> '
-        '"Working Areas Gas Production"\n'
+        '{{"title": "Working Areas Gas Production"}}\n'
         '- "compare reserves between 2020 and 2023" -> '
-        '"Reserve Comparison 2020-2023"\n\n'
-        "User query: {query}\n\n"
-        "Title:"
+        '{{"title": "Reserve Comparison 2020-2023"}}\n\n'
+        "Pertanyaan user: {query}\n\n"
+        "Judul:"
     )
 
     try:
         messages = [
             SystemMessage(
-                content="You are a helpful assistant that generates concise conversation titles."  # noqa: E501
+                content=(
+                    "Kamu adalah asisten yang membuat judul percakapan "
+                    "singkat dan ringkas. Gunakan bahasa yang sama dengan "
+                    "pertanyaan user. Hanya respons dalam format JSON "
+                    'tanpa markdown: {{"title": "..."}}.'
+                )
             ),
             HumanMessage(content=prompt.format(query=user_query)),
         ]
@@ -183,18 +246,34 @@ async def generate_conversation_title(
             inference_elapsed_ms,
             content_len,
         )
-        content = response.content
-        if isinstance(content, list):
-            title = str(content[0]) if content else ""
-        else:
-            title = str(content)
-        title = title.strip().strip("\"'")
+
+        raw_text = str(response.content).strip() if response.content else ""
+
+        # Parse JSON title
+        title = ""
+        if raw_text:
+            try:
+                json_start = raw_text.find("{")
+                json_end = raw_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    parsed = json.loads(raw_text[json_start:json_end])
+                    title = parsed.get("title", "")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Fallback: plain text extraction if JSON parsing fails
+        if not title:
+            title = raw_text.strip().strip("\"'")
 
         if len(title) > 50:
             title = title[:47] + "..."
 
         return title
     except Exception:
+        logger.exception(
+            "[INFERENCE] title_generation_error | query=%r",
+            user_query[:80],
+        )
         query_clean = user_query.strip()
         if len(query_clean) > 50:
             return query_clean[:47] + "..."
@@ -216,16 +295,16 @@ async def generate_conversation_tags(
     """
     prompt = (
         "Generate 1-3 broad tags categorizing this user query.\n"
-        "The tags should be general categories. "
-        "Respond with ONLY comma-separated tags,\n"
-        "no quotes, no explanation, no numbering.\n\n"
+        "The tags should be general categories.\n\n"
+        "INSTRUCTION: Selalu respons dalam format JSON berikut (tanpa markdown):\n"
+        '{{"tags": "tag1, tag2, tag3"}}\n\n'
         "Examples:\n"
         '- "how much oil reserves in Rokan field" -> '
-        '"Reserves, Oil, Rokan"\n'
+        '{{"tags": "Reserves, Oil, Rokan"}}\n'
         '- "list all working areas with gas production" -> '
-        '"Working Areas, Gas Production"\n'
+        '{{"tags": "Working Areas, Gas Production"}}\n'
         '- "compare reserves between 2020 and 2023" -> '
-        '"Reserves, Comparison"\n\n'
+        '{{"tags": "Reserves, Comparison"}}\n\n'
         "User query: {query}\n\n"
         "Tags:"
     )
@@ -233,7 +312,13 @@ async def generate_conversation_tags(
     try:
         messages = [
             SystemMessage(
-                content="You are a helpful assistant that generates broad categorization tags."  # noqa: E501
+                content=(
+                    "You are a helpful assistant that "
+                    "generates broad categorization tags. "
+                    "Respond ONLY in JSON format: "
+                    '{{"tags": "tag1, tag2, ..."}}. '
+                    "No markdown, no explanation."
+                )
             ),
             HumanMessage(content=prompt.format(query=user_query)),
         ]
@@ -258,18 +343,34 @@ async def generate_conversation_tags(
             inference_elapsed_ms,
             content_len,
         )
-        content = response.content
-        if isinstance(content, list):
-            tags = str(content[0]) if content else ""
-        else:
-            tags = str(content)
-        tags = tags.strip().strip("\"'")
+
+        raw_text = str(response.content).strip() if response.content else ""
+
+        # Parse JSON tags
+        tags = ""
+        if raw_text:
+            try:
+                json_start = raw_text.find("{")
+                json_end = raw_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    parsed = json.loads(raw_text[json_start:json_end])
+                    tags = parsed.get("tags", "")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Fallback: plain text extraction if JSON parsing fails
+        if not tags:
+            tags = raw_text.strip().strip("\"'")
 
         if len(tags) > 100:
             tags = tags[:97] + "..."
 
         return tags
     except Exception:
+        logger.exception(
+            "[INFERENCE] tag_generation_error | query=%r",
+            user_query[:80],
+        )
         query_clean = user_query.strip()
         if len(query_clean) > 100:
             return query_clean[:97] + "..."
@@ -307,6 +408,7 @@ def create_agent(
         context_length = _detect_context_length(llm)
     if tools is None:
         tools = [
+            simple_data_query,
             knowledge_traversal,
             resolve_spatial,
             semantic_search,
@@ -374,9 +476,24 @@ def create_agent(
                 len(system_prompt),
             )
 
-        messages_with_system = [SystemMessage(content=system_prompt)] + state[
-            "messages"
-        ]
+        # Filter out empty assistant messages that can cause death spiral
+        # when accumulated in conversation history
+        filtered_messages = []
+        empty_count = 0
+        for m in state["messages"]:
+            if isinstance(m, AIMessage) and not m.content and not m.tool_calls:
+                empty_count += 1
+                continue
+            filtered_messages.append(m)
+        if empty_count:
+            logger.warning(
+                "[AGENT] Filtered %d empty AIMessage from history",
+                empty_count,
+            )
+
+        messages_with_system = [
+            SystemMessage(content=system_prompt)
+        ] + filtered_messages
 
         tool_call_count = state.get("tool_call_count", 0)
         if tool_call_count >= 35:
@@ -616,6 +733,11 @@ def create_agent(
                         "[TOOL] TOOL_NODE: Invoking %s (id=%s)", tool_name, tool_id
                     )
                     observation = await tool.ainvoke(tool_args)
+
+                    # JSON-serialize dict/list observations for richer content
+                    if isinstance(observation, (dict, list)):
+                        observation = json.dumps(observation, ensure_ascii=False)
+
                     observation_str = str(observation)
                     logger.info(
                         "[TOOL] TOOL_NODE: %s returned %d chars",
@@ -1040,8 +1162,6 @@ async def run_agent_stream(
                 )
 
             # Add ToolMessage to conversation for token tracking
-            from langchain_core.messages import ToolMessage
-
             tool_msg = ToolMessage(content=str(tool_result), tool_call_id=tool_call_id)
             conversation_messages.append(tool_msg)
             yield {
@@ -1056,6 +1176,17 @@ async def run_agent_stream(
                 "result": str(tool_result),
                 "sql": sql,
             }
+
+    # If no content was streamed (e.g., fallback message from agent_node
+    # that never triggered LLM events), yield it now
+    if token_event_count == 0 and first_llm_time is None:
+        logger.warning("[AGENT] No LLM content streamed, yielding fallback message")
+        yield {
+            "type": "message",
+            "content": (
+                "Maaf, saya tidak dapat memproses permintaan Anda. Silakan coba lagi."
+            ),
+        }
 
     # Stream complete - log final timing summary
     total_ms = (time.perf_counter() - stream_start) * 1000
