@@ -13,7 +13,6 @@ from esdc.validate.rules import (
     get_rule,
     get_rules_by_group,
     register_rule,
-    render_formal,
     run_validation,
 )
 
@@ -22,7 +21,6 @@ __all__ = [
     "get_rule",
     "get_rules_by_group",
     "register_rule",
-    "render_formal",
     "run_validation",
     "ValidationResult",
     "ValidationRule",

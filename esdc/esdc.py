@@ -71,7 +71,7 @@ from esdc.dbmanager import (  # noqa: E402
     run_query,
 )
 from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
-from esdc.validate import ValidationResult, render_formal, run_validation
+from esdc.validate import ValidationResult, run_validation
 
 TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
@@ -1206,6 +1206,20 @@ def validate(
             help="Filter by report year(s). Can specify multiple.",
         ),
     ] = None,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help=(
+                "Verbosity level: "
+                "0=group summary (default), "
+                "1=per-rule summary, "
+                "2=full detail."
+            ),
+        ),
+    ] = 0,
     save: Annotated[
         bool,
         typer.Option(
@@ -1227,11 +1241,24 @@ def validate(
     rule ID such as ``RE9001`` defined via a formal mathematical
     expression.
 
+    Verbosity levels:
+        0 (default): Group summary only — total violations per rule group.
+        1 (-v): Per-rule summary — rule ID, formula, and violation count.
+        2 (-vv): Full detail — individual violations with values.
+
     Examples:
     --------
-    Run all rules::
+    Run all rules (group summary only)::
 
         esdc validate
+
+    Per-rule summary::
+
+        esdc validate -v
+
+    Full detail with individual violations::
+
+        esdc validate -vv
 
     Run a specific group::
 
@@ -1259,6 +1286,16 @@ def validate(
         esdc validate --save --save-format csv
         esdc validate --save --save-format json
     """
+    # Validate severity early so invalid value fails fast
+    if severity:
+        try:
+            Severity(severity)
+        except ValueError:
+            rich.print(
+                f"[red]Unknown severity: {severity}. Use: strict, warning, info[/red]"
+            )
+            raise typer.Exit(1) from None
+
     # Import rules so that the @register_rule decorator fires.
     import esdc.validate.rule_re0  # noqa: F401
     import esdc.validate.rule_re1  # noqa: F401
@@ -1282,41 +1319,93 @@ def validate(
         year=year,
     )
 
-    if severity and results:
-        try:
-            sev = Severity(severity)
-            results = [r for r in results if r.severity == sev]
-        except ValueError:
-            rich.print(
-                f"[red]Unknown severity: {severity}. Use: strict, warning, info[/red]"
-            )
-            raise typer.Exit(1) from None
+    if severity:
+        results = [r for r in results if r.severity == Severity(severity)]
 
     if not results:
         rich.print("[green]No validation rules matched.[/green]")
         return
 
-    total_violations = 0
-    total_fixed = 0
+    total_violations = sum(r.total_violations for r in results)
+    total_fixed = sum(r.fix_applied_count for r in results)
+    results_with_violations = [r for r in results if r.total_violations > 0]
 
+    if verbose >= 2:
+        _print_full_detail(results_with_violations)
+    elif verbose == 1:
+        _print_rule_summary(results_with_violations)
+
+    # Always print group summary (and total) unless verbose >= 2
+    # which already includes a per-rule summary ending with totals.
+    if verbose < 2:
+        _print_group_summary(results)
+
+    rich.print("")
+    if total_violations == 0:
+        rich.print("[green]✓ All validations passed![/green]")
+    elif force_fix and total_fixed > 0:
+        rich.print(
+            f"[green]✓ Applied {total_fixed} fixes out of "
+            f"{total_violations} violations[/green]"
+        )
+        if total_fixed < total_violations:
+            remaining = total_violations - total_fixed
+            rich.print(
+                f"[yellow]⚠ {remaining} violation(s) remaining "
+                f"(manual review required)[/yellow]"
+            )
+    else:
+        rich.print(
+            f"[yellow]⚠ Found {total_violations} violation(s). "
+            f"Use --force-fix to apply fixes.[/yellow]"
+        )
+
+    if save:
+        _save_violations(results, save_format)
+
+
+def _severity_icon(severity: Severity) -> str:
+    icons = {
+        Severity.STRICT: "⛔",
+        Severity.WARNING: "🟡",
+        Severity.INFO: "🔵",
+    }
+    return icons.get(severity, "⚪")
+
+
+def _print_group_summary(results: list[ValidationResult]) -> None:
+    from collections import defaultdict
+
+    group_totals: dict[str, int] = defaultdict(int)
+    for r in results:
+        group_totals[r.rule_group] += r.total_violations
+
+    for group in sorted(group_totals):
+        total = group_totals[group]
+        rich.print(f"  {group}: {total:,} violations")
+
+    total = sum(group_totals.values())
+    rich.print(f"  Total: {total:,} violations")
+
+
+def _print_rule_summary(results: list[ValidationResult]) -> None:
     for result in results:
-        total_violations += result.total_violations
-        total_fixed += result.fix_applied_count
-
-        if result.total_violations == 0:
-            continue
-
-        icon = {
-            Severity.STRICT: "⛔",
-            Severity.WARNING: "🟡",
-            Severity.INFO: "🔵",
-        }.get(result.severity, "⚪")
-
+        icon = _severity_icon(result.severity)
         rich.print(f"\n{icon} [bold]{result.rule_id}[/bold]: {result.description}")
 
-        formal_rendered = render_formal(result.formal)
-        if formal_rendered:
-            rich.print(f"   {formal_rendered}")
+        if result.formal:
+            rich.print(f"   {result.formal}")
+
+        rich.print(f"   Violations: [bold]{result.total_violations}[/bold]")
+
+
+def _print_full_detail(results: list[ValidationResult]) -> None:
+    for result in results:
+        icon = _severity_icon(result.severity)
+        rich.print(f"\n{icon} [bold]{result.rule_id}[/bold]: {result.description}")
+
+        if result.formal:
+            rich.print(f"   {result.formal}")
 
         fixable_text = "Yes" if result.is_fixable else "No"
         fixable_style = "green" if result.is_fixable else "yellow"
@@ -1341,29 +1430,6 @@ def validate(
 
         if result.total_violations > 20:
             rich.print(f"   ... and {result.total_violations - 20} more")
-
-    rich.print("")
-    if total_violations == 0:
-        rich.print("[green]✓ All validations passed![/green]")
-    elif force_fix and total_fixed > 0:
-        rich.print(
-            f"[green]✓ Applied {total_fixed} fixes out of "
-            f"{total_violations} violations[/green]"
-        )
-        if total_fixed < total_violations:
-            remaining = total_violations - total_fixed
-            rich.print(
-                f"[yellow]⚠ {remaining} violation(s) remaining "
-                f"(manual review required)[/yellow]"
-            )
-    else:
-        rich.print(
-            f"[yellow]⚠ Found {total_violations} violation(s). "
-            f"Use --force-fix to apply fixes.[/yellow]"
-        )
-
-    if save:
-        _save_violations(results, save_format)
 
 
 def _save_violations(results: list[ValidationResult], fmt: str) -> None:

@@ -137,7 +137,6 @@ dev = [
     "pandas-stubs>=2.2.2",
     "types-requests>=2.33.0.20260402",
     "types-tabulate>=0.10.0.20260308",
-    "pylatexenc>=2.10",
 ]
 
 [tool.pytest.ini_options]
