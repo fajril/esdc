@@ -2,6 +2,7 @@
 
 from esdc.validate import (
     rule_re0,  # noqa: F401 - register RE0 rules
+    rule_re5,  # noqa: F401 - register RE5 rules
     rule_re9,  # noqa: F401 - register RE9 rules
 )
 from esdc.validate.rules import (
