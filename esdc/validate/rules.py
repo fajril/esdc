@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -14,49 +13,7 @@ from esdc.configs import Config
 from esdc.dbmanager import get_duckdb_connection
 from esdc.selection import Severity
 
-# Simple LaTeX tokens that do NOT take arguments.
-_LATEX_TOKEN_MAP: dict[str, str] = {
-    r"\implies": " -> ",
-    r"\land": " & ",
-    r"\lor": " | ",
-    r"\forall": " for all ",
-    r"\in": " in ",
-    r"\exists": " exists ",
-    r"\neg": " not ",
-    r"\quad": "  ",
-    r"\;": " ",
-    r"\,": " ",
-    r"\Delta": "delta ",
-    r"\sum": "sum ",
-    r"\times": " x ",
-    r"\leq": " <= ",
-    r"\geq": " >= ",
-    r"\neq": " != ",
-    r"\\": "",
-    r"$": "",
-}
-
-# Regex to strip LaTeX commands that take a single braced argument,
-# e.g. \text{project_name}, \mathbf{x}, \mathrm{val}.
-_COMMAND_ARG_RE: re.Pattern[str] = re.compile(
-    r"\\(?:text|mathbf|mathrm|mathit|mathcal)\{([^}]*)\}"
-)
-
-
-def render_formal(formal: str) -> str:
-    """Render LaTeX formal notation as plain-text approximation.
-
-    Processing order matters: commands with arguments are stripped
-    first so that the surrounding braces are handled correctly.
-    Remaining ``{`` and ``}`` characters (LaTeX grouping) are removed
-    after all command processing.
-    """
-    result = formal.replace("  ", " ")
-    result = _COMMAND_ARG_RE.sub(r"\1", result)
-    for token, replacement in _LATEX_TOKEN_MAP.items():
-        result = result.replace(token, replacement)
-    result = result.replace("{", "").replace("}", "")
-    return result.strip()
+TOLERANCE: float = 0.001
 
 
 @dataclass
@@ -68,6 +25,8 @@ class Violation:
     description: str
     severity: Severity
     table: str
+    validated_column: str
+    compared_columns: list[str]
     identifiers: dict[str, str]
     current_values: dict[str, object]
     fix_sql: str | None = None

@@ -71,7 +71,7 @@ from esdc.dbmanager import (  # noqa: E402
     run_query,
 )
 from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
-from esdc.validate import render_formal, run_validation
+from esdc.validate import ValidationResult, run_validation
 
 TABLES: tuple[TableName, TableName] = (
     TableName.PROJECT_RESOURCES,
@@ -1206,6 +1206,34 @@ def validate(
             help="Filter by report year(s). Can specify multiple.",
         ),
     ] = None,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help=(
+                "Verbosity level: "
+                "0=group summary (default), "
+                "1=per-rule summary, "
+                "2=full detail."
+            ),
+        ),
+    ] = 0,
+    save: Annotated[
+        bool,
+        typer.Option(
+            "--save/--no-save",
+            help="Save violations to file.",
+        ),
+    ] = False,
+    save_format: Annotated[
+        str,
+        typer.Option(
+            "--save-format",
+            help="Save format: xlsx, csv, json.",
+        ),
+    ] = "xlsx",
 ) -> None:
     """Validate ESDC data against business rules.
 
@@ -1213,11 +1241,24 @@ def validate(
     rule ID such as ``RE9001`` defined via a formal mathematical
     expression.
 
+    Verbosity levels:
+        0 (default): Group summary only — total violations per rule group.
+        1 (-v): Per-rule summary — rule ID, formula, and violation count.
+        2 (-vv): Full detail — individual violations with values.
+
     Examples:
     --------
-    Run all rules::
+    Run all rules (group summary only)::
 
         esdc validate
+
+    Per-rule summary::
+
+        esdc validate -v
+
+    Full detail with individual violations::
+
+        esdc validate -vv
 
     Run a specific group::
 
@@ -1238,8 +1279,27 @@ def validate(
     Validate a specific year::
 
         esdc validate --year 2024
+
+    Save violations to file::
+
+        esdc validate --save
+        esdc validate --save --save-format csv
+        esdc validate --save --save-format json
     """
+    # Validate severity early so invalid value fails fast
+    if severity:
+        try:
+            Severity(severity)
+        except ValueError:
+            rich.print(
+                f"[red]Unknown severity: {severity}. Use: strict, warning, info[/red]"
+            )
+            raise typer.Exit(1) from None
+
     # Import rules so that the @register_rule decorator fires.
+    import esdc.validate.rule_re0  # noqa: F401
+    import esdc.validate.rule_re1  # noqa: F401
+    import esdc.validate.rule_re2  # noqa: F401
     import esdc.validate.rule_re9  # noqa: F401
 
     if force_fix:
@@ -1259,66 +1319,26 @@ def validate(
         year=year,
     )
 
-    if severity and results:
-        try:
-            sev = Severity(severity)
-            results = [r for r in results if r.severity == sev]
-        except ValueError:
-            rich.print(
-                f"[red]Unknown severity: {severity}. Use: strict, warning, info[/red]"
-            )
-            raise typer.Exit(1) from None
+    if severity:
+        results = [r for r in results if r.severity == Severity(severity)]
 
     if not results:
         rich.print("[green]No validation rules matched.[/green]")
         return
 
-    total_violations = 0
-    total_fixed = 0
+    total_violations = sum(r.total_violations for r in results)
+    total_fixed = sum(r.fix_applied_count for r in results)
+    results_with_violations = [r for r in results if r.total_violations > 0]
 
-    for result in results:
-        total_violations += result.total_violations
-        total_fixed += result.fix_applied_count
+    if verbose >= 2:
+        _print_full_detail(results_with_violations)
+    elif verbose == 1:
+        _print_rule_summary(results_with_violations)
 
-        icon = {
-            Severity.STRICT: "⛔",
-            Severity.WARNING: "🟡",
-            Severity.INFO: "🔵",
-        }.get(result.severity, "⚪")
-
-        rich.print(f"\n{icon} [bold]{result.rule_id}[/bold]: {result.description}")
-
-        formal_rendered = render_formal(result.formal)
-        if formal_rendered:
-            rich.print(f"   {formal_rendered}")
-
-        fixable_text = "Yes" if result.is_fixable else "No"
-        fixable_style = "green" if result.is_fixable else "yellow"
-        rich.print(f"   Fixable: [{fixable_style}]{fixable_text}[/{fixable_style}]")
-
-        if result.total_violations == 0:
-            rich.print("   [green]0 violations[/green]")
-            continue
-
-        rich.print(f"   Violations: [bold]{result.total_violations}[/bold]")
-
-        for v in result.violations[:20]:
-            ids_text = ", ".join(f"{k}={val}" for k, val in v.identifiers.items())
-            rich.print(f"   - {ids_text}")
-
-            nonzero = {
-                k: val
-                for k, val in v.current_values.items()
-                if val is not None and val != 0 and k != "project_isactive"
-            }
-            if nonzero:
-                cols_text = ", ".join(f"{k}={val}" for k, val in nonzero.items())
-                rich.print(f"     {cols_text}")
-            if v.fix_applied:
-                rich.print("     [green]✓ Fixed[/green]")
-
-        if result.total_violations > 20:
-            rich.print(f"   ... and {result.total_violations - 20} more")
+    # Always print group summary (and total) unless verbose >= 2
+    # which already includes a per-rule summary ending with totals.
+    if verbose < 2:
+        _print_group_summary(results)
 
     rich.print("")
     if total_violations == 0:
@@ -1339,6 +1359,122 @@ def validate(
             f"[yellow]⚠ Found {total_violations} violation(s). "
             f"Use --force-fix to apply fixes.[/yellow]"
         )
+
+    if save:
+        _save_violations(results, save_format)
+
+
+def _severity_icon(severity: Severity) -> str:
+    icons = {
+        Severity.STRICT: "⛔",
+        Severity.WARNING: "🟡",
+        Severity.INFO: "🔵",
+    }
+    return icons.get(severity, "⚪")
+
+
+def _print_group_summary(results: list[ValidationResult]) -> None:
+    from collections import defaultdict
+
+    group_totals: dict[str, int] = defaultdict(int)
+    for r in results:
+        group_totals[r.rule_group] += r.total_violations
+
+    for group in sorted(group_totals):
+        total = group_totals[group]
+        rich.print(f"  {group}: {total:,} violations")
+
+    total = sum(group_totals.values())
+    rich.print(f"  Total: {total:,} violations")
+
+
+def _print_rule_summary(results: list[ValidationResult]) -> None:
+    for result in results:
+        icon = _severity_icon(result.severity)
+        rich.print(f"\n{icon} [bold]{result.rule_id}[/bold]: {result.description}")
+
+        if result.formal:
+            rich.print(f"   {result.formal}")
+
+        rich.print(f"   Violations: [bold]{result.total_violations}[/bold]")
+
+
+def _print_full_detail(results: list[ValidationResult]) -> None:
+    for result in results:
+        icon = _severity_icon(result.severity)
+        rich.print(f"\n{icon} [bold]{result.rule_id}[/bold]: {result.description}")
+
+        if result.formal:
+            rich.print(f"   {result.formal}")
+
+        fixable_text = "Yes" if result.is_fixable else "No"
+        fixable_style = "green" if result.is_fixable else "yellow"
+        rich.print(f"   Fixable: [{fixable_style}]{fixable_text}[/{fixable_style}]")
+
+        rich.print(f"   Violations: [bold]{result.total_violations}[/bold]")
+
+        for v in result.violations[:20]:
+            ids_text = ", ".join(f"{k}={val}" for k, val in v.identifiers.items())
+            rich.print(f"   - {ids_text}")
+
+            shown = {
+                k: val
+                for k, val in v.current_values.items()
+                if val is not None and k != "project_isactive"
+            }
+            if shown:
+                cols_text = ", ".join(f"{k}={val}" for k, val in shown.items())
+                rich.print(f"     {cols_text}")
+            if v.fix_applied:
+                rich.print("     [green]✓ Fixed[/green]")
+
+        if result.total_violations > 20:
+            rich.print(f"   ... and {result.total_violations - 20} more")
+
+
+def _save_violations(results: list[ValidationResult], fmt: str) -> None:
+    """Collect all violations into a DataFrame and save to file."""
+    from datetime import datetime
+
+    import pandas as pd
+
+    fmt = (fmt or "xlsx").strip().lower()
+    if fmt not in ("xlsx", "csv", "json"):
+        rich.print(f"[red]Unknown format: {fmt}. Use xlsx, csv, or json.[/red]")
+        raise typer.Exit(1) from None
+
+    rows: list[dict[str, object]] = []
+    for result in results:
+        for v in result.violations:
+            rows.append(
+                {
+                    "report_year": v.identifiers.get("report_year", ""),
+                    "wk_name": v.identifiers.get("wk_name", ""),
+                    "field_name": v.identifiers.get("field_name", ""),
+                    "project_name": v.identifiers.get("project_name", ""),
+                    "validated_column": v.validated_column,
+                    "severity": v.severity.value,
+                    "rule_id": v.rule_id,
+                    "description": v.description,
+                }
+            )
+
+    if not rows:
+        rich.print("[green]No violations to save.[/green]")
+        return
+
+    df = pd.DataFrame(rows)
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    filename = f"val_result_{timestamp}.{fmt}"
+
+    if fmt == "xlsx":
+        df.to_excel(filename, index=False, engine="openpyxl")
+    elif fmt == "csv":
+        df.to_csv(filename, index=False)
+    elif fmt == "json":
+        df.to_json(filename, orient="records", indent=2)
+
+    rich.print(f"[green]Saved {len(rows)} violations to {filename}[/green]")
 
 
 if __name__ == "__main__":

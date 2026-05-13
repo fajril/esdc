@@ -13,7 +13,6 @@ from esdc.validate import (
     get_all_rules,
     get_rule,
     get_rules_by_group,
-    render_formal,
     run_validation,
 )
 from esdc.validate.rule_re9 import RE9001
@@ -190,23 +189,6 @@ class TestRE9001:
         conn.close()
 
 
-# --- Test render_formal ---
-
-
-class TestRenderFormal:
-    def test_implies(self):
-        result = render_formal(r"A \implies B")
-        assert "->" in result
-
-    def test_forall(self):
-        result = render_formal(r"\forall x \in S")
-        assert "for all" in result
-
-    def test_delta(self):
-        result = render_formal(r"\Delta N")
-        assert "delta" in result
-
-
 # --- Test CLI ---
 
 
@@ -245,10 +227,88 @@ class TestValidateCommand:
             assert result.exit_code == 0
 
     def test_validate_with_severity_invalid(self):
-        with patch("esdc.validate.rules.run_validation", return_value=[]):
+        with patch("esdc.esdc.run_validation", return_value=[]):
             result = runner.invoke(app, ["validate", "--severity", "not_a_severity"])
             assert result.exit_code == 1
             assert "Unknown" in result.stdout
+
+    def test_validate_verbose_flag_in_help(self):
+        result = runner.invoke(app, ["validate", "--help"])
+        assert result.exit_code == 0
+        assert "verbose" in result.stdout.lower()
+
+    def test_validate_verbose_level_0_shows_group_summary(self):
+        from esdc.selection import Severity as Sev
+
+        mock_result = ValidationResult(
+            rule_id="RE5001",
+            rule_group="RE5",
+            description="Production implies E0",
+            formal=r"$(q > 0) \implies M = E_0$",
+            severity=Sev.STRICT,
+            is_fixable=False,
+            total_violations=5,
+            violations=[],
+            fix_applied_count=0,
+        )
+        with patch("esdc.esdc.run_validation", return_value=[mock_result]):
+            result = runner.invoke(app, ["validate"])
+        assert result.exit_code == 0
+        assert "RE5" in result.stdout
+        assert "5" in result.stdout
+
+    def test_validate_verbose_level_1_shows_rule_detail(self):
+        from esdc.selection import Severity as Sev
+
+        mock_result = ValidationResult(
+            rule_id="RE5001",
+            rule_group="RE5",
+            description="Production implies E0",
+            formal=r"$(q > 0) \implies M = E_0$",
+            severity=Sev.STRICT,
+            is_fixable=False,
+            total_violations=5,
+            violations=[],
+            fix_applied_count=0,
+        )
+        with patch("esdc.esdc.run_validation", return_value=[mock_result]):
+            result = runner.invoke(app, ["validate", "-v"])
+        assert result.exit_code == 0
+        assert "RE5001" in result.stdout
+        assert "Production implies E0" in result.stdout
+        assert r"\implies" in result.stdout
+
+    def test_validate_verbose_level_2_shows_full_detail(self):
+        from esdc.selection import Severity as Sev
+
+        violation = Violation(
+            rule_id="RE5001",
+            rule_group="RE5",
+            description="Production implies E0",
+            severity=Sev.STRICT,
+            table="project_resources",
+            validated_column="project_level",
+            compared_columns=[],
+            identifiers={"project_name": "TestProject"},
+            current_values={"project_level": "X5. Prospect"},
+        )
+        mock_result = ValidationResult(
+            rule_id="RE5001",
+            rule_group="RE5",
+            description="Production implies E0",
+            formal=r"$(q > 0) \implies M = E_0$",
+            severity=Sev.STRICT,
+            is_fixable=False,
+            total_violations=1,
+            violations=[violation],
+            fix_applied_count=0,
+        )
+        with patch("esdc.esdc.run_validation", return_value=[mock_result]):
+            result = runner.invoke(app, ["validate", "-vv"])
+        assert result.exit_code == 0
+        assert "RE5001" in result.stdout
+        assert "TestProject" in result.stdout
+        assert "project_level" in result.stdout
 
     def test_validate_force_fix(self, tmp_path):
         db_path = tmp_path / "test.duckdb"
@@ -322,6 +382,8 @@ class TestDataclasses:
             description="test",
             severity=Severity.STRICT,
             table="project_resources",
+            validated_column="project_isactive",
+            compared_columns=[],
             identifiers={"a": "1"},
             current_values={"b": 2},
         )

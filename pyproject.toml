@@ -122,7 +122,8 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["N806"]  # Mock variable names use convention like MockClient
+"tests/**" = ["N806", "E501"]  # Mock variable names use convention like MockClient; long SQL in tests
+"esdc/validate/rule_re*.py" = ["E501"]  # Long LaTeX formal strings
 
 [dependency-groups]
 dev = [
