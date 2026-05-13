@@ -284,7 +284,9 @@ class RE1SalesVsGrossRule(ValidationRule):
         year: list[int] | None = None,
     ) -> list[Violation]:
         sql = build_same_row_ordering_sql(
-            self.validated_column, self.compared_column, self.uncert,
+            self.validated_column,
+            self.compared_column,
+            self.uncert,
         )
         return _execute_and_build_violations(
             conn,
@@ -367,7 +369,8 @@ class RE1TimeseriesSalesVsTpfRule(ValidationRule):
         year: list[int] | None = None,
     ) -> list[Violation]:
         sql = build_timeseries_sales_le_tpf_sql(
-            self.validated_column, self.compared_column,
+            self.validated_column,
+            self.compared_column,
         )
         return _execute_and_build_violations(
             conn,

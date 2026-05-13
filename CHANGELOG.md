@@ -66,6 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `langchain-anthropic>=0.3.0`, `langchain-google-genai>=2.0.0`, `langchain-groq>=0.2.0`
 - Added `questionary>=2.0.0`
 
+## [0.7.0] - 2026-05-13
+
+### Changed
+
+- **Phoenix/OTel dependencies are now optional** — install with `pip install esdc[phoenix]`
+  - Moved 6 Phoenix/OTel packages from core dependencies to `[project.optional-dependencies]`
+  - Core install is ~19 packages lighter and faster
+  - All Phoenix imports are wrapped in `try/except ImportError` with helpful warning messages
+  - Dev environment still includes Phoenix via `esdc[phoenix]` in dependency groups
+  - `esdc validate` completely unaffected (Phoenix was only used in `esdc chat` and `esdc serve`)
+  - If `phoenix.enabled: true` in config but dependencies not installed, a warning is logged and tracing is skipped gracefully
+
 ## [0.6.0] - 2026-04-22
 
 ### Added

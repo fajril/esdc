@@ -116,8 +116,7 @@ class TestBuildForecastSumEqualsReserveSql:
         )
         assert (
             f"HAVING ABS(SUM(COALESCE(ts.slf_oil, 0))"
-            f" - COALESCE(pr.res_oil, 0)) > {TOLERANCE}"
-            in sql
+            f" - COALESCE(pr.res_oil, 0)) > {TOLERANCE}" in sql
         )
 
     def test_group_by_clause(self):
@@ -151,8 +150,7 @@ class TestBuildForecastSumEqualsResourceSql:
         )
         assert (
             f"HAVING ABS(SUM(COALESCE(ts.tpf_ga, 0))"
-            f" - COALESCE(pr.rec_ga, 0)) > {TOLERANCE}"
-            in sql
+            f" - COALESCE(pr.rec_ga, 0)) > {TOLERANCE}" in sql
         )
 
 

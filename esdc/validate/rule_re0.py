@@ -578,7 +578,9 @@ class RE0SameRowOrderingRule(ValidationRule):
         year: list[int] | None = None,
     ) -> list[Violation]:
         sql = build_same_row_ordering_sql(
-            self.validated_column, self.compared_column, self.uncert,
+            self.validated_column,
+            self.compared_column,
+            self.uncert,
         )
         return _execute_and_build_violations(
             conn,
@@ -968,7 +970,10 @@ class RE0ReserveVsPlaceRule(ValidationRule):
         year: list[int] | None = None,
     ) -> list[Violation]:
         sql = build_reserve_vs_place_sql(
-            self.validated_column, self.reserve_col, self.cumprod_col, self.uncert,
+            self.validated_column,
+            self.reserve_col,
+            self.cumprod_col,
+            self.uncert,
         )
         return _execute_and_build_violations(
             conn,

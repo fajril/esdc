@@ -108,7 +108,9 @@ E0_E7_E8_A1_A2: list[str] = [
 
 
 def _pl_list(levels: Sequence[str]) -> str:
-    return ", ".join(f"'{lv.value if isinstance(lv, ProjectLevel) else lv}'" for lv in levels)
+    return ", ".join(
+        f"'{lv.value if isinstance(lv, ProjectLevel) else lv}'" for lv in levels
+    )
 
 
 def _add_year_filter(sql: str, year: list[int] | None) -> str:
@@ -244,7 +246,11 @@ def build_transition_sql(
     """
     allowed = _pl_list(allowed_levels)
     ident = ", ".join(IDENTIFIER_COLS)
-    pl_val = previous_level.value if isinstance(previous_level, ProjectLevel) else previous_level
+    pl_val = (
+        previous_level.value
+        if isinstance(previous_level, ProjectLevel)
+        else previous_level
+    )
     return (
         f"SELECT DISTINCT ON (project_id, report_year) {ident},"
         f" project_level AS val_ref, project_level_previous AS val_cmp"
@@ -262,8 +268,16 @@ def build_groovy_transition_sql(
     """RE5003, RE5005, RE5006: Transition with groovy_isactive condition."""
     groovy_int = 1 if groovy_value else 0
     ident = ", ".join(IDENTIFIER_COLS)
-    pl_val = previous_level.value if isinstance(previous_level, ProjectLevel) else previous_level
-    req_val = required_level.value if isinstance(required_level, ProjectLevel) else required_level
+    pl_val = (
+        previous_level.value
+        if isinstance(previous_level, ProjectLevel)
+        else previous_level
+    )
+    req_val = (
+        required_level.value
+        if isinstance(required_level, ProjectLevel)
+        else required_level
+    )
     return (
         f"SELECT DISTINCT ON (project_id, report_year) {ident},"
         f" project_level AS val_ref, groovy_isactive AS val_cmp"
@@ -288,7 +302,11 @@ def build_multi_year_transition_sql(
     If no_production=True, adds condition that current sales increment <= tolerance.
     """
     ident = ", ".join(f"curr.{c}" for c in IDENTIFIER_COLS)
-    req_val = required_level.value if isinstance(required_level, ProjectLevel) else required_level
+    req_val = (
+        required_level.value
+        if isinstance(required_level, ProjectLevel)
+        else required_level
+    )
     conditions = [f"curr.project_level != '{req_val}'"]
     for i, pl in enumerate(previous_levels[:n_years], 1):
         alias = f"prev{i}"
@@ -312,9 +330,7 @@ def build_multi_year_transition_sql(
     if no_production:
         sales_curr = " + ".join(f"COALESCE(curr.{c}, 0)" for c in SALES_COLUMNS)
         sales_prev1 = " + ".join(f"COALESCE(prev1.{c}, 0)" for c in SALES_COLUMNS)
-        conditions.append(
-            f"ABS(({sales_curr}) - ({sales_prev1})) <= {tolerance}"
-        )
+        conditions.append(f"ABS(({sales_curr}) - ({sales_prev1})) <= {tolerance}")
 
     where = " AND ".join(conditions)
     return (
@@ -354,8 +370,8 @@ def build_gcf_element_not_neutral_sql(
         f" ON curr.project_id = prev.project_id"
         f" AND curr.report_year = prev.report_year + 1"
         f" AND prev.uncert_level = curr.uncert_level"
-    f" WHERE prev.{gcf_column} != 0.5"
-    f" AND curr.{gcf_column} = 0.5"
+        f" WHERE prev.{gcf_column} != 0.5"
+        f" AND curr.{gcf_column} = 0.5"
     )
 
 
@@ -400,8 +416,8 @@ def build_gcf_abandoned_binary_sql(
         f" {gcf_column} AS val_ref"
         f" FROM project_resources"
         f" WHERE project_level IN ({abandoned})"
-    f" AND {gcf_column} != 0"
-    f" AND {gcf_column} != 1"
+        f" AND {gcf_column} != 0"
+        f" AND {gcf_column} != 1"
     )
 
 
@@ -419,9 +435,9 @@ def build_gcf_monotonic_sql(
         f" ON curr.project_id = prev.project_id"
         f" AND curr.report_year = prev.report_year + 1"
         f" AND prev.uncert_level = curr.uncert_level"
-    f" WHERE prev.{gcf_column} > 0.5"
-    f" AND curr.project_level NOT IN ({abandoned})"
-    f" AND prev.{gcf_column} > curr.{gcf_column}"
+        f" WHERE prev.{gcf_column} > 0.5"
+        f" AND curr.project_level NOT IN ({abandoned})"
+        f" AND prev.{gcf_column} > curr.{gcf_column}"
     )
 
 
@@ -577,7 +593,7 @@ def build_onstream_required_sql(
         f" project_level AS val_ref, onstream_actual AS val_cmp"
         f" FROM project_resources"
         f" WHERE project_level IN ({level_list})"
-    f" AND (onstream_actual IS NULL OR onstream_actual = '')"
+        f" AND (onstream_actual IS NULL OR onstream_actual = '')"
     )
 
 
@@ -610,10 +626,10 @@ def build_onstream_before_report_year_sql() -> str:
         f"SELECT DISTINCT ON (project_id, report_year) {ident},"
         f" report_year AS val_ref, onstream_actual AS val_cmp"
         f" FROM project_resources"
-    f" WHERE onstream_actual IS NOT NULL"
-    f" AND onstream_actual != ''"
-    f" AND {year_expr} IS NOT NULL"
-    f" AND {year_expr} >= report_year"
+        f" WHERE onstream_actual IS NOT NULL"
+        f" AND onstream_actual != ''"
+        f" AND {year_expr} IS NOT NULL"
+        f" AND {year_expr} >= report_year"
     )
 
 

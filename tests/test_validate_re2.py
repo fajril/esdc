@@ -127,15 +127,21 @@ class TestBuildEurBoundsSql:
 
     def test_returns_string(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         assert isinstance(sql, str)
 
     def test_self_joins_field_resources(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         assert "field_resources fr_result" in sql
         assert "field_resources fr_cond" in sql
@@ -143,40 +149,55 @@ class TestBuildEurBoundsSql:
 
     def test_both_uncert_levels_in_filter(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         assert "fr_cond.uncert_level = '3. High Value'" in sql
         assert "fr_result.uncert_level = '2. Middle Value'" in sql
 
     def test_eur_computed_from_rec_plus_cprd(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         assert "fr_cond.rec_oil" in sql
         assert "fr_cond.cprd_sls_oil" in sql
 
     def test_group_by_and_having(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         assert "GROUP BY" in sql
         assert "HAVING" in sql
 
     def test_no_project_class_or_stage_in_join(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         assert "project_class" not in sql
         assert "project_stage" not in sql
 
     def test_aggregates_with_sum(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         assert "SUM(fr_result.ioip)" in sql
         assert "SUM(fr_cond.rec_oil)" in sql
@@ -184,12 +205,14 @@ class TestBuildEurBoundsSql:
 
     def test_violation_conditions_in_having(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         assert (
-            f"(SUM(fr_cond.rec_oil) + SUM(fr_cond.cprd_sls_oil))"
-            f" > {TOLERANCE}" in sql
+            f"(SUM(fr_cond.rec_oil) + SUM(fr_cond.cprd_sls_oil)) > {TOLERANCE}" in sql
         )
         assert "HAVING" in sql
 
@@ -199,15 +222,21 @@ class TestBuildEurImplicationSql:
 
     def test_returns_string(self):
         sql = build_eur_implication_sql(
-            "igip", "rec_con", "cprd_sls_con",
-            UncertLevel.HIGH, UncertLevel.LOW,
+            "igip",
+            "rec_con",
+            "cprd_sls_con",
+            UncertLevel.HIGH,
+            UncertLevel.LOW,
         )
         assert isinstance(sql, str)
 
     def test_self_joins_field_resources(self):
         sql = build_eur_implication_sql(
-            "igip", "rec_con", "cprd_sls_con",
-            UncertLevel.HIGH, UncertLevel.LOW,
+            "igip",
+            "rec_con",
+            "cprd_sls_con",
+            UncertLevel.HIGH,
+            UncertLevel.LOW,
         )
         assert "field_resources fr_result" in sql
         assert "field_resources fr_cond" in sql
@@ -215,16 +244,22 @@ class TestBuildEurImplicationSql:
 
     def test_both_uncert_levels_in_filter(self):
         sql = build_eur_implication_sql(
-            "igip", "rec_con", "cprd_sls_con",
-            UncertLevel.HIGH, UncertLevel.LOW,
+            "igip",
+            "rec_con",
+            "cprd_sls_con",
+            UncertLevel.HIGH,
+            UncertLevel.LOW,
         )
         assert "fr_cond.uncert_level = '3. High Value'" in sql
         assert "fr_result.uncert_level = '1. Low Value'" in sql
 
     def test_implication_conditions(self):
         sql = build_eur_implication_sql(
-            "ioip", "rec_ga", "cprd_sls_ga",
-            UncertLevel.HIGH, UncertLevel.LOW,
+            "ioip",
+            "rec_ga",
+            "cprd_sls_ga",
+            UncertLevel.HIGH,
+            UncertLevel.LOW,
         )
         assert f"> {TOLERANCE}" in sql
         assert f"<= {TOLERANCE}" in sql
@@ -232,16 +267,22 @@ class TestBuildEurImplicationSql:
 
     def test_group_by_and_having(self):
         sql = build_eur_implication_sql(
-            "igip", "rec_con", "cprd_sls_con",
-            UncertLevel.HIGH, UncertLevel.LOW,
+            "igip",
+            "rec_con",
+            "cprd_sls_con",
+            UncertLevel.HIGH,
+            UncertLevel.LOW,
         )
         assert "GROUP BY" in sql
         assert "HAVING" in sql
 
     def test_no_project_class_or_stage_in_join(self):
         sql = build_eur_implication_sql(
-            "igip", "rec_con", "cprd_sls_con",
-            UncertLevel.HIGH, UncertLevel.LOW,
+            "igip",
+            "rec_con",
+            "cprd_sls_con",
+            UncertLevel.HIGH,
+            UncertLevel.LOW,
         )
         assert "project_class" not in sql
         assert "project_stage" not in sql
@@ -252,15 +293,21 @@ class TestBuildEurGreaterThanSql:
 
     def test_returns_string(self):
         sql = build_eur_greater_than_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.LOW, UncertLevel.LOW,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.LOW,
+            UncertLevel.LOW,
         )
         assert isinstance(sql, str)
 
     def test_self_joins_field_resources(self):
         sql = build_eur_greater_than_sql(
-            "igip", "rec_gn", "cprd_sls_gn",
-            UncertLevel.LOW, UncertLevel.LOW,
+            "igip",
+            "rec_gn",
+            "cprd_sls_gn",
+            UncertLevel.LOW,
+            UncertLevel.LOW,
         )
         assert "field_resources fr_result" in sql
         assert "field_resources fr_cond" in sql
@@ -268,32 +315,44 @@ class TestBuildEurGreaterThanSql:
 
     def test_both_uncert_levels_same(self):
         sql = build_eur_greater_than_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.LOW, UncertLevel.LOW,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.LOW,
+            UncertLevel.LOW,
         )
         assert "fr_result.uncert_level = '1. Low Value'" in sql
         assert "fr_cond.uncert_level = '1. Low Value'" in sql
 
     def test_group_by_and_having(self):
         sql = build_eur_greater_than_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.LOW, UncertLevel.LOW,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.LOW,
+            UncertLevel.LOW,
         )
         assert "GROUP BY" in sql
         assert "HAVING" in sql
 
     def test_no_project_class_or_stage_in_join(self):
         sql = build_eur_greater_than_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.LOW, UncertLevel.LOW,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.LOW,
+            UncertLevel.LOW,
         )
         assert "project_class" not in sql
         assert "project_stage" not in sql
 
     def test_aggregates_with_sum(self):
         sql = build_eur_greater_than_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.LOW, UncertLevel.LOW,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.LOW,
+            UncertLevel.LOW,
         )
         assert "SUM(fr_result.ioip)" in sql
         assert "SUM(fr_cond.rec_oil)" in sql
@@ -301,12 +360,14 @@ class TestBuildEurGreaterThanSql:
 
     def test_violation_conditions_in_having(self):
         sql = build_eur_greater_than_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.LOW, UncertLevel.LOW,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.LOW,
+            UncertLevel.LOW,
         )
         assert (
-            f"(SUM(fr_cond.rec_oil) + SUM(fr_cond.cprd_sls_oil))"
-            f" > {TOLERANCE}" in sql
+            f"(SUM(fr_cond.rec_oil) + SUM(fr_cond.cprd_sls_oil)) > {TOLERANCE}" in sql
         )
         assert "SUM(fr_result.ioip)" in sql
 
@@ -426,17 +487,48 @@ def _insert_project_row(
         "?, ?, ?, ?"
         ")",
         [
-            report_year, project_name, wk_name, field_name,
-            project_id, uncert,
-            rec_oil, rec_con, rec_ga, rec_gn,
-            res_oil, res_con, res_ga, res_gn,
-            cprd_sls_oil, cprd_sls_con, cprd_sls_ga, cprd_sls_gn,
-            dcpy_um_oil, dcpy_um_con, dcpy_um_ga, dcpy_um_gn,
-            dcpy_ppa_oil, dcpy_ppa_con, dcpy_ppa_ga, dcpy_ppa_gn,
-            dcpy_wi_oil, dcpy_wi_con, dcpy_wi_ga, dcpy_wi_gn,
-            dcpy_uc_oil, dcpy_uc_con, dcpy_uc_ga, dcpy_uc_gn,
-            dcpy_cio_oil, dcpy_cio_con, dcpy_cio_ga, dcpy_cio_gn,
-            dcpy_gtr_oil, dcpy_gtr_con, dcpy_gtr_ga, dcpy_gtr_gn,
+            report_year,
+            project_name,
+            wk_name,
+            field_name,
+            project_id,
+            uncert,
+            rec_oil,
+            rec_con,
+            rec_ga,
+            rec_gn,
+            res_oil,
+            res_con,
+            res_ga,
+            res_gn,
+            cprd_sls_oil,
+            cprd_sls_con,
+            cprd_sls_ga,
+            cprd_sls_gn,
+            dcpy_um_oil,
+            dcpy_um_con,
+            dcpy_um_ga,
+            dcpy_um_gn,
+            dcpy_ppa_oil,
+            dcpy_ppa_con,
+            dcpy_ppa_ga,
+            dcpy_ppa_gn,
+            dcpy_wi_oil,
+            dcpy_wi_con,
+            dcpy_wi_ga,
+            dcpy_wi_gn,
+            dcpy_uc_oil,
+            dcpy_uc_con,
+            dcpy_uc_ga,
+            dcpy_uc_gn,
+            dcpy_cio_oil,
+            dcpy_cio_con,
+            dcpy_cio_ga,
+            dcpy_cio_gn,
+            dcpy_gtr_oil,
+            dcpy_gtr_con,
+            dcpy_gtr_ga,
+            dcpy_gtr_gn,
         ],
     )
 
@@ -459,15 +551,26 @@ class TestMaterialBalanceGRR:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_test_table(conn)
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                rec_oil=1015, cprd_sls_oil=200,
-                dcpy_um_oil=50, dcpy_ppa_oil=30, dcpy_wi_oil=20,
-                dcpy_uc_oil=10, dcpy_cio_oil=5,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                rec_oil=1015,
+                cprd_sls_oil=200,
+                dcpy_um_oil=50,
+                dcpy_ppa_oil=30,
+                dcpy_wi_oil=20,
+                dcpy_uc_oil=10,
+                dcpy_cio_oil=5,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                rec_oil=1000, cprd_sls_oil=100,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                rec_oil=1000,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
 
@@ -484,13 +587,21 @@ class TestMaterialBalanceGRR:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_test_table(conn)
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                rec_oil=900, cprd_sls_oil=100,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                rec_oil=900,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                rec_oil=1000, cprd_sls_oil=90,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                rec_oil=1000,
+                cprd_sls_oil=90,
                 project_id="P-001",
             )
 
@@ -512,15 +623,26 @@ class TestMaterialBalanceGRR:
             #  - (cprd_curr(200) - cprd_prev(100))
             # 1015 = 1000 + 50 + 30 + 20 + 10 + 5 - 100 = 1015
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                rec_oil=1015, cprd_sls_oil=200,
-                dcpy_um_oil=50, dcpy_ppa_oil=30, dcpy_wi_oil=20,
-                dcpy_uc_oil=10, dcpy_cio_oil=5,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                rec_oil=1015,
+                cprd_sls_oil=200,
+                dcpy_um_oil=50,
+                dcpy_ppa_oil=30,
+                dcpy_wi_oil=20,
+                dcpy_uc_oil=10,
+                dcpy_cio_oil=5,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                rec_oil=1000, cprd_sls_oil=100,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                rec_oil=1000,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
 
@@ -538,15 +660,26 @@ class TestMaterialBalanceGRR:
             _create_re2_test_table(conn)
             # rec_curr = 900, but expected = 1000 + 115 - 100 = 1015
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                rec_oil=900, cprd_sls_oil=200,
-                dcpy_um_oil=50, dcpy_ppa_oil=30, dcpy_wi_oil=20,
-                dcpy_uc_oil=10, dcpy_cio_oil=5,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                rec_oil=900,
+                cprd_sls_oil=200,
+                dcpy_um_oil=50,
+                dcpy_ppa_oil=30,
+                dcpy_wi_oil=20,
+                dcpy_uc_oil=10,
+                dcpy_cio_oil=5,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                rec_oil=1000, cprd_sls_oil=100,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                rec_oil=1000,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
 
@@ -563,7 +696,10 @@ class TestMaterialBalanceGRR:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_test_table(conn)
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
                 rec_oil=100,
                 project_id="P-001",
             )
@@ -591,13 +727,22 @@ class TestMaterialBalanceReserves:
             _create_re2_test_table(conn)
             # res_curr(1100) = res_prev(1000) + dcpy_gtr(200) - (200 - 100)
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                res_oil=1100, cprd_sls_oil=200, dcpy_gtr_oil=200,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1100,
+                cprd_sls_oil=200,
+                dcpy_gtr_oil=200,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                res_oil=1000, cprd_sls_oil=100,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
 
@@ -614,13 +759,22 @@ class TestMaterialBalanceReserves:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_test_table(conn)
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                res_oil=1000, cprd_sls_oil=200, dcpy_gtr_oil=200,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000,
+                cprd_sls_oil=200,
+                dcpy_gtr_oil=200,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                res_oil=1000, cprd_sls_oil=100,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
 
@@ -648,13 +802,21 @@ class TestToleranceBoundary:
             _create_re2_test_table(conn)
             diff = TOLERANCE / 2
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                res_oil=1000 + diff, cprd_sls_oil=100,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000 + diff,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                res_oil=1000, cprd_sls_oil=100,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
 
@@ -671,13 +833,21 @@ class TestToleranceBoundary:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_test_table(conn)
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                res_oil=1000 + TOLERANCE, cprd_sls_oil=100,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000 + TOLERANCE,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                res_oil=1000, cprd_sls_oil=100,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
 
@@ -695,13 +865,21 @@ class TestToleranceBoundary:
             _create_re2_test_table(conn)
             diff = TOLERANCE + 0.0001
             _insert_project_row(
-                conn, 2024, "PROJ1", "1. Low Value",
-                res_oil=1000 + diff, cprd_sls_oil=100,
+                conn,
+                2024,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000 + diff,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
             _insert_project_row(
-                conn, 2023, "PROJ1", "1. Low Value",
-                res_oil=1000, cprd_sls_oil=100,
+                conn,
+                2023,
+                "PROJ1",
+                "1. Low Value",
+                res_oil=1000,
+                cprd_sls_oil=100,
                 project_id="P-001",
             )
 
@@ -770,13 +948,26 @@ def _insert_field_resource_row(
     if field_id is None:
         field_id = f"FLD-{field_name}"
     conn.execute(
-        "INSERT INTO field_resources VALUES ("
-        "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO field_resources VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [
-            report_year, wk_name, field_name, project_stage, project_class,
-            wk_id, field_id, uncert, ioip, igip,
-            rec_oil, rec_con, rec_ga, rec_gn,
-            cprd_sls_oil, cprd_sls_con, cprd_sls_ga, cprd_sls_gn,
+            report_year,
+            wk_name,
+            field_name,
+            project_stage,
+            project_class,
+            wk_id,
+            field_id,
+            uncert,
+            ioip,
+            igip,
+            rec_oil,
+            rec_con,
+            rec_ga,
+            rec_gn,
+            cprd_sls_oil,
+            cprd_sls_con,
+            cprd_sls_ga,
+            cprd_sls_gn,
         ],
     )
 
@@ -790,12 +981,21 @@ class TestEurBounds:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
                 ioip=1500,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_oil=800, cprd_sls_oil=200,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_oil=800,
+                cprd_sls_oil=200,
             )
 
             from esdc.validate.rule_re2 import RE2025
@@ -811,12 +1011,21 @@ class TestEurBounds:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
                 ioip=800,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_oil=800, cprd_sls_oil=200,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_oil=800,
+                cprd_sls_oil=200,
             )
 
             from esdc.validate.rule_re2 import RE2025
@@ -833,12 +1042,21 @@ class TestEurBounds:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
                 ioip=0,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_oil=0, cprd_sls_oil=0,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_oil=0,
+                cprd_sls_oil=0,
             )
 
             from esdc.validate.rule_re2 import RE2025
@@ -854,12 +1072,21 @@ class TestEurBounds:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
                 ioip=800,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
-                rec_oil=800, cprd_sls_oil=200,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
+                rec_oil=800,
+                cprd_sls_oil=200,
             )
 
             from esdc.validate.rule_re2 import RE2025
@@ -879,21 +1106,45 @@ class TestEurBounds:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
-                ioip=900, project_class="COMM", project_stage="DEV",
-            )
-            _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
-                ioip=600, project_class="CONT", project_stage="EXP",
-            )
-            _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_oil=400, cprd_sls_oil=200, project_class="COMM",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
+                ioip=900,
+                project_class="COMM",
                 project_stage="DEV",
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_oil=300, cprd_sls_oil=100, project_class="CONT",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
+                ioip=600,
+                project_class="CONT",
+                project_stage="EXP",
+            )
+            _insert_field_resource_row(
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_oil=400,
+                cprd_sls_oil=200,
+                project_class="COMM",
+                project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_oil=300,
+                cprd_sls_oil=100,
+                project_class="CONT",
                 project_stage="EXP",
             )
 
@@ -915,21 +1166,45 @@ class TestEurBounds:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
-                ioip=300, project_class="COMM", project_stage="DEV",
-            )
-            _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
-                ioip=300, project_class="CONT", project_stage="EXP",
-            )
-            _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_oil=400, cprd_sls_oil=100, project_class="COMM",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
+                ioip=300,
+                project_class="COMM",
                 project_stage="DEV",
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_oil=400, cprd_sls_oil=100, project_class="CONT",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
+                ioip=300,
+                project_class="CONT",
+                project_stage="EXP",
+            )
+            _insert_field_resource_row(
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_oil=400,
+                cprd_sls_oil=100,
+                project_class="COMM",
+                project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_oil=400,
+                cprd_sls_oil=100,
+                project_class="CONT",
                 project_stage="EXP",
             )
 
@@ -947,12 +1222,21 @@ class TestEurBounds:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
                 igip=1500,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_gn=800, cprd_sls_gn=200,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_gn=800,
+                cprd_sls_gn=200,
             )
 
             from esdc.validate.rule_re2 import RE2026
@@ -968,12 +1252,21 @@ class TestEurBounds:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "2. Middle Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "2. Middle Value",
                 igip=800,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_gn=800, cprd_sls_gn=200,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_gn=800,
+                cprd_sls_gn=200,
             )
 
             from esdc.validate.rule_re2 import RE2026
@@ -994,12 +1287,21 @@ class TestEurImplication:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
                 igip=500,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_con=500, cprd_sls_con=500,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_con=500,
+                cprd_sls_con=500,
             )
 
             from esdc.validate.rule_re2 import RE2027
@@ -1015,12 +1317,21 @@ class TestEurImplication:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
                 igip=0,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_con=500, cprd_sls_con=500,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_con=500,
+                cprd_sls_con=500,
             )
 
             from esdc.validate.rule_re2 import RE2027
@@ -1042,17 +1353,35 @@ class TestEurImplication:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                igip=500, project_class="COMM", project_stage="DEV",
-            )
-            _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_con=300, cprd_sls_con=200, project_class="COMM",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                igip=500,
+                project_class="COMM",
                 project_stage="DEV",
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_con=200, cprd_sls_con=100, project_class="CONT",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_con=300,
+                cprd_sls_con=200,
+                project_class="COMM",
+                project_stage="DEV",
+            )
+            _insert_field_resource_row(
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_con=200,
+                cprd_sls_con=100,
+                project_class="CONT",
                 project_stage="EXP",
             )
 
@@ -1069,12 +1398,21 @@ class TestEurImplication:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
                 ioip=500,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_ga=500, cprd_sls_ga=500,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_ga=500,
+                cprd_sls_ga=500,
             )
 
             from esdc.validate.rule_re2 import RE2028
@@ -1090,12 +1428,21 @@ class TestEurImplication:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
                 ioip=0,
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "3. High Value",
-                rec_ga=500, cprd_sls_ga=500,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "3. High Value",
+                rec_ga=500,
+                cprd_sls_ga=500,
             )
 
             from esdc.validate.rule_re2 import RE2028
@@ -1116,8 +1463,14 @@ class TestEurGreaterThan:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                ioip=2000, rec_oil=500, cprd_sls_oil=500,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                ioip=2000,
+                rec_oil=500,
+                cprd_sls_oil=500,
             )
 
             from esdc.validate.rule_re2 import RE2029
@@ -1133,8 +1486,14 @@ class TestEurGreaterThan:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                ioip=1000, rec_oil=500, cprd_sls_oil=500,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                ioip=1000,
+                rec_oil=500,
+                cprd_sls_oil=500,
             )
 
             from esdc.validate.rule_re2 import RE2029
@@ -1156,14 +1515,28 @@ class TestEurGreaterThan:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                ioip=800, rec_oil=300, cprd_sls_oil=100,
-                project_class="COMM", project_stage="DEV",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                ioip=800,
+                rec_oil=300,
+                cprd_sls_oil=100,
+                project_class="COMM",
+                project_stage="DEV",
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                ioip=800, rec_oil=300, cprd_sls_oil=200,
-                project_class="CONT", project_stage="EXP",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                ioip=800,
+                rec_oil=300,
+                cprd_sls_oil=200,
+                project_class="CONT",
+                project_stage="EXP",
             )
 
             from esdc.validate.rule_re2 import RE2029
@@ -1184,14 +1557,28 @@ class TestEurGreaterThan:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                ioip=300, rec_oil=400, cprd_sls_oil=100,
-                project_class="COMM", project_stage="DEV",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                ioip=300,
+                rec_oil=400,
+                cprd_sls_oil=100,
+                project_class="COMM",
+                project_stage="DEV",
             )
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                ioip=300, rec_oil=400, cprd_sls_oil=100,
-                project_class="CONT", project_stage="EXP",
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                ioip=300,
+                rec_oil=400,
+                cprd_sls_oil=100,
+                project_class="CONT",
+                project_stage="EXP",
             )
 
             from esdc.validate.rule_re2 import RE2029
@@ -1208,8 +1595,14 @@ class TestEurGreaterThan:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                igip=2000, rec_gn=500, cprd_sls_gn=500,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                igip=2000,
+                rec_gn=500,
+                cprd_sls_gn=500,
             )
 
             from esdc.validate.rule_re2 import RE2030
@@ -1225,8 +1618,14 @@ class TestEurGreaterThan:
             conn = duckdb.connect(f"{tmpdir}/test.duckdb")
             _create_re2_field_test_table(conn)
             _insert_field_resource_row(
-                conn, 2024, "WK1", "FLD1", "1. Low Value",
-                igip=1000, rec_gn=500, cprd_sls_gn=500,
+                conn,
+                2024,
+                "WK1",
+                "FLD1",
+                "1. Low Value",
+                igip=1000,
+                rec_gn=500,
+                cprd_sls_gn=500,
             )
 
             from esdc.validate.rule_re2 import RE2030
@@ -1250,14 +1649,36 @@ class TestRe2Registry:
         re2_rules = get_rules_by_group("RE2")
         rule_ids = sorted(r.rule_id for r in re2_rules)
         expected = [
-            "RE2001", "RE2002", "RE2003", "RE2004",
-            "RE2005", "RE2006", "RE2007", "RE2008",
-            "RE2009", "RE2010", "RE2011", "RE2012",
-            "RE2013", "RE2014", "RE2015", "RE2016",
-            "RE2017", "RE2018", "RE2019", "RE2020",
-            "RE2021", "RE2022", "RE2023", "RE2024",
-            "RE2025", "RE2026", "RE2027", "RE2028",
-            "RE2029", "RE2030",
+            "RE2001",
+            "RE2002",
+            "RE2003",
+            "RE2004",
+            "RE2005",
+            "RE2006",
+            "RE2007",
+            "RE2008",
+            "RE2009",
+            "RE2010",
+            "RE2011",
+            "RE2012",
+            "RE2013",
+            "RE2014",
+            "RE2015",
+            "RE2016",
+            "RE2017",
+            "RE2018",
+            "RE2019",
+            "RE2020",
+            "RE2021",
+            "RE2022",
+            "RE2023",
+            "RE2024",
+            "RE2025",
+            "RE2026",
+            "RE2027",
+            "RE2028",
+            "RE2029",
+            "RE2030",
         ]
         assert rule_ids == expected
 

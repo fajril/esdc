@@ -106,8 +106,11 @@ class RE2001(RE2MaterialBalanceRule):
     )
     validated_column = "rec_oil"
     dcpy_columns = [
-        "dcpy_um_oil", "dcpy_ppa_oil", "dcpy_wi_oil",
-        "dcpy_uc_oil", "dcpy_cio_oil",
+        "dcpy_um_oil",
+        "dcpy_ppa_oil",
+        "dcpy_wi_oil",
+        "dcpy_uc_oil",
+        "dcpy_cio_oil",
     ]
     production_column = "cprd_sls_oil"
     uncert = UncertLevel.LOW
@@ -132,8 +135,11 @@ class RE2005(RE2MaterialBalanceRule):
     )
     validated_column = "rec_oil"
     dcpy_columns = [
-        "dcpy_um_oil", "dcpy_ppa_oil", "dcpy_wi_oil",
-        "dcpy_uc_oil", "dcpy_cio_oil",
+        "dcpy_um_oil",
+        "dcpy_ppa_oil",
+        "dcpy_wi_oil",
+        "dcpy_uc_oil",
+        "dcpy_cio_oil",
     ]
     production_column = "cprd_sls_oil"
     uncert = UncertLevel.MID
@@ -158,8 +164,11 @@ class RE2009(RE2MaterialBalanceRule):
     )
     validated_column = "rec_oil"
     dcpy_columns = [
-        "dcpy_um_oil", "dcpy_ppa_oil", "dcpy_wi_oil",
-        "dcpy_uc_oil", "dcpy_cio_oil",
+        "dcpy_um_oil",
+        "dcpy_ppa_oil",
+        "dcpy_wi_oil",
+        "dcpy_uc_oil",
+        "dcpy_cio_oil",
     ]
     production_column = "cprd_sls_oil"
     uncert = UncertLevel.HIGH
@@ -187,8 +196,11 @@ class RE2002(RE2MaterialBalanceRule):
     )
     validated_column = "rec_con"
     dcpy_columns = [
-        "dcpy_um_con", "dcpy_ppa_con", "dcpy_wi_con",
-        "dcpy_uc_con", "dcpy_cio_con",
+        "dcpy_um_con",
+        "dcpy_ppa_con",
+        "dcpy_wi_con",
+        "dcpy_uc_con",
+        "dcpy_cio_con",
     ]
     production_column = "cprd_sls_con"
     uncert = UncertLevel.LOW
@@ -213,8 +225,11 @@ class RE2006(RE2MaterialBalanceRule):
     )
     validated_column = "rec_con"
     dcpy_columns = [
-        "dcpy_um_con", "dcpy_ppa_con", "dcpy_wi_con",
-        "dcpy_uc_con", "dcpy_cio_con",
+        "dcpy_um_con",
+        "dcpy_ppa_con",
+        "dcpy_wi_con",
+        "dcpy_uc_con",
+        "dcpy_cio_con",
     ]
     production_column = "cprd_sls_con"
     uncert = UncertLevel.MID
@@ -239,8 +254,11 @@ class RE2010(RE2MaterialBalanceRule):
     )
     validated_column = "rec_con"
     dcpy_columns = [
-        "dcpy_um_con", "dcpy_ppa_con", "dcpy_wi_con",
-        "dcpy_uc_con", "dcpy_cio_con",
+        "dcpy_um_con",
+        "dcpy_ppa_con",
+        "dcpy_wi_con",
+        "dcpy_uc_con",
+        "dcpy_cio_con",
     ]
     production_column = "cprd_sls_con"
     uncert = UncertLevel.HIGH
@@ -268,8 +286,11 @@ class RE2003(RE2MaterialBalanceRule):
     )
     validated_column = "rec_ga"
     dcpy_columns = [
-        "dcpy_um_ga", "dcpy_ppa_ga", "dcpy_wi_ga",
-        "dcpy_uc_ga", "dcpy_cio_ga",
+        "dcpy_um_ga",
+        "dcpy_ppa_ga",
+        "dcpy_wi_ga",
+        "dcpy_uc_ga",
+        "dcpy_cio_ga",
     ]
     production_column = "cprd_sls_ga"
     uncert = UncertLevel.LOW
@@ -294,8 +315,11 @@ class RE2007(RE2MaterialBalanceRule):
     )
     validated_column = "rec_ga"
     dcpy_columns = [
-        "dcpy_um_ga", "dcpy_ppa_ga", "dcpy_wi_ga",
-        "dcpy_uc_ga", "dcpy_cio_ga",
+        "dcpy_um_ga",
+        "dcpy_ppa_ga",
+        "dcpy_wi_ga",
+        "dcpy_uc_ga",
+        "dcpy_cio_ga",
     ]
     production_column = "cprd_sls_ga"
     uncert = UncertLevel.MID
@@ -320,8 +344,11 @@ class RE2011(RE2MaterialBalanceRule):
     )
     validated_column = "rec_ga"
     dcpy_columns = [
-        "dcpy_um_ga", "dcpy_ppa_ga", "dcpy_wi_ga",
-        "dcpy_uc_ga", "dcpy_cio_ga",
+        "dcpy_um_ga",
+        "dcpy_ppa_ga",
+        "dcpy_wi_ga",
+        "dcpy_uc_ga",
+        "dcpy_cio_ga",
     ]
     production_column = "cprd_sls_ga"
     uncert = UncertLevel.HIGH
@@ -349,8 +376,11 @@ class RE2004(RE2MaterialBalanceRule):
     )
     validated_column = "rec_gn"
     dcpy_columns = [
-        "dcpy_um_gn", "dcpy_ppa_gn", "dcpy_wi_gn",
-        "dcpy_uc_gn", "dcpy_cio_gn",
+        "dcpy_um_gn",
+        "dcpy_ppa_gn",
+        "dcpy_wi_gn",
+        "dcpy_uc_gn",
+        "dcpy_cio_gn",
     ]
     production_column = "cprd_sls_gn"
     uncert = UncertLevel.LOW
@@ -375,8 +405,11 @@ class RE2008(RE2MaterialBalanceRule):
     )
     validated_column = "rec_gn"
     dcpy_columns = [
-        "dcpy_um_gn", "dcpy_ppa_gn", "dcpy_wi_gn",
-        "dcpy_uc_gn", "dcpy_cio_gn",
+        "dcpy_um_gn",
+        "dcpy_ppa_gn",
+        "dcpy_wi_gn",
+        "dcpy_uc_gn",
+        "dcpy_cio_gn",
     ]
     production_column = "cprd_sls_gn"
     uncert = UncertLevel.MID
@@ -401,8 +434,11 @@ class RE2012(RE2MaterialBalanceRule):
     )
     validated_column = "rec_gn"
     dcpy_columns = [
-        "dcpy_um_gn", "dcpy_ppa_gn", "dcpy_wi_gn",
-        "dcpy_uc_gn", "dcpy_cio_gn",
+        "dcpy_um_gn",
+        "dcpy_ppa_gn",
+        "dcpy_wi_gn",
+        "dcpy_uc_gn",
+        "dcpy_cio_gn",
     ]
     production_column = "cprd_sls_gn"
     uncert = UncertLevel.HIGH

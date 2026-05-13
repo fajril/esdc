@@ -58,8 +58,15 @@ def parse_args() -> argparse.Namespace:
 
 def fetch_spans_from_phoenix(project: str, endpoint: str) -> pd.DataFrame:
     """Fetch LLM spans from a Phoenix server."""
-    from phoenix.client import Client
-    from phoenix.client.types.spans import SpanQuery
+    try:
+        from phoenix.client import Client
+        from phoenix.client.types.spans import SpanQuery
+    except ImportError as exc:
+        logger.error(
+            "Phoenix client dependencies not installed. "
+            "Install with: pip install esdc[phoenix]"
+        )
+        raise SystemExit(1) from exc
 
     client = Client(base_url=endpoint)
     query = (

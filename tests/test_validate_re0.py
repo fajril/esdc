@@ -172,8 +172,7 @@ class TestBuildReserveVsPlaceSql:
         assert "COALESCE(prj_ioip, 0) > 0" in sql
         assert (
             f"COALESCE(prj_ioip, 0) - COALESCE(res_oil, 0)"
-            f" - COALESCE(cprd_grs_oil, 0) < {TOLERANCE}"
-            in sql
+            f" - COALESCE(cprd_grs_oil, 0) < {TOLERANCE}" in sql
         )
         assert "prj_ioip AS val_ref" in sql
         assert "res_oil AS val_cmp" in sql
@@ -312,8 +311,11 @@ class TestAddYearFilter:
 
     def test_field_self_join_year_filter(self):
         sql = build_eur_bounds_sql(
-            "ioip", "rec_oil", "cprd_sls_oil",
-            UncertLevel.HIGH, UncertLevel.MID,
+            "ioip",
+            "rec_oil",
+            "cprd_sls_oil",
+            UncertLevel.HIGH,
+            UncertLevel.MID,
         )
         result = _add_year_filter(sql, [2024])
         assert "fr_result.report_year IN (2024)" in result

@@ -286,9 +286,7 @@ def reindex_fts() -> None:
             )
         elif fts_ok and fts_failed:
             for t in fts_failed:
-                console.print(
-                    f"[red]✗[/red] FTS index: {t} — {fts_results[t]}"
-                )
+                console.print(f"[red]✗[/red] FTS index: {t} — {fts_results[t]}")
             console.print(
                 "[yellow]:warning:  HNSW embedding index dropped "
                 "(required for checkpoint). "
@@ -296,9 +294,7 @@ def reindex_fts() -> None:
                 "to regenerate.[/yellow]"
             )
         else:
-            console.print(
-                f"[red]✗[/red] FTS indexes failed in {elapsed:.1f}s"
-            )
+            console.print(f"[red]✗[/red] FTS indexes failed in {elapsed:.1f}s")
             console.print(
                 "[yellow]:warning:  HNSW embedding index dropped "
                 "(required for checkpoint). "

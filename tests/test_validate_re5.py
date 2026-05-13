@@ -62,11 +62,15 @@ class TestBuildNoSalesImpliesNotLevelSql:
 
 class TestBuildTransitionSql:
     def test_previous_level(self):
-        sql = build_transition_sql(ProjectLevel.E2, [ProjectLevel.E0, ProjectLevel.E2, ProjectLevel.E5])
+        sql = build_transition_sql(
+            ProjectLevel.E2, [ProjectLevel.E0, ProjectLevel.E2, ProjectLevel.E5]
+        )
         assert "project_level_previous = 'E2. Under Development'" in sql
 
     def test_allowed_levels(self):
-        sql = build_transition_sql(ProjectLevel.E2, [ProjectLevel.E0, ProjectLevel.E2, ProjectLevel.E5])
+        sql = build_transition_sql(
+            ProjectLevel.E2, [ProjectLevel.E0, ProjectLevel.E2, ProjectLevel.E5]
+        )
         assert "'E0. On Production'" in sql
         assert "'E2. Under Development'" in sql
         assert "'E5. Development Unclarified'" in sql
@@ -89,17 +93,13 @@ class TestBuildGroovyTransitionSql:
 
 class TestBuildMultiYearTransitionSql:
     def test_three_years(self):
-        sql = build_multi_year_transition_sql(
-            [ProjectLevel.E1] * 3, 3, ProjectLevel.E4
-        )
+        sql = build_multi_year_transition_sql([ProjectLevel.E1] * 3, 3, ProjectLevel.E4)
         assert "prev1" in sql
         assert "prev2" in sql
         assert "prev3" in sql
 
     def test_two_years(self):
-        sql = build_multi_year_transition_sql(
-            [ProjectLevel.X1] * 2, 2, ProjectLevel.X0
-        )
+        sql = build_multi_year_transition_sql([ProjectLevel.X1] * 2, 2, ProjectLevel.X0)
         assert "prev1" in sql
         assert "prev2" in sql
         assert "prev3" not in sql
@@ -111,23 +111,17 @@ class TestBuildMultiYearTransitionSql:
         assert "groovy_isactive = 0" in sql
 
     def test_uncert_level_in_join(self):
-        sql = build_multi_year_transition_sql(
-            [ProjectLevel.E4] * 3, 3, ProjectLevel.E7
-        )
+        sql = build_multi_year_transition_sql([ProjectLevel.E4] * 3, 3, ProjectLevel.E7)
         assert "prev1.uncert_level = curr.uncert_level" in sql
         assert "prev2.uncert_level = prev1.uncert_level" in sql
         assert "prev3.uncert_level = prev2.uncert_level" in sql
 
     def test_distinct_on(self):
-        sql = build_multi_year_transition_sql(
-            [ProjectLevel.E4] * 3, 3, ProjectLevel.E7
-        )
+        sql = build_multi_year_transition_sql([ProjectLevel.E4] * 3, 3, ProjectLevel.E7)
         assert "DISTINCT ON (curr.project_id, curr.report_year)" in sql
 
     def test_no_production_default(self):
-        sql = build_multi_year_transition_sql(
-            [ProjectLevel.E4] * 3, 3, ProjectLevel.E7
-        )
+        sql = build_multi_year_transition_sql([ProjectLevel.E4] * 3, 3, ProjectLevel.E7)
         assert "cprd_sls_oil" in sql
         assert "ABS" in sql
 
@@ -179,7 +173,9 @@ class TestBuildGcfAbandonedBinarySql:
 
 class TestBuildReservesImpliesNotAbandonedSql:
     def test_high_uncert(self):
-        sql = build_reserves_implies_not_abandoned_sql("3. High Value", ["rec_oil", "rec_con"])
+        sql = build_reserves_implies_not_abandoned_sql(
+            "3. High Value", ["rec_oil", "rec_con"]
+        )
         assert "uncert_level = '3. High Value'" in sql
         assert "rec_oil" in sql
 
@@ -350,9 +346,7 @@ def _make_conn() -> duckdb.DuckDBPyConnection:
         "dcpy_gtr_gn DOUBLE DEFAULT 0",
         "dcpy_cio_oil DOUBLE DEFAULT 0",
     ]
-    conn.execute(
-        f"CREATE TABLE project_resources ({', '.join(cols)})"
-    )
+    conn.execute(f"CREATE TABLE project_resources ({', '.join(cols)})")
     return conn
 
 
