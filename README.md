@@ -38,11 +38,17 @@ Fetch and manage ESDC data from the command line.
 git clone https://github.com/fajril/esdc.git
 cd esdc
 
-# Install with uv
+# Install with uv (core only — lighter, no observability)
 uv sync
 
 # Or install editable
 uv pip install -e .
+
+# With Phoenix observability and evaluation
+uv pip install -e ".[phoenix]"
+
+# Dev environment (includes everything + test tools)
+uv sync --dev
 ```
 
 ## Quick Start
@@ -110,6 +116,9 @@ export ESDC_PASS="your_password"
 | `ESDC_PASS` | ESDC API password |
 | `ESDC_URL` | API URL (default: https://esdc.skkmigas.go.id/) |
 | `ESDC_DB_FILE` | Database file path |
+| `PHOENIX_ENABLED` | Enable Phoenix tracing (true/false) |
+| `PHOENIX_COLLECTOR_ENDPOINT` | Phoenix OTLP endpoint |
+| `PHOENIX_PROJECT_NAME` | Phoenix project name |
 
 ## Domain Knowledge
 
@@ -148,9 +157,21 @@ esdc/
 │   │   ├── synonyms.py     # Indonesian/English terms
 │   │   └── tables.py       # Entity→Table mapping
 │   └── schema_loader.py    # Database schema
-├── commands/                # CLI commands
+├── server/                  # OpenAI-compatible API
+│   ├── app.py              # FastAPI application
+│   └── routes.py           # API endpoints
+├── phoenix/                 # Observability (optional)
+│   ├── phoenix_tracing.py  # OpenTelemetry setup
+│   ├── phoenix_evals.py    # LLM evaluation
+│   └── phoenix_config.py   # Phoenix configuration
+├── validate/                # Data validation rules
+│   ├── rule_re0.py         # Volumetric rules
+│   ├── rule_re1.py         # Reserves rules
+│   ├── rule_re2.py         # Resources rules
+│   └── rule_re5.py         # Transition rules
+├── esdc.py                  # CLI entry point
 ├── configs.py               # Configuration
-└── db/                      # Database operations
+└── dbmanager.py             # Database operations
 ```
 
 ## Documentation
@@ -202,17 +223,73 @@ Arguments:
 - `--save`: Save output to file
 - `--columns`: Columns to display
 
+### `status`
+Show database status and index integrity.
+
+```bash
+esdc status --verify
+```
+
+### `validate`
+Validate data against business rules (RE0-RE5).
+
+```bash
+# Default: summary per group
+esdc validate
+
+# Per-rule detail
+esdc validate -v
+
+# Full violation detail
+esdc validate -vv
+
+# Specific year
+esdc validate --year 2024
+```
+
+### `configs`
+Interactive configuration wizard.
+
+```bash
+esdc configs
+```
+
+### `serve`
+Run OpenAI-compatible API server.
+
+```bash
+esdc serve --host 0.0.0.0 --port 3334
+```
+
 ## Tech Stack
 
-- **Python 3.11+**
+- **Python 3.10+**
 - **Textual** - Terminal UI framework
 - **LangChain & LangGraph** - AI agent framework
-- **SQLite** - Local database
+- **DuckDB** - Analytics database (local)
+- **FastAPI + Uvicorn** - OpenAI-compatible API server
 - **Typer** - CLI framework
+- **Arize Phoenix** (optional) - Observability & evaluation
+- **OpenTelemetry** (optional) - Distributed tracing
 
 ## Version History
 
-### v0.5.0 (Current)
+### v0.7.0 (Current)
+- **Phoenix/OTel dependencies optional**: Install with `pip install esdc[phoenix]` — core install ~19 packages lighter
+- **RE0 volumetric validation**: 66 field-level rules for reserves vs production, cumulative vs sales, year-over-year comparison
+- **Verbosity levels for `validate`**: 0=group summary, 1=per-rule detail, 2=full violation values
+- **GCF exact comparisons**: Replaced tolerance with exact value comparisons for GCF rules
+- **FTS auto-reindex**: Full-text search indexes rebuilt automatically after data fetch
+- **Multi-provider support**: Anthropic Claude, Google Gemini, Azure OpenAI, Groq, Ollama (local + cloud)
+- **OpenAI-compatible API server**: `esdc serve` with streaming and tool calling
+
+### v0.6.0
+- **Arize Phoenix observability**: Tracing and evaluation integration
+- **Hybrid external tool passthrough**: External tools routed transparently through LangGraph
+- **OpenWebUI v0.9.0 compatibility**: Streaming, reasoning, citations, source metadata
+- **New providers**: Claude, Gemini, Azure, Groq, Ollama Cloud
+
+### v0.5.0
 - **IRIS rebranding**: Model renamed from "esdc-agent" to "iris"
 - **Intelligent column selection**: Combined columns by default, specific when user mentions substance
 - **Correct "potensi" handling**: All classified resources, with risked columns for prospective only
