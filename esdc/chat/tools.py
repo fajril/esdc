@@ -252,6 +252,9 @@ async def execute_sql(
     to query data from the database.
     Only SELECT queries are allowed for safety.
 
+    For domain context about KSMI levels, entities, or transitions,
+    call knowledge_traversal first.
+
     This is an async tool that runs the query in a thread pool to avoid blocking
     the event loop, keeping the UI responsive during database operations.
     """
@@ -1035,8 +1038,8 @@ def search_problem_cluster(
         )
 
 
-@tool("Knowledge Traversal")
-def knowledge_traversal(
+@tool("Entity Resolver")
+def entity_resolver(
     query: Annotated[
         str,
         "Natural language query to resolve entities and match patterns "
@@ -1052,11 +1055,10 @@ def knowledge_traversal(
 ) -> str:
     """Resolve entities and match query patterns from the ESDC knowledge graph.
 
-    This tool traverses the knowledge graph to identify entities
-    (fields, working areas, operators, years, uncertainty levels) and match
-    query patterns from natural language. It returns structured context that
-    enables single-shot SQL generation, reducing multi-round tool calling
-    to 1-2 calls.
+    This tool resolves entity names (fields, working areas, operators, years)
+    and matches query patterns from natural language. It returns structured
+    context that enables single-shot SQL generation, reducing multi-round
+    tool calling to 1-2 calls.
 
     WHEN TO USE:
     - Call this BEFORE writing SQL queries to resolve entity names
@@ -1079,11 +1081,11 @@ def knowledge_traversal(
     - confidence: Overall confidence score (0.0-1.0)
 
     Examples:
-    - knowledge_traversal("cadangan Duri 2024")
+    - entity_resolver("cadangan Duri 2024")
       → Entity: Field=Duri, Year=2024, Pattern: cadangan, Table: field_resources
-    - knowledge_traversal("profil produksi Abadi")
+    - entity_resolver("profil produksi Abadi")
       → Entity: Field=Abadi, Pattern: profil_produksi, Table: field_timeseries
-    - knowledge_traversal("isu water cut di lapangan Duri")
+    - entity_resolver("isu water cut di lapangan Duri")
       → Entity: Field=Duri, Pattern: issues_remarks, Table: field_resources
     """
     import json
@@ -1092,13 +1094,13 @@ def knowledge_traversal(
 
     cache = _get_tool_cache()
     cache_key = _tool_cache_key(
-        "knowledge_traversal", query=query, return_multiple=return_multiple
+        "entity_resolver", query=query, return_multiple=return_multiple
     )
     if cache_key in cache:
-        logger.debug("[CACHE] hit | tool=knowledge_traversal key=%s", cache_key[:16])
+        logger.debug("[CACHE] hit | tool=entity_resolver key=%s", cache_key[:16])
         return str(cache[cache_key])
 
-    logger.debug("[CACHE] miss | tool=knowledge_traversal key=%s", cache_key[:16])
+    logger.debug("[CACHE] miss | tool=entity_resolver key=%s", cache_key[:16])
 
     try:
         conn = get_db_connection()
@@ -1116,7 +1118,7 @@ def knowledge_traversal(
             if result.get("status") in ("success", "ambiguous"):
                 cache.set(cache_key, result_str)
                 logger.debug(
-                    "[CACHE] stored | tool=knowledge_traversal key=%s", cache_key[:16]
+                    "[CACHE] stored | tool=entity_resolver key=%s", cache_key[:16]
                 )
             return result_str
         finally:
@@ -1137,7 +1139,7 @@ def knowledge_traversal(
             {
                 "status": "failed",
                 "fallback": "multi_round",
-                "message": f"Knowledge traversal error: {str(e)}",
+                "message": f"Entity resolver error: {str(e)}",
                 "query": query,
             }
         )
@@ -1740,8 +1742,59 @@ def _search_remarks_via_fts(
         }
 
 
-@tool("KSMI Knowledge")
-def ksmi_knowledge(
+def _format_find_results(
+    results: list[dict[str, Any]],
+) -> str:
+    """Format FTS find results into readable text."""
+    if not results:
+        return "No matching entities found."
+    lines = []
+    for i, r in enumerate(results, 1):
+        lines.append(f"### {i}. {r.get('code', 'N/A')} — {r.get('name', 'N/A')}")
+        lines.append(f"   Type: {r.get('source_table', r.get('entity_type', 'N/A'))}")
+        if r.get("definition"):
+            defn = r["definition"]
+            if len(defn) > 300:
+                defn = defn[:300] + "..."
+            lines.append(f"   Definition: {defn}")
+        if r.get("aliases"):
+            aliases = r["aliases"]
+            if isinstance(aliases, str):
+                aliases = aliases.split("||")
+            lines.append(f"   Aliases: {', '.join(str(a) for a in aliases[:5])}")
+        lines.append(f"   Relevance: {r.get('score', 0):.4f}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_traverse_results(
+    entity_code: str,
+    relationship: str,
+    results: list[dict[str, Any]],
+) -> str:
+    """Format graph traversal results into readable text."""
+    rel_labels = {
+        "CLASSIFIED_AS": "classified as",
+        "REPORTED_AS": "reported as",
+        "CAN_TRANSITION_TO": "can transition to",
+        "HAS_LEVEL": "has level",
+        "BELONGS_TO_FRAMEWORK": "belongs to framework",
+        "HAS_SUBSTANCE": "has substance",
+    }
+    rel_label = rel_labels.get(relationship, relationship)
+    if not results:
+        return f"Entity '{entity_code}' has no {rel_label} relationships."
+    lines = [f"Entity '{entity_code}' {rel_label}:"]
+    for r in results:
+        code = r.get("code", "N/A")
+        name = r.get("name", "N/A")
+        rtype = r.get("type", "")
+        lines.append(f"  - {code}: {name} ({rtype})")
+    return "\n".join(lines)
+
+
+@tool("Knowledge Traversal")
+def knowledge_traversal(
     topic: Annotated[
         str,
         "Knowledge topic to retrieve. "
@@ -1762,10 +1815,21 @@ def ksmi_knowledge(
         "'DokumenPenentuanStatusEksplorasi', 'SalesPotentialResources'. "
         "If provided, returns only that entity regardless of topic.",
     ] = None,
+    relationship: Annotated[
+        str | None,
+        "Optional relationship type for graph traversal. "
+        "Use to find related entities. Examples: "
+        "'CLASSIFIED_AS' (what classification a level belongs to), "
+        "'REPORTED_AS' (what volume types a classification reports as), "
+        "'CAN_TRANSITION_TO' (what levels a level can transition to), "
+        "'HAS_LEVEL' (what levels belong to the KSMI framework), "
+        "'BELONGS_TO_FRAMEWORK' (what entities belong to KSMI). "
+        "Only effective when entity is also provided.",
+    ] = None,
 ) -> str:
-    """Retrieve KSMI domain knowledge — definitions, rules, transitions, formulas.
+    """Retrieve domain knowledge — definitions, rules, transitions, formulas.
 
-    Use this tool when you need detailed information about:
+    Traverses the KSMI knowledge schema to provide detailed information about:
     - Project maturity levels (E0-On Production, E1-Production on Hold, etc.)
     - Level transition rules (which levels can transition to which)
     - WAP constraints (max WAP duration, GROOVY dispensation)
@@ -1777,9 +1841,28 @@ def ksmi_knowledge(
     The short table in the system prompt covers level codes and basic rules.
     Use this tool for ANY detailed question about KSMI concepts.
 
+    When 'relationship' is provided with 'entity', performs a graph traversal
+    to find related entities. For example:
+    - entity='Reserves', relationship='REPORTED_AS' → returns gross, net, sales
+    - entity='E0', relationship='CAN_TRANSITION_TO' → returns E1, E4, E7
+
     Returns formatted text with definitions, key concepts, and rules.
     """
+    from esdc.chat.domain_knowledge.ksmi_graph_manager import KSMIGraphManager
+
+    try:
+        mgr = KSMIGraphManager()
+        if entity and relationship:
+            results = mgr.traverse(entity, relationship)
+            if results:
+                return _format_traverse_results(entity, relationship, results)
+        if entity:
+            results = mgr.find_all(entity)
+            if results:
+                return _format_find_results(results)
+    except Exception as e:
+        logger.warning("[KSMI-KG] graph_fallback | error=%s", e)
+
     from esdc.chat.domain_knowledge.ksmi_loader import ksmi_retrieve
 
-    result = ksmi_retrieve(topic=topic, entity=entity)
-    return result
+    return ksmi_retrieve(topic=topic, entity=entity)

@@ -363,6 +363,7 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
         List of LangChain tool names to bind for this query
     """
     base_tools = [
+        "Entity Resolver",
         "Knowledge Traversal",
         "SQL Executor",
         "Simple Data Query",
@@ -421,7 +422,7 @@ def format_classification_for_prompt(classification: QueryClassification) -> str
 
     if classification.query_type == QueryType.SIMPLE_FACTUAL:
         lines.append("**Write SQL directly using the schema above.**")
-        lines.append("- DO NOT call knowledge_traversal")
+        lines.append("- DO NOT call entity_resolver")
         lines.append("- DO NOT call get_recommended_table")
         lines.append("- DO NOT call get_resources_columns")
         lines.append("- Use suggested table and columns above")
@@ -458,7 +459,7 @@ def format_classification_for_prompt(classification: QueryClassification) -> str
         lines.append(
             "- If auto-resolved entities above are sufficient → write SQL directly"
         )
-        lines.append("- If entities are unclear → call knowledge_traversal")
+        lines.append("- If entities are unclear → call entity_resolver")
 
     lines.append("")
     lines.append(f"*Reason: {classification.reason}*")

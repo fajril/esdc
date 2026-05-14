@@ -1,4 +1,4 @@
-"""Tests for Knowledge Traversal tool and resolver."""
+"""Tests for Entity Resolver tool and resolver."""
 
 from __future__ import annotations
 
@@ -222,13 +222,13 @@ class TestKnowledgeTraversalResolver:
         assert result["suggested_table"] == "field_resources"
 
 
-class TestKnowledgeTraversalTool:
+class TestEntityResolverTool:
     @patch("esdc.chat.tools.get_db_connection")
     def test_tool_success(self, mock_get_db, mock_db: duckdb.DuckDBPyConnection):
         mock_get_db.return_value = mock_db
-        from esdc.chat.tools import knowledge_traversal
+        from esdc.chat.tools import entity_resolver
 
-        result = knowledge_traversal.invoke({"query": "cadangan Duri 2024"})
+        result = entity_resolver.invoke({"query": "cadangan Duri 2024"})
         parsed = json.loads(result)
         assert parsed["status"] == "success"
         assert "entities" in parsed
@@ -236,9 +236,9 @@ class TestKnowledgeTraversalTool:
     @patch("esdc.chat.tools.get_db_connection")
     def test_tool_returns_json(self, mock_get_db, mock_db: duckdb.DuckDBPyConnection):
         mock_get_db.return_value = mock_db
-        from esdc.chat.tools import knowledge_traversal
+        from esdc.chat.tools import entity_resolver
 
-        result = knowledge_traversal.invoke({"query": "profil produksi Abadi"})
+        result = entity_resolver.invoke({"query": "profil produksi Abadi"})
         parsed = json.loads(result)
         assert "status" in parsed
         assert "entities" in parsed

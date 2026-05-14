@@ -277,7 +277,7 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "Knowledge Traversal" in tools
+        assert "Entity Resolver" in tools
         assert "SQL Executor" in tools
 
     def test_year_transition_tools(self):
@@ -293,7 +293,7 @@ class TestToolSelection:
 
         tools = get_tools_for_classification(classification)
         assert "SQL Executor" in tools
-        assert "Knowledge Traversal" in tools
+        assert "Entity Resolver" in tools
         assert "Semantic Search" not in tools
         assert "Spatial Resolver" not in tools
 
@@ -318,7 +318,7 @@ class TestPromptFormatting:
         assert "field_name: 'Duri'" in formatted
         assert "field_resources" in formatted
         assert "res_oc" in formatted
-        assert "DO NOT call knowledge_traversal" in formatted
+        assert "DO NOT call entity_resolver" in formatted
         assert "DO NOT call get_recommended_table" in formatted
 
     def test_conceptual_formatting(self):
@@ -385,6 +385,7 @@ class TestConditionalToolPreservation:
 
     # All possible tools = classifier tools + conditional tools
     ALL_TOOLS = {
+        "Entity Resolver",
         "Knowledge Traversal",
         "SQL Executor",
         "Schema Inspector",
@@ -480,6 +481,7 @@ class TestConditionalToolPreservation:
 
         # Simulate all_tools WITHOUT conditional tools (sandbox not configured)
         all_tools_without_sandbox = {
+            "Entity Resolver",
             "Knowledge Traversal",
             "SQL Executor",
             "Schema Inspector",

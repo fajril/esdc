@@ -43,7 +43,8 @@ When writing SQL queries, use DuckDB syntax:
 
 ## Available Tools
 
-- **knowledge_traversal**: Resolve entities and match query patterns from knowledge graph (query) — call only if no auto-resolved entities provided
+- **entity_resolver**: Resolve entity names and match query patterns from knowledge graph (query) — call only if no auto-resolved entities provided
+- **knowledge_traversal**: Retrieve KSMI domain knowledge — definitions, transitions, formulas, hierarchy (topic, entity) — use for domain questions about KSMI levels, rules, or concepts
 - **resolve_spatial**: Execute spatial queries using DuckDB spatial extension (query_type, target, radius_km=20, limit=10, wk_name=None) — use for proximity, distance, or working area queries. **IMPORTANT: When a query mentions a working area (e.g., "di WK Mahakam", "in Rokan"), ALWAYS pass wk_name to scope results to that working area.**
 - **semantic_search**: Search documents by semantic similarity (query, limit=10, **filters**) — use for concept-based queries, "proyek dengan masalah X", when FTS returns no results. **NEW: Supports many filters** - report_year, field_name, pod_name, wk_name, province, basin128, project_class, project_stage, project_level, operator_name, operator_group, wk_subgroup, wk_regionisasi_ngi (NGI region), wk_area_perwakilan_skkmigas (SKK Migas region). **IMPORTANT**: If semantic embeddings are not available, this tool automatically falls back to FTS search and returns status="fallback_to_fts". Inform the user that semantic search is not active and how to enable it.
 
@@ -59,7 +60,7 @@ When writing SQL queries, use DuckDB syntax:
 - Queries like "proyek yang namanya ada..." or "project name contains..."
 
 **For project_name keyword matching:** Use execute_sql with ILIKE '%keyword%' — DuckDB auto-optimizes ILIKE to BM25 FTS.
-- **execute_cypher**: Execute Cypher queries on the knowledge graph (cypher_query) — use when knowledge_traversal returns cypher_available=true
+- **execute_cypher**: Execute Cypher queries on the knowledge graph (cypher_query) — use when entity_resolver returns cypher_available=true
 - **execute_sql**: Execute SELECT queries on the DuckDB database
 - **get_schema**: Get table structure and column information
 - **list_tables**: List all available tables and views
@@ -71,7 +72,7 @@ When writing SQL queries, use DuckDB syntax:
 - **get_resources_columns**: Validate resources column selection (volume_type, substance)
 - **simple_data_query**: Execute standardized aggregate queries for reserves/resources data. Use for simple factual questions: reserves, resources, contingent, prospective, cumprod, prodrate. Parameters: query_type, entity_level, entity_name, uncertainty, report_year.
 
-**Entity resolution is automatic.** If a `[Knowledge Graph - Auto-resolved entities]` message is present, use those entities to write SQL directly. Only call `knowledge_traversal` manually if auto-resolution was insufficient.
+**Entity resolution is automatic.** If a `[Knowledge Graph - Auto-resolved entities]` message is present, use those entities to write SQL directly. Only call `entity_resolver` manually if auto-resolution was insufficient.
 
 ### Tool Selection Rules
 
@@ -82,12 +83,12 @@ When writing SQL queries, use DuckDB syntax:
 
 **These tools MUST be called sequentially (wait for results):**
 - `semantic_search` → wait → `execute_sql`
-- `knowledge_traversal` → wait → `execute_sql`
+- `entity_resolver` → wait → `execute_sql`
 - `resolve_spatial` → wait → `execute_sql`
 
 **NEVER call these together in the same response:**
 ❌ `semantic_search` + `execute_sql`
-❌ `knowledge_traversal` + `execute_sql`
+❌ `entity_resolver` + `execute_sql`
 ❌ `resolve_spatial` + `execute_sql`
 ✅ `get_schema` + `list_tables` (parallel OK)
 
@@ -123,7 +124,7 @@ When writing SQL queries, use DuckDB syntax:
 
 **D. COMPLEX/AMBIGUOUS** (when Query Analysis says entities may be insufficient):
 1. Check auto-resolved entities first
-2. If insufficient → Call `knowledge_traversal`
+2. If insufficient → Call `entity_resolver`
 3. **WAIT** for results
 4. Use WHERE conditions to write `execute_sql`
 
@@ -240,7 +241,11 @@ WHERE report_year = (
 
 ## Domain Definitions
 
-### KSMI Project Maturity Levels
+### KSMI — Kerangka Sumber Daya Migas Indonesia
+
+**KSMI** (Kerangka Sumber Daya Migas Indonesia) is the classification framework for Indonesian oil & gas resources and reserves, based on PRMS 2018 adapted for Indonesian regulations. It categorizes projects by maturity level (E0-X6, A1-A2) reflecting commercial viability. Three classes: Reserves & GRR, Contingent Resources, Prospective Resources.
+
+#### Project Maturity Levels
 
 | Level | Name | Class | is_pod | is_pse | Key Rule |
 |-------|------|-------|--------|--------|----------|
@@ -263,7 +268,7 @@ WHERE report_year = (
 | A1 | Dry (Abandoned) | None | ✗ | ✗ | Absorbing state (no exit) |
 | A2 | Dissolved (Abandoned) | None | ✗ | ✗ | Absorbing state (no exit) |
 
-**Key distinctions:** PSE ≠ Izin Berproduksi. PSE = exploration closure document (required for X0). Izin Berproduksi = production approval (POD/POP/POFD/OPL/OPLL, required for E-levels). `is_pod_approved`: true=has approval, false=doesn't have, null=context-dependent. **For detailed definitions, transition rules, volume formulas, and document semantics → use `ksmi_knowledge` tool.**
+**Key distinctions:** PSE ≠ Izin Berproduksi. PSE = exploration closure document (required for X0). Izin Berproduksi = production approval (POD/POP/POFD/OPL/OPLL, required for E-levels). `is_pod_approved`: true=has approval, false=doesn't have, null=context-dependent. **For detailed definitions, transition rules, volume formulas, and document semantics → use `knowledge_traversal` tool.**
 
 ### GRR (Government of Indonesia Recoverable Resources)
 **CRITICAL: GRR ≠ "Geological Resources and Reserves".**
@@ -508,17 +513,17 @@ WHERE field_name ILIKE '%Duri%' AND (tpf_oc > 0 OR tpf_an > 0)
 ### Query-Specific Strategies
 
 **For SIMPLE FACTUAL queries (cadangan, sumber daya, profil produksi):**
-- **DO NOT call knowledge_traversal** — query classification already identified the pattern
+- **DO NOT call entity_resolver** — query classification already identified the pattern
 - **DO NOT call get_recommended_table** — use the suggested table from Query Analysis
 - **DO NOT call get_resources_columns** — use the key columns listed in Query Analysis
 - Write `execute_sql` directly using detected entities and suggested columns
 
 **For CONCEPTUAL queries (tidak ekonomis, kendala teknis):**
-- **DO NOT call knowledge_traversal first** — call `semantic_search` instead
+- **DO NOT call entity_resolver first** — call `semantic_search` instead
 - Use `semantic_search` → wait → `execute_sql` with returned project_ids
 
 **For SPATIAL queries (dekat, jarak, radius):**
-- **DO NOT call knowledge_traversal first** — call `resolve_spatial` instead
+- **DO NOT call entity_resolver first** — call `resolve_spatial` instead
 - Use `resolve_spatial` → wait → `execute_sql`
 
 ### Quick Reference
@@ -568,7 +573,7 @@ ORDER BY report_year
 
 ### Common Mistakes to Avoid
 
-1. ❌ Calling `knowledge_traversal` for simple factual queries
+1. ❌ Calling `entity_resolver` for simple factual queries
 2. ❌ Calling `get_recommended_table` when table is already suggested in Query Analysis
 3. ❌ Calling `get_resources_columns` when columns are already listed
 4. ❌ Forgetting `report_year` filter in all queries

@@ -1,9 +1,13 @@
 """KSMI Schema loader and retrieval module.
 
 Loads ksmi_schema.yaml and provides topic-based retrieval for the
-ksmi_knowledge tool. The YAML file is the single source of truth for
+knowledge_traversal tool. The YAML file is the single source of truth for
 KSMI domain reasoning — definitions, rules, transitions, formulas,
 and entity relationships.
+
+NOTE: The primary retrieval path is now via KSMIGraphManager (LadybugDB),
+which provides FTS search and Cypher graph traversal. This module serves as
+a fallback when LadybugDB is unavailable. See ksmi_graph_manager.py.
 """
 
 from __future__ import annotations
@@ -227,12 +231,28 @@ def ksmi_retrieve(
     return _retrieve_topic(schema, topic_lower, section_keys)
 
 
+def _ci_match(haystack: str, needle: str) -> bool:
+    """Case-insensitive exact string match."""
+    return haystack.lower() == needle.lower()
+
+
+def _ci_in(needle: str, haystack: list[str]) -> bool:
+    """Case-insensitive membership check: needle in haystack."""
+    return needle.lower() in [h.lower() for h in haystack]
+
+
+def _ci_contains(haystack: str, needle: str) -> bool:
+    """Case-insensitive substring check: needle in haystack."""
+    return needle.lower() in haystack.lower()
+
+
 def _retrieve_entity(schema: dict[str, Any], entity: str) -> str:
     """Retrieve a specific entity from the schema."""
-    entity_normalized = entity.strip()
+    entity_norm = entity.strip()
 
-    if entity_normalized in schema:
-        return _format_entity(entity_normalized, schema[entity_normalized])
+    for key in schema:
+        if _ci_match(key, entity_norm):
+            return _format_entity(key, schema[key])
 
     for key in schema:
         inner = schema[key]
@@ -242,9 +262,9 @@ def _retrieve_entity(schema: dict[str, Any], entity: str) -> str:
         name = inner.get("name", "")
         aliases = inner.get("aliases", [])
         if (
-            code == entity_normalized
-            or name.lower() == entity_normalized.lower()
-            or entity_normalized in aliases
+            _ci_match(code, entity_norm)
+            or _ci_match(name, entity_norm)
+            or _ci_in(entity_norm, aliases)
         ):
             return _format_entity(key, inner)
 
@@ -252,16 +272,17 @@ def _retrieve_entity(schema: dict[str, Any], entity: str) -> str:
     project_level = schema.get("ProjectLevel", {})
     for lk in level_keys:
         ld = project_level[lk]
-        if ld.get("code") == entity_normalized or entity_normalized in ld.get(
-            "aliases", []
+        if _ci_match(ld.get("code", ""), entity_norm) or _ci_in(
+            entity_norm, ld.get("aliases", [])
         ):
             return _format_level_detail(ld)
 
-    # Search nested sections (ProjectClassification, CommercialFactors, etc.)
     nested_sections = [
         "ProjectClassification",
         "CommercialFactors",
         "VolumeFormulas",
+        "VolumeReporting",
+        "KSMIFramework",
     ]
     for section_name in nested_sections:
         section = schema.get(section_name, {})
@@ -274,22 +295,23 @@ def _retrieve_entity(schema: dict[str, Any], entity: str) -> str:
             sub_aliases = sub_val.get("aliases", [])
             sub_code = sub_val.get("code", "")
             if (
-                sub_key == entity_normalized
-                or sub_code == entity_normalized
-                or sub_name.lower() == entity_normalized.lower()
-                or entity_normalized in sub_aliases
+                _ci_match(sub_key, entity_norm)
+                or _ci_match(sub_code, entity_norm)
+                or _ci_match(sub_name, entity_norm)
+                or _ci_in(entity_norm, sub_aliases)
+                or _ci_contains(sub_name, entity_norm)
             ):
                 return _format_entity(f"{section_name}.{sub_key}", sub_val)
 
     matching = []
     for key in schema:
-        if entity_normalized.lower() in key.lower():
+        if _ci_contains(key, entity_norm):
             matching.append(key)
         inner = schema[key]
         if isinstance(inner, dict):
-            if entity_normalized.lower() in inner.get("name", "").lower():
+            if _ci_contains(inner.get("name", ""), entity_norm):
                 matching.append(key)
-            if entity_normalized in inner.get("aliases", []):
+            if _ci_in(entity_norm, inner.get("aliases", [])):
                 matching.append(key)
 
     if matching:
@@ -298,7 +320,7 @@ def _retrieve_entity(schema: dict[str, Any], entity: str) -> str:
             results.append(_format_entity(m, schema[m]))
         return "\n---\n".join(results)
 
-    return _entity_not_found(entity_normalized)
+    return _entity_not_found(entity_norm)
 
 
 def _entity_not_found(entity: str) -> str:

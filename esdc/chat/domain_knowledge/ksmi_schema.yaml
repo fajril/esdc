@@ -1,6 +1,44 @@
 # KSMI Schema Definitions
+# KSMI = Kerangka Sumber Daya Migas Indonesia
 # Standar Klasifikasi Sumber Daya dan Cadangan Indonesia
 # https://github.com/fajril/esdc
+
+# =============================================================================
+# KSMI Framework Definition
+# =============================================================================
+KSMIFramework:
+  name: Kerangka Sumber Daya Migas Indonesia
+  code: KSMI
+  aliases:
+    - KSMI
+    - Kerangka Sumber Daya Migas
+    - Kerangka Sumber Daya Migas Indonesia
+    - Indonesia Framework of Petroleum Resources
+    - Kerangka Klasifikasi Sumber Daya
+  full_name: Kerangka Sumber Daya Migas Indonesia
+  definition: >-
+    KSMI (Kerangka Sumber Daya Migas Indonesia) adalah kerangka klasifikasi
+    sumber daya dan cadangan migas Indonesia yang disusun berdasarkan Petroleum
+    Resources Management System (PRMS) 2018 dan disesuaikan dengan regulasi
+    serta proses bisnis industri hulu migas di Indonesia. KSMI
+    mengkategorikan proyek migas berdasarkan level kematangan proyek (Project
+    Maturity Level) yang merefleksikan peluang keberhasilan komersial.
+  source: >-
+    Sub Tim Standardisasi Kerangka Sumber Daya Migas Indonesia.
+    Ketua: Ir. Wilson Robert Pariangan, M.T., SPEC.
+    Penyusun Naskah: Dr. Ir. Fajril Ambia, PMP, SPEC.
+  key_concepts:
+    - KSMI = Kerangka Sumber Daya Migas Indonesia (bukan "Klasifikasi")
+    - Kerangka (framework) yang berisi sistem klasifikasi
+    - Berbasis PRMS 2018 (Petroleum Resources Management System)
+    - Disesuaikan dengan regulasi dan proses bisnis industri hulu migas Indonesia
+    - Tiga kelas: Reserves & GRR, Contingent Resources, Prospective Resources
+    - Level kematangan proyek (E0-X6, A1-A2) merefleksikan peluang komersial
+    - Standar Klasifikasi Sumber Daya dan Cadangan Indonesia adalah nama standar/dokumennya
+    - KSMI adalah nama kerangka/framework-nya
+    - Setiap proyek hanya dapat memiliki satu kategori kelas
+    - Cadangan dan GRR berada dalam kelas yang sama (Reserves & GRR)
+    - GRR tidak dapat dilaporkan sendiri tanpa nilai cadangan
 
 # =============================================================================
 # Waktu Acuan Pelaporan (WAP)

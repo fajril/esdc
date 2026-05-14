@@ -62,6 +62,11 @@ from .functions import (
 from .ksmi_loader import ksmi_retrieve
 
 # =============================================================================
+# KSMI Graph Module (LadybugDB)
+# =============================================================================
+from .ksmi_graph_manager import KSMIGraphManager
+
+# =============================================================================
 # Problems Module
 # =============================================================================
 from .problems import (
@@ -202,4 +207,6 @@ __all__ = [
     "detect_report_year_from_query",
     # KSMI Loader
     "ksmi_retrieve",
+    # KSMI Graph Manager
+    "KSMIGraphManager",
 ]

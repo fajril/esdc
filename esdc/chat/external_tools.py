@@ -19,6 +19,7 @@ from typing import Any
 logger = logging.getLogger("esdc.chat.external_tools")
 
 INTERNAL_TOOL_NAMES: set[str] = {
+    "entity_resolver",
     "knowledge_traversal",
     "resolve_spatial",
     "semantic_search",
