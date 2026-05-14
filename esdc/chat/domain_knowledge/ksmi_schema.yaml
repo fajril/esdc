@@ -240,6 +240,28 @@ Abandoned:
     - Peluang keberhasilan komersial = 0 (tidak ada potensi akumulasi petroleum)
   commerciality_rank: 0
   peluang_keberhasilan_komersial: nol
+  is_pod_approved: false   # Tidak ada izin berproduksi untuk proyek tanpa akumulasi
+  is_pse_approved: false   # PSE tidak relevan untuk proyek tanpa akumulasi
+
+DokumenPenentuanStatusEksplorasi:
+  name: Dokumen Penentuan Status Eksplorasi
+  code: PSE
+  aliases:
+    - PSE
+    - Penentuan Status Eksplorasi
+    - Dokumen PSE
+  definition: >-
+    Dokumen Penentuan Status Eksplorasi (PSE) adalah dokumen yang menandakan
+    bahwa kegiatan eksplorasi telah selesai. PSE BUKAN merupakan Izin Berproduksi.
+    PSE diperlukan untuk transisi proyek ke level X0 (Development Pending).
+    Transisi dari X-level ke E-level memerlukan Izin Berproduksi, bukan PSE.
+  key_concepts:
+    - PSE ≠ Izin Berproduksi
+    - PSE menandai selesainya kegiatan eksplorasi
+    - PSE hanya diperlukan untuk transisi ke X0 (Development Pending)
+    - Izin Berproduksi (POD/POP/POFD/OPL/OPLL) diperlukan untuk transisi ke E-level
+    - Kolom database is_pse_approved menandakan apakah PSE sudah disetujui
+  db_column: is_pse_approved
 
 # =============================================================================
 # Classification Hierarchy
@@ -414,7 +436,7 @@ CommercialFactors:
       applies_to: Reserves (membedakan dari GRR)
     regulatory_legal:
       definition: Perizinan, kontrak PSC, regulasi pemerintah
-      applies_to: Reserves (POD/PSE approval)
+      applies_to: Reserves (Izin Berproduksi)
     social_environmental:
       definition: Dampak sosial dan lingkungan
       applies_to: Reserves
@@ -657,14 +679,16 @@ ProjectClassification:
       - Sumber Daya Kontingen
     definition: >-
       Contingent Resources merupakan bagian volume IPIP yang diperkirakan dapat
-      diambil berdasarkan proyek yang ditetapkan dengan dibatasi oleh faktor teknis.
-      Proyek yang berada dalam kelas contingent resources mengalami kendala dari
-      sisi komersial. Umumnya, masalah utama terletak pada faktor keekonomian,
+      diambil berdasarkan proyek yang ditetapkan. Dalam konteks perhitungan volume,
+      estimasi dibatasi oleh faktor teknis (abandonment pressure, facility limit, dll).
+      Namun proyek berada di kelas ini karena kendala dari sisi komersial
+      (keekonomian, regulasi/legal, sosial/lingkungan) yang menghalangi produksi
+      komersial. Umumnya, masalah utama terletak pada faktor keekonomian,
       regulasi dan legal.
     definition_code: "II.11"
     key_concepts:
-      - Kendala dari sisi komersial (bukan teknis)
-      - Masalah utama: keekonomian, regulasi, legal
+      - Volume diestimasi dengan batasan teknis (abandonment pressure, facility limit)
+      - Status CR karena kendala komersial (keekonomian, regulasi/legal, sosial/lingkungan)
       - Bisa naik ke Reserves jika kendala komersial teratasi
 
   # ---------------------------------------------------------------------------
@@ -732,10 +756,15 @@ ProjectLevel:
       berproduksi secara komersial walau tidak berproduksi secara penuh sepanjang tahun.
     key_concepts:
       - Sedang berproduksi secara komersial
-      - rate_sls > 0 (ada produksi sales)
-    rule: "IF rate_sls_oil + rate_sls_con + rate_sls_ga + rate_sls_gn > 0 THEN True ELSE False"
-    is_pod_approved: null  # Can be True or False
-    is_pse_approved: null  # Can be True or False
+      - Grace period: proyek yang berhenti produksi sebelum WAP masih boleh menyandang level E0 pada WAP tersebut
+      - Jika pada WAP berikutnya masih tidak berproduksi, proyek harus pindah ke E1 atau level lain
+    rule_note: >-
+      Kriteria utama: ada produksi sales (rate_sls > 0). Namun terdapat grace period:
+      jika proyek berhenti produksi sebelum WAP, proyek masih boleh diberikan level E0
+      pada WAP tersebut. Evaluasi berikutnya akan menentukan apakah proyek tetap E0
+      atau harus pindah ke level lain.
+    is_pod_approved: null   # Bisa aktif/tidak, DB: boolean
+    is_pse_approved: true   # Sudah melewati X0
 
   E1_ProductionOnHold:
     code: E1
@@ -748,15 +777,16 @@ ProjectLevel:
     definition: >-
       Proyek memiliki level On Production pada WAP sebelumnya. Namun sama sekali
       tidak berproduksi secara komersial hingga evaluasi di WAP. Pada WAP selanjutnya,
-      proyek harus pindah ke level lain kecuali jika proyek aktif terdaftar dalam dokumen
-      rencana kerja pengembangan lapangan jangka panjang 3 tahun ke depan.
+      proyek harus pindah ke level lain KECUALI jika proyek terdaftar dalam GROOVY
+      (Long Term Exploration and Development Strategy). Jika memiliki GROOVY,
+      proyek mendapat dispensasi hingga maksimal 3 WAP di level ini.
     definition_code: "II.19"
     key_concepts:
-      - Setahun tidak berproduksi secara komersial, atau
-      - 1-3 tahun tidak berproduksi tapi masih ada rencana jangka panjang
-    rule: null
-    is_pod_approved: null
-    is_pse_approved: null
+      - Setahun tidak berproduksi secara komersial
+      - Maksimal 1 WAP tanpa GROOVY
+      - Dengan GROOVY: dispensasi hingga 3 WAP
+    is_pod_approved: true   # Pernah punya izin berproduksi
+    is_pse_approved: true   # Sudah melewati X0
 
   E2_UnderDevelopment:
     code: E2
@@ -779,10 +809,10 @@ ProjectLevel:
     key_concepts:
       - Memiliki Final Investment Decision (FID)
       - Fase EPCI (Engineering, Procurement, Construction, Installation)
-      - Maksimal 3 WAP
-    rule: null
-    is_pod_approved: true
-    is_pse_approved: true
+      - Maksimal 3 WAP tanpa GROOVY
+      - Dengan GROOVY: tidak ada batasan WAP
+    is_pod_approved: true   # Membutuhkan izin berproduksi
+    is_pse_approved: true   # Sudah melewati X0
 
   E3_JustifiedForDevelopment:
     code: E3
@@ -802,12 +832,13 @@ ProjectLevel:
       Untuk proyek yang berasal dari eksplorasi, setelah mendapatkan level ini proyek
       mengalami perubahan dari fase eksplorasi menjadi fase eksploitasi.
     key_concepts:
-      - Memiliki Plan of Development (POD) approved
+      - Memiliki izin berproduksi yang disetujui (POD/POP/POFD/OPL/OPLL)
       - Fase Front End Engineering Design (FEED)
       - Transisi dari eksplorasi ke eksploitasi
-    rule: null
-    is_pod_approved: true
-    is_pse_approved: true
+      - Maksimal 3 WAP tanpa GROOVY
+      - Dengan GROOVY: tidak ada batasan WAP
+    is_pod_approved: true   # Membutuhkan izin berproduksi
+    is_pse_approved: true   # Sudah melewati X0
 
   E4_ProductionPending:
     code: E4
@@ -830,9 +861,10 @@ ProjectLevel:
       - Turun kelas ke Contingent Resources
       - Tidak berproduksi 3-6 WAP, atau >6 WAP tapi masih ada rencana
       - Risiko komersial sangat tinggi
-    rule: null
-    is_pod_approved: null
-    is_pse_approved: null
+      - Maksimal 3 WAP tanpa GROOVY
+      - Dengan GROOVY: tidak ada batasan WAP
+    is_pod_approved: null   # Izin berproduksi bisa aktif/tidak
+    is_pse_approved: true   # Sudah melewati X0
 
   E5_DevelopmentUnclarified:
     code: E5
@@ -848,9 +880,13 @@ ProjectLevel:
       tidak tercapai pada WAP sebelumnya sehingga mengakibatkan rencana kerja
       pengembangan lapangan jangka panjang tidak berlaku lagi.
     definition_code: "II.23"
-    rule: null
-    is_pod_approved: true
-    is_pse_approved: true
+    key_concepts:
+      - Tidak mendapatkan Final Investment Decision (FID)
+      - FEED (Front End Engineering Design) tidak dikerjakan atau tidak menjadi prioritas
+      - Proyek masih memiliki izin berproduksi tapi tidak diprioritaskan
+      - Durasi tidak terbatas (tanpa batasan WAP)
+    is_pod_approved: true   # Membutuhkan izin berproduksi
+    is_pse_approved: true   # Sudah melewati X0
 
   E6_FurtherDevelopment:
     code: E6
@@ -873,12 +909,13 @@ ProjectLevel:
       Volume perkiraan yang bisa diambil dari proyek ini berasal dari bagian Unrecoverable.
     key_concepts:
       - Pengembangan lanjut (infill drilling, EOR, IOR)
-      - Hanya 1 WAP
+      - Hanya 1 WAP (tanpa dispensasi GROOVY)
       - Volume berasal dari Unrecoverable
-      - Harus memiliki izin berproduksi terpisah
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+      - Merupakan proyek BARU, bukan kelanjutan proyek yang sudah ada
+      - Memerlukan izin berproduksi terpisah dari proyek utama (bukan revisi)
+      - Satu proyek tidak boleh memiliki dua atau lebih project level
+    is_pod_approved: null   # Proyek BARU, memerlukan izin berproduksi terpisah
+    is_pse_approved: true   # Sudah melewati X0
 
   E7_ProductionNotViable:
     code: E7
@@ -904,9 +941,9 @@ ProjectLevel:
       - Uneconomic: revenue < cost
       - Marginal: IRR < Minimum Attractive Rate of Return (MARR)
       - Level terendah dari sisi komersial
-    rule: null
-    is_pod_approved: null
-    is_pse_approved: null
+      - Dapat direaktivasi dengan izin berproduksi baru
+    is_pod_approved: null   # Bisa reaktivasi
+    is_pse_approved: true   # Sudah melewati X0
 
   E8_FurtherDevelopmentNotViable:
     code: E8
@@ -926,9 +963,9 @@ ProjectLevel:
       Level ini merupakan level terendah dari sisi komersial dalam fase pengembangan.
       Proyek dalam level ini merupakan proyek konseptual yang bisa jadi tidak dapat
       direalisasikan karena faktor komersial.
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+
+    is_pod_approved: null   # Bisa reaktivasi
+    is_pse_approved: true   # Sudah melewati X0
 
   # ===========================================================================
   # X Levels: Exploration
@@ -947,11 +984,11 @@ ProjectLevel:
     definition_code: "II.27"
     description: null
     key_concepts:
-      - Pengakhiran kegiatan eksplorasi approved
+      - Pengakhiran kegiatan eksplorasi approved (PSE)
       - Penyusunan strategi pengembangan sedang dilakukan
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: true
+      - PSE diperlukan untuk transisi ke level ini
+    is_pod_approved: false   # Belum memiliki Izin Berproduksi
+    is_pse_approved: true   # PSE required untuk X0
 
   X1_DiscoveryUnderEvaluation:
     code: X1
@@ -976,9 +1013,8 @@ ProjectLevel:
       - Discovery (ditemukan)
       - Pengeboran delineasi untuk konfirmasi batasan
       - Maksimal 2 WAP
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki Izin Berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X2_DevelopmentUndetermined:
     code: X2
@@ -996,9 +1032,9 @@ ProjectLevel:
     description: >-
       Pada level ini biasanya evaluasi untuk penyusunan strategi pengembangan lapangan
       sudah dilakukan. Dari evaluasi tersebut dinyatakan ada kebutuhan tambahan data baru.
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+
+    is_pod_approved: false   # Belum memiliki Izin Berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X3_DevelopmentNotViable:
     code: X3
@@ -1017,9 +1053,8 @@ ProjectLevel:
     key_concepts:
       - Pengembangan ditolak
       - Uneconomic atau marginal
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki izin berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X4_InconclusiveFlow:
     code: X4
@@ -1041,9 +1076,8 @@ ProjectLevel:
       - Ditemukan tapi tidak pasti bisa mengalir
       - Butuh uji sumur lebih lanjut
       - Untuk heavy oil perlu evaluasi teknologi
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki izin berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X5_Prospect:
     code: X5
@@ -1065,9 +1099,8 @@ ProjectLevel:
       - Belum pernah dibor, atau ada ada sumur eksplorasi namun tidak ada data yang diambil di zona dalam lingkup proyek
       - siap untuk dilakukan pengeboran eksplorasi
       - studi subsurface sudah dilakukan secara tuntas untuk menentukan target pengeboran, perkiraan akumulasi petroleum, dan risiko geologis
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki izin berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X6_Lead:
     code: X6
@@ -1090,9 +1123,8 @@ ProjectLevel:
       - Belum ada data cukup untuk target pengeboran
       - Entrypoint eksplorasi
       - Level terendah
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki izin berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
 # =============================================================================
 # Level Transition Rules
@@ -1106,130 +1138,254 @@ LevelTransitionRules:
     baik naik maupun turun. WAP constraints membatasi transisi tertentu pada
     kondisi khusus.
 
+    Catatan tentang is_pod_approved:
+    - true: proyek memiliki izin berproduksi yang sudah disetujui
+    - false: proyek belum memiliki izin berproduksi
+    - null: tidak dapat ditentukan secara rule — bisa true atau false
+      tergantung konteks (misalnya izin bisa aktif/tidak, atau bisa reaktivasi)
+
   reachability_matrix:
     description: >-
       Matriks reachability: dari level baris, level kolom yang tercantum
-      adalah level yang dapat dituju. Level yang tidak tercantam tidak dapat
-      dituju secara langsung maupun tidak langsung.
+      adalah level yang dapat dituju. Level yang tidak tercantum tidak dapat
+      dituju secara langsung maupun tidak langsung. Abandoned (A1/A2) merupakan
+      absorbing state — proyek yang masuk ke level ini tidak dapat keluar.
+      Transisi ke A1 (Dry) berasal dari X4, X5, X6 (dry well).
+      Transisi ke A2 (Dissolved) berasal dari X5, X6 (no structure from seismic).
+      Abandoned tidak termasuk dalam klasifikasi sumber daya — volume sumber daya = nol.
     E0:
       reachable: [E0, E1, E4, E7]
-      description: "On Production dapat transit ke dirinya sendiri, Production on Hold, Production Pending, atau Production Not Viable"
     E1:
       reachable: [E0, E1, E4, E7]
-      description: "Production on Hold dapat kembali ke On Production, tetap on hold, turun ke Production Pending, atau turun ke Production Not Viable"
     E2:
       reachable: [E0, E5]
-      description: "Under Development dapat naik ke On Production atau turun ke Development Unclarified"
     E3:
       reachable: [E0, E2, E5]
-      description: "Justified for Development dapat naik ke On Production, naik ke Under Development, atau turun ke Development Unclarified"
     E4:
       reachable: [E0, E4, E7]
-      description: "Production Pending dapat naik ke On Production, tetap Production Pending, atau turun ke Production Not Viable"
     E5:
       reachable: [E0, E2, E3]
-      description: "Development Unclarified dapat naik ke On Production, Under Development, atau Justified for Development"
     E6:
       reachable: [E0, E2, E3, E8]
-      description: "Further Development dapat naik ke On Production, Under Development, Justified for Development, atau turun ke Further Development Not Viable"
     E7:
       reachable: [E0, E4, E7]
-      description: "Production Not Viable dapat direaktivasi ke On Production atau Production Pending, atau tetap Production Not Viable"
     E8:
       reachable: [E0, E2, E3, E8]
-      description: "Further Development Not Viable dapat direaktivasi ke On Production, Under Development, Justified for Development, atau tetap Further Development Not Viable"
     X0:
       reachable: [E0, E2, E3, X0]
-      description: "Development Pending dapat naik ke E-levels atau tetap"
     X1:
       reachable: [E0, E2, E3, X0, X2, X3]
-      description: "Discovery under Evaluation dapat transit ke E-levels atau lanjut ke level X lebih tinggi"
     X2:
       reachable: [E0, E2, E3, X0, X2, X3]
-      description: "Development Undetermined dapat transit ke E-levels atau tetap/naik dalam X"
     X3:
       reachable: [E0, E2, E3, X0, X2, X3]
-      description: "Development Not Viable dapat transit ke E-levels atau tetap dalam X contingent"
     X4:
-      reachable: [E0, E2, E3, X0, X1, X4]
-      description: "Inconclusive Flow dapat naik ke E-levels, X0, X1, atau tetap"
+      reachable: [E0, E2, E3, X0, X1, X4, A1]
     X5:
-      reachable: [E0, E2, E3, X0, X1, X4, X5, X6]
-      description: "Prospect dapat naik ke E-levels atau turun ke Lead"
+      reachable: [E0, E2, E3, X0, X1, X4, X5, X6, A1, A2]
     X6:
-      reachable: [E0, E2, E3, X0, X1, X4, X5, X6]
-      description: "Lead dapat naik ke semua level yang lebih tinggi atau tetap"
+      reachable: [E0, E2, E3, X0, X1, X4, X5, X6, A1, A2]
+    A1:
+      reachable: [A1]
+    A2:
+      reachable: [A2]
 
   wap_constraints:
     description: >-
-      Batasan khusus yang berlaku pada perpindahan level proyek saat evaluasi WAP.
-      Batasan ini bersifat tambahan terhadap matriks reachability.
+      Batasan durasi WAP untuk setiap project maturity level, diurutkan berdasarkan
+      peluang keberhasilan komersial dari tinggi ke rendah. Semua 16 level tercantum
+      di sini; level dengan max_wap: null tidak memiliki batasan durasi WAP dan dapat
+      berada pada level tersebut selamanya. GROOVY (Long Term Exploration and
+      Development Strategy) merupakan dokumen rencana kerja jangka panjang yang
+      berisi bab executive summary, current situation, key challenges, solution
+      proposal, dan timeline. GROOVY memberikan dispensasi tambahan durasi WAP
+      pada level tertentu (E1, E2, E3, E4).
     constraints:
       - id: WAP-C01
         from_level: E0
+        name: On Production
+        max_wap: null
         description: >-
-          Proyek On Production yang sama sekali tidak berproduksi pada WAP berikutnya
-          harus pindah dari E0. Dapat pindah ke E1 (Production on Hold) jika masih dalam rencana
-          pengembangan, E4 (Production Pending), atau E7 (Production Not Viable).
-        condition: "rate_sls = 0 pada WAP saat ini"
+          On Production tidak memiliki batasan durasi WAP. Proyek dapat berada pada
+          level ini selamanya selama masih berproduksi secara komersial.
       - id: WAP-C02
         from_level: E1
+        name: Production on Hold
+        max_wap: 1
+        groovy_max_wap: 3
         description: >-
-          Proyek Production on Hold harus pindah ke level lain pada WAP selanjutnya,
-          KECUALI proyek masih terdaftar dalam rencana kerja pengembangan lapangan
-          jangka panjang 3 tahun ke depan.
-        condition: "Maksimal 1 WAP di E1, kecuali terdaftar dalam rencana kerja 3 tahun"
+          Production on Hold maksimal 1 WAP. Jika proyek memiliki GROOVY
+          (Long Term Exploration and Development Strategy), diberikan dispensasi
+          hingga maksimal 3 WAP. Setelah batas tersebut, proyek harus pindah ke
+          level lain (E0, E4, atau E7).
       - id: WAP-C03
-        from_level: X1
+        from_level: E2
+        name: Under Development
+        max_wap: 3
+        groovy_max_wap: null
         description: >-
-          Proyek Discovery under Evaluation maksimal berada pada level ini selama
-          2 WAP. Setelah itu harus pindah ke X2 atau level lain yang sesuai.
-        condition: "Maksimal 2 WAP di X1"
+          Under Development maksimal 3 WAP. Jika proyek memiliki GROOVY, tidak
+          ada batasan durasi WAP (dapat berada selamanya selama ada rencana kerja
+          jangka panjang). Setelah batas WAP tanpa GROOVY, proyek harus pindah
+          ke E0 atau E5.
       - id: WAP-C04
-        from_level: X2
+        from_level: E3
+        name: Justified for Development
+        max_wap: 3
+        groovy_max_wap: null
         description: >-
-          Proyek Development Undetermined yang memperoleh izin berproduksi dapat
-          naik ke level E (E0-E5).
-        condition: "Memperoleh izin berproduksi (POD/PSE)"
+          Justified for Development maksimal 3 WAP. Jika proyek memiliki GROOVY,
+          tidak ada batasan durasi WAP. Setelah batas WAP tanpa GROOVY, proyek
+          harus pindah ke E0, E2, atau E5.
       - id: WAP-C05
-        from_level: X3
+        from_level: E4
+        name: Production Pending
+        max_wap: 3
+        groovy_max_wap: null
         description: >-
-          Proyek Development Not Viable dapat naik ke level E apabila memperoleh
-          izin berproduksi. Tanpa perizinan, proyek tetap di X3 atau dipindahkan.
-        condition: "Memperoleh izin berproduksi"
+          Production Pending maksimal 3 WAP. Jika proyek memiliki GROOVY, tidak
+          ada batasan durasi WAP. Setelah batas WAP tanpa GROOVY, proyek harus
+          pindah ke E0 (jika kembali berproduksi) atau E7 (jika masih tidak berproduksi).
       - id: WAP-C06
-        from_level: E5
-        description: >-
-          Proyek Development Unclarified dapat naik ke E0 jika mulai berproduksi, ke E2
-          jika mendapatkan persetujuan POD, atau ke E3 jika mendapatkan PSE.
-        condition: "Berproduksi, mendapat POD, atau mendapat PSE"
-      - id: WAP-C07
         from_level: E6
+        name: Further Development
+        max_wap: 1
         description: >-
-          Proyek Further Development tidak dapat naik level tanpa izin berproduksi.
-          Dengan izin berproduksi, proyek dapat naik ke E2 atau E3.
-        condition: "Perubahan kepemilikan atau persetujuan baru diperlukan"
+          Further Development hanya dapat berada pada level ini selama 1 WAP.
+          E6 merupakan proyek BARU (bukan kelanjutan proyek yang sudah ada),
+          sehingga memerlukan izin berproduksi terpisah. Setelah 1 WAP, proyek
+          harus pindah ke E0, E2, E3, atau E8.
+      - id: WAP-C07
+        from_level: X1
+        name: Discovery under Evaluation
+        max_wap: 2
+        description: >-
+          Discovery under Evaluation maksimal 2 WAP. Setelah batas tersebut,
+          proyek harus pindah ke X2 atau level lain yang sesuai.
       - id: WAP-C08
-        from_level: E7
+        from_level: E5
+        name: Development Unclarified
+        max_wap: null
         description: >-
-          Proyek Production Not Viable dapat direaktivasi ke E0 atau E4 jika ada izin dan
-          rencana kerja baru yang disetujui.
-        condition: "Memperoleh izin dan rencana kerja baru yang disetujui"
+          Development Unclarified tidak memiliki batasan durasi WAP. Proyek
+          dapat berada pada level ini selamanya.
       - id: WAP-C09
+        from_level: E7
+        name: Production Not Viable
+        max_wap: null
         description: >-
-          Satu proyek hanya dapat memiliki SATU level pada SATU WAP.
-          Tidak boleh memiliki beberapa level sekaligus.
-        condition: "One project, one level, one WAP"
+          Production Not Viable tidak memiliki batasan durasi WAP. Proyek
+          dapat berada pada level ini selamanya.
       - id: WAP-C10
+        from_level: E8
+        name: Further Development Not Viable
+        max_wap: null
         description: >-
-          Volume pada satu level proyek hanya dapat diklasifikasikan sebagai
-          cadangan ATAU contingent resources, tidak keduanya secara bersamaan.
-        condition: "Cadangan XOR Contingent Resources per project per WAP"
+          Further Development Not Viable tidak memiliki batasan durasi WAP.
+          Proyek dapat berada pada level ini selamanya.
       - id: WAP-C11
+        from_level: X0
+        name: Development Pending
+        max_wap: null
         description: >-
-          Transisi dari X-level ke E-level hanya terjadi jika proyek
-          mendapatkan izin berproduksi yang sesuai.
-        condition: "X→E transition requires producing license"
+          Development Pending tidak memiliki batasan durasi WAP. Proyek dapat
+          berada pada level ini selamanya.
+      - id: WAP-C12
+        from_level: X2
+        name: Development Undetermined
+        max_wap: null
+        description: >-
+          Development Undetermined tidak memiliki batasan durasi WAP. Proyek
+          dapat berada pada level ini selamanya.
+      - id: WAP-C13
+        from_level: X3
+        name: Development Not Viable
+        max_wap: null
+        description: >-
+          Development Not Viable tidak memiliki batasan durasi WAP. Proyek
+          dapat berada pada level ini selamanya.
+      - id: WAP-C14
+        from_level: X4
+        name: Inconclusive Flow
+        max_wap: null
+        description: >-
+          Inconclusive Flow tidak memiliki batasan durasi WAP. Proyek dapat
+          berada pada level ini selamanya.
+      - id: WAP-C15
+        from_level: X5
+        name: Prospect
+        max_wap: null
+        description: >-
+          Prospect tidak memiliki batasan durasi WAP. Proyek dapat berada pada
+          level ini selamanya.
+      - id: WAP-C16
+        from_level: X6
+        name: Lead
+        max_wap: null
+        description: >-
+          Lead tidak memiliki batasan durasi WAP. Proyek dapat berada pada level
+          ini selamanya.
+
+  transition_rules:
+    description: >-
+      Prasyarat dokumen untuk transisi level proyek. Terdapat dua jenis dokumen
+      yang berbeda: Izin Berproduksi dan PSE (Dokumen Penentuan Status Eksplorasi).
+      Kedua dokumen ini tidak saling menggantikan. Izin Berproduksi diperlukan
+      untuk transisi ke E-level, sedangkan PSE diperlukan untuk transisi ke X0.
+    rules:
+      - id: TR-01
+        description: >-
+          Transisi dari X-level ke E-level memerlukan Izin Berproduksi
+          (POD/POP/POFD/OPL/OPLL).
+        from_levels: [X0, X1, X2, X3, X4]
+        to_levels: [E0, E2, E3]
+        requires: Izin Berproduksi
+        db_column: is_pod_approved
+      - id: TR-02
+        description: >-
+          Transisi ke X0 (Development Pending) memerlukan PSE
+          (Dokumen Penentuan Status Eksplorasi). PSE BUKAN Izin Berproduksi.
+          PSE menandai selesainya kegiatan eksplorasi.
+        from_levels: [X1, X2, X3, X4, X5, X6]
+        to_levels: [X0]
+        requires: PSE
+        db_column: is_pse_approved
+      - id: TR-03
+        description: >-
+          E6 (Further Development) merupakan proyek baru yang memerlukan
+          izin berproduksi terpisah dari proyek utama. Satu proyek tidak boleh
+          memiliki dua atau lebih project level.
+        from_levels: []
+        to_levels: [E6]
+        requires: Izin Berproduksi terpisah
+        db_column: is_pod_approved
+      - id: TR-04
+        description: >-
+          E7 (Production Not Viable) dan E8 (Further Development Not Viable)
+          dapat direaktivasi jika memperoleh izin berproduksi baru yang disetujui.
+          Tujuan reaktivasi mengikuti reachability_matrix: E7 dapat ke E0/E4/E7,
+          E8 dapat ke E0/E2/E3/E8.
+        from_levels: [E7, E8]
+        to_levels: []
+        requires: Izin Berproduksi baru
+        db_column: is_pod_approved
+
+  universal_rules:
+    - id: KSMI-R01
+      description: >-
+        Satu proyek hanya dapat memiliki SATU level pada SATU WAP.
+        Tidak boleh memiliki beberapa level sekaligus.
+    - id: KSMI-R02
+      description: >-
+        Volume pada satu level proyek hanya dapat diklasifikasikan sebagai
+        cadangan ATAU contingent resources, tidak keduanya secara bersamaan.
+    - id: KSMI-R03
+      description: >-
+        Evaluasi level proyek dilakukan pada setiap WAP (31 Desember 23:59).
+    - id: KSMI-R04
+      description: >-
+        E6 (Further Development) merupakan proyek BARU, bukan kelanjutan proyek
+        yang sudah ada. Satu proyek tidak boleh memiliki dua atau lebih level.
 
 Play:
   name: Play
@@ -1450,6 +1606,34 @@ ProducingLicense:
     berujung pada permintaan izin berproduksi yang baru. Apabila kerangka kegiatan
     tersebut tidak membutuhkan izin berproduksi yang baru, maka cukup merevisi proyek
     yang sudah ada.
+  note: >-
+    PSE (Dokumen Penentuan Status Eksplorasi) BUKAN merupakan Izin Berproduksi.
+    PSE menandai selesainya kegiatan eksplorasi dan diperlukan untuk transisi ke X0.
+    Izin Berproduksi (POD/POP/POFD/OPL/OPLL) diperlukan untuk transisi ke E-level.
+    Kolom database is_pod_approved merepresentasikan apakah proyek memiliki
+    Izin Berproduksi, bukan hanya POD saja.
+  db_column: is_pod_approved
+
+GROOVY:
+  name: Long Term Exploration and Development Strategy
+  code: GROOVY
+  aliases:
+    - GROOVY
+    - LTEDS
+    - Rencana Kerja Jangka Panjang
+  definition: >-
+    GROOVY (Long Term Exploration and Development Strategy) adalah dokumen rencana
+    kerja jangka panjang yang berisi bab executive summary, current situation,
+    key challenges, solution proposal, dan timeline. Proyek yang memiliki GROOVY
+    mendapat dispensasi tambahan durasi WAP pada level tertentu (E1, E2, E3, E4).
+  key_concepts:
+    - GROOVY memberikan dispensasi durasi WAP
+    - "E1 dengan GROOVY: dispensasi hingga 3 WAP (tanpa GROOVY: maks 1 WAP)"
+    - "E2 dengan GROOVY: tanpa batas WAP (tanpa GROOVY: maks 3 WAP)"
+    - "E3 dengan GROOVY: tanpa batas WAP (tanpa GROOVY: maks 3 WAP)"
+    - "E4 dengan GROOVY: tanpa batas WAP (tanpa GROOVY: maks 3 WAP)"
+    - E6, X1 tidak memiliki dispensasi GROOVY
+  db_column: groovy_isactive
 
 # =============================================================================
 # Volume Reporting Specification

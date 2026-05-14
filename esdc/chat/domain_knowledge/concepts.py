@@ -280,9 +280,24 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         "PSE": {
             "full_name": "Penentuan Status Eksplorasi",
             "description": (
-                "Penentuan Status Eksplorasi - determination of exploration"
-                " status for a project. The is_pse_approved column indicates"
-                " whether a project has PSE approved."
+                "Penentuan Status Eksplorasi (PSE) - dokumen yang menandai"
+                " selesainya kegiatan eksplorasi. PSE BUKAN Izin Berproduksi."
+                " PSE diperlukan untuk transisi proyek ke level X0 (Development"
+                " Pending). Transisi dari X-level ke E-level memerlukan Izin"
+                " Berproduksi, bukan PSE. Kolom is_pse_approved menandakan"
+                " apakah PSE sudah disetujui."
+            ),
+        },
+        "GROOVY": {
+            "full_name": "Long Term Exploration and Development Strategy",
+            "description": (
+                "GROOVY (Long Term Exploration and Development Strategy) -"
+                " dokumen rencana kerja jangka panjang yang berisi bab"
+                " executive summary, current situation, key challenges,"
+                " solution proposal, dan timeline. Proyek yang memiliki"
+                " GROOVY mendapat dispensasi tambahan durasi WAP pada level"
+                " tertentu (E1, E2, E3, E4). Kolom groovy_isactive"
+                " menandakan apakah proyek memiliki GROOVY aktif."
             ),
         },
     },
