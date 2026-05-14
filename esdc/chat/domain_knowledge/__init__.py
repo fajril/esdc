@@ -57,6 +57,11 @@ from .functions import (
 )
 
 # =============================================================================
+# KSMI Loader Module
+# =============================================================================
+from .ksmi_loader import ksmi_retrieve
+
+# =============================================================================
 # Problems Module
 # =============================================================================
 from .problems import (
@@ -195,4 +200,6 @@ __all__ = [
     "get_available_report_year",
     "build_report_year_filter",
     "detect_report_year_from_query",
+    # KSMI Loader
+    "ksmi_retrieve",
 ]

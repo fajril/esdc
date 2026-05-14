@@ -1738,3 +1738,48 @@ def _search_remarks_via_fts(
             "results": [],
             "count": 0,
         }
+
+
+@tool("KSMI Knowledge")
+def ksmi_knowledge(
+    topic: Annotated[
+        str,
+        "Knowledge topic to retrieve. "
+        "One of: 'definition' (concept definitions), "
+        "'level' (project maturity levels E0-X6, A1-A2), "
+        "'transition' (level transition rules, reachability matrix, WAP constraints), "
+        "'formula' (volume formulas, GRR, EUR, Gross/Net/Sales), "
+        "'hierarchy' (classification hierarchy tree), "
+        "'entity' (entities: WAP, PSE, GROOVY, etc.), "
+        "'document' (PSE, GROOVY, izin berproduksi), "
+        "'commercial' (commercial factors), "
+        "'all' (entire knowledge base).",
+    ],
+    entity: Annotated[
+        str | None,
+        "Optional entity name to narrow results. "
+        "Examples: 'E0', 'GRR', 'PSE', 'GROOVY', "
+        "'DokumenPenentuanStatusEksplorasi', 'SalesPotentialResources'. "
+        "If provided, returns only that entity regardless of topic.",
+    ] = None,
+) -> str:
+    """Retrieve KSMI domain knowledge — definitions, rules, transitions, formulas.
+
+    Use this tool when you need detailed information about:
+    - Project maturity levels (E0-On Production, E1-Production on Hold, etc.)
+    - Level transition rules (which levels can transition to which)
+    - WAP constraints (max WAP duration, GROOVY dispensation)
+    - Volume formulas (EUR, GRR, Gross/Net/Sales relationships)
+    - Document semantics (PSE vs Izin Berproduksi, GROOVY)
+    - is_pod_approved / is_pse_approved logic per level
+    - Classification hierarchy (Reserves > GRR, Contingent, Prospective)
+
+    The short table in the system prompt covers level codes and basic rules.
+    Use this tool for ANY detailed question about KSMI concepts.
+
+    Returns formatted text with definitions, key concepts, and rules.
+    """
+    from esdc.chat.domain_knowledge.ksmi_loader import ksmi_retrieve
+
+    result = ksmi_retrieve(topic=topic, entity=entity)
+    return result

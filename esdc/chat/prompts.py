@@ -240,6 +240,31 @@ WHERE report_year = (
 
 ## Domain Definitions
 
+### KSMI Project Maturity Levels
+
+| Level | Name | Class | is_pod | is_pse | Key Rule |
+|-------|------|-------|--------|--------|----------|
+| E0 | On Production | Reserves & GRR | null | ✓ | Must produce; 1-WAP grace period |
+| E1 | Prod on Hold | Reserves & GRR | ✓ | ✓ | Max 1 WAP (3 with GROOVY) |
+| E2 | Under Development | Reserves & GRR | ✓ | ✓ | Max 3 WAP (no limit with GROOVY) |
+| E3 | Justified for Dev | Reserves & GRR | ✓ | ✓ | Max 3 WAP (no limit with GROOVY) |
+| E4 | Prod Pending | Contingent | null | ✓ | Max 3 WAP (no limit with GROOVY) |
+| E5 | Dev Unclarified | Contingent | ✓ | ✓ | No WAP limit |
+| E6 | Further Dev | Contingent | null | ✓ | 1 WAP only, no GROOVY dispensation |
+| E7 | Prod Not Viable | Contingent | null | ✓ | Can reactivate with new izin |
+| E8 | Further Dev NV | Contingent | null | ✓ | Can reactivate |
+| X0 | Dev Pending | Contingent | ✗ | ✓ | PSE required for entry |
+| X1 | Discovery Eval | Contingent | ✗ | ✗ | Max 2 WAP |
+| X2 | Dev Undetermined | Contingent | ✗ | ✗ | Need more data |
+| X3 | Dev Not Viable | Contingent | ✗ | ✗ | Development plan rejected |
+| X4 | Inconclusive Flow | Prospective | ✗ | ✗ | Discovery not conclusive |
+| X5 | Prospect | Prospective | ✗ | ✗ | Ready for exploration drilling |
+| X6 | Lead | Prospective | ✗ | ✗ | Entry point, insufficient data |
+| A1 | Dry (Abandoned) | None | ✗ | ✗ | Absorbing state (no exit) |
+| A2 | Dissolved (Abandoned) | None | ✗ | ✗ | Absorbing state (no exit) |
+
+**Key distinctions:** PSE ≠ Izin Berproduksi. PSE = exploration closure document (required for X0). Izin Berproduksi = production approval (POD/POP/POFD/OPL/OPLL, required for E-levels). `is_pod_approved`: true=has approval, false=doesn't have, null=context-dependent. **For detailed definitions, transition rules, volume formulas, and document semantics → use `ksmi_knowledge` tool.**
+
 ### GRR (Government of Indonesia Recoverable Resources)
 **CRITICAL: GRR ≠ "Geological Resources and Reserves".**
 - GRR = Reserves + Sales Potential
