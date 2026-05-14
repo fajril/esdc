@@ -1090,7 +1090,7 @@ def entity_resolver(
     """
     import json
 
-    from esdc.knowledge_graph.resolver import KnowledgeTraversalResolver
+    from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 
     cache = _get_tool_cache()
     cache_key = _tool_cache_key(
@@ -1105,14 +1105,9 @@ def entity_resolver(
     try:
         conn = get_db_connection()
         try:
-            resolver = KnowledgeTraversalResolver(db=conn)
+            resolver = EntityResolver(db=conn)
             result = resolver.resolve(query=query, return_multiple=return_multiple)
             result["query"] = query
-
-            if result.get("pattern") and result["pattern"].get("cypher_template"):
-                result["cypher_available"] = True
-            else:
-                result["cypher_available"] = False
 
             result_str = json.dumps(result, indent=2, ensure_ascii=False)
             if result.get("status") in ("success", "ambiguous"):
@@ -1143,79 +1138,6 @@ def entity_resolver(
                 "query": query,
             }
         )
-
-
-@tool("Cypher Executor")
-async def execute_cypher(
-    query: Annotated[
-        str,
-        "A valid Cypher query to execute against the ESDC knowledge graph. "
-        "Use this for graph traversal queries like finding nearby fields, "
-        "tracing relationships, or multi-hop entity resolution.",
-    ],
-) -> str:
-    """Execute a Cypher query against the ESDC knowledge graph.
-
-    Use this tool when knowledge_traversal indicates cypher_available=True
-    or when you need graph traversal (spatial proximity, relationships).
-
-    Supports parameterized queries using $param_name syntax.
-
-    Returns:
-    JSON string with:
-    - status: "success" or "error"
-    - results: List of result rows as dictionaries
-    - row_count: Number of rows returned
-
-    Examples:
-    - execute_cypher("MATCH (f:Field {field_name: 'Duri'})
-      RETURN f.field_name, f.field_lat")
-    - execute_cypher(
-        "MATCH (f1:Field)-[:LOCATED_NEAR]->(f2:Field) "
-        "WHERE f1.field_name = 'Duri' AND f2.distance_km < 20 "
-        "RETURN f2.field_name, f2.distance_km"
-    )
-    """
-    import json
-
-    try:
-        return await asyncio.get_running_loop().run_in_executor(
-            None, _execute_cypher_sync, query
-        )
-    except Exception as e:
-        return json.dumps({"status": "error", "message": str(e)})
-
-
-def _execute_cypher_sync(query: str) -> str:
-    """Synchronous Cypher execution."""
-    import json
-
-    from esdc.knowledge_graph.ladybug_manager import LadybugDBManager
-
-    manager = LadybugDBManager()
-    if not manager.initialize():
-        return json.dumps(
-            {
-                "status": "error",
-                "message": "Knowledge graph not available. Run 'esdc load --kg' first.",
-            }
-        )
-
-    try:
-        results = manager.execute_cypher(query)
-        return json.dumps(
-            {
-                "status": "success",
-                "results": results,
-                "row_count": len(results),
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-    except Exception as e:
-        return json.dumps({"status": "error", "message": str(e)})
-    finally:
-        manager.close()
 
 
 @tool("Spatial Resolver")
@@ -1283,7 +1205,7 @@ def resolve_spatial(
     """
     import json
 
-    from esdc.knowledge_graph.spatial_resolver import SpatialResolver
+    from esdc.search.spatial_resolver import SpatialResolver
 
     logger.debug(
         "[SPATIAL_START] query_type=%s | target=%s | radius_km=%s | wk_name=%s",
@@ -1561,7 +1483,7 @@ def semantic_search(
     """
     import json
 
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+    from esdc.search.semantic_resolver import SemanticResolver
 
     # Build filters dict from optional parameters
     filters: dict[str, Any] = {}

@@ -15,8 +15,8 @@ def test_end_to_end_semantic_search():
     import duckdb
 
     from esdc.configs import Config
-    from esdc.knowledge_graph.embedding_manager import EmbeddingManager
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+    from esdc.search.embedding_manager import EmbeddingManager
+    from esdc.search.semantic_resolver import SemanticResolver
 
     # Check prerequisites
     manager = EmbeddingManager(model="qwen3-embedding:0.6b")
@@ -64,7 +64,7 @@ def test_end_to_end_semantic_search():
 @pytest.mark.integration
 def test_semantic_search_fallback_no_ollama():
     """Test graceful fallback when Ollama is not available."""
-    from esdc.knowledge_graph.embedding_manager import EmbeddingManager
+    from esdc.search.embedding_manager import EmbeddingManager
 
     # Try to connect to non-existent Ollama
     manager = EmbeddingManager(model="nonexistent-model")
@@ -76,7 +76,7 @@ def test_semantic_search_fallback_no_ollama():
 @pytest.mark.integration
 def test_semantic_search_no_embeddings():
     """Test behavior when no embeddings exist."""
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+    from esdc.search.semantic_resolver import SemanticResolver
 
     resolver = SemanticResolver()
 

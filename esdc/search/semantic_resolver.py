@@ -15,7 +15,7 @@ from typing import Any
 import duckdb
 
 from esdc.configs import Config
-from esdc.knowledge_graph.embedding_manager import EmbeddingManager
+from esdc.search.embedding_manager import EmbeddingManager
 
 logger = logging.getLogger(__name__)
 

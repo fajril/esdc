@@ -57,7 +57,7 @@ class TestResolveSpatialCaching:
         with (
             patch("esdc.chat.tools._get_tool_cache") as mock_cache_fn,
             patch(
-                "esdc.knowledge_graph.spatial_resolver.SpatialResolver"
+                "esdc.search.spatial_resolver.SpatialResolver"
             ) as MockResolver,
         ):
             mock_cache = MagicMock()

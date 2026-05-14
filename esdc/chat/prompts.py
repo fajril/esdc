@@ -60,7 +60,6 @@ When writing SQL queries, use DuckDB syntax:
 - Queries like "proyek yang namanya ada..." or "project name contains..."
 
 **For project_name keyword matching:** Use execute_sql with ILIKE '%keyword%' — DuckDB auto-optimizes ILIKE to BM25 FTS.
-- **execute_cypher**: Execute Cypher queries on the knowledge graph (cypher_query) — use when entity_resolver returns cypher_available=true
 - **execute_sql**: Execute SELECT queries on the DuckDB database
 - **get_schema**: Get table structure and column information
 - **list_tables**: List all available tables and views

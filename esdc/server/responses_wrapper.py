@@ -73,10 +73,6 @@ logger = logging.getLogger("esdc.server.responses")
 # Tool source metadata mapping for OpenWebUI citation rendering
 _TOOL_SOURCE_MAP: dict[str, dict[str, str]] = {
     "execute_sql": {"resource_type": "sql_query", "resource_id": "project_resources"},
-    "execute_cypher": {
-        "resource_type": "cypher_query",
-        "resource_id": "knowledge_graph",
-    },
     "semantic_search": {
         "resource_type": "semantic_search",
         "resource_id": "project_embeddings",

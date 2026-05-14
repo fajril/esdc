@@ -23,7 +23,6 @@ INTERNAL_TOOL_NAMES: set[str] = {
     "knowledge_traversal",
     "resolve_spatial",
     "semantic_search",
-    "execute_cypher",
     "execute_sql",
     "get_schema",
     "list_tables",

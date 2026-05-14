@@ -275,8 +275,8 @@ def reload(
 def _generate_embeddings() -> None:
     """Generate semantic embeddings for project_remarks with progress bar."""
     from esdc.configs import Config
-    from esdc.knowledge_graph.embedding_manager import EmbeddingManager
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+    from esdc.search.embedding_manager import EmbeddingManager
+    from esdc.search.semantic_resolver import SemanticResolver
 
     logger = logging.getLogger(__name__)
 
@@ -1138,36 +1138,6 @@ def serve(
             f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
         )
         run_server(host=host, port=port, log_level=log_level)
-
-
-@app.command(name="load-kg")
-def load_kg() -> None:
-    """Build the knowledge graph from the ESDC database.
-
-    Creates a LadybugDB graph database with nodes and relationships
-    for fields, working areas, projects, operators, and reports.
-    Uses zero-copy ATTACH to DuckDB for data loading.
-    """
-    from esdc.knowledge_graph.ladybug_manager import LadybugDBManager
-
-    db_file = Config.get_db_file()
-    if not db_file.exists():
-        rich.print("[red]Database not found. Run 'esdc fetch --save' first.[/red]")
-        return
-
-    rich.print("[bold cyan]Building knowledge graph...[/bold cyan]")
-    manager = LadybugDBManager()
-    if manager.build_graph(db_file):
-        schema_info = manager.get_schema_info()
-        table_count = len(schema_info.get("tables", []))
-        rich.print(
-            f"[green]Knowledge graph built successfully![/green] ({table_count} tables)"
-        )
-    else:
-        rich.print(
-            "[red]Failed to build knowledge graph. Check logs for details.[/red]"
-        )
-    manager.close()
 
 
 @app.command(name="validate")

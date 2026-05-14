@@ -8,7 +8,7 @@ class TestHybridSearchMerge:
 
     def test_merge_rrf_combines_both_paths(self):
         """RRF should merge results from both semantic and keyword paths."""
-        from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+        from esdc.search.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
 
@@ -58,7 +58,7 @@ class TestHybridSearchMerge:
 
     def test_merge_rrf_with_empty_keyword_results(self):
         """When keyword results are empty, should return semantic results with score."""
-        from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+        from esdc.search.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
         semantic_results = [
@@ -79,7 +79,7 @@ class TestHybridSearchMerge:
 
     def test_merge_rrf_with_empty_semantic_results(self):
         """When semantic results are empty, should return keyword results with score."""
-        from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+        from esdc.search.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
         keyword_results = [
@@ -100,7 +100,7 @@ class TestHybridSearchMerge:
 
     def test_merge_rrf_deduplicates_by_project_id_year(self):
         """Results should be deduplicated by project_id and report_year."""
-        from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+        from esdc.search.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
         semantic_results = [
@@ -128,7 +128,7 @@ class TestHybridSearchMerge:
 
     def test_merge_rrf_both_empty_returns_empty(self):
         """When both result lists are empty, should return empty list."""
-        from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+        from esdc.search.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
         merged = resolver._merge_rrf([], [], semantic_weight=0.7, keyword_weight=0.3)
@@ -145,7 +145,7 @@ class TestHybridSearchToolIntegration:
 
         from esdc.chat.tools import semantic_search
 
-        with patch("esdc.chat.tools.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
             mock_instance = MagicMock()
             mock_instance.hybrid_search.return_value = {
                 "status": "success",
@@ -160,14 +160,14 @@ class TestHybridSearchToolIntegration:
                 cache.__contains__ = MagicMock(return_value=False)
                 mock_cache.return_value = cache
 
-                result = semantic_search("test query")
+                result = semantic_search.invoke({"query": "test query"})
                 result_dict = json.loads(result)
                 assert result_dict["status"] == "success"
                 mock_instance.hybrid_search.assert_called_once()
 
     def test_hybrid_search_returns_success_status(self):
         """Hybrid search should return success status with results."""
-        from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+        from esdc.search.semantic_resolver import SemanticResolver
 
         # This is a minimal test - actual hybrid search requires DB
         resolver = SemanticResolver.__new__(SemanticResolver)
@@ -189,7 +189,7 @@ class TestKeywordSearch:
 
     def test_keyword_search_returns_results_with_bm25_score(self):
         """Keyword search should return results with bm25_score."""
-        from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+        from esdc.search.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
         resolver._db_path = MagicMock()

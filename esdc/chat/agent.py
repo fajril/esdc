@@ -31,7 +31,6 @@ from esdc.chat.query_classifier import (
 from esdc.chat.smart_query import simple_data_query
 from esdc.chat.tools import (
     entity_resolver,
-    execute_cypher,
     execute_sql,
     get_recommended_table,
     get_resources_columns,
@@ -414,7 +413,6 @@ def create_agent(
             knowledge_traversal,
             resolve_spatial,
             semantic_search,
-            execute_cypher,
             execute_sql,
             get_schema,
             list_tables,

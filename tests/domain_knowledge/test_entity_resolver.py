@@ -9,9 +9,9 @@ from unittest.mock import patch
 import duckdb
 import pytest
 
-from esdc.knowledge_graph.patterns import QueryPatternMatcher
-from esdc.knowledge_graph.resolver import KnowledgeTraversalResolver
-from esdc.knowledge_graph.schema import KGSchema
+from esdc.chat.domain_knowledge.entity_patterns import QueryPatternMatcher
+from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
+from esdc.chat.domain_knowledge.entity_schema import KGSchema
 
 
 @pytest.fixture
@@ -160,9 +160,9 @@ class TestQueryPatternMatcher:
         assert result is None
 
 
-class TestKnowledgeTraversalResolver:
+class TestEntityResolver:
     def test_resolve_field_entity(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("cadangan Duri 2024")
         assert result["status"] == "success"
         assert any(e["type"] == "Field" for e in result["entities"])
@@ -170,54 +170,54 @@ class TestKnowledgeTraversalResolver:
         assert "Duri" in field_entity["name"]
 
     def test_resolve_year(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("cadangan Duri 2024")
         year_entities = [e for e in result["entities"] if e["type"] == "Year"]
         assert len(year_entities) == 1
         assert year_entities[0]["value"] == 2024
 
     def test_resolve_uncertainty(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("cadangan 2P Duri")
         assert any(e["type"] == "UncertaintyLevel" for e in result["entities"])
 
     def test_resolve_pattern(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("cadangan Duri 2024")
         assert result["pattern"] is not None
         assert result["pattern"]["pattern_name"] == "cadangan"
         assert result["suggested_table"] == "field_resources"
 
     def test_resolve_where_conditions(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("cadangan Duri 2024")
         assert "field_name = 'Duri'" in result["where_conditions"]
         assert "report_year = 2024" in result["where_conditions"]
 
     def test_ambiguous_returns_candidates(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("cadangan Duri", return_multiple=True)
         assert result["status"] == "success"
         assert len(result["entities"]) >= 1
 
     def test_fallback_on_no_match(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("xyzzy foobar baz 9999")
         assert result["status"] == "failed"
         assert result["fallback"] == "multi_round"
 
     def test_working_area_entity(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("data di WK Rokan 2024")
         assert any(e["type"] == "WorkingArea" for e in result["entities"])
 
     def test_determine_table_for_production(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("profil produksi Duri 2024")
         assert result["suggested_table"] == "field_timeseries"
 
     def test_determine_table_for_reserves(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = KnowledgeTraversalResolver(db=mock_db)
+        resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("cadangan Duri 2024")
         assert result["suggested_table"] == "field_resources"
 

@@ -1,4 +1,4 @@
-"""Knowledge Traversal entity resolver.
+"""Entity resolver for ESDC.
 
 Resolves entities from the database using pattern matching and FTS.
 Returns structured context for single-shot SQL generation.
@@ -12,8 +12,8 @@ from typing import Any
 
 import duckdb
 
-from .patterns import QueryPatternMatcher
-from .schema import KGSchema
+from .entity_patterns import QueryPatternMatcher
+from .entity_schema import KGSchema
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ _STOP_WORDS: set[str] = {
 }
 
 
-class KnowledgeTraversalResolver:
+class EntityResolver:
     """Resolve entities from database for Knowledge Traversal."""
 
     def __init__(self, db: duckdb.DuckDBPyConnection) -> None:

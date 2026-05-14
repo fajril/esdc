@@ -2,19 +2,19 @@
 
 from unittest.mock import Mock, patch
 
-from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+from esdc.search.semantic_resolver import SemanticResolver
 
 
 def test_semantic_resolver_initialization():
     """Test SemanticResolver can be initialized."""
-    with patch("esdc.knowledge_graph.semantic_resolver.EmbeddingManager"):
+    with patch("esdc.search.semantic_resolver.EmbeddingManager"):
         resolver = SemanticResolver()
         assert resolver is not None
 
 
 def test_search_by_text():
     """Test semantic search by text query."""
-    with patch("esdc.knowledge_graph.semantic_resolver.EmbeddingManager") as MockEmb:
+    with patch("esdc.search.semantic_resolver.EmbeddingManager") as MockEmb:
         # Mock embedding manager
         mock_emb = Mock()
         mock_emb.generate_embedding.return_value = [0.1] * 1024
@@ -71,7 +71,7 @@ def test_search_by_text():
 
 def test_search_by_embedding():
     """Test semantic search by pre-computed embedding."""
-    with patch("esdc.knowledge_graph.semantic_resolver.EmbeddingManager"):
+    with patch("esdc.search.semantic_resolver.EmbeddingManager"):
         resolver = SemanticResolver()
         resolver._get_connection = Mock()
         mock_conn = Mock()
@@ -95,7 +95,7 @@ def test_search_by_embedding():
 
 def test_build_embeddings_table():
     """Test building embeddings table."""
-    with patch("esdc.knowledge_graph.semantic_resolver.EmbeddingManager"):
+    with patch("esdc.search.semantic_resolver.EmbeddingManager"):
         resolver = SemanticResolver()
         resolver._get_connection = Mock()
         mock_conn = Mock()
@@ -108,7 +108,7 @@ def test_build_embeddings_table():
 
 def test_search_not_available():
     """Test search when embeddings not available."""
-    with patch("esdc.knowledge_graph.semantic_resolver.EmbeddingManager") as MockEmb:
+    with patch("esdc.search.semantic_resolver.EmbeddingManager") as MockEmb:
         mock_emb = Mock()
         mock_emb.generate_embedding.return_value = [0.1] * 4096
         MockEmb.return_value = mock_emb

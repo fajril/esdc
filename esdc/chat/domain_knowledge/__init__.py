@@ -24,6 +24,13 @@ from .columns import (
 # Concepts Module
 # =============================================================================
 from .concepts import DOMAIN_CONCEPTS
+from .entity_patterns import QueryPatternMatcher
+
+# =============================================================================
+# Entity Resolution Module
+# =============================================================================
+from .entity_resolver_lib import EntityResolver
+from .entity_schema import KGSchema
 
 # =============================================================================
 # Functions Module
@@ -57,14 +64,14 @@ from .functions import (
 )
 
 # =============================================================================
-# KSMI Loader Module
-# =============================================================================
-from .ksmi_loader import ksmi_retrieve
-
-# =============================================================================
 # KSMI Graph Module (LadybugDB)
 # =============================================================================
 from .ksmi_graph_manager import KSMIGraphManager
+
+# =============================================================================
+# KSMI Loader Module
+# =============================================================================
+from .ksmi_loader import ksmi_retrieve
 
 # =============================================================================
 # Problems Module
@@ -209,4 +216,8 @@ __all__ = [
     "ksmi_retrieve",
     # KSMI Graph Manager
     "KSMIGraphManager",
+    # Entity Resolution
+    "EntityResolver",
+    "KGSchema",
+    "QueryPatternMatcher",
 ]

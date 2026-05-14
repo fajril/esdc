@@ -1,4 +1,4 @@
-"""Knowledge Graph schema loader and validator.
+"""Entity schema loader and validator.
 
 Loads entity types, relationships, query patterns, and aliases from graph_schema.yaml.
 Compiled once at startup for fast access.
@@ -14,9 +14,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_PATH = (
-    Path(__file__).parent.parent / "chat" / "domain_knowledge" / "graph_schema.yaml"
-)
+_SCHEMA_PATH = Path(__file__).parent / "graph_schema.yaml"
 
 
 class KGSchema:

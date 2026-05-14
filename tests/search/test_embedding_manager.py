@@ -2,12 +2,12 @@
 
 from unittest.mock import Mock, patch
 
-from esdc.knowledge_graph.embedding_manager import EmbeddingManager
+from esdc.search.embedding_manager import EmbeddingManager
 
 
 def test_embedding_manager_initialization():
     """Test EmbeddingManager can be initialized."""
-    with patch("esdc.knowledge_graph.embedding_manager.ollama.Client"):
+    with patch("esdc.search.embedding_manager.ollama.Client"):
         manager = EmbeddingManager(model="qwen3-embedding:0.6b")
         assert manager.model == "qwen3-embedding:0.6b"
 
@@ -15,9 +15,9 @@ def test_embedding_manager_initialization():
 def test_embedding_manager_default_model():
     """Test EmbeddingManager uses default model."""
     with (
-        patch("esdc.knowledge_graph.embedding_manager.ollama.Client"),
+        patch("esdc.search.embedding_manager.ollama.Client"),
         patch(
-            "esdc.knowledge_graph.embedding_manager.Config._load_config"
+            "esdc.search.embedding_manager.Config._load_config"
         ) as mock_config,
     ):
         mock_config.return_value = None
@@ -27,7 +27,7 @@ def test_embedding_manager_default_model():
 
 def test_generate_embedding_single():
     """Test generating embedding for single text."""
-    with patch("esdc.knowledge_graph.embedding_manager.ollama.Client") as MockClient:
+    with patch("esdc.search.embedding_manager.ollama.Client") as MockClient:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.embeddings = [[0.1, 0.2, 0.3]]
@@ -43,7 +43,7 @@ def test_generate_embedding_single():
 
 def test_generate_embeddings_batch():
     """Test generating embeddings for batch of texts."""
-    with patch("esdc.knowledge_graph.embedding_manager.ollama.Client") as MockClient:
+    with patch("esdc.search.embedding_manager.ollama.Client") as MockClient:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.embeddings = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
@@ -59,7 +59,7 @@ def test_generate_embeddings_batch():
 
 def test_health_check_success():
     """Test health check when Ollama is available."""
-    with patch("esdc.knowledge_graph.embedding_manager.ollama.Client") as MockClient:
+    with patch("esdc.search.embedding_manager.ollama.Client") as MockClient:
         mock_client = Mock()
         mock_client.show.return_value = {"name": "qwen3-embedding:0.6b"}
         MockClient.return_value = mock_client
@@ -70,7 +70,7 @@ def test_health_check_success():
 
 def test_health_check_failure():
     """Test health check when Ollama is not available."""
-    with patch("esdc.knowledge_graph.embedding_manager.ollama.Client") as MockClient:
+    with patch("esdc.search.embedding_manager.ollama.Client") as MockClient:
         mock_client = Mock()
         mock_client.show.side_effect = Exception("Ollama not running")
         MockClient.return_value = mock_client

@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from esdc.knowledge_graph.spatial_resolver import SpatialResolver
+from esdc.search.spatial_resolver import SpatialResolver
 
 pytestmark = pytest.mark.integration
 

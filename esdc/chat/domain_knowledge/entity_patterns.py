@@ -1,6 +1,6 @@
-"""Query pattern matcher for Knowledge Traversal.
+"""Entity pattern matcher for query resolution.
 
-Matches natural language queries against KG query patterns using keyword extraction.
+Matches natural language queries against entity patterns using keyword extraction.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ import logging
 import re
 from typing import Any
 
-from .schema import KGSchema
+from .entity_schema import KGSchema
 
 logger = logging.getLogger(__name__)
 
