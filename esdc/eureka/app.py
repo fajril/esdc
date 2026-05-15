@@ -274,9 +274,5 @@ def _prev_year(years: list[int], current: int) -> int | None:
 def _dataclass_to_dict(obj: object) -> dict | object:
     """Convert a dataclass instance to a dict."""
     if hasattr(obj, "__dataclass_fields__"):
-        return {
-            k: v
-            for k, v in obj.__dict__.items()
-            if not k.startswith("_")
-        }
+        return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
     return obj

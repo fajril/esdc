@@ -7,346 +7,368 @@
 {% set f = fields %}
 {% set p = projects %}
 
-{# ─── Volumetric KPI Cards ─── #}
-<div class="row g-3 mb-4">
-    <div class="col-12">
-        <h5 class="eureka-section-title"><i class="bi bi-bar-chart-fill"></i> Volumetric Data</h5>
+<div class="animate-fade-up stagger-1">
+  <div class="section-title">Volumetric Resources</div>
+
+  <div class="hero-pipeline">
+    <div class="hero-metric reserves">
+      <div class="hero-metric-header">Reserves &amp; GRR</div>
+      <div class="hero-value-group">
+        <div class="hero-value overview">{{ "%.0f"|format(k.res_2p_oc) }}</div>
+        <div class="hero-unit">MMSTB</div>
+        <div class="hero-label" style="color:var(--oil-bright)">2P OC</div>
+      </div>
+      <div class="hero-value-group" style="margin-top:0.5rem;">
+        <div class="hero-value overview">{{ "%.0f"|format(k.res_2p_an) }}</div>
+        <div class="hero-unit">TSCF</div>
+        <div class="hero-label" style="color:var(--gas-bright)">2P AN</div>
+      </div>
+      {% if k.yoy_res_2p_oc is not none %}
+      <div class="hero-yoy {{ 'up' if k.yoy_res_2p_oc >= 0 else 'down' }}">
+        {% if k.yoy_res_2p_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_res_2p_oc) }}% OC
+      </div>
+      {% endif %}
     </div>
 
-    {# Reserves #}
-    <div class="col-md-4">
-        <div class="card eureka-card h-100">
-            <div class="card-body">
-                <h6 class="card-title eureka-class-header" style="background: #1565C0;">Reserves & GRR</h6>
-                <div class="row">
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">1P OC</span>
-                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.res_1p_oc) }}</span>
-                            <span class="eureka-kpi-unit">MMSTB</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">1P AN</span>
-                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.res_1p_an) }}</span>
-                            <span class="eureka-kpi-unit">TSCF</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="eureka-kpi eureka-kpi-highlight">
-                            <span class="eureka-kpi-label">2P OC</span>
-                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.res_2p_oc) }}</span>
-                            <span class="eureka-kpi-unit">MMSTB</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="eureka-kpi eureka-kpi-highlight">
-                            <span class="eureka-kpi-label">2P AN</span>
-                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.res_2p_an) }}</span>
-                            <span class="eureka-kpi-unit">TSCF</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">3P OC</span>
-                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.res_3p_oc) }}</span>
-                            <span class="eureka-kpi-unit">MMSTB</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">3P AN</span>
-                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.res_3p_an) }}</span>
-                            <span class="eureka-kpi-unit">TSCF</span>
-                        </div>
-                    </div>
-                </div>
-                {% if k.yoy_res_2p_oc is not none %}
-                <div class="eureka-yoy {{ 'eureka-yoy-up' if k.yoy_res_2p_oc >= 0 else 'eureka-yoy-down' }}">
-                    YoY 2P: {{ "%+.1f"|format(k.yoy_res_2p_oc) }}% OC
-                    {% if k.yoy_res_2p_an is not none %}, {{ "%+.1f"|format(k.yoy_res_2p_an) }}% AN{% endif %}
-                </div>
-                {% endif %}
-            </div>
-        </div>
+    <div class="hero-metric cont-exploit">
+      <div class="hero-metric-header">Contingent Exploit.</div>
+      <div class="hero-value-group">
+        <div class="hero-value oil">{{ "%.0f"|format(k.cont_exploit_oc) }}</div>
+        <div class="hero-unit">MMSTB</div>
+        <div class="hero-label">2C OC Risked</div>
+      </div>
+      <div class="hero-value-group" style="margin-top:0.5rem;">
+        <div class="hero-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.cont_exploit_an) }}</div>
+        <div class="hero-unit">TSCF</div>
+        <div class="hero-label">2C AN Risked</div>
+      </div>
     </div>
 
-    {# Contingent #}
-    <div class="col-md-4">
-        <div class="card eureka-card h-100">
-            <div class="card-body">
-                <h6 class="card-title eureka-class-header" style="background: #F9A825;">Contingent Resources</h6>
-                <div class="row">
-                    <div class="col-6">
-                        <span class="eureka-sub-label">Exploitation (2C)</span>
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">OC</span>
-                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.cont_exploit_oc) }}</span>
-                            <span class="eureka-kpi-unit">MMSTB</span>
-                        </div>
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">AN</span>
-                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.cont_exploit_an) }}</span>
-                            <span class="eureka-kpi-unit">TSCF</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <span class="eureka-sub-label">Exploration (2C)</span>
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">OC</span>
-                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.cont_explore_oc) }}</span>
-                            <span class="eureka-kpi-unit">MMSTB</span>
-                        </div>
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">AN</span>
-                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.cont_explore_an) }}</span>
-                            <span class="eureka-kpi-unit">TSCF</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+    <div class="hero-metric cont-explore">
+      <div class="hero-metric-header">Contingent Explore.</div>
+      <div class="hero-value-group">
+        <div class="hero-value oil">{{ "%.0f"|format(k.cont_explore_oc) }}</div>
+        <div class="hero-unit">MMSTB</div>
+        <div class="hero-label">2C OC Risked</div>
+      </div>
+      <div class="hero-value-group" style="margin-top:0.5rem;">
+        <div class="hero-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.cont_explore_an) }}</div>
+        <div class="hero-unit">TSCF</div>
+        <div class="hero-label">2C AN Risked</div>
+      </div>
     </div>
 
-    {# Prospective #}
-    <div class="col-md-4">
-        <div class="card eureka-card h-100">
-            <div class="card-body">
-                <h6 class="card-title eureka-class-header" style="background: #E65100;">Prospective Resources</h6>
-                <div class="row">
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">Risked 2U OC</span>
-                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.prospective_oc) }}</span>
-                            <span class="eureka-kpi-unit">MMSTB</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">Risked 2U AN</span>
-                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.prospective_an) }}</span>
-                            <span class="eureka-kpi-unit">TSCF</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+    <div class="hero-metric prospective">
+      <div class="hero-metric-header">Prospective</div>
+      <div class="hero-value-group">
+        <div class="hero-value oil">{{ "%.0f"|format(k.prospective_oc) }}</div>
+        <div class="hero-unit">MMSTB</div>
+        <div class="hero-label">Risked 2U OC</div>
+      </div>
+      <div class="hero-value-group" style="margin-top:0.5rem;">
+        <div class="hero-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.prospective_an) }}</div>
+        <div class="hero-unit">TSCF</div>
+        <div class="hero-label">Risked 2U AN</div>
+      </div>
     </div>
+
+    <div class="hero-metric cumulative">
+      <div class="hero-metric-header">Production</div>
+      <div class="hero-value-group">
+        <div class="hero-value overview">{{ "%.0f"|format(k.cumprod_sls_oc) }}</div>
+        <div class="hero-unit">MMSTB</div>
+        <div class="hero-label">Sales Cumulative OC</div>
+      </div>
+      <div class="hero-value-group" style="margin-top:0.5rem;">
+        <div class="hero-value overview">{{ "%.0f"|format(k.yearly_sls_oc) }}</div>
+        <div class="hero-unit">MMSTB/yr</div>
+        <div class="hero-label">Yearly Production OC</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="prod-stats">
+    <div class="prod-stat">
+      <span class="prod-stat-label">Sales Cumulative AN</span>
+      <span class="prod-stat-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.cumprod_sls_an) }} <span style="font-size:0.75rem;color:var(--text-muted)">TSCF</span></span>
+    </div>
+    <div class="prod-stat">
+      <span class="prod-stat-label">Yearly Production AN</span>
+      <span class="prod-stat-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.yearly_sls_an) }} <span style="font-size:0.75rem;color:var(--text-muted)">BSCF/yr</span></span>
+    </div>
+  </div>
 </div>
 
-{# ─── Sales Cumulative & Yearly Production ─── #}
-<div class="row g-3 mb-4">
-    <div class="col-md-6">
-        <div class="card eureka-card">
-            <div class="card-body">
-                <h6 class="card-title"><i class="bi bi-graph-up-arrow"></i> Sales Cumulative</h6>
-                <div class="row">
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">OC</span>
-                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.cumprod_sls_oc) }}</span>
-                            <span class="eureka-kpi-unit">MMSTB</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">AN</span>
-                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.cumprod_sls_an) }}</span>
-                            <span class="eureka-kpi-unit">TSCF</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
+<div class="section-separator"></div>
+
+<div class="animate-fade-up stagger-2">
+  <div class="section-title" style="--section-color:var(--cont-exploit)">
+    <span style="background:var(--cont-exploit);width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:0.75rem;"></span>
+    Asset Counts
+  </div>
+  <div class="counts-bar">
+    <div class="count-item">
+      <div class="count-header">
+        <span class="count-type">Working Areas</span>
+        <span class="count-total">{{ w.total_wk }}</span>
+      </div>
+      <div class="count-details">
+        <div class="count-detail-row">
+          <span class="count-detail-label">Exploitation</span>
+          <span class="count-detail-value">{{ w.exploit_wk }}</span>
         </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card eureka-card">
-            <div class="card-body">
-                <h6 class="card-title"><i class="bi bi-speedometer"></i> Yearly Production ({{ selected_year }})</h6>
-                <div class="row">
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">OC</span>
-                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.yearly_sls_oc) }}</span>
-                            <span class="eureka-kpi-unit">MMSTB/yr</span>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="eureka-kpi">
-                            <span class="eureka-kpi-label">AN</span>
-                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.yearly_sls_an) }}</span>
-                            <span class="eureka-kpi-unit">BSCF/yr</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploit" style="width:{{ (w.exploit_wk / w.total_wk * 100) if w.total_wk else 0 }}%"></div>
         </div>
+        <div class="count-detail-row" style="margin-top:0.25rem;">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Production</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--oil-bright)">{{ w.production_wk }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Development</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--info)">{{ w.development_wk }}</span>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.5rem;">
+          <span class="count-detail-label">Exploration</span>
+          <span class="count-detail-value">{{ w.exploration_wk }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploration" style="width:{{ (w.exploration_wk / w.total_wk * 100) if w.total_wk else 0 }}%"></div>
+        </div>
+      </div>
     </div>
+
+    <div class="count-item">
+      <div class="count-header">
+        <span class="count-type">Fields</span>
+        <span class="count-total">{{ f.total_fields }}</span>
+      </div>
+      <div class="count-details">
+        <div class="count-detail-row">
+          <span class="count-detail-label">Exploitation</span>
+          <span class="count-detail-value">{{ f.exploit_fields }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploit" style="width:{{ (f.exploit_fields / f.total_fields * 100) if f.total_fields else 0 }}%"></div>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.5rem;">
+          <span class="count-detail-label">Exploration</span>
+          <span class="count-detail-value">{{ f.exploration_fields }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploration" style="width:{{ (f.exploration_fields / f.total_fields * 100) if f.total_fields else 0 }}%"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="count-item">
+      <div class="count-header">
+        <span class="count-type">Projects</span>
+        <span class="count-total">{{ p.total_projects }}</span>
+      </div>
+      <div class="count-details">
+        <div class="count-detail-row">
+          <span class="count-detail-label">Exploitation</span>
+          <span class="count-detail-value">{{ p.exploit_projects }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploit" style="width:{{ (p.exploit_projects / p.total_projects * 100) if p.total_projects else 0 }}%"></div>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.25rem;">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Primary</span>
+          <span class="count-detail-value" style="font-size:0.75rem">{{ p.primary_projects }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Waterflood</span>
+          <span class="count-detail-value" style="font-size:0.75rem">{{ p.waterflood_projects }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ EOR/EGR</span>
+          <span class="count-detail-value" style="font-size:0.75rem">{{ p.eor_egr_projects }}</span>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.5rem;">
+          <span class="count-detail-label">Exploration</span>
+          <span class="count-detail-value">{{ p.exploration_projects }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploration" style="width:{{ (p.exploration_projects / p.total_projects * 100) if p.total_projects else 0 }}%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
-{# ─── Counts ─── #}
-<div class="row g-3 mb-4">
-    <div class="col-12">
-        <h5 class="eureka-section-title"><i class="bi bi-diagram-3-fill"></i> Counts</h5>
+<div class="section-separator"></div>
+
+<div class="animate-fade-up stagger-3">
+  <div class="section-title">
+    <span style="background:var(--oil);width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:0.75rem;"></span>
+    Analytical Charts
+  </div>
+  <div class="charts-grid">
+    <div class="chart-panel">
+      <div class="chart-panel-header">
+        <span class="chart-panel-title">Resources by Class</span>
+      </div>
+      <div class="chart-body" id="chart-volumetric"></div>
     </div>
-    <div class="col-md-4">
-        <div class="card eureka-card">
-            <div class="card-body">
-                <h6 class="card-title">Working Areas: {{ w.total_wk }}</h6>
-                <ul class="eureka-count-list">
-                    <li>{{ w.exploit_wk }} Exploitation
-                        <small class="text-muted">({{ w.production_wk }} Production, {{ w.development_wk }} Development)</small>
-                    </li>
-                    <li>{{ w.exploration_wk }} Exploration</li>
-                </ul>
-            </div>
-        </div>
+    <div class="chart-panel">
+      <div class="chart-panel-header">
+        <span class="chart-panel-title">Fluid Split</span>
+      </div>
+      <div class="chart-body" id="chart-donut"></div>
     </div>
-    <div class="col-md-4">
-        <div class="card eureka-card">
-            <div class="card-body">
-                <h6 class="card-title">Fields: {{ f.total_fields }}</h6>
-                <ul class="eureka-count-list">
-                    <li>{{ f.exploit_fields }} Exploitation</li>
-                    <li>{{ f.exploration_fields }} Exploration</li>
-                </ul>
-            </div>
-        </div>
+    <div class="chart-panel">
+      <div class="chart-panel-header">
+        <span class="chart-panel-title">Year Comparison</span>
+      </div>
+      <div class="chart-body" id="chart-yoy"></div>
     </div>
-    <div class="col-md-4">
-        <div class="card eureka-card">
-            <div class="card-body">
-                <h6 class="card-title">Projects: {{ p.total_projects }}</h6>
-                <ul class="eureka-count-list">
-                    <li>{{ p.exploit_projects }} Exploitation
-                        <small class="text-muted">({{ p.primary_projects }} Primary, {{ p.waterflood_projects }} Waterflood, {{ p.eor_egr_projects }} EOR/EGR)</small>
-                    </li>
-                    <li>{{ p.exploration_projects }} Exploration</li>
-                </ul>
-            </div>
-        </div>
+    <div class="chart-panel">
+      <div class="chart-panel-header">
+        <span class="chart-panel-title">Hierarchy</span>
+      </div>
+      <div class="chart-body" id="chart-sunburst"></div>
     </div>
+  </div>
 </div>
 
-{# ─── Charts ─── #}
-<div class="row g-3 mb-4">
-    <div class="col-12">
-        <h5 class="eureka-section-title"><i class="bi bi-pie-chart-fill"></i> Charts</h5>
-    </div>
-    <div class="col-md-6">
-        <div class="card eureka-card">
-            <div class="card-body eureka-chart-container" id="chart-volumetric"></div>
-        </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card eureka-card">
-            <div class="card-body eureka-chart-container" id="chart-donut"></div>
-        </div>
-    </div>
-</div>
+<div class="section-separator"></div>
 
-<div class="row g-3 mb-4">
-    <div class="col-md-6">
-        <div class="card eureka-card">
-            <div class="card-body eureka-chart-container" id="chart-yoy"></div>
-        </div>
+<div class="animate-fade-up stagger-4">
+  <div class="section-title">
+    <span style="background:var(--gas);width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:0.75rem;"></span>
+    Data Explorer
+  </div>
+  <div class="table-section">
+    <div class="table-toolbar">
+      <div style="display:flex;align-items:center;gap:0.75rem;">
+        <span class="table-toolbar-label">View</span>
+        <select id="detail-select" class="detail-filter">
+          <option value="resources" selected>Resources</option>
+          <option value="reserves">Reserves</option>
+          <option value="inplace">In-Place</option>
+          <option value="cumprod">Cumulative Production</option>
+          <option value="rate">Production Rate</option>
+        </select>
+      </div>
+      <a href="/eureka/api/nkri/export?year={{ selected_year }}&format=csv" class="btn-export">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Export CSV
+      </a>
     </div>
-    <div class="col-md-6">
-        <div class="card eureka-card">
-            <div class="card-body eureka-chart-container" id="chart-sunburst"></div>
-        </div>
+    <div class="table-container" id="data-table-container">
+      <div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem;">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4;margin-bottom:0.5rem;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        <br>Loading data...
+      </div>
     </div>
-</div>
-
-{# ─── Data Table ─── #}
-<div class="row g-3 mb-4">
-    <div class="col-12">
-        <h5 class="eureka-section-title"><i class="bi bi-table"></i> Data Table</h5>
-        <div class="card eureka-card">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <div>
-                        <select id="detail-select" class="form-select form-select-sm" style="width:auto;">
-                            <option value="resources" selected>Resources</option>
-                            <option value="reserves">Reserves</option>
-                            <option value="inplace">In-Place</option>
-                            <option value="cumprod">Cumulative Production</option>
-                            <option value="rate">Production Rate</option>
-                        </select>
-                    </div>
-                    <a href="/eureka/api/nkri/export?year={{ selected_year }}&format=csv" class="btn btn-sm btn-outline-primary">
-                        <i class="bi bi-download"></i> Export CSV
-                    </a>
-                </div>
-                <div class="table-responsive" id="data-table-container">
-                    <p class="text-muted">Loading table data...</p>
-                </div>
-            </div>
-        </div>
-    </div>
+  </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-    // Render Plotly charts
-    const charts = {
-        'chart-volumetric': {{ bar_fig.to_json() | safe }},
-        'chart-donut': {{ donut_fig.to_json() | safe }},
-        'chart-yoy': {{ yoy_fig.to_json() | safe }},
-        'chart-sunburst': {{ sunburst_fig.to_json() | safe }}
-    };
+  // Plotly dark theme config
+  const plotlyConfig = {
+    responsive: true,
+    displayModeBar: true,
+    modeBarButtonsToRemove: ['lasso2d','select2d','sendDataToCloud'],
+    displaylogo: false,
+    toImageButtonOptions: {format: 'png', filename: 'eureka-chart'}
+  };
 
-    for (const [id, fig_json] of Object.entries(charts)) {
-        try {
-            const parsed = typeof fig_json === 'string' ? JSON.parse(fig_json) : fig_json;
-            Plotly.newPlot(id, parsed.data, parsed.layout, parsed.config || {responsive: true});
-        } catch(e) {
-            console.error('Failed to render chart', id, e);
+  const plotlyLayoutDefaults = {
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(0,0,0,0)',
+    font: {family: 'JetBrains Mono, monospace', color: '#E6EDF3', size: 12},
+    margin: {l:50,r:30,t:30,b:50},
+    legend: {orientation:'h',yanchor:'bottom',y:1.02,xanchor:'right',x:1},
+    xaxis: {gridcolor: 'rgba(48,54,61,0.3)', zerolinecolor: 'rgba(48,54,61,0.5)', tickfont:{size:11}},
+    yaxis: {gridcolor: 'rgba(48,54,61,0.3)', zerolinecolor: 'rgba(48,54,61,0.5)', tickfont:{size:11}}
+  };
+
+  const charts = {
+    'chart-volumetric': {{ bar_fig.to_json() | safe }},
+    'chart-donut': {{ donut_fig.to_json() | safe }},
+    'chart-yoy': {{ yoy_fig.to_json() | safe }},
+    'chart-sunburst': {{ sunburst_fig.to_json() | safe }}
+  };
+
+  for (const [id, figJson] of Object.entries(charts)) {
+    try {
+      const parsed = typeof figJson === 'string' ? JSON.parse(figJson) : figJson;
+      const layout = { ...plotlyLayoutDefaults, ...parsed.layout };
+      if (id === 'chart-sunburst') {
+        // Let sunburst keep its own margins
+        delete layout.margin;
+      }
+      Plotly.newPlot(id, parsed.data, layout, plotlyConfig);
+    } catch(e) {
+      console.error('Chart render failed', id, e);
+      document.getElementById(id).innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;"><span style="color:var(--danger);margin-right:0.5rem;">×</span>Chart unavailable</div>';
+    }
+  }
+
+  // Data table loader
+  function loadTable(detail) {
+    const container = document.getElementById('data-table-container');
+    container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4;margin-bottom:0.5rem;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><br>Loading...</div>';
+
+    fetch('/eureka/api/nkri/table?year={{ selected_year }}&detail=' + detail)
+      .then(r => r.json())
+      .then(data => {
+        if (!data || data.length === 0) {
+          container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted);">No data available.</div>';
+          return;
         }
-    }
+        const cols = Object.keys(data[0]);
+        let html = '<table class="eureka-table"><thead><tr>';
+        cols.forEach(c => html += '<th>' + c + '</th>');
+        html += '</tr></thead><tbody>';
+        data.forEach(row => {
+          html += '<tr>';
+          cols.forEach(c => {
+            let val = row[c];
+            if (typeof val === 'number' && !Number.isInteger(val)) {
+              val = val.toLocaleString(undefined, {maximumFractionDigits: 0});
+            } else if (typeof val === 'number') {
+              val = val.toLocaleString();
+            }
+            html += '<td>' + (val !== null && val !== undefined ? val : '—') + '</td>';
+          });
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        container.innerHTML = html;
+      })
+      .catch(err => {
+        console.error('Table load failed', err);
+        container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--danger);">Failed to load data.</div>';
+      });
+  }
 
-    // Data table loading
-    function loadTable(detail) {
-        fetch('/eureka/api/nkri/table?year={{ selected_year }}&detail=' + detail)
-            .then(r => r.json())
-            .then(data => {
-                if (!data || data.length === 0) {
-                    document.getElementById('data-table-container').innerHTML = '<p class="text-muted">No data available.</p>';
-                    return;
-                }
-                const cols = Object.keys(data[0]);
-                let html = '<table class="table table-sm table-hover eureka-table"><thead><tr>';
-                cols.forEach(c => html += '<th>' + c + '</th>');
-                html += '</tr></thead><tbody>';
-                data.forEach(row => {
-                    html += '<tr>';
-                    cols.forEach(c => {
-                        let val = row[c];
-                        if (typeof val === 'number' && !Number.isInteger(val)) {
-                            val = val.toLocaleString(undefined, {maximumFractionDigits: 0});
-                        } else if (typeof val === 'number') {
-                            val = val.toLocaleString();
-                        }
-                        html += '<td>' + val + '</td>';
-                    });
-                    html += '</tr>';
-                });
-                html += '</tbody></table>';
-                document.getElementById('data-table-container').innerHTML = html;
-            })
-            .catch(err => {
-                console.error('Failed to load table', err);
-                document.getElementById('data-table-container').innerHTML = '<p class="text-danger">Error loading data.</p>';
-            });
-    }
+  document.getElementById('detail-select').addEventListener('change', function() {
+    loadTable(this.value);
+  });
 
-    document.getElementById('detail-select').addEventListener('change', function() {
-        loadTable(this.value);
+  loadTable('resources');
+
+  // Animate count detail bars on scroll
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const bars = entry.target.querySelectorAll('.count-detail-bar-fill');
+        bars.forEach(bar => {
+          const w = bar.style.width;
+          bar.style.width = '0%';
+          requestAnimationFrame(() => { bar.style.width = w; });
+        });
+        observer.unobserve(entry.target);
+      }
     });
+  }, {threshold: 0.3});
 
-    // Initial load
-    loadTable('resources');
+  document.querySelectorAll('.counts-bar').forEach(el => observer.observe(el));
 </script>
 {% endblock %}

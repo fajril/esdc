@@ -3,21 +3,14 @@
 Follows Shell Green Oil Convention and SPE PRMS standards.
 """
 
-# --- Petroleum Fluid Colors (Shell Green Oil Convention) ---
+# ── Petroleum Fluid Colors (Terminal-inspired) ─────────────────
 
-OIL_DARK_GREEN = "#2E7D32"
-OIL_FOREST_GREEN = "#4CAF50"
-GAS_CRIMSON_RED = "#C62828"
-GAS_RED = "#EF5350"
-CONDENSATE_STEEL_BLUE = "#1565C0"
-NGL_AMBER_GOLD = "#D4A843"
-
-FLUID_OC = OIL_DARK_GREEN
-FLUID_AN = GAS_CRIMSON_RED
-FLUID_OIL = OIL_FOREST_GREEN
-FLUID_GA = GAS_RED
-FLUID_CON = CONDENSATE_STEEL_BLUE
-FLUID_NGL = NGL_AMBER_GOLD
+FLUID_OC = "#3FB950"  # bright terminal green
+FLUID_AN = "#F85149"  # bright terminal red
+FLUID_OIL = "#56D364"  # lighter green
+FLUID_GA = "#FF7B72"  # lighter red
+FLUID_CON = "#58A6FF"  # bright blue
+FLUID_NGL = "#D29922"  # amber gold
 
 FLUID_PALETTE: dict[str, str] = {
     "Oil+Condensate": FLUID_OC,
@@ -28,12 +21,12 @@ FLUID_PALETTE: dict[str, str] = {
     "NGL": FLUID_NGL,
 }
 
-# --- Resource Classification Colors (SPE PRMS) ---
+# ── Resource Classification Colors (SPE PRMS) ────────────────
 
-RESERVES_BLUE = "#1565C0"
-CONTINGENT_EXPLOIT_AMBER = "#F9A825"
-CONTINGENT_EXPLORE_LIGHT_AMBER = "#FFCA28"
-PROSPECTIVE_ORANGE = "#E65100"
+RESERVES_BLUE = "#58A6FF"
+CONTINGENT_EXPLOIT_AMBER = "#D29922"
+CONTINGENT_EXPLORE_LIGHT_AMBER = "#E3B341"
+PROSPECTIVE_ORANGE = "#F0883E"
 
 CLASS_PALETTE: dict[str, str] = {
     "Reserves & GRR": RESERVES_BLUE,
@@ -42,59 +35,58 @@ CLASS_PALETTE: dict[str, str] = {
     "Prospective Resources": PROSPECTIVE_ORANGE,
 }
 
-# --- Project Stage Colors ---
+# ── UI Chrome (Dark Theme) ───────────────────────────────────
 
-PRODUCING_TEAL = "#00897B"
-DEVELOPMENT_INDIGO = "#3949AB"
-EXPLORATION_ORANGE = PROSPECTIVE_ORANGE
+BG_PRIMARY = "#0A0C10"
+BG_SURFACE = "#161B22"
+BG_ELEVATED = "#1C2128"
+TEXT_PRIMARY = "#E6EDF3"
+TEXT_MUTED = "#7D8590"
+TEXT_LABEL = "#8B949E"
+BORDER_COLOR = "#21262D"
+SUCCESS = "#3FB950"
+WARNING = "#D29922"
+DANGER = "#F85149"
+INFO = "#58A6FF"
 
-STAGE_PALETTE: dict[str, str] = {
-    "Producing": PRODUCING_TEAL,
-    "Development": DEVELOPMENT_INDIGO,
-    "Exploration": EXPLORATION_ORANGE,
-}
-
-# --- UI Chrome ---
-
-NAV_DEEP_NAVY = "#1B2A4A"
-CARD_WHITE = "#FFFFFF"
-PAGE_LIGHT_GRAY = "#F5F6FA"
-BORDER_SILVER = "#DEE2E6"
-TEXT_CHARCOAL = "#2C3E50"
-TEXT_SLATE = "#7F8C8D"
-SUCCESS_EMERALD = "#27AE60"
-WARNING_AMBER = "#F39C12"
-DANGER_RED = "#E74C3C"
-
-# --- YoY Change Indicators ---
-
-YOY_UP = SUCCESS_EMERALD
-YOY_DOWN = DANGER_RED
-YOY_FLAT = TEXT_SLATE
-
-# --- Chart Template ---
+# ── Chart Template (Dark) ────────────────────────────────────
 
 PLOTLY_LAYOUT_DEFAULTS: dict = {
-    "paper_bgcolor": CARD_WHITE,
-    "plot_bgcolor": PAGE_LIGHT_GRAY,
+    "paper_bgcolor": "rgba(0,0,0,0)",
+    "plot_bgcolor": "rgba(0,0,0,0)",
     "font": {
-        "family": ("Inter, -apple-system, BlinkMacSystemFont, sans-serif"),
-        "color": TEXT_CHARCOAL,
-        "size": 13,
+        "family": "JetBrains Mono, monospace",
+        "color": TEXT_PRIMARY,
+        "size": 12,
     },
-    "margin": {"l": 60, "r": 30, "t": 40, "b": 50},
+    "margin": {"l": 50, "r": 30, "t": 30, "b": 50},
     "legend": {
         "orientation": "h",
         "yanchor": "bottom",
         "y": 1.02,
         "xanchor": "right",
         "x": 1,
+        "font": {"color": TEXT_PRIMARY, "size": 11},
+    },
+    "xaxis": {
+        "gridcolor": "rgba(48,54,61,0.3)",
+        "zerolinecolor": "rgba(48,54,61,0.5)",
+        "tickfont": {"color": TEXT_MUTED, "size": 11},
+    },
+    "yaxis": {
+        "gridcolor": "rgba(48,54,61,0.3)",
+        "zerolinecolor": "rgba(48,54,61,0.5)",
+        "tickfont": {"color": TEXT_MUTED, "size": 11},
     },
 }
 
 PLOTLY_CONFIG: dict = {
     "responsive": True,
     "displayModeBar": True,
-    "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+    "modeBarButtonsToRemove": [
+        "lasso2d",
+        "select2d",
+        "sendDataToCloud",
+    ],
     "displaylogo": False,
 }
