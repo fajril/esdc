@@ -1,0 +1,352 @@
+{% extends "base.html" %}
+{% block title %}Eureka — NKRI Dashboard{% endblock %}
+
+{% block content %}
+{% set k = kpis %}
+{% set w = wk %}
+{% set f = fields %}
+{% set p = projects %}
+
+{# ─── Volumetric KPI Cards ─── #}
+<div class="row g-3 mb-4">
+    <div class="col-12">
+        <h5 class="eureka-section-title"><i class="bi bi-bar-chart-fill"></i> Volumetric Data</h5>
+    </div>
+
+    {# Reserves #}
+    <div class="col-md-4">
+        <div class="card eureka-card h-100">
+            <div class="card-body">
+                <h6 class="card-title eureka-class-header" style="background: #1565C0;">Reserves & GRR</h6>
+                <div class="row">
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">1P OC</span>
+                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.res_1p_oc) }}</span>
+                            <span class="eureka-kpi-unit">MMSTB</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">1P AN</span>
+                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.res_1p_an) }}</span>
+                            <span class="eureka-kpi-unit">TSCF</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="eureka-kpi eureka-kpi-highlight">
+                            <span class="eureka-kpi-label">2P OC</span>
+                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.res_2p_oc) }}</span>
+                            <span class="eureka-kpi-unit">MMSTB</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="eureka-kpi eureka-kpi-highlight">
+                            <span class="eureka-kpi-label">2P AN</span>
+                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.res_2p_an) }}</span>
+                            <span class="eureka-kpi-unit">TSCF</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">3P OC</span>
+                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.res_3p_oc) }}</span>
+                            <span class="eureka-kpi-unit">MMSTB</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">3P AN</span>
+                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.res_3p_an) }}</span>
+                            <span class="eureka-kpi-unit">TSCF</span>
+                        </div>
+                    </div>
+                </div>
+                {% if k.yoy_res_2p_oc is not none %}
+                <div class="eureka-yoy {{ 'eureka-yoy-up' if k.yoy_res_2p_oc >= 0 else 'eureka-yoy-down' }}">
+                    YoY 2P: {{ "%+.1f"|format(k.yoy_res_2p_oc) }}% OC
+                    {% if k.yoy_res_2p_an is not none %}, {{ "%+.1f"|format(k.yoy_res_2p_an) }}% AN{% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {# Contingent #}
+    <div class="col-md-4">
+        <div class="card eureka-card h-100">
+            <div class="card-body">
+                <h6 class="card-title eureka-class-header" style="background: #F9A825;">Contingent Resources</h6>
+                <div class="row">
+                    <div class="col-6">
+                        <span class="eureka-sub-label">Exploitation (2C)</span>
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">OC</span>
+                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.cont_exploit_oc) }}</span>
+                            <span class="eureka-kpi-unit">MMSTB</span>
+                        </div>
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">AN</span>
+                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.cont_exploit_an) }}</span>
+                            <span class="eureka-kpi-unit">TSCF</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <span class="eureka-sub-label">Exploration (2C)</span>
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">OC</span>
+                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.cont_explore_oc) }}</span>
+                            <span class="eureka-kpi-unit">MMSTB</span>
+                        </div>
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">AN</span>
+                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.cont_explore_an) }}</span>
+                            <span class="eureka-kpi-unit">TSCF</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# Prospective #}
+    <div class="col-md-4">
+        <div class="card eureka-card h-100">
+            <div class="card-body">
+                <h6 class="card-title eureka-class-header" style="background: #E65100;">Prospective Resources</h6>
+                <div class="row">
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">Risked 2U OC</span>
+                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.prospective_oc) }}</span>
+                            <span class="eureka-kpi-unit">MMSTB</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">Risked 2U AN</span>
+                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.prospective_an) }}</span>
+                            <span class="eureka-kpi-unit">TSCF</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# ─── Sales Cumulative & Yearly Production ─── #}
+<div class="row g-3 mb-4">
+    <div class="col-md-6">
+        <div class="card eureka-card">
+            <div class="card-body">
+                <h6 class="card-title"><i class="bi bi-graph-up-arrow"></i> Sales Cumulative</h6>
+                <div class="row">
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">OC</span>
+                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.cumprod_sls_oc) }}</span>
+                            <span class="eureka-kpi-unit">MMSTB</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">AN</span>
+                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.cumprod_sls_an) }}</span>
+                            <span class="eureka-kpi-unit">TSCF</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card eureka-card">
+            <div class="card-body">
+                <h6 class="card-title"><i class="bi bi-speedometer"></i> Yearly Production ({{ selected_year }})</h6>
+                <div class="row">
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">OC</span>
+                            <span class="eureka-kpi-value" data-fluid="oc">{{ "%.0f"|format(k.yearly_sls_oc) }}</span>
+                            <span class="eureka-kpi-unit">MMSTB/yr</span>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="eureka-kpi">
+                            <span class="eureka-kpi-label">AN</span>
+                            <span class="eureka-kpi-value" data-fluid="an">{{ "%.0f"|format(k.yearly_sls_an) }}</span>
+                            <span class="eureka-kpi-unit">BSCF/yr</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# ─── Counts ─── #}
+<div class="row g-3 mb-4">
+    <div class="col-12">
+        <h5 class="eureka-section-title"><i class="bi bi-diagram-3-fill"></i> Counts</h5>
+    </div>
+    <div class="col-md-4">
+        <div class="card eureka-card">
+            <div class="card-body">
+                <h6 class="card-title">Working Areas: {{ w.total_wk }}</h6>
+                <ul class="eureka-count-list">
+                    <li>{{ w.exploit_wk }} Exploitation
+                        <small class="text-muted">({{ w.production_wk }} Production, {{ w.development_wk }} Development)</small>
+                    </li>
+                    <li>{{ w.exploration_wk }} Exploration</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card eureka-card">
+            <div class="card-body">
+                <h6 class="card-title">Fields: {{ f.total_fields }}</h6>
+                <ul class="eureka-count-list">
+                    <li>{{ f.exploit_fields }} Exploitation</li>
+                    <li>{{ f.exploration_fields }} Exploration</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card eureka-card">
+            <div class="card-body">
+                <h6 class="card-title">Projects: {{ p.total_projects }}</h6>
+                <ul class="eureka-count-list">
+                    <li>{{ p.exploit_projects }} Exploitation
+                        <small class="text-muted">({{ p.primary_projects }} Primary, {{ p.waterflood_projects }} Waterflood, {{ p.eor_egr_projects }} EOR/EGR)</small>
+                    </li>
+                    <li>{{ p.exploration_projects }} Exploration</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# ─── Charts ─── #}
+<div class="row g-3 mb-4">
+    <div class="col-12">
+        <h5 class="eureka-section-title"><i class="bi bi-pie-chart-fill"></i> Charts</h5>
+    </div>
+    <div class="col-md-6">
+        <div class="card eureka-card">
+            <div class="card-body eureka-chart-container" id="chart-volumetric"></div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card eureka-card">
+            <div class="card-body eureka-chart-container" id="chart-donut"></div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-6">
+        <div class="card eureka-card">
+            <div class="card-body eureka-chart-container" id="chart-yoy"></div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card eureka-card">
+            <div class="card-body eureka-chart-container" id="chart-sunburst"></div>
+        </div>
+    </div>
+</div>
+
+{# ─── Data Table ─── #}
+<div class="row g-3 mb-4">
+    <div class="col-12">
+        <h5 class="eureka-section-title"><i class="bi bi-table"></i> Data Table</h5>
+        <div class="card eureka-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        <select id="detail-select" class="form-select form-select-sm" style="width:auto;">
+                            <option value="resources" selected>Resources</option>
+                            <option value="reserves">Reserves</option>
+                            <option value="inplace">In-Place</option>
+                            <option value="cumprod">Cumulative Production</option>
+                            <option value="rate">Production Rate</option>
+                        </select>
+                    </div>
+                    <a href="/eureka/api/nkri/export?year={{ selected_year }}&format=csv" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-download"></i> Export CSV
+                    </a>
+                </div>
+                <div class="table-responsive" id="data-table-container">
+                    <p class="text-muted">Loading table data...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Render Plotly charts
+    const charts = {
+        'chart-volumetric': {{ bar_fig.to_json() | safe }},
+        'chart-donut': {{ donut_fig.to_json() | safe }},
+        'chart-yoy': {{ yoy_fig.to_json() | safe }},
+        'chart-sunburst': {{ sunburst_fig.to_json() | safe }}
+    };
+
+    for (const [id, fig_json] of Object.entries(charts)) {
+        try {
+            const parsed = typeof fig_json === 'string' ? JSON.parse(fig_json) : fig_json;
+            Plotly.newPlot(id, parsed.data, parsed.layout, parsed.config || {responsive: true});
+        } catch(e) {
+            console.error('Failed to render chart', id, e);
+        }
+    }
+
+    // Data table loading
+    function loadTable(detail) {
+        fetch('/eureka/api/nkri/table?year={{ selected_year }}&detail=' + detail)
+            .then(r => r.json())
+            .then(data => {
+                if (!data || data.length === 0) {
+                    document.getElementById('data-table-container').innerHTML = '<p class="text-muted">No data available.</p>';
+                    return;
+                }
+                const cols = Object.keys(data[0]);
+                let html = '<table class="table table-sm table-hover eureka-table"><thead><tr>';
+                cols.forEach(c => html += '<th>' + c + '</th>');
+                html += '</tr></thead><tbody>';
+                data.forEach(row => {
+                    html += '<tr>';
+                    cols.forEach(c => {
+                        let val = row[c];
+                        if (typeof val === 'number' && !Number.isInteger(val)) {
+                            val = val.toLocaleString(undefined, {maximumFractionDigits: 0});
+                        } else if (typeof val === 'number') {
+                            val = val.toLocaleString();
+                        }
+                        html += '<td>' + val + '</td>';
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table>';
+                document.getElementById('data-table-container').innerHTML = html;
+            })
+            .catch(err => {
+                console.error('Failed to load table', err);
+                document.getElementById('data-table-container').innerHTML = '<p class="text-danger">Error loading data.</p>';
+            });
+    }
+
+    document.getElementById('detail-select').addEventListener('change', function() {
+        loadTable(this.value);
+    });
+
+    // Initial load
+    loadTable('resources');
+</script>
+{% endblock %}

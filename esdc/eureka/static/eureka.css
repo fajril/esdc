@@ -1,0 +1,200 @@
+/* Eureka Dashboard — Oil & Gas Theme */
+
+:root {
+    --nav-bg: #1B2A4A;
+    --nav-text: #FFFFFF;
+    --page-bg: #F5F6FA;
+    --card-bg: #FFFFFF;
+    --border-color: #DEE2E6;
+    --text-primary: #2C3E50;
+    --text-secondary: #7F8C8D;
+    --success: #27AE60;
+    --warning: #F39C12;
+    --danger: #E74C3C;
+    --oc-color: #2E7D32;
+    --an-color: #C62828;
+}
+
+body.eureka-body {
+    background-color: var(--page-bg);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Navbar */
+.eureka-nav {
+    background-color: var(--nav-bg) !important;
+    padding: 0.5rem 1rem;
+}
+
+.eureka-nav .navbar-brand {
+    color: var(--nav-text) !important;
+    font-size: 1.25rem;
+    letter-spacing: 0.5px;
+}
+
+/* Section Titles */
+.eureka-section-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+/* Cards */
+.eureka-card {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    transition: box-shadow 0.2s;
+}
+
+.eureka-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* KPI */
+.eureka-kpi {
+    text-align: center;
+    padding: 0.5rem 0.25rem;
+}
+
+.eureka-kpi-label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.eureka-kpi-value {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.eureka-kpi-value[data-fluid="oc"] {
+    color: var(--oc-color);
+}
+
+.eureka-kpi-value[data-fluid="an"] {
+    color: var(--an-color);
+}
+
+.eureka-kpi-unit {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.eureka-kpi-highlight {
+    background-color: rgba(21, 101, 192, 0.05);
+    border-radius: 6px;
+    padding: 0.5rem 0.25rem;
+}
+
+/* Class Headers */
+.eureka-class-header {
+    color: white;
+    padding: 0.4rem 0.75rem;
+    border-radius: 4px 4px 0 0;
+    margin: -0.75rem -0.75rem 0.75rem -0.75rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+/* Sub Labels */
+.eureka-sub-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+/* YoY Change */
+.eureka-yoy {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-align: center;
+    margin-top: 0.5rem;
+    padding: 0.25rem;
+    border-radius: 4px;
+}
+
+.eureka-yoy-up {
+    color: var(--success);
+    background-color: rgba(39, 174, 96, 0.1);
+}
+
+.eureka-yoy-down {
+    color: var(--danger);
+    background-color: rgba(231, 76, 60, 0.1);
+}
+
+/* Count Lists */
+.eureka-count-list {
+    list-style: none;
+    padding-left: 0;
+    margin-bottom: 0;
+}
+
+.eureka-count-list li {
+    padding: 0.25rem 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.9rem;
+}
+
+.eureka-count-list li:last-child {
+    border-bottom: none;
+}
+
+/* Chart Containers */
+.eureka-chart-container {
+    min-height: 350px;
+}
+
+/* Tables */
+.eureka-table {
+    font-size: 0.85rem;
+}
+
+.eureka-table thead th {
+    background-color: var(--nav-bg);
+    color: white;
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.3px;
+}
+
+.eureka-table tbody td {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.eureka-table tbody td:first-child {
+    text-align: left;
+}
+
+/* Footer */
+.eureka-footer {
+    background-color: var(--nav-bg);
+    color: rgba(255, 255, 255, 0.5);
+    padding: 1rem 0;
+    margin-top: 2rem;
+    font-size: 0.8rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .eureka-kpi-value {
+        font-size: 1.2rem;
+    }
+
+    .eureka-chart-container {
+        min-height: 280px;
+    }
+}

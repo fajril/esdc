@@ -1109,6 +1109,23 @@ def status(
         rich.print(f"  {icon} {bt['name']}: {detail}")
 
 
+@app.command(name="eureka")
+def eureka(
+    port: int = typer.Option(2030, "--port", "-p", help="Dashboard port"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Dashboard host"),
+    log_level: str = typer.Option("info", "--log-level", help="Log level"),
+    year: int | None = typer.Option(None, "--year", "-y", help="Report year"),
+) -> None:
+    """Launch Eureka — Resources Knowledge Pages dashboard."""
+    from esdc.eureka.app import run_eureka
+
+    rich.print(
+        f"[bold green]Starting Eureka dashboard on "
+        f"http://{host}:{port}/eureka/[/bold green]"
+    )
+    run_eureka(host=host, port=port, log_level=log_level, year=year)
+
+
 @app.command(name="serve")
 def serve(
     web: bool = typer.Option(True, "--web", help="Run web server"),
