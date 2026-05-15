@@ -6,7 +6,8 @@ import duckdb
 from typer.testing import CliRunner
 
 from esdc.esdc import app
-from tests.integration.constants import (
+
+from .constants import (
     PROJECT_RESOURCES_URL,
 )
 
