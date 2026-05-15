@@ -126,14 +126,8 @@ class KSMIGraphBuilder:
                 "(code STRING PRIMARY KEY, name STRING, "
                 "aliases STRING, definition STRING, source STRING)"
             ),
-            (
-                "CREATE REL TABLE CLASSIFIED_AS "
-                "(FROM ProjectLevel TO KSMIEntity)"
-            ),
-            (
-                "CREATE REL TABLE REPORTED_AS "
-                "(FROM KSMIEntity TO VolumeType)"
-            ),
+            ("CREATE REL TABLE CLASSIFIED_AS (FROM ProjectLevel TO KSMIEntity)"),
+            ("CREATE REL TABLE REPORTED_AS (FROM KSMIEntity TO VolumeType)"),
             (
                 "CREATE REL TABLE CAN_TRANSITION_TO "
                 "(FROM ProjectLevel TO ProjectLevel, "
@@ -143,14 +137,8 @@ class KSMIGraphBuilder:
                 "CREATE REL TABLE BELONGS_TO_FRAMEWORK "
                 "(FROM KSMIEntity TO KSMIFrameworkNode)"
             ),
-            (
-                "CREATE REL TABLE HAS_LEVEL "
-                "(FROM KSMIFrameworkNode TO ProjectLevel)"
-            ),
-            (
-                "CREATE REL TABLE HAS_SUBSTANCE "
-                "(FROM KSMIEntity TO VolumeSubstance)"
-            ),
+            ("CREATE REL TABLE HAS_LEVEL (FROM KSMIFrameworkNode TO ProjectLevel)"),
+            ("CREATE REL TABLE HAS_SUBSTANCE (FROM KSMIEntity TO VolumeSubstance)"),
         ]
         for stmt in stmts:
             try:
@@ -228,17 +216,14 @@ class KSMIGraphBuilder:
                 count += 1
             except Exception as e:
                 logger.warning("[KSMI-KG] entity_error | key=%s err=%s", key, e)
-        self._node_counts["KSMIEntity"] = (
-            self._node_counts.get("KSMIEntity", 0) + count
-        )
+        self._node_counts["KSMIEntity"] = self._node_counts.get("KSMIEntity", 0) + count
 
     def _classify_entity(self, key: str, val: dict[str, Any]) -> str:
         concepts = val.get("key_concepts", [])
         if any("commercial" in str(c).lower() for c in concepts):
             return "commercial"
         if any(
-            "risk" in str(c).lower() or "chance" in str(c).lower()
-            for c in concepts
+            "risk" in str(c).lower() or "chance" in str(c).lower() for c in concepts
         ):
             return "risk"
         if "unit" in val or "units" in val:
@@ -248,11 +233,7 @@ class KSMIGraphBuilder:
     def _create_project_levels(self, schema: dict[str, Any]) -> None:
         assert self._conn is not None
         pl = schema.get("ProjectLevel", {})
-        level_keys = [
-            k
-            for k in pl
-            if isinstance(pl[k], dict) and "code" in pl[k]
-        ]
+        level_keys = [k for k in pl if isinstance(pl[k], dict) and "code" in pl[k]]
         count = 0
         for lk in level_keys:
             ld = pl[lk]
@@ -310,9 +291,7 @@ class KSMIGraphBuilder:
                 count += 1
             except Exception as e:
                 logger.warning("[KSMI-KG] class_error | key=%s err=%s", key, e)
-        self._node_counts["KSMIEntity"] = (
-            self._node_counts.get("KSMIEntity", 0) + count
-        )
+        self._node_counts["KSMIEntity"] = self._node_counts.get("KSMIEntity", 0) + count
 
     def _create_volume_types(self, schema: dict[str, Any]) -> None:
         assert self._conn is not None
@@ -337,16 +316,16 @@ class KSMIGraphBuilder:
                 count += 1
             except Exception as e:
                 logger.warning("[KSMI-KG] volume_type_error | code=%s err=%s", code, e)
-        self._node_counts["VolumeType"] = (
-            self._node_counts.get("VolumeType", 0) + count
-        )
+        self._node_counts["VolumeType"] = self._node_counts.get("VolumeType", 0) + count
 
     def _create_volume_substances(self, schema: dict[str, Any]) -> None:
         assert self._conn is not None
         vr = schema.get("VolumeReporting", {})
         categories = [
-            "reserves", "grr",
-            "contingent_resources", "prospective_resources",
+            "reserves",
+            "grr",
+            "contingent_resources",
+            "prospective_resources",
         ]
         seen_codes: set[str] = set()
         count = 0
@@ -415,9 +394,7 @@ class KSMIGraphBuilder:
                 count += 1
             except Exception as e:
                 logger.warning("[KSMI-KG] commercial_error | key=%s err=%s", key, e)
-        self._node_counts["KSMIEntity"] = (
-            self._node_counts.get("KSMIEntity", 0) + count
-        )
+        self._node_counts["KSMIEntity"] = self._node_counts.get("KSMIEntity", 0) + count
 
     def _create_relationships(self, schema: dict[str, Any]) -> None:
         assert self._conn is not None
@@ -535,9 +512,7 @@ class KSMIGraphBuilder:
                 count += 1
             except Exception as e:
                 logger.warning("[KSMI-KG] fw_level_error | %s", e)
-        self._edge_counts["HAS_LEVEL"] = (
-            self._edge_counts.get("HAS_LEVEL", 0) + count
-        )
+        self._edge_counts["HAS_LEVEL"] = self._edge_counts.get("HAS_LEVEL", 0) + count
 
     def _link_entities_to_framework(self, schema: dict[str, Any]) -> None:
         assert self._conn is not None
@@ -588,9 +563,7 @@ class KSMIGraphBuilder:
         ]
         for table, idx_name, props in indexes:
             try:
-                props_literal = (
-                    "[" + ", ".join(f"'{p}'" for p in props) + "]"
-                )
+                props_literal = "[" + ", ".join(f"'{p}'" for p in props) + "]"
                 self._conn.execute(
                     f"CALL CREATE_FTS_INDEX('{table}', '{idx_name}', "
                     f"{props_literal}, stemmer := 'indonesian')"

@@ -16,9 +16,7 @@ def test_embedding_manager_default_model():
     """Test EmbeddingManager uses default model."""
     with (
         patch("esdc.search.embedding_manager.ollama.Client"),
-        patch(
-            "esdc.search.embedding_manager.Config._load_config"
-        ) as mock_config,
+        patch("esdc.search.embedding_manager.Config._load_config") as mock_config,
     ):
         mock_config.return_value = None
         manager = EmbeddingManager()

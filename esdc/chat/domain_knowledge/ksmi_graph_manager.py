@@ -110,12 +110,10 @@ class KSMIGraphManager:
             ),
             "VolumeType": "node.code, node.name, node.description, score",
             "VolumeSubstance": (
-                "node.code, node.name, "
-                "node.substance, node.volume_category, score"
+                "node.code, node.name, node.substance, node.volume_category, score"
             ),
             "KSMIFrameworkNode": (
-                "node.code, node.name, node.aliases, "
-                "node.definition, score"
+                "node.code, node.name, node.aliases, node.definition, score"
             ),
         }
         return_cols = return_cols_map.get(table, return_cols_map["KSMIEntity"])
@@ -157,9 +155,7 @@ class KSMIGraphManager:
             logger.warning("[KSMI-KG] find_error | query=%s error=%s", query, e)
             return []
 
-    def find_all(
-        self, query: str, top_k: int = 3
-    ) -> list[dict[str, Any]]:
+    def find_all(self, query: str, top_k: int = 3) -> list[dict[str, Any]]:
         """Search across all tables and merge results by score.
 
         Args:
@@ -188,9 +184,7 @@ class KSMIGraphManager:
         all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
         return all_results
 
-    def traverse(
-        self, entity_code: str, rel_type: str
-    ) -> list[dict[str, Any]]:
+    def traverse(self, entity_code: str, rel_type: str) -> list[dict[str, Any]]:
         """Traverse relationships from an entity.
 
         Args:
@@ -211,8 +205,7 @@ class KSMIGraphManager:
         try:
             raw_rows = self._execute_cypher(cypher)
             return [
-                {"code": row[0], "name": row[1], "type": row[2]}
-                for row in raw_rows
+                {"code": row[0], "name": row[1], "type": row[2]} for row in raw_rows
             ]
         except Exception as e:
             logger.warning(
@@ -223,9 +216,7 @@ class KSMIGraphManager:
             )
             return []
 
-    def traverse_reverse(
-        self, entity_code: str, rel_type: str
-    ) -> list[dict[str, Any]]:
+    def traverse_reverse(self, entity_code: str, rel_type: str) -> list[dict[str, Any]]:
         """Traverse reverse relationships (incoming edges).
 
         Args:
@@ -245,8 +236,7 @@ class KSMIGraphManager:
         try:
             raw_rows = self._execute_cypher(cypher)
             return [
-                {"code": row[0], "name": row[1], "type": row[2]}
-                for row in raw_rows
+                {"code": row[0], "name": row[1], "type": row[2]} for row in raw_rows
             ]
         except Exception as e:
             logger.warning(
@@ -285,9 +275,7 @@ class KSMIGraphManager:
             )
             return []
 
-    def find_levels(
-        self, project_class: str | None = None
-    ) -> list[dict[str, Any]]:
+    def find_levels(self, project_class: str | None = None) -> list[dict[str, Any]]:
         """Find project levels, optionally filtered by classification.
 
         Args:
@@ -329,9 +317,7 @@ class KSMIGraphManager:
             logger.warning("[KSMI-KG] find_levels_error | error=%s", e)
             return []
 
-    def get_transitions(
-        self, from_level: str | None = None
-    ) -> list[dict[str, Any]]:
+    def get_transitions(self, from_level: str | None = None) -> list[dict[str, Any]]:
         """Get level transition rules.
 
         Args:

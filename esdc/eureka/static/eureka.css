@@ -289,10 +289,26 @@ body.eureka-body::after {
   flex-shrink: 0;
 }
 
-/* ── 6-Col Pipeline Hero ──────────────────────────────────────── */
-.hero-pipeline {
+/* ── Two-Column Resources Layout ──────────────────────────────── */
+.resources-layout {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 991px) {
+  .resources-layout { grid-template-columns: 1fr; }
+}
+
+.resources-right .counts-bar {
+  grid-template-columns: 1fr;
+}
+
+/* ── Vertical Pipeline Hero ──────────────────────────────────── */
+.hero-pipeline {
+  display: flex;
+  flex-direction: column;
   gap: 1px;
   background: var(--border);
   border: 1px solid var(--border);
@@ -349,6 +365,13 @@ body.eureka-body::after {
 .hero-metric.production::before { background: var(--info); }
 .hero-metric.production::after { background: radial-gradient(circle, var(--info) 0%, transparent 70%); }
 
+/* Right-column standalone card */
+.right-section-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
 .hero-metric:hover {
   background: var(--bg-elevated);
   transform: scale(1.02);
@@ -377,7 +400,7 @@ body.eureka-body::after {
 
 .hero-subheader {
   font-family: var(--font-sans);
-  font-size: 0.6rem;
+  font-size: 0.65rem;
   font-weight: 500;
   color: var(--text-label);
   letter-spacing: 0.5px;
@@ -404,14 +427,14 @@ body.eureka-body::after {
 }
 
 .hero-value {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 2.5rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.75rem;
   line-height: 1;
-  letter-spacing: -1px;
+  letter-spacing: -0.5px;
 }
 
-.hero-metric.reserves .hero-value { font-size: 3rem; }
+.hero-metric.reserves .hero-value { font-size: 2rem; }
 
 .hero-value.oil { color: var(--oil-bright); text-shadow: var(--glow-oil); }
 .hero-value.gas { color: var(--gas-bright); text-shadow: var(--glow-gas); }
@@ -473,25 +496,21 @@ body.eureka-body::after {
 }
 
 .prod-cell-value {
-  font-family: var(--font-display);
+  font-family: var(--font-mono);
   font-weight: 700;
   font-size: 1.1rem;
   line-height: 1;
 }
 
 .prod-cell-label {
-  font-size: 0.55rem;
+  font-size: 0.6rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
-@media (max-width: 1200px) {
-  .hero-pipeline { grid-template-columns: repeat(3, 1fr); }
-  .hero-metric.reserves .hero-value { font-size: 2.5rem; }
-}
 @media (max-width: 768px) {
-  .hero-pipeline { grid-template-columns: 1fr; }
+  .hero-metric.reserves .hero-value { font-size: 1.75rem; }
 }
 
 /* ── Counts ──────────────────────────────────────────────────── */
@@ -571,6 +590,86 @@ body.eureka-body::after {
 
 @media (max-width: 768px) {
   .counts-bar { grid-template-columns: 1fr; }
+}
+
+/* ── In Place P50 Grid ─────────────────────────────────────────── */
+.inplace-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+@media (max-width: 768px) {
+  .inplace-grid { grid-template-columns: 1fr; }
+}
+
+.inplace-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.inplace-card:hover {
+  border-color: var(--border-bright);
+  transform: translateY(-2px);
+}
+
+.inplace-card.total {
+  background: var(--bg-elevated);
+  border-color: var(--border-bright);
+}
+
+.inplace-card-header {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.inplace-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.inplace-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.inplace-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 3rem;
+}
+
+.inplace-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.15rem;
+  line-height: 1;
+  letter-spacing: -0.5px;
+}
+
+.inplace-value.oil { color: var(--oil-bright); }
+.inplace-value.gas { color: var(--gas-bright); }
+
+.inplace-unit {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
 }
 
 /* ── Asymmetric Charts Grid ──────────────────────────────────── */
@@ -816,6 +915,7 @@ body.eureka-body::after {
 .stagger-2 { animation-delay: 0.35s; }
 .stagger-3 { animation-delay: 0.6s; }
 .stagger-4 { animation-delay: 0.85s; }
+.stagger-5 { animation-delay: 1.1s; }
 
 /* ── Scrollbar ────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

@@ -128,20 +128,8 @@ def _format_level_summary(level_data: dict, code: str) -> str:
     is_pse = level_data.get("is_pse_approved")
     key_concepts = level_data.get("key_concepts", [])
 
-    is_pod_str = (
-        "true"
-        if is_pod is True
-        else "false"
-        if is_pod is False
-        else "null"
-    )
-    is_pse_str = (
-        "true"
-        if is_pse is True
-        else "false"
-        if is_pse is False
-        else "null"
-    )
+    is_pod_str = "true" if is_pod is True else "false" if is_pod is False else "null"
+    is_pse_str = "true" if is_pse is True else "false" if is_pse is False else "null"
 
     concept_str = (
         "; ".join(
@@ -194,9 +182,7 @@ def _format_wap_constraints(constraints: list) -> str:
     return "\n".join(lines)
 
 
-def ksmi_retrieve(
-    topic: str, entity: str | None = None
-) -> str:
+def ksmi_retrieve(topic: str, entity: str | None = None) -> str:
     """Retrieve KSMI domain knowledge by topic and optional entity.
 
     Args:
@@ -340,9 +326,7 @@ def _entity_not_found(entity: str) -> str:
     )
 
 
-def _retrieve_topic(
-    schema: dict[str, Any], topic: str, section_keys: list[str]
-) -> str:
+def _retrieve_topic(schema: dict[str, Any], topic: str, section_keys: list[str]) -> str:
     """Retrieve all sections for a topic."""
     parts = [f"## KSMI Knowledge: {topic.upper()}\n"]
     for key in section_keys:
@@ -478,12 +462,8 @@ def _format_level_detail(level_data: dict) -> str:
     if rule_note:
         lines.append(f"**Rule:** {rule_note.strip()}")
 
-    is_pod_str = (
-        "true" if is_pod is True else "false" if is_pod is False else "null"
-    )
-    is_pse_str = (
-        "true" if is_pse is True else "false" if is_pse is False else "null"
-    )
+    is_pod_str = "true" if is_pod is True else "false" if is_pod is False else "null"
+    is_pse_str = "true" if is_pse is True else "false" if is_pse is False else "null"
     lines.append(
         f"**is_pod_approved:** {is_pod_str} | **is_pse_approved:** {is_pse_str}"
     )
@@ -562,9 +542,7 @@ def _format_hierarchy(data: dict) -> str:
                                 code = u.get("code", "")
                                 name = u.get("name", "")
                                 pct = u.get("percentile", "")
-                                lines.append(
-                                    f"{prefix}  · {code}: {name} ({pct})"
-                                )
+                                lines.append(f"{prefix}  · {code}: {name} ({pct})")
                     else:
                         lines.append(f"{prefix}- {k}")
                         _walk(v, indent + 1)

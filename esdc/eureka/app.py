@@ -21,6 +21,7 @@ from esdc.eureka.charts.nkri import (
 from esdc.eureka.queries import (
     get_available_years,
     get_field_kpis,
+    get_inplace_kpis,
     get_latest_year,
     get_nkri_kpis,
     get_nkri_resources,
@@ -114,6 +115,7 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
         wk = get_wk_kpis(selected_year)
         fields = get_field_kpis(selected_year)
         projects = get_project_kpis(selected_year)
+        inplace = get_inplace_kpis(selected_year)
 
         # Generate charts
         resources = get_nkri_resources(selected_year)
@@ -130,6 +132,7 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
             "wk": wk,
             "fields": fields,
             "projects": projects,
+            "inplace": inplace,
             "bar_fig": bar_fig,
             "donut_fig": donut_fig,
             "yoy_fig": yoy_fig,

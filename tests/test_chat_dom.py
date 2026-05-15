@@ -255,7 +255,9 @@ class TestWidgetMountingOrder:
             mounted = [
                 c
                 for c in chat_panel.children
-                if isinstance(c, (ThinkingIndicator, SQLPanel, ResultsPanel, ChatMessage))
+                if isinstance(
+                    c, (ThinkingIndicator, SQLPanel, ResultsPanel, ChatMessage)
+                )
                 and not (isinstance(c, ChatMessage) and c.role == "system")
             ]
 

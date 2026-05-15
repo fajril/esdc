@@ -95,8 +95,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
             "db_value": "3. Prospective Resources",
             "columns": ["rec_*", "rec_*_risked"],
             "description": (
-                "Undiscovered potential — volume x GCF."
-                " See KSMI: ProspectiveResources"
+                "Undiscovered potential — volume x GCF. See KSMI: ProspectiveResources"
             ),
         },
         "sales potential": {
@@ -115,8 +114,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
             "full_name": "Total Potential Forecast",
             "columns": ["tpf_*"],
             "description": (
-                "Total potential forecast volume."
-                " Sum equals rec_* (resources)."
+                "Total potential forecast volume. Sum equals rec_* (resources)."
             ),
             "equivalent_to": "resources",
         },
@@ -124,8 +122,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
             "full_name": "Total Potential Forecast",
             "columns": ["tpf_*"],
             "description": (
-                "Total potential forecast volume."
-                " Sum equals rec_* (resources)."
+                "Total potential forecast volume. Sum equals rec_* (resources)."
             ),
             "equivalent_to": "resources",
         },
@@ -265,8 +262,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         "POFD": {
             "full_name": "Plan of Further Development",
             "description": (
-                "POD variant for ongoing development phases."
-                " See KSMI: ProducingLicense"
+                "POD variant for ongoing development phases. See KSMI: ProducingLicense"
             ),
         },
         "OPL": {
@@ -293,8 +289,7 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
         "POD_I": {
             "full_name": "Plan of Development I",
             "description": (
-                "First POD approved for a working area."
-                " See KSMI: ProducingLicense"
+                "First POD approved for a working area. See KSMI: ProducingLicense"
             ),
         },
         "PSE": {

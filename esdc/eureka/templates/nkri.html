@@ -7,8 +7,9 @@
 {% set f = fields %}
 {% set p = projects %}
 
-<div class="animate-scale-in stagger-1">
-  <div class="section-title"><span class="section-badge" style="background:var(--reserves);"></span>Volumetric Resources</div>
+<div class="resources-layout animate-scale-in stagger-1">
+  <div class="resources-left">
+    <div class="section-title">    <span class="section-badge" style="background:var(--reserves);"></span>Resource Classification</div>
 
   <div class="hero-pipeline">
     {# ── 1. Reserves (2fr card) ── #}
@@ -38,7 +39,7 @@
     {# ── 2. GRR ── #}
     <div class="hero-metric grr">
       <div class="hero-metric-header">GRR</div>
-      <div class="hero-subheader">Recoverable Potential</div>
+      <div class="hero-subheader">GOI Recoverable Resources - Technical</div>
       <div class="hero-columns">
         <div class="hero-column">
           <div class="hero-value oil" data-count="{{ "%.0f"|format(k.grr_oc) }}">{{ "%.0f"|format(k.grr_oc) }}</div>
@@ -62,7 +63,7 @@
     {# ── 3. Contingent Resources (Exploitation) ── #}
     <div class="hero-metric cont-exploit">
       <div class="hero-metric-header">Contingent Resources</div>
-      <div class="hero-subheader">(Exploitation) — 2C Risked</div>
+      <div class="hero-subheader">Exploitation - 2C</div>
       <div class="hero-columns">
         <div class="hero-column">
           <div class="hero-value oil" data-count="{{ "%.0f"|format(k.cont_exploit_oc) }}">{{ "%.0f"|format(k.cont_exploit_oc) }}</div>
@@ -86,7 +87,7 @@
     {# ── 4. Contingent Resources (Exploration) ── #}
     <div class="hero-metric cont-explore">
       <div class="hero-metric-header">Contingent Resources</div>
-      <div class="hero-subheader">(Exploration) — 2C Risked</div>
+      <div class="hero-subheader">Exploration - 2C</div>
       <div class="hero-columns">
         <div class="hero-column">
           <div class="hero-value oil" data-count="{{ "%.0f"|format(k.cont_explore_oc) }}">{{ "%.0f"|format(k.cont_explore_oc) }}</div>
@@ -110,7 +111,7 @@
     {# ── 5. Prospective Resources ── #}
     <div class="hero-metric prospective">
       <div class="hero-metric-header">Prospective Resources</div>
-      <div class="hero-subheader">2U Risked</div>
+      <div class="hero-subheader">Risked - 2U</div>
       <div class="hero-columns">
         <div class="hero-column">
           <div class="hero-value oil" data-count="{{ "%.0f"|format(k.prospective_oc) }}">{{ "%.0f"|format(k.prospective_oc) }}</div>
@@ -131,40 +132,42 @@
       </div>
     </div>
 
-    {# ── 6. Production ── #}
-    <div class="hero-metric production">
-      <div class="hero-metric-header">Production</div>
-      <div class="hero-subheader">Cumulative &amp; Yearly</div>
-      <div class="prod-grid">
-        <div class="prod-cell">
-          <div class="prod-cell-value" style="color:var(--oil-bright)" data-count="{{ "%.0f"|format(k.cumprod_sls_oc) }}">{{ "%.0f"|format(k.cumprod_sls_oc) }}</div>
-          <div class="hero-unit">MMSTB</div>
-          <div class="prod-cell-label">Cumulative OC</div>
-        </div>
-        <div class="prod-cell">
-          <div class="prod-cell-value" style="color:var(--gas-bright)" data-count="{{ "%.0f"|format(k.cumprod_sls_an) }}">{{ "%.0f"|format(k.cumprod_sls_an) }}</div>
-          <div class="hero-unit">TSCF</div>
-          <div class="prod-cell-label">Cumulative AN</div>
-        </div>
-        <div class="prod-cell">
-          <div class="prod-cell-value" style="color:var(--oil-bright)">{{ "%.0f"|format(k.yearly_sls_oc) }}</div>
-          <div class="hero-unit">MMSTB/yr</div>
-          <div class="prod-cell-label">Yearly OC</div>
-        </div>
-        <div class="prod-cell">
-          <div class="prod-cell-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.yearly_sls_an) }}</div>
-          <div class="hero-unit">BSCF/yr</div>
-          <div class="prod-cell-label">Yearly AN</div>
-        </div>
-      </div>
-    </div>
   </div>
 </div>
 
-<div class="section-separator"></div>
+<div class="resources-right animate-fade-up stagger-2">
+  <div class="section-title" style="margin-bottom:0.75rem;">
+    <span class="section-badge" style="background:var(--info);"></span>
+    Production
+  </div>
+  <div class="hero-metric production right-section-card">
+    <div class="hero-metric-header">Production</div>
+    <div class="hero-subheader">Cumulative &amp; Yearly</div>
+    <div class="prod-grid">
+      <div class="prod-cell">
+        <div class="prod-cell-value" style="color:var(--oil-bright)" data-count="{{ "%.0f"|format(k.cumprod_sls_oc) }}">{{ "%.0f"|format(k.cumprod_sls_oc) }}</div>
+        <div class="hero-unit">MMSTB</div>
+        <div class="prod-cell-label">Cumulative Oil + Condensate</div>
+      </div>
+      <div class="prod-cell">
+        <div class="prod-cell-value" style="color:var(--gas-bright)" data-count="{{ "%.0f"|format(k.cumprod_sls_an) }}">{{ "%.0f"|format(k.cumprod_sls_an) }}</div>
+        <div class="hero-unit">TSCF</div>
+        <div class="prod-cell-label">Cumulative Assoc. + Non Assoc. Gas</div>
+      </div>
+      <div class="prod-cell">
+        <div class="prod-cell-value" style="color:var(--oil-bright)">{{ "%.0f"|format(k.yearly_sls_oc) }}</div>
+        <div class="hero-unit">MMSTB/yr</div>
+        <div class="prod-cell-label">Yearly Oil + Condensate</div>
+      </div>
+      <div class="prod-cell">
+        <div class="prod-cell-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.yearly_sls_an) }}</div>
+        <div class="hero-unit">TSCF/yr</div>
+        <div class="prod-cell-label">Yearly Assoc. + Non Assoc. Gas</div>
+      </div>
+    </div>
+  </div>
 
-<div class="animate-fade-up stagger-2">
-  <div class="section-title">
+  <div class="section-title" style="margin-top:1.25rem;">
     <span class="section-badge" style="background:var(--cont-exploit);"></span>
     Asset Counts
   </div>
@@ -213,12 +216,32 @@
         <div class="count-detail-bar-bg">
           <div class="count-detail-bar-fill exploit" style="width:{{ (f.exploit_fields / f.total_fields * 100) if f.total_fields else 0 }}%"></div>
         </div>
+        <div class="count-detail-row" style="margin-top:0.25rem;">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Production</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--oil-bright)">{{ f.production_fields }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Development</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--info)">{{ f.development_fields }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Idle</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--warning)">{{ f.idle_fields }}</span>
+        </div>
         <div class="count-detail-row" style="margin-top:0.5rem;">
           <span class="count-detail-label">Exploration</span>
           <span class="count-detail-value">{{ f.exploration_fields }}</span>
         </div>
         <div class="count-detail-bar-bg">
           <div class="count-detail-bar-fill exploration" style="width:{{ (f.exploration_fields / f.total_fields * 100) if f.total_fields else 0 }}%"></div>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.25rem;">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Discovered</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--cont-explore)">{{ f.discovered_fields }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Undiscovered</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--prospective)">{{ f.undiscovered_fields }}</span>
         </div>
       </div>
     </div>
@@ -259,10 +282,67 @@
     </div>
   </div>
 </div>
+</div>
 
 <div class="section-separator"></div>
 
 <div class="animate-fade-up stagger-3">
+  <div class="section-title">
+    <span class="section-badge" style="background:var(--oil);"></span>
+    Initial Petroleum in Place
+  </div>
+  <div class="inplace-grid">
+    <div class="inplace-card">
+      <div class="inplace-card-header">Discovered — Exploitation</div>
+      <div class="inplace-rows">
+        <div class="inplace-row">
+          <span class="inplace-label">IOIP</span>
+          <span class="inplace-value oil" data-count="{{ "%.0f"|format(inplace.disc_exploit_ioip) }}">{{ "%.0f"|format(inplace.disc_exploit_ioip) }}</span>
+          <span class="inplace-unit">MMSTB</span>
+        </div>
+        <div class="inplace-row">
+          <span class="inplace-label">IGIP</span>
+          <span class="inplace-value gas" data-count="{{ "%.0f"|format(inplace.disc_exploit_igip) }}">{{ "%.0f"|format(inplace.disc_exploit_igip) }}</span>
+          <span class="inplace-unit">TSCF</span>
+        </div>
+      </div>
+    </div>
+    <div class="inplace-card">
+      <div class="inplace-card-header">Discovered — Exploration</div>
+      <div class="inplace-rows">
+        <div class="inplace-row">
+          <span class="inplace-label">IOIP</span>
+          <span class="inplace-value oil" data-count="{{ "%.0f"|format(inplace.disc_explore_ioip) }}">{{ "%.0f"|format(inplace.disc_explore_ioip) }}</span>
+          <span class="inplace-unit">MMSTB</span>
+        </div>
+        <div class="inplace-row">
+          <span class="inplace-label">IGIP</span>
+          <span class="inplace-value gas" data-count="{{ "%.0f"|format(inplace.disc_explore_igip) }}">{{ "%.0f"|format(inplace.disc_explore_igip) }}</span>
+          <span class="inplace-unit">TSCF</span>
+        </div>
+      </div>
+    </div>
+    <div class="inplace-card total">
+      <div class="inplace-card-header">Undiscovered — Risked</div>
+      <div class="inplace-rows">
+        <div class="inplace-row">
+          <span class="inplace-label">IOIP</span>
+          <span class="inplace-value oil" data-count="{{ "%.0f"|format(inplace.undisc_risked_ioip) }}">{{ "%.0f"|format(inplace.undisc_risked_ioip) }}</span>
+          <span class="inplace-unit">MMSTB</span>
+        </div>
+        <div class="inplace-row">
+          <span class="inplace-label">IGIP</span>
+          <span class="inplace-value gas" data-count="{{ "%.0f"|format(inplace.undisc_risked_igip) }}">{{ "%.0f"|format(inplace.undisc_risked_igip) }}</span>
+          <span class="inplace-unit">TSCF</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section-separator"></div>
+
+<div class="animate-fade-up stagger-4">
   <div class="section-title">
     <span class="section-badge" style="background:var(--oil);"></span>
     Analytical Charts
@@ -297,7 +377,7 @@
 
 <div class="section-separator"></div>
 
-<div class="animate-fade-up stagger-4">
+<div class="animate-fade-up stagger-5">
   <div class="section-title">
     <span class="section-badge" style="background:var(--gas);"></span>
     Data Explorer

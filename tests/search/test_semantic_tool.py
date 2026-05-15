@@ -13,9 +13,7 @@ def test_semantic_search_tool_exists():
 
 def test_semantic_search_by_text():
     """Test semantic search by text."""
-    with patch(
-        "esdc.search.semantic_resolver.SemanticResolver"
-    ) as MockResolver:
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
         mock_resolver = Mock()
         mock_resolver.hybrid_search.return_value = {
             "status": "success",
@@ -33,7 +31,9 @@ def test_semantic_search_by_text():
             cache.__contains__ = Mock(return_value=False)
             mock_cache.return_value = cache
 
-            result = semantic_search.invoke({"query": "proyek masalah teknis", "limit": 5})
+            result = semantic_search.invoke(
+                {"query": "proyek masalah teknis", "limit": 5}
+            )
 
             data = json.loads(result)
             assert data["status"] == "success"
@@ -41,9 +41,7 @@ def test_semantic_search_by_text():
 
 def test_semantic_search_not_available():
     """Test fallback when embeddings not available."""
-    with patch(
-        "esdc.search.semantic_resolver.SemanticResolver"
-    ) as MockResolver:
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
         mock_resolver = Mock()
         mock_resolver.hybrid_search.return_value = {
             "status": "not_available",

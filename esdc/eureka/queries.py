@@ -103,7 +103,12 @@ class FieldKpiData:
 
     total_fields: int
     exploit_fields: int
+    production_fields: int
+    development_fields: int
+    idle_fields: int
     exploration_fields: int
+    discovered_fields: int
+    undiscovered_fields: int
 
 
 @dataclass(frozen=True)
@@ -116,6 +121,18 @@ class ProjectKpiData:
     waterflood_projects: int
     eor_egr_projects: int
     exploration_projects: int
+
+
+@dataclass(frozen=True)
+class InPlaceKpiData:
+    """In-Place (IOIP/IGIP) KPI data at P50 level."""
+
+    disc_exploit_ioip: float
+    disc_exploit_igip: float
+    disc_explore_ioip: float
+    disc_explore_igip: float
+    undisc_risked_ioip: float
+    undisc_risked_igip: float
 
 
 @dataclass(frozen=True)
@@ -216,12 +233,12 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
         res_3p = res_map.get("3. High Value", (0, 0))
         rec_2p = rec_map.get("2. Middle Value", (0, 0))
 
-        # --- Contingent Exploitation (2C) from project_resources ---
+        # --- Contingent Exploitation (2C) from nkri_resources ---
         cont_exploit_sql = f"""
         SELECT
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
-        FROM project_resources
+        FROM nkri_resources
         WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
           AND uncert_level = '2. Middle Value'
@@ -231,12 +248,12 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
         cont_exploit_oc = cont_ex[0] if cont_ex else 0
         cont_exploit_an = cont_ex[1] if cont_ex else 0
 
-        # --- Contingent Exploration (2C) from project_resources ---
+        # --- Contingent Exploration (2C) from nkri_resources ---
         cont_explore_sql = f"""
         SELECT
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
-        FROM project_resources
+        FROM nkri_resources
         WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
           AND uncert_level = '2. Middle Value'
@@ -246,12 +263,12 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
         cont_explore_oc = cont_ex2[0] if cont_ex2 else 0
         cont_explore_an = cont_ex2[1] if cont_ex2 else 0
 
-        # --- Prospective (risked 2U) from project_resources ---
+        # --- Prospective (risked 2U) from nkri_resources ---
         prospect_sql = f"""
         SELECT
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
-        FROM project_resources
+        FROM nkri_resources
         WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
           AND uncert_level = '2. Middle Value'
           AND report_year = {year}
@@ -265,8 +282,9 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
         SELECT
             SUM(COALESCE(cprd_sls_oc, 0)) as sum_oc,
             SUM(COALESCE(cprd_sls_an, 0)) as sum_an
-        FROM project_resources
+        FROM nkri_resources
         WHERE report_year = {year}
+          AND uncert_level = '2. Middle Value'
         """
         cumprod = conn.execute(cumprod_sql).fetchone()
         cumprod_sls_oc = cumprod[0] if cumprod else 0
@@ -277,8 +295,9 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
         SELECT
             SUM(COALESCE(rate_sls_oc, 0)) as sum_oc,
             SUM(COALESCE(rate_sls_an, 0)) as sum_an
-        FROM project_resources
+        FROM nkri_resources
         WHERE report_year = {year}
+          AND uncert_level = '2. Middle Value'
         """
         yearly = conn.execute(yearly_sql).fetchone()
         yearly_sls_oc = yearly[0] if yearly else 0
@@ -291,10 +310,17 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
         yoy_data = {}
         if prev_year is not None:
             yoy_data = _compute_yoy(
-                conn, year, prev_year, res_map, rec_map,
-                cont_exploit_oc, cont_exploit_an,
-                cont_explore_oc, cont_explore_an,
-                prospective_oc, prospective_an,
+                conn,
+                year,
+                prev_year,
+                res_map,
+                rec_map,
+                cont_exploit_oc,
+                cont_exploit_an,
+                cont_explore_oc,
+                cont_explore_an,
+                prospective_oc,
+                prospective_an,
             )
 
         return NKRIKpiData(
@@ -366,7 +392,7 @@ def _compute_yoy(
     SELECT
         SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
         SUM(COALESCE(rec_an_risked, 0)) as sum_an
-    FROM project_resources
+    FROM nkri_resources
     WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
       AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
       AND uncert_level = '2. Middle Value'
@@ -381,7 +407,7 @@ def _compute_yoy(
     SELECT
         SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
         SUM(COALESCE(rec_an_risked, 0)) as sum_an
-    FROM project_resources
+    FROM nkri_resources
     WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
       AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
       AND uncert_level = '2. Middle Value'
@@ -396,7 +422,7 @@ def _compute_yoy(
     SELECT
         SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
         SUM(COALESCE(rec_an_risked, 0)) as sum_an
-    FROM project_resources
+    FROM nkri_resources
     WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
       AND uncert_level = '2. Middle Value'
       AND report_year = {prev_year}
@@ -529,28 +555,83 @@ def get_field_kpis(year: int | None = None) -> FieldKpiData:
 
     conn = _get_conn()
     try:
+        # Exploitation breakdown by field maturity
+        # Priority: idle (E4-E8 only) → development (E2/E3 only, no sales)
+        # → production (catch-all)
+        exploit_brk_sql = f"""
+        SELECT
+            SUM(CASE WHEN all_idle THEN 1 ELSE 0 END) as idle,
+            SUM(CASE WHEN all_development AND NOT has_sales
+                THEN 1 ELSE 0 END
+            ) as development,
+            SUM(CASE WHEN NOT all_idle
+                AND NOT (all_development AND NOT has_sales)
+                THEN 1 ELSE 0 END
+            ) as production
+        FROM (
+            SELECT field_id,
+                BOOL_AND(LEFT(project_level, 2)
+                    IN ('E4','E5','E6','E7','E8')
+                ) as all_idle,
+                BOOL_AND(LEFT(project_level, 2)
+                    IN ('E2','E3')
+                ) as all_development,
+                BOOL_OR(COALESCE(cprd_sls_oc, 0)
+                    + COALESCE(cprd_sls_an, 0) > 0
+                ) as has_sales
+            FROM project_resources
+            WHERE report_year = {year}
+              AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
+              AND field_id IS NOT NULL AND field_id != ''
+            GROUP BY field_id
+        )
+        """
+        brk = conn.execute(exploit_brk_sql).fetchone()
+        idle = brk[0] if brk and brk[0] is not None else 0
+        development = brk[1] if brk and brk[1] is not None else 0
+        production = brk[2] if brk and brk[2] is not None else 0
+        exploit = development + idle + production
+
+        # Exploration fields split by class
+        discovered_sql = f"""
+        SELECT COUNT(DISTINCT field_id) FROM project_resources
+        WHERE report_year = {year}
+          AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
+          AND ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
+          AND field_id IS NOT NULL AND field_id != ''
+        """
+        disc_row = conn.execute(discovered_sql).fetchone()
+        discovered = disc_row[0] if disc_row else 0
+
+        undiscovered_sql = f"""
+        SELECT COUNT(DISTINCT field_id) FROM project_resources
+        WHERE report_year = {year}
+          AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
+          AND ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
+          AND field_id IS NOT NULL AND field_id != ''
+        """
+        undisc_row = conn.execute(undiscovered_sql).fetchone()
+        undiscovered = undisc_row[0] if undisc_row else 0
+        exploration = discovered + undiscovered
+
         total_sql = f"""
         SELECT COUNT(DISTINCT field_id) FROM project_resources
         WHERE report_year = {year}
+          AND ({PROJECT_STAGE_NORM.strip()}) IN ('Exploitation', 'Exploration')
           AND field_id IS NOT NULL AND field_id != ''
         """
         total_row = conn.execute(total_sql).fetchone()
         total = total_row[0] if total_row else 0
 
-        exploit_sql = f"""
-        SELECT COUNT(DISTINCT field_id) FROM project_resources
-        WHERE report_year = {year}
-          AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
-          AND field_id IS NOT NULL AND field_id != ''
-        """
-        exploit_row = conn.execute(exploit_sql).fetchone()
-        exploit = exploit_row[0] if exploit_row else 0
-        exploration = total - exploit
-
         return FieldKpiData(
             total_fields=total,
             exploit_fields=exploit,
+            production_fields=production,
+            development_fields=development,
+            idle_fields=idle,
             exploration_fields=exploration,
+            discovered_fields=discovered,
+            undiscovered_fields=undiscovered,
         )
     finally:
         conn.close()
@@ -691,5 +772,70 @@ def get_nkri_table_data(
         rows = conn.execute(sql).fetchall()
         col_names = [desc[0] for desc in conn.description]
         return [dict(zip(col_names, row, strict=False)) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_inplace_kpis(year: int | None = None) -> InPlaceKpiData:
+    """Get NKRI In-Place (IOIP/IGIP) KPIs at P50 level."""
+    if year is None:
+        year = get_latest_year()
+
+    conn = _get_conn()
+    try:
+        # Discovered — Exploitation: Reserves & GRR + Contingent Resources
+        disc_exploit_sql = f"""
+        SELECT
+            SUM(COALESCE(ioip, 0)) as ioip,
+            SUM(COALESCE(igip, 0)) as igip
+        FROM nkri_resources
+        WHERE report_year = {year}
+          AND uncert_level = '2. Middle Value'
+          AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
+          AND ({PROJECT_CLASS_NORM.strip()})
+            IN ('Reserves & GRR', 'Contingent Resources')
+        """
+        de = conn.execute(disc_exploit_sql).fetchone()
+        disc_exploit_ioip = de[0] if de else 0
+        disc_exploit_igip = de[1] if de else 0
+
+        # Discovered — Exploration: Contingent Resources (Exploration)
+        disc_explore_sql = f"""
+        SELECT
+            SUM(COALESCE(ioip, 0)) as ioip,
+            SUM(COALESCE(igip, 0)) as igip
+        FROM nkri_resources
+        WHERE report_year = {year}
+          AND uncert_level = '2. Middle Value'
+          AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
+          AND ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
+        """
+        dx = conn.execute(disc_explore_sql).fetchone()
+        disc_explore_ioip = dx[0] if dx else 0
+        disc_explore_igip = dx[1] if dx else 0
+
+        # Undiscovered — Risked: Prospective Resources × gcf_total
+        #   query project_resources directly (gcf_total only available there)
+        undisc_sql = f"""
+        SELECT
+            SUM(COALESCE(prj_ioip, 0) * COALESCE(gcf_total, 0)) as ioip,
+            SUM(COALESCE(prj_igip, 0) * COALESCE(gcf_total, 0)) as igip
+        FROM project_resources
+        WHERE report_year = {year}
+          AND ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
+          AND uncert_level = '2. Middle Value'
+        """
+        un = conn.execute(undisc_sql).fetchone()
+        undisc_risked_ioip = un[0] if un else 0
+        undisc_risked_igip = un[1] if un else 0
+
+        return InPlaceKpiData(
+            disc_exploit_ioip=_to_mmstb(disc_exploit_ioip),
+            disc_exploit_igip=_to_tscf(disc_exploit_igip),
+            disc_explore_ioip=_to_mmstb(disc_explore_ioip),
+            disc_explore_igip=_to_tscf(disc_explore_igip),
+            undisc_risked_ioip=_to_mmstb(undisc_risked_ioip),
+            undisc_risked_igip=_to_tscf(undisc_risked_igip),
+        )
     finally:
         conn.close()

@@ -52,9 +52,7 @@ class TestKSMIGraphBuilder:
         assert counts.get("CLASSIFIED_AS", 0) >= 3
 
     def test_builder_levels_exist(self, builder):
-        result = builder.conn.execute(
-            "MATCH (l:ProjectLevel) RETURN l.code, l.name"
-        )
+        result = builder.conn.execute("MATCH (l:ProjectLevel) RETURN l.code, l.name")
         levels = {row[0]: row[1] for row in result}
         assert "E0" in levels or any("E" in k for k in levels)
 
@@ -75,9 +73,7 @@ class TestKSMIGraphBuilder:
         assert len(classifications) >= 1
 
     def test_volume_types_created(self, builder):
-        result = builder.conn.execute(
-            "MATCH (v:VolumeType) RETURN v.code, v.name"
-        )
+        result = builder.conn.execute("MATCH (v:VolumeType) RETURN v.code, v.name")
         vols = {row[0]: row[1] for row in result}
         assert "gross" in vols or len(vols) >= 1
 
@@ -148,8 +144,7 @@ class TestKSMIGraphManagerTraverse:
         results = manager.traverse("E0", "CLASSIFIED_AS")
         assert len(results) >= 1
         assert any(
-            "Reserve" in r["name"] or "reserve" in r["name"].lower()
-            for r in results
+            "Reserve" in r["name"] or "reserve" in r["name"].lower() for r in results
         )
 
     def test_traverse_can_transition_to(self, manager):
@@ -175,9 +170,7 @@ class TestKSMIGraphManagerTraverseReverse:
     """Tests for KSMIGraphManager.traverse_reverse() — backward traversal."""
 
     def test_traverse_reverse_classified_as(self, manager):
-        results = manager.traverse_reverse(
-            "1. Reserves & GRR", "CLASSIFIED_AS"
-        )
+        results = manager.traverse_reverse("1. Reserves & GRR", "CLASSIFIED_AS")
         assert len(results) >= 1
         codes = [r["code"] for r in results]
         assert "E0" in codes or any(c.startswith("E") for c in codes)
@@ -197,9 +190,7 @@ class TestKSMIGraphManagerQuery:
         assert len(results) >= 1
 
     def test_query_project_levels(self, manager):
-        results = manager.query(
-            "MATCH (l:ProjectLevel) RETURN l.code, l.name LIMIT 3"
-        )
+        results = manager.query("MATCH (l:ProjectLevel) RETURN l.code, l.name LIMIT 3")
         assert len(results) >= 1
 
     def test_query_invalid_cypher_returns_empty(self, manager):
