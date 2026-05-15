@@ -21,19 +21,42 @@ FLUID_PALETTE: dict[str, str] = {
     "NGL": FLUID_NGL,
 }
 
-# ── Resource Classification Colors (SPE PRMS) ────────────────
+# ── Resource Classification Colors ──────────────────────────
 
-RESERVES_BLUE = "#58A6FF"
-CONTINGENT_EXPLOIT_AMBER = "#D29922"
-CONTINGENT_EXPLORE_LIGHT_AMBER = "#E3B341"
-PROSPECTIVE_ORANGE = "#F0883E"
+RESERVES_GREEN = "#3FB950"
+CONTINGENT_EXPLOIT_GRAY = "#6E7681"
+CONTINGENT_EXPLORE_LIGHT_GRAY = "#8B949E"
+PROSPECTIVE_BLUE = "#58A6FF"
 
 CLASS_PALETTE: dict[str, str] = {
-    "Reserves": RESERVES_BLUE,
+    "Reserves": RESERVES_GREEN,
     "GRR": "#36C5F0",
-    "Contingent Resources (Exploitation)": CONTINGENT_EXPLOIT_AMBER,
-    "Contingent Resources (Exploration)": CONTINGENT_EXPLORE_LIGHT_AMBER,
-    "Prospective Resources": PROSPECTIVE_ORANGE,
+    "Contingent Resources (Exploitation)": CONTINGENT_EXPLOIT_GRAY,
+    "Contingent Resources (Exploration)": CONTINGENT_EXPLORE_LIGHT_GRAY,
+    "Prospective Resources": PROSPECTIVE_BLUE,
+}
+
+TIMESERIES_PALETTE_OC: dict[str, str] = {
+    "Reserves": "#2EA043",
+    "Sales Potential Resources": "#3FB950",
+    "Contingent Resources (Exploitation)": "#7EE787",
+    "Contingent Resources (Exploration)": "#A5D6A7",
+    "Prospective Resources": "#C5E1A5",
+}
+
+TIMESERIES_PALETTE_AN: dict[str, str] = {
+    "Reserves": "#DA3633",
+    "Sales Potential Resources": "#F85149",
+    "Contingent Resources (Exploitation)": "#FF7B72",
+    "Contingent Resources (Exploration)": "#FFA198",
+    "Prospective Resources": "#FFC1B6",
+}
+
+ONSTREAM_PALETTE: dict[str, str] = {
+    "Reserves": RESERVES_GREEN,
+    "Contingent Resources (Exploitation)": CONTINGENT_EXPLOIT_GRAY,
+    "Contingent Resources (Exploration)": CONTINGENT_EXPLORE_LIGHT_GRAY,
+    "Prospective Resources": PROSPECTIVE_BLUE,
 }
 
 # ── UI Chrome (Dark Theme) ───────────────────────────────────
@@ -61,6 +84,15 @@ PLOTLY_LAYOUT_DEFAULTS: dict = {
         "size": 12,
     },
     "margin": {"l": 50, "r": 30, "t": 30, "b": 50},
+    "hoverlabel": {
+        "bgcolor": BG_ELEVATED,
+        "bordercolor": BORDER_COLOR,
+        "font": {
+            "color": TEXT_PRIMARY,
+            "size": 11,
+            "family": "JetBrains Mono, monospace",
+        },
+    },
     "legend": {
         "orientation": "h",
         "yanchor": "bottom",
@@ -73,11 +105,13 @@ PLOTLY_LAYOUT_DEFAULTS: dict = {
         "gridcolor": "rgba(48,54,61,0.3)",
         "zerolinecolor": "rgba(48,54,61,0.5)",
         "tickfont": {"color": TEXT_MUTED, "size": 11},
+        "showspikes": False,
     },
     "yaxis": {
         "gridcolor": "rgba(48,54,61,0.3)",
         "zerolinecolor": "rgba(48,54,61,0.5)",
         "tickfont": {"color": TEXT_MUTED, "size": 11},
+        "showspikes": False,
     },
 }
 

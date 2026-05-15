@@ -345,32 +345,14 @@
 <div class="animate-fade-up stagger-4">
   <div class="section-title">
     <span class="section-badge" style="background:var(--oil);"></span>
-    Analytical Charts
+    NKRI Timeseries — Oil &amp; Gas Forecast
   </div>
-  <div class="charts-grid">
+  <div class="chart-pair">
     <div class="chart-panel">
-      <div class="chart-panel-header">
-        <span class="chart-panel-title">Resources by Class</span>
-      </div>
-      <div class="chart-body" id="chart-volumetric"></div>
+      <div class="chart-body" id="chart-ts-oc"></div>
     </div>
     <div class="chart-panel">
-      <div class="chart-panel-header">
-        <span class="chart-panel-title">Fluid Split</span>
-      </div>
-      <div class="chart-body" id="chart-donut"></div>
-    </div>
-    <div class="chart-panel">
-      <div class="chart-panel-header">
-        <span class="chart-panel-title">Year Comparison</span>
-      </div>
-      <div class="chart-body" id="chart-yoy"></div>
-    </div>
-    <div class="chart-panel">
-      <div class="chart-panel-header">
-        <span class="chart-panel-title">Hierarchy</span>
-      </div>
-      <div class="chart-body" id="chart-sunburst"></div>
+      <div class="chart-body" id="chart-ts-an"></div>
     </div>
   </div>
 </div>
@@ -378,6 +360,18 @@
 <div class="section-separator"></div>
 
 <div class="animate-fade-up stagger-5">
+  <div class="section-title">
+    <span class="section-badge" style="background:var(--gas);"></span>
+    Projects by Onstream Year
+  </div>
+  <div class="chart-panel">
+    <div class="chart-body" id="chart-onstream"></div>
+  </div>
+</div>
+
+<div class="section-separator"></div>
+
+<div class="animate-fade-up stagger-6">
   <div class="section-title">
     <span class="section-badge" style="background:var(--gas);"></span>
     Data Explorer
@@ -452,25 +446,22 @@
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: {family: 'JetBrains Mono, monospace', color: '#E6EDF3', size: 12},
     margin: {l:50,r:30,t:30,b:50},
-    legend: {orientation:'h',yanchor:'bottom',y:1.02,xanchor:'right',x:1},
-    xaxis: {gridcolor: 'rgba(48,54,61,0.3)', zerolinecolor: 'rgba(48,54,61,0.5)', tickfont:{size:11}},
-    yaxis: {gridcolor: 'rgba(48,54,61,0.3)', zerolinecolor: 'rgba(48,54,61,0.5)', tickfont:{size:11}}
+    hoverlabel: {bgcolor: '#1C2128', bordercolor: '#21262D', font: {color: '#E6EDF3', size: 11, family: 'JetBrains Mono, monospace'}},
+    legend: {orientation:'h',yanchor:'bottom',y:1.02,xanchor:'right',x:1, font:{color:'#E6EDF3',size:11}},
+    xaxis: {gridcolor: 'rgba(48,54,61,0.3)', zerolinecolor: 'rgba(48,54,61,0.5)', tickfont:{size:11}, showspikes:false},
+    yaxis: {gridcolor: 'rgba(48,54,61,0.3)', zerolinecolor: 'rgba(48,54,61,0.5)', tickfont:{size:11}, showspikes:false}
   };
 
   const charts = {
-    'chart-volumetric': {{ bar_fig.to_json() | safe }},
-    'chart-donut': {{ donut_fig.to_json() | safe }},
-    'chart-yoy': {{ yoy_fig.to_json() | safe }},
-    'chart-sunburst': {{ sunburst_fig.to_json() | safe }}
+    'chart-ts-oc': {{ ts_oc_fig.to_json() | safe }},
+    'chart-ts-an': {{ ts_an_fig.to_json() | safe }},
+    'chart-onstream': {{ onstream_fig.to_json() | safe }}
   };
 
   for (const [id, figJson] of Object.entries(charts)) {
     try {
       const parsed = typeof figJson === 'string' ? JSON.parse(figJson) : figJson;
       const layout = { ...plotlyLayoutDefaults, ...parsed.layout };
-      if (id === 'chart-sunburst') {
-        delete layout.margin;
-      }
       Plotly.newPlot(id, parsed.data, layout, plotlyConfig);
     } catch(e) {
       console.error('Chart render failed', id, e);

@@ -148,6 +148,34 @@ class NKRIResourcesRow:
     res_an: float
 
 
+@dataclass(frozen=True)
+class NKRITimeseriesRow:
+    """One row of NKRI timeseries forecast data."""
+
+    year: int
+    project_class: str
+    project_level: str
+    tpf_oc: float
+    tpf_an: float
+    slf_oc: float
+    slf_an: float
+    spf_oc: float
+    spf_an: float
+    tpf_risked_oc: float
+    tpf_risked_an: float
+
+
+@dataclass(frozen=True)
+class OnstreamRow:
+    """One row of onstream year project counts."""
+
+    onstream_year: int
+    project_class: str
+    level_prefix: str
+    project_count: int
+    total_sales: float
+
+
 def _get_conn(read_only: bool = True):
     """Get a DuckDB connection using the configured database path."""
     db_path = Config.get_db_file()
@@ -837,5 +865,100 @@ def get_inplace_kpis(year: int | None = None) -> InPlaceKpiData:
             undisc_risked_ioip=_to_mmstb(undisc_risked_ioip),
             undisc_risked_igip=_to_tscf(undisc_risked_igip),
         )
+    finally:
+        conn.close()
+
+
+def get_nkri_timeseries(
+    year: int | None = None,
+) -> list[NKRITimeseriesRow]:
+    """Get NKRI timeseries forecast data from nkri_timeseries.
+
+    Returns rows for forecast years from year+1 to year+31,
+    grouped by year, project_class, and project_level.
+    """
+    if year is None:
+        year = get_latest_year()
+
+    conn = _get_conn()
+    try:
+        start_yr = year + 1
+        end_yr = year + 31
+        sql = f"""
+        SELECT
+            year as forecast_year,
+            project_class,
+            LEFT(project_level, 1) as lvl,
+            SUM(COALESCE(tpf_oc, 0)) as tpf_oc,
+            SUM(COALESCE(tpf_an, 0)) as tpf_an,
+            SUM(COALESCE(slf_oc, 0)) as slf_oc,
+            SUM(COALESCE(slf_an, 0)) as slf_an,
+            SUM(COALESCE(spf_oc, 0)) as spf_oc,
+            SUM(COALESCE(spf_an, 0)) as spf_an,
+            SUM(COALESCE(tpf_risked_oc, 0)) as tpf_risked_oc,
+            SUM(COALESCE(tpf_risked_an, 0)) as tpf_risked_an
+        FROM nkri_timeseries
+        WHERE report_year = {year}
+          AND year BETWEEN {start_yr} AND {end_yr}
+        GROUP BY forecast_year, project_class, lvl
+        ORDER BY forecast_year
+        """
+        rows = conn.execute(sql).fetchall()
+        return [
+            NKRITimeseriesRow(
+                year=r[0],
+                project_class=r[1],
+                project_level=r[2],
+                tpf_oc=float(r[3]),
+                tpf_an=float(r[4]),
+                slf_oc=float(r[5]),
+                slf_an=float(r[6]),
+                spf_oc=float(r[7]),
+                spf_an=float(r[8]),
+                tpf_risked_oc=float(r[9]),
+                tpf_risked_an=float(r[10]),
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_onstream_data(
+    year: int | None = None,
+) -> list[OnstreamRow]:
+    """Get onstream year project counts by class for a report year."""
+    if year is None:
+        year = get_latest_year()
+
+    conn = _get_conn()
+    try:
+        sql = f"""
+        SELECT
+            onstream_year,
+            {PROJECT_CLASS_NORM.strip()} as class,
+            LEFT(project_level, 1) as lvl,
+            COUNT(DISTINCT project_id) as cnt,
+            SUM(COALESCE(cprd_sls_oc, 0)
+                + COALESCE(cprd_sls_an, 0)) as total_sales
+        FROM project_resources
+        WHERE report_year = {year}
+          AND onstream_year IS NOT NULL
+          AND onstream_year > 1900
+          AND onstream_year <= 2050
+        GROUP BY onstream_year, class, lvl
+        ORDER BY onstream_year
+        """
+        rows = conn.execute(sql).fetchall()
+        return [
+            OnstreamRow(
+                onstream_year=r[0],
+                project_class=r[1],
+                level_prefix=r[2],
+                project_count=r[3],
+                total_sales=float(r[4] if r[4] else 0),
+            )
+            for r in rows
+        ]
     finally:
         conn.close()

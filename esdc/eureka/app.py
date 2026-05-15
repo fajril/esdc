@@ -13,10 +13,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from esdc.eureka.charts.nkri import (
-    nkri_hierarchy_sunburst,
-    nkri_resource_donut,
-    nkri_volumetric_bar,
-    nkri_yoy_comparison,
+    nkri_onstream_chart,
+    nkri_timeseries_an,
+    nkri_timeseries_oc,
 )
 from esdc.eureka.queries import (
     get_available_years,
@@ -24,8 +23,9 @@ from esdc.eureka.queries import (
     get_inplace_kpis,
     get_latest_year,
     get_nkri_kpis,
-    get_nkri_resources,
     get_nkri_table_data,
+    get_nkri_timeseries,
+    get_onstream_data,
     get_project_kpis,
     get_wk_kpis,
 )
@@ -118,11 +118,11 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
         inplace = get_inplace_kpis(selected_year)
 
         # Generate charts
-        resources = get_nkri_resources(selected_year)
-        bar_fig = nkri_volumetric_bar(resources)
-        donut_fig = nkri_resource_donut(resources)
-        yoy_fig = nkri_yoy_comparison(selected_year, years)
-        sunburst_fig = nkri_hierarchy_sunburst(resources)
+        ts_data = get_nkri_timeseries(selected_year)
+        onstream_data = get_onstream_data(selected_year)
+        ts_oc_fig = nkri_timeseries_oc(ts_data)
+        ts_an_fig = nkri_timeseries_an(ts_data)
+        onstream_fig = nkri_onstream_chart(onstream_data, selected_year)
 
         ctx = {
             "years": years,
@@ -133,10 +133,9 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
             "fields": fields,
             "projects": projects,
             "inplace": inplace,
-            "bar_fig": bar_fig,
-            "donut_fig": donut_fig,
-            "yoy_fig": yoy_fig,
-            "sunburst_fig": sunburst_fig,
+            "ts_oc_fig": ts_oc_fig,
+            "ts_an_fig": ts_an_fig,
+            "onstream_fig": onstream_fig,
         }
         return templates.TemplateResponse(request, "nkri.html", ctx)
 
@@ -164,15 +163,19 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
     async def nkri_chart(chart_name: str, year: int | None = None) -> JSONResponse:
         """API endpoint for NKRI chart data as Plotly JSON."""
         try:
-            resources = get_nkri_resources(year)
             years = get_available_years()
             selected_year = year if year and year in years else years[0]
 
             chart_map = {
-                "volumetric_bar": nkri_volumetric_bar,
-                "resource_donut": nkri_resource_donut,
-                "yoy_comparison": lambda r: nkri_yoy_comparison(selected_year, years),
-                "hierarchy_sunburst": nkri_hierarchy_sunburst,
+                "timeseries_oc": lambda _: nkri_timeseries_oc(
+                    get_nkri_timeseries(selected_year)
+                ),
+                "timeseries_an": lambda _: nkri_timeseries_an(
+                    get_nkri_timeseries(selected_year)
+                ),
+                "onstream": lambda _: nkri_onstream_chart(
+                    get_onstream_data(selected_year), selected_year
+                ),
             }
 
             if chart_name not in chart_map:
@@ -181,7 +184,7 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
                     status_code=404,
                 )
 
-            fig = chart_map[chart_name](resources)
+            fig = chart_map[chart_name](None)
             return JSONResponse(fig.to_json(), media_type="application/json")
         except FileNotFoundError:
             return JSONResponse({"error": "Database not found"}, status_code=500)
