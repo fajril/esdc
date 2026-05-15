@@ -7,94 +7,156 @@
 {% set f = fields %}
 {% set p = projects %}
 
-<div class="animate-fade-up stagger-1">
-  <div class="section-title">Volumetric Resources</div>
+<div class="animate-scale-in stagger-1">
+  <div class="section-title"><span class="section-badge" style="background:var(--reserves);"></span>Volumetric Resources</div>
 
   <div class="hero-pipeline">
+    {# ── 1. Reserves (2fr card) ── #}
     <div class="hero-metric reserves">
-      <div class="hero-metric-header">Reserves &amp; GRR</div>
-      <div class="hero-value-group">
-        <div class="hero-value overview">{{ "%.0f"|format(k.res_2p_oc) }}</div>
-        <div class="hero-unit">MMSTB</div>
-        <div class="hero-label" style="color:var(--oil-bright)">2P OC</div>
+      <div class="hero-metric-header">Reserves</div>
+      <div class="hero-subheader">2P Best Estimate</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.res_2p_oc) }}">{{ "%.0f"|format(k.res_2p_oc) }}</div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_res_2p_oc is not none %}{{ 'up' if k.yoy_res_2p_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_res_2p_oc is not none %}{% if k.yoy_res_2p_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_res_2p_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.res_2p_an) }}">{{ "%.0f"|format(k.res_2p_an) }}</div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_res_2p_an is not none %}{{ 'up' if k.yoy_res_2p_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_res_2p_an is not none %}{% if k.yoy_res_2p_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_res_2p_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
       </div>
-      <div class="hero-value-group" style="margin-top:0.5rem;">
-        <div class="hero-value overview">{{ "%.0f"|format(k.res_2p_an) }}</div>
-        <div class="hero-unit">TSCF</div>
-        <div class="hero-label" style="color:var(--gas-bright)">2P AN</div>
-      </div>
-      {% if k.yoy_res_2p_oc is not none %}
-      <div class="hero-yoy {{ 'up' if k.yoy_res_2p_oc >= 0 else 'down' }}">
-        {% if k.yoy_res_2p_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_res_2p_oc) }}% OC
-      </div>
-      {% endif %}
     </div>
 
+    {# ── 2. GRR ── #}
+    <div class="hero-metric grr">
+      <div class="hero-metric-header">GRR</div>
+      <div class="hero-subheader">Recoverable Potential</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.grr_oc) }}">{{ "%.0f"|format(k.grr_oc) }}</div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_grr_oc is not none %}{{ 'up' if k.yoy_grr_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_grr_oc is not none %}{% if k.yoy_grr_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_grr_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.grr_an) }}">{{ "%.0f"|format(k.grr_an) }}</div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_grr_an is not none %}{{ 'up' if k.yoy_grr_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_grr_an is not none %}{% if k.yoy_grr_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_grr_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── 3. Contingent Resources (Exploitation) ── #}
     <div class="hero-metric cont-exploit">
-      <div class="hero-metric-header">Contingent Exploit.</div>
-      <div class="hero-value-group">
-        <div class="hero-value oil">{{ "%.0f"|format(k.cont_exploit_oc) }}</div>
-        <div class="hero-unit">MMSTB</div>
-        <div class="hero-label">2C OC Risked</div>
-      </div>
-      <div class="hero-value-group" style="margin-top:0.5rem;">
-        <div class="hero-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.cont_exploit_an) }}</div>
-        <div class="hero-unit">TSCF</div>
-        <div class="hero-label">2C AN Risked</div>
+      <div class="hero-metric-header">Contingent Resources</div>
+      <div class="hero-subheader">(Exploitation) — 2C Risked</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.cont_exploit_oc) }}">{{ "%.0f"|format(k.cont_exploit_oc) }}</div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_cont_exploit_oc is not none %}{{ 'up' if k.yoy_cont_exploit_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_cont_exploit_oc is not none %}{% if k.yoy_cont_exploit_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_cont_exploit_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.cont_exploit_an) }}">{{ "%.0f"|format(k.cont_exploit_an) }}</div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_cont_exploit_an is not none %}{{ 'up' if k.yoy_cont_exploit_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_cont_exploit_an is not none %}{% if k.yoy_cont_exploit_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_cont_exploit_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
       </div>
     </div>
 
+    {# ── 4. Contingent Resources (Exploration) ── #}
     <div class="hero-metric cont-explore">
-      <div class="hero-metric-header">Contingent Explore.</div>
-      <div class="hero-value-group">
-        <div class="hero-value oil">{{ "%.0f"|format(k.cont_explore_oc) }}</div>
-        <div class="hero-unit">MMSTB</div>
-        <div class="hero-label">2C OC Risked</div>
-      </div>
-      <div class="hero-value-group" style="margin-top:0.5rem;">
-        <div class="hero-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.cont_explore_an) }}</div>
-        <div class="hero-unit">TSCF</div>
-        <div class="hero-label">2C AN Risked</div>
+      <div class="hero-metric-header">Contingent Resources</div>
+      <div class="hero-subheader">(Exploration) — 2C Risked</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.cont_explore_oc) }}">{{ "%.0f"|format(k.cont_explore_oc) }}</div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_cont_explore_oc is not none %}{{ 'up' if k.yoy_cont_explore_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_cont_explore_oc is not none %}{% if k.yoy_cont_explore_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_cont_explore_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.cont_explore_an) }}">{{ "%.0f"|format(k.cont_explore_an) }}</div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_cont_explore_an is not none %}{{ 'up' if k.yoy_cont_explore_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_cont_explore_an is not none %}{% if k.yoy_cont_explore_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_cont_explore_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
       </div>
     </div>
 
+    {# ── 5. Prospective Resources ── #}
     <div class="hero-metric prospective">
-      <div class="hero-metric-header">Prospective</div>
-      <div class="hero-value-group">
-        <div class="hero-value oil">{{ "%.0f"|format(k.prospective_oc) }}</div>
-        <div class="hero-unit">MMSTB</div>
-        <div class="hero-label">Risked 2U OC</div>
-      </div>
-      <div class="hero-value-group" style="margin-top:0.5rem;">
-        <div class="hero-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.prospective_an) }}</div>
-        <div class="hero-unit">TSCF</div>
-        <div class="hero-label">Risked 2U AN</div>
+      <div class="hero-metric-header">Prospective Resources</div>
+      <div class="hero-subheader">2U Risked</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.prospective_oc) }}">{{ "%.0f"|format(k.prospective_oc) }}</div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_prospective_oc is not none %}{{ 'up' if k.yoy_prospective_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_prospective_oc is not none %}{% if k.yoy_prospective_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_prospective_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.prospective_an) }}">{{ "%.0f"|format(k.prospective_an) }}</div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_prospective_an is not none %}{{ 'up' if k.yoy_prospective_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_prospective_an is not none %}{% if k.yoy_prospective_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_prospective_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="hero-metric cumulative">
+    {# ── 6. Production ── #}
+    <div class="hero-metric production">
       <div class="hero-metric-header">Production</div>
-      <div class="hero-value-group">
-        <div class="hero-value overview">{{ "%.0f"|format(k.cumprod_sls_oc) }}</div>
-        <div class="hero-unit">MMSTB</div>
-        <div class="hero-label">Sales Cumulative OC</div>
+      <div class="hero-subheader">Cumulative &amp; Yearly</div>
+      <div class="prod-grid">
+        <div class="prod-cell">
+          <div class="prod-cell-value" style="color:var(--oil-bright)" data-count="{{ "%.0f"|format(k.cumprod_sls_oc) }}">{{ "%.0f"|format(k.cumprod_sls_oc) }}</div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="prod-cell-label">Cumulative OC</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-value" style="color:var(--gas-bright)" data-count="{{ "%.0f"|format(k.cumprod_sls_an) }}">{{ "%.0f"|format(k.cumprod_sls_an) }}</div>
+          <div class="hero-unit">TSCF</div>
+          <div class="prod-cell-label">Cumulative AN</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-value" style="color:var(--oil-bright)">{{ "%.0f"|format(k.yearly_sls_oc) }}</div>
+          <div class="hero-unit">MMSTB/yr</div>
+          <div class="prod-cell-label">Yearly OC</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.yearly_sls_an) }}</div>
+          <div class="hero-unit">BSCF/yr</div>
+          <div class="prod-cell-label">Yearly AN</div>
+        </div>
       </div>
-      <div class="hero-value-group" style="margin-top:0.5rem;">
-        <div class="hero-value overview">{{ "%.0f"|format(k.yearly_sls_oc) }}</div>
-        <div class="hero-unit">MMSTB/yr</div>
-        <div class="hero-label">Yearly Production OC</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="prod-stats">
-    <div class="prod-stat">
-      <span class="prod-stat-label">Sales Cumulative AN</span>
-      <span class="prod-stat-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.cumprod_sls_an) }} <span style="font-size:0.75rem;color:var(--text-muted)">TSCF</span></span>
-    </div>
-    <div class="prod-stat">
-      <span class="prod-stat-label">Yearly Production AN</span>
-      <span class="prod-stat-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.yearly_sls_an) }} <span style="font-size:0.75rem;color:var(--text-muted)">BSCF/yr</span></span>
     </div>
   </div>
 </div>
@@ -102,8 +164,8 @@
 <div class="section-separator"></div>
 
 <div class="animate-fade-up stagger-2">
-  <div class="section-title" style="--section-color:var(--cont-exploit)">
-    <span style="background:var(--cont-exploit);width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:0.75rem;"></span>
+  <div class="section-title">
+    <span class="section-badge" style="background:var(--cont-exploit);"></span>
     Asset Counts
   </div>
   <div class="counts-bar">
@@ -202,7 +264,7 @@
 
 <div class="animate-fade-up stagger-3">
   <div class="section-title">
-    <span style="background:var(--oil);width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:0.75rem;"></span>
+    <span class="section-badge" style="background:var(--oil);"></span>
     Analytical Charts
   </div>
   <div class="charts-grid">
@@ -237,7 +299,7 @@
 
 <div class="animate-fade-up stagger-4">
   <div class="section-title">
-    <span style="background:var(--gas);width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:0.75rem;"></span>
+    <span class="section-badge" style="background:var(--gas);"></span>
     Data Explorer
   </div>
   <div class="table-section">
@@ -269,7 +331,34 @@
 
 {% block scripts %}
 <script>
-  // Plotly dark theme config
+  // ── Count-up animation for hero values ──
+  function animateValue(el, end, duration) {
+    const start = 0;
+    let startTimestamp = null;
+    const step = (timestamp) => {
+      if (!startTimestamp) startTimestamp = timestamp;
+      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      el.textContent = Math.floor(eased * (end - start) + start).toLocaleString();
+      if (progress < 1) {
+        window.requestAnimationFrame(step);
+      }
+    };
+    window.requestAnimationFrame(step);
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[data-count]').forEach(el => {
+      const raw = el.getAttribute('data-count');
+      const parsed = parseFloat(raw.replace(/,/g, ''));
+      if (!isNaN(parsed) && parsed > 0) {
+        el.textContent = '0';
+        animateValue(el, parsed, 1200);
+      }
+    });
+  });
+
+  // ── Plotly dark theme config ──
   const plotlyConfig = {
     responsive: true,
     displayModeBar: true,
@@ -300,7 +389,6 @@
       const parsed = typeof figJson === 'string' ? JSON.parse(figJson) : figJson;
       const layout = { ...plotlyLayoutDefaults, ...parsed.layout };
       if (id === 'chart-sunburst') {
-        // Let sunburst keep its own margins
         delete layout.margin;
       }
       Plotly.newPlot(id, parsed.data, layout, plotlyConfig);
@@ -310,7 +398,7 @@
     }
   }
 
-  // Data table loader
+  // ── Data table loader ──
   function loadTable(detail) {
     const container = document.getElementById('data-table-container');
     container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4;margin-bottom:0.5rem;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><br>Loading...</div>';
@@ -354,7 +442,7 @@
 
   loadTable('resources');
 
-  // Animate count detail bars on scroll
+  // ── Animate count bars on scroll ──
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (entry.isIntersecting) {

@@ -31,11 +31,48 @@ def _class_label(class_norm: str, stage_norm: str) -> str:
     """Get display label for resource class."""
     if class_norm == "Contingent Resources":
         if stage_norm == "Exploitation":
-            return "Contingent Exploit."
+            return "Contingent Resources (Exploitation)"
         if stage_norm == "Exploration":
-            return "Contingent Explore."
-        return "Contingent"
+            return "Contingent Resources (Exploration)"
+        return "Contingent Resources"
     return class_norm
+
+
+def _split_reserves_grr(
+    resources: list[NKRIResourcesRow],
+) -> dict[str, dict[str, float]]:
+    """Split 'Reserves & GRR' rows into separate Reserves and GRR entries."""
+    groups: dict[str, dict[str, float]] = {}
+    for r in resources:
+        if r.project_class_norm == "Reserves & GRR":
+            # Split into Reserves (res_*) and additional GRR (rec_* - res_*)
+            res_oc = r.res_oc or 0
+            res_an = r.res_an or 0
+            rec_oc = r.rec_oc or 0
+            rec_an = r.rec_an or 0
+            grr_oc = max(0, rec_oc - res_oc)
+            grr_an = max(0, rec_an - res_an)
+            groups.setdefault("Reserves", {"oc": 0, "an": 0})
+            groups.setdefault("GRR", {"oc": 0, "an": 0})
+            groups["Reserves"]["oc"] += res_oc
+            groups["Reserves"]["an"] += res_an
+            groups["GRR"]["oc"] += grr_oc
+            groups["GRR"]["an"] += grr_an
+        else:
+            label = _class_label(r.project_class_norm, r.project_stage_norm)
+            groups.setdefault(label, {"oc": 0, "an": 0})
+            groups[label]["oc"] += r.rec_oc or 0
+            groups[label]["an"] += r.rec_an or 0
+    return groups
+
+
+CLASS_ORDER = [
+    "Reserves",
+    "GRR",
+    "Contingent Resources (Exploitation)",
+    "Contingent Resources (Exploration)",
+    "Prospective Resources",
+]
 
 
 def nkri_volumetric_bar(resources: list[NKRIResourcesRow]) -> go.Figure:
@@ -44,28 +81,12 @@ def nkri_volumetric_bar(resources: list[NKRIResourcesRow]) -> go.Figure:
     Shows 2P/2C/2U best estimate volumes grouped by resource class,
     with OC and AN side by side.
     """
-    # Filter to best estimate (2. Middle Value)
     best = [r for r in resources if r.uncert_level == "2. Middle Value"]
     if not best:
         best = resources
 
-    # Group by class+stage
-    groups: dict[str, dict[str, float]] = {}
-    for r in best:
-        label = _class_label(r.project_class_norm, r.project_stage_norm)
-        if label not in groups:
-            groups[label] = {"oc": 0, "an": 0}
-        groups[label]["oc"] += r.rec_oc or 0
-        groups[label]["an"] += r.rec_an or 0
-
-    # Ordered categories
-    class_order = [
-        "Reserves & GRR",
-        "Contingent Exploit.",
-        "Contingent Explore.",
-        "Prospective Resources",
-    ]
-    labels = [lbl for lbl in class_order if lbl in groups]
+    groups = _split_reserves_grr(best)
+    labels = [lbl for lbl in CLASS_ORDER if lbl in groups]
 
     fig = go.Figure()
     fig.add_trace(
@@ -128,50 +149,36 @@ def nkri_resource_donut(resources: list[NKRIResourcesRow]) -> go.Figure:
 
 
 def nkri_yoy_comparison(year: int, available_years: list[int]) -> go.Figure:
-    """Stacked bar chart: Year-over-Year comparison for 2P/2C/2U.
+    """Grouped bar chart: Year-over-Year comparison for all resource classes.
 
-    Shows delta values (current year minus previous year) by class for OC and AN.
+    Shows current year volumes by class for OC and AN.
     """
     sorted_years = sorted(available_years)
     if year not in sorted_years:
         return go.Figure()
 
-    # For now, show current year resource volumes by class.
-    # YoY deltas will be added in a future iteration.
     curr_data = get_nkri_resources(year)
-
-    # Best estimate only
     curr_best = [r for r in curr_data if r.uncert_level == "2. Middle Value"]
     if not curr_best:
         curr_best = curr_data
 
-    categories = ["Reserves & GRR", "Contingent Resources", "Prospective Resources"]
-
-    # Current year values
-    curr_oc: dict[str, float] = {}
-    curr_an: dict[str, float] = {}
-    for r in curr_best:
-        label = r.project_class_norm
-        if label in categories:
-            curr_oc.setdefault(label, 0)
-            curr_an.setdefault(label, 0)
-            curr_oc[label] += r.rec_oc or 0
-            curr_an[label] += r.rec_an or 0
+    groups = _split_reserves_grr(curr_best)
+    labels = [lbl for lbl in CLASS_ORDER if lbl in groups]
 
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
-            name=f"{year} OC",
-            x=categories,
-            y=[_to_mmstb(curr_oc.get(c, 0)) for c in categories],
+            name=f"{year} Oil+Condensate",
+            x=labels,
+            y=[_to_mmstb(groups[lbl]["oc"]) for lbl in labels],
             marker_color=FLUID_OC,
         )
     )
     fig.add_trace(
         go.Bar(
-            name=f"{year} AN",
-            x=categories,
-            y=[_to_tscf(curr_an.get(c, 0)) for c in categories],
+            name=f"{year} Gas+NGL",
+            x=labels,
+            y=[_to_tscf(groups[lbl]["an"]) for lbl in labels],
             marker_color=FLUID_AN,
         )
     )
@@ -186,7 +193,7 @@ def nkri_yoy_comparison(year: int, available_years: list[int]) -> go.Figure:
 
 
 def nkri_hierarchy_sunburst(resources: list[NKRIResourcesRow]) -> go.Figure:
-    """Sunburst chart: Hierarchical view Reserves → Contingent → Prospective.
+    """Sunburst chart: Hierarchical view of resource classes.
 
     Inner ring: resource class. Outer ring: OC/AN split.
     """
@@ -194,46 +201,36 @@ def nkri_hierarchy_sunburst(resources: list[NKRIResourcesRow]) -> go.Figure:
     if not best:
         best = resources
 
-    # Build sunburst data
+    groups = _split_reserves_grr(best)
+
     labels: list[str] = ["Total"]
     parents: list[str] = [""]
     values: list[float] = [0.0]
     colors: list[str] = [""]
 
-    class_order = ["Reserves & GRR", "Contingent Resources", "Prospective Resources"]
-
-    for cls in class_order:
-        cls_rows = [r for r in best if r.project_class_norm == cls]
-        if not cls_rows:
+    for cls in CLASS_ORDER:
+        if cls not in groups:
             continue
+        oc_val = _to_mmstb(groups[cls]["oc"])
+        an_val = _to_tscf(groups[cls]["an"])
 
-        oc_val = _to_mmstb(sum(r.rec_oc or 0 for r in cls_rows))
-        an_val = _to_tscf(sum(r.rec_an or 0 for r in cls_rows))
-
-        # Class node
         labels.append(cls)
         parents.append("Total")
         values.append(oc_val + an_val)
         colors.append(CLASS_PALETTE.get(cls, "#999"))
 
-        # OC sub-node
         labels.append(f"{cls}<br>Oil+Cond")
         parents.append(cls)
         values.append(oc_val)
         colors.append(FLUID_OC)
 
-        # AN sub-node
         labels.append(f"{cls}<br>Gas+NGL")
         parents.append(cls)
         values.append(an_val)
         colors.append(FLUID_AN)
 
-    # Update total
-    total_values = []
-    for idx_pos, (_lbl, val) in enumerate(zip(labels, values, strict=False)):
-        if parents[idx_pos] == "Total":
-            total_values.append(val)
-    values[0] = sum(total_values)
+    total_vals = [v for i, v in enumerate(values) if parents[i] == "Total"]
+    values[0] = sum(total_vals)
 
     fig = go.Figure(
         go.Sunburst(

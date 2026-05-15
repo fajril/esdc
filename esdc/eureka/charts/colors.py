@@ -29,9 +29,10 @@ CONTINGENT_EXPLORE_LIGHT_AMBER = "#E3B341"
 PROSPECTIVE_ORANGE = "#F0883E"
 
 CLASS_PALETTE: dict[str, str] = {
-    "Reserves & GRR": RESERVES_BLUE,
-    "Contingent Exploitation": CONTINGENT_EXPLOIT_AMBER,
-    "Contingent Exploration": CONTINGENT_EXPLORE_LIGHT_AMBER,
+    "Reserves": RESERVES_BLUE,
+    "GRR": "#36C5F0",
+    "Contingent Resources (Exploitation)": CONTINGENT_EXPLOIT_AMBER,
+    "Contingent Resources (Exploration)": CONTINGENT_EXPLORE_LIGHT_AMBER,
     "Prospective Resources": PROSPECTIVE_ORANGE,
 }
 

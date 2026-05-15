@@ -55,6 +55,9 @@ class NKRIKpiData:
     res_1p_an: float
     res_2p_an: float
     res_3p_an: float
+    # GRR — total recoverable (rec_* at Reserves & GRR class, 2P)
+    grr_oc: float
+    grr_an: float
     # Contingent Exploitation (risked, 2C)
     cont_exploit_oc: float
     cont_exploit_an: float
@@ -73,6 +76,8 @@ class NKRIKpiData:
     # YoY changes (percent)
     yoy_res_2p_oc: float | None = None
     yoy_res_2p_an: float | None = None
+    yoy_grr_oc: float | None = None
+    yoy_grr_an: float | None = None
     yoy_cont_exploit_oc: float | None = None
     yoy_cont_exploit_an: float | None = None
     yoy_cont_explore_oc: float | None = None
@@ -186,23 +191,30 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
 
     conn = _get_conn()
     try:
-        # --- Reserves (1P/2P/3P) from nkri_resources ---
-        res_sql = f"""
+        # --- Reserves (res_*) + GRR (rec_*) from nkri_resources ---
+        class_res_sql = f"""
         SELECT
             uncert_level,
             SUM(res_oc) as sum_res_oc,
-            SUM(res_an) as sum_res_an
+            SUM(res_an) as sum_res_an,
+            SUM(rec_oc) as sum_rec_oc,
+            SUM(rec_an) as sum_rec_an
         FROM nkri_resources
         WHERE {PROJECT_CLASS_NORM.strip()} = 'Reserves & GRR'
           AND report_year = {year}
         GROUP BY uncert_level
         """
-        res_rows = conn.execute(res_sql).fetchall()
-        res_map = {r[0]: (r[1], r[2]) for r in res_rows}
+        class_res_rows = conn.execute(class_res_sql).fetchall()
+        res_map: dict[str, tuple[float, float]] = {}
+        rec_map: dict[str, tuple[float, float]] = {}
+        for r in class_res_rows:
+            res_map[r[0]] = (r[1], r[2])
+            rec_map[r[0]] = (r[3], r[4])
 
         res_1p = res_map.get("1. Low Value", (0, 0))
         res_2p = res_map.get("2. Middle Value", (0, 0))
         res_3p = res_map.get("3. High Value", (0, 0))
+        rec_2p = rec_map.get("2. Middle Value", (0, 0))
 
         # --- Contingent Exploitation (2C) from project_resources ---
         cont_exploit_sql = f"""
@@ -278,7 +290,12 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
 
         yoy_data = {}
         if prev_year is not None:
-            yoy_data = _compute_yoy(conn, year, prev_year, res_map)
+            yoy_data = _compute_yoy(
+                conn, year, prev_year, res_map, rec_map,
+                cont_exploit_oc, cont_exploit_an,
+                cont_explore_oc, cont_explore_an,
+                prospective_oc, prospective_an,
+            )
 
         return NKRIKpiData(
             res_1p_oc=_to_mmstb(res_1p[0]),
@@ -287,6 +304,8 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
             res_1p_an=_to_tscf(res_1p[1]),
             res_2p_an=_to_tscf(res_2p[1]),
             res_3p_an=_to_tscf(res_3p[1]),
+            grr_oc=_to_mmstb(rec_2p[0]),
+            grr_an=_to_tscf(rec_2p[1]),
             cont_exploit_oc=_to_mmstb(cont_exploit_oc),
             cont_exploit_an=_to_tscf(cont_exploit_an),
             cont_explore_oc=_to_mmstb(cont_explore_oc),
@@ -303,24 +322,44 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
         conn.close()
 
 
-def _compute_yoy(conn, year: int, prev_year: int, curr_res_map: dict) -> dict:
+def _compute_yoy(
+    conn,
+    year: int,
+    prev_year: int,
+    curr_res_map: dict,
+    curr_rec_map: dict,
+    curr_ce_oc: float,
+    curr_ce_an: float,
+    curr_cx_oc: float,
+    curr_cx_an: float,
+    curr_pr_oc: float,
+    curr_pr_an: float,
+) -> dict:
     """Compute YoY percentage changes for KPIs."""
-    # Reserves YoY
-    prev_res_sql = f"""
+    # Reserves + GRR (combined query, 4 columns per uncert_level)
+    prev_class_sql = f"""
     SELECT
         uncert_level,
         SUM(res_oc) as sum_res_oc,
-        SUM(res_an) as sum_res_an
+        SUM(res_an) as sum_res_an,
+        SUM(rec_oc) as sum_rec_oc,
+        SUM(rec_an) as sum_rec_an
     FROM nkri_resources
     WHERE {PROJECT_CLASS_NORM.strip()} = 'Reserves & GRR'
       AND report_year = {prev_year}
     GROUP BY uncert_level
     """
-    prev_res_rows = conn.execute(prev_res_sql).fetchall()
-    prev_res_map = {r[0]: (r[1], r[2]) for r in prev_res_rows}
+    prev_rows = conn.execute(prev_class_sql).fetchall()
+    prev_res_map: dict[str, tuple] = {}
+    prev_rec_map: dict[str, tuple] = {}
+    for r in prev_rows:
+        prev_res_map[r[0]] = (r[1], r[2])
+        prev_rec_map[r[0]] = (r[3], r[4])
 
-    prev_2p = prev_res_map.get("2. Middle Value", (0, 0))
-    curr_2p = curr_res_map.get("2. Middle Value", (0, 0))
+    prev_res_2p = prev_res_map.get("2. Middle Value", (0, 0))
+    prev_rec_2p = prev_rec_map.get("2. Middle Value", (0, 0))
+    curr_res_2p = curr_res_map.get("2. Middle Value", (0, 0))
+    curr_rec_2p = curr_rec_map.get("2. Middle Value", (0, 0))
 
     # Contingent Exploitation YoY
     prev_cont_exploit_sql = f"""
@@ -366,15 +405,20 @@ def _compute_yoy(conn, year: int, prev_year: int, curr_res_map: dict) -> dict:
     prev_pr_oc = prev_pr[0] if prev_pr else 0
     prev_pr_an = prev_pr[1] if prev_pr else 0
 
+    def _yoy_pct(current: float, prev: float, to_unit) -> float | None:
+        return _pct_change(to_unit(current), to_unit(prev))
+
     return {
-        "yoy_res_2p_oc": _pct_change(_to_mmstb(curr_2p[0]), _to_mmstb(prev_2p[0])),
-        "yoy_res_2p_an": _pct_change(_to_tscf(curr_2p[1]), _to_tscf(prev_2p[1])),
-        "yoy_cont_exploit_oc": _pct_change(_to_mmstb(0), _to_mmstb(prev_ce_oc)),
-        "yoy_cont_exploit_an": _pct_change(_to_tscf(0), _to_tscf(prev_ce_an)),
-        "yoy_cont_explore_oc": _pct_change(_to_mmstb(0), _to_mmstb(prev_cx_oc)),
-        "yoy_cont_explore_an": _pct_change(_to_tscf(0), _to_tscf(prev_cx_an)),
-        "yoy_prospective_oc": _pct_change(_to_mmstb(0), _to_mmstb(prev_pr_oc)),
-        "yoy_prospective_an": _pct_change(_to_tscf(0), _to_tscf(prev_pr_an)),
+        "yoy_res_2p_oc": _yoy_pct(curr_res_2p[0], prev_res_2p[0], _to_mmstb),
+        "yoy_res_2p_an": _yoy_pct(curr_res_2p[1], prev_res_2p[1], _to_tscf),
+        "yoy_grr_oc": _yoy_pct(curr_rec_2p[0], prev_rec_2p[0], _to_mmstb),
+        "yoy_grr_an": _yoy_pct(curr_rec_2p[1], prev_rec_2p[1], _to_tscf),
+        "yoy_cont_exploit_oc": _yoy_pct(curr_ce_oc, prev_ce_oc, _to_mmstb),
+        "yoy_cont_exploit_an": _yoy_pct(curr_ce_an, prev_ce_an, _to_tscf),
+        "yoy_cont_explore_oc": _yoy_pct(curr_cx_oc, prev_cx_oc, _to_mmstb),
+        "yoy_cont_explore_an": _yoy_pct(curr_cx_an, prev_cx_an, _to_tscf),
+        "yoy_prospective_oc": _yoy_pct(curr_pr_oc, prev_pr_oc, _to_mmstb),
+        "yoy_prospective_an": _yoy_pct(curr_pr_an, prev_pr_an, _to_tscf),
     }
 
 
@@ -642,7 +686,7 @@ def get_nkri_table_data(
         FROM nkri_resources
         WHERE report_year = {year}
         GROUP BY project_stage, project_class{group_clause}
-        ORDER BY project_class, project_stage, uncert_level
+        ORDER BY project_class, project_stage{group_clause}
         """
         rows = conn.execute(sql).fetchall()
         col_names = [desc[0] for desc in conn.description]
