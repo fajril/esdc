@@ -626,8 +626,9 @@ def _summarize_entity(
             metrics=metrics,
             source_quality=_source_quality_context(source_items),
         )
+        max_attempts = max(retry, 1)
         last_error: str | None = None
-        for attempt in range(retry + 1):
+        for attempt in range(max_attempts):
             retry_prompt = (
                 prompt + _retry_feedback(last_error) if last_error else prompt
             )
@@ -644,13 +645,14 @@ def _summarize_entity(
                 break
             except (json.JSONDecodeError, ValueError) as e:
                 msg = (
-                    f"[yellow]Attempt {attempt + 1}/{retry + 1} failed[/yellow] "
+                    f"[yellow]Attempt {attempt + 1}/{max_attempts} failed[/yellow] "
                     f"for {level} '[bold]{entity_name}[/bold]' "
                     f"({type(e).__name__}): {e}"
                 )
                 logger.warning("%s | Response: %.200s", msg, content.strip()[:200])
                 console.print(msg)
-                if attempt < retry:
+                is_last = attempt == max_attempts - 1
+                if not is_last:
                     last_error = str(e)
                 else:
                     raise

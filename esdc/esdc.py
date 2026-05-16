@@ -306,9 +306,9 @@ def summarize(
         int,
         typer.Option(
             "--retry",
-            help="Retry failed LLM N times with error feedback (0 = repair only).",
+            help="Max LLM attempts (1 = no retry, 2 = one retry, etc). Default 1.",
         ),
-    ] = 0,
+    ] = 1,
 ) -> None:
     """Generate LLM executive summaries for Eureka resource dashboards."""
     if year is None:
