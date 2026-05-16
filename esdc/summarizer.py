@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from esdc.configs import Config
 from esdc.console import console
 from esdc.db_security import _load_sql_script
 from esdc.dbmanager import _ensure_duckdb_database, get_duckdb_connection
+
+logger = logging.getLogger(__name__)
 
 EntityLevel = Literal["field", "working_area", "nkri"]
 SummarizeTarget = Literal["all", "field", "working_area", "nkri"]
@@ -640,12 +643,23 @@ def _summarize_entity(
                 summary = _parse_summary_response(content)
                 break
             except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(
+                    "Attempt %d/%d failed for %s '%s' (%s): %.200s",
+                    attempt + 1,
+                    retry + 1,
+                    level,
+                    entity_name,
+                    type(e).__name__,
+                    content.strip()[:200],
+                )
                 if attempt < retry:
                     last_error = str(e)
                 else:
                     raise
         else:
-            raise RuntimeError("Unexpected: retry loop exhausted without success or raise.")
+            raise RuntimeError(
+                "Retry loop exhausted without success or raise."
+            )
         summary = _normalize_summary(summary, len(source_items_for_prompt))
 
     summary_json = json.dumps(summary, ensure_ascii=False, sort_keys=True)
@@ -1088,8 +1102,19 @@ def _parse_summary_response(content: str) -> dict[str, Any]:
     end = cleaned.rfind("}")
     if start != -1 and end != -1:
         cleaned = cleaned[start : end + 1]
+    before_repair = cleaned
     cleaned = _repair_json(cleaned)
-    parsed = json.loads(cleaned)
+    if cleaned != before_repair:
+        logger.debug("JSON repair applied: %.150s", before_repair)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Invalid JSON from LLM (after repair). Raw[%.300s] | Repaired[%.300s]",
+            content.strip()[:300],
+            cleaned[:300],
+        )
+        raise
     if not isinstance(parsed, dict):
         raise ValueError("Summary response must be a JSON object.")
     return parsed
