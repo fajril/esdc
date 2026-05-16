@@ -644,14 +644,19 @@ def _summarize_entity(
                 summary = _parse_summary_response(content)
                 break
             except (json.JSONDecodeError, ValueError) as e:
-                msg = (
-                    f"[yellow]Attempt {attempt + 1}/{max_attempts} failed[/yellow] "
-                    f"for {level} '[bold]{entity_name}[/bold]' "
-                    f"({type(e).__name__}): {e}"
-                )
-                logger.warning("%s | Response: %.200s", msg, content.strip()[:200])
-                console.print(msg)
                 is_last = attempt == max_attempts - 1
+                label = "failed" if is_last else "failed, retrying..."
+                msg = (
+                    f"[yellow]Attempt {attempt + 1}/{max_attempts} {label}"
+                    f"[/yellow] for [bold]{entity_name}[/bold]"
+                )
+                logger.debug(
+                    "%s | Response: %.200s | Error: %s",
+                    msg,
+                    content.strip()[:200],
+                    e,
+                )
+                console.print(msg)
                 if not is_last:
                     last_error = str(e)
                 else:
@@ -1113,7 +1118,7 @@ def _parse_summary_response(content: str) -> dict[str, Any]:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        logger.warning(
+        logger.debug(
             "Invalid JSON from LLM (after repair). Raw[%.300s] | Repaired[%.300s]",
             content.strip()[:300],
             cleaned[:300],
