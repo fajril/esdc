@@ -4,11 +4,15 @@ import duckdb
 import pandas as pd
 import pytest
 import yaml
+from openpyxl import load_workbook
 
 from esdc.chat.tools import knowledge_traversal
 from esdc.configs import Config
 from esdc.esdc import app
 from esdc.loaders import (
+    POD_MONITORING_SHEET_NAME,
+    POD_PLAN_SHEET_NAME,
+    POD_PROJECT_SHEET_NAME,
     POD_SCHEMA_PATH,
     LoadSchemaError,
     build_loaded_schema_graph,
@@ -51,20 +55,67 @@ def _write_excel(path, rows):
 
 def _write_pod_excel(path):
     schema = load_schema_from_yaml(POD_SCHEMA_PATH)
-    row = {}
-    for column in schema.columns:
-        if column.type == "date":
-            row[column.name] = pd.Timestamp("2024-01-01")
-        elif column.type == "integer":
-            row[column.name] = 2024
-        elif column.type in {"float", "double"}:
-            row[column.name] = 1.0
-        else:
-            row[column.name] = f"{column.name}-value"
-    row["pod_name"] = "POD Alpha"
-    row["pod_id"] = "POD-001"
-    df = pd.DataFrame([row])
-    df.to_excel(path, index=False, sheet_name="POD")
+    metric_columns = [
+        column
+        for column in schema.columns
+        if column.name
+        not in {
+            "report_date",
+            "effective_date",
+            "case_type",
+            "pod_id",
+            "pod_letter_num",
+            "pod_name",
+            "pod_scope",
+            "supercedes_by",
+        }
+    ]
+
+    plan_row = {
+        "pod_id": "POD-001",
+        "pod_letter_num": "POD-L-001",
+        "pod_name": "POD Alpha",
+        "pod_scope": "Development",
+        "supercedes_by": "",
+        "report_date": pd.Timestamp("2024-01-01"),
+        "effective_date": pd.Timestamp("2024-12-31"),
+    }
+    monitoring_row = {
+        "pod_id": "POD-001",
+        "case_type": "outlook",
+        "report_date": pd.Timestamp("2024-04-01"),
+        "effective_date": pd.Timestamp("2024-03-31"),
+    }
+    for column in metric_columns:
+        plan_row[column.name] = 1.0
+        monitoring_row[column.name] = 2.0
+
+    project_row = {"pod_id": "POD-001", "project_id": "PRJ-001"}
+
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        pd.DataFrame([plan_row]).to_excel(
+            writer, index=False, sheet_name=POD_PLAN_SHEET_NAME, startrow=1
+        )
+        pd.DataFrame([project_row]).to_excel(
+            writer, index=False, sheet_name=POD_PROJECT_SHEET_NAME, startrow=1
+        )
+        pd.DataFrame([monitoring_row]).to_excel(
+            writer, index=False, sheet_name=POD_MONITORING_SHEET_NAME, startrow=1
+        )
+    workbook = load_workbook(path)
+    try:
+        sheet_descriptions = {
+            POD_PLAN_SHEET_NAME: "Baseline POD plan data.",
+            POD_PROJECT_SHEET_NAME: "Many-to-many POD to project mapping.",
+            POD_MONITORING_SHEET_NAME: "POD outlook and actual monitoring data.",
+        }
+        for sheet_name, description in sheet_descriptions.items():
+            ws = workbook[sheet_name]
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
+            ws.cell(1, 1).value = description
+    finally:
+        workbook.save(path)
+        workbook.close()
     return path
 
 
@@ -249,20 +300,31 @@ class TestLoadCommand:
         )
 
         assert result.exit_code == 0
-        assert "Loaded 1 rows x 41 columns into 'pod_plan'" in result.stdout
+        assert "Loaded 1 rows x 40 columns into 'pod_plan'" in result.stdout
+        assert "Loaded 1 rows x 2 columns into 'pod_project'" in result.stdout
+        assert "Loaded 1 rows x 37 columns into 'pod_monitoring'" in result.stdout
         conn = duckdb.connect(str(Config.get_db_file()))
         try:
-            row = conn.execute(
+            plan_row = conn.execute(
                 "SELECT pod_name, pod_id FROM pod_plan"
             ).fetchone()
+            project_row = conn.execute(
+                "SELECT pod_id, project_id FROM pod_project"
+            ).fetchone()
+            monitoring_row = conn.execute(
+                "SELECT pod_id, case_type, effective_date FROM pod_monitoring"
+            ).fetchone()
             metadata = conn.execute(
-                "SELECT description FROM _loaded_table_schemas WHERE table_name = ?",
+                "SELECT description FROM _loaded_table_schemas WHERE table_name = ? ORDER BY table_name",
                 ["pod_plan"],
             ).fetchone()
         finally:
             conn.close()
-        assert row == ("POD Alpha", "POD-001")
-        assert "POD planning and monitoring data" in metadata[0]
+        assert plan_row == ("POD Alpha", "POD-001")
+        assert project_row == ("POD-001", "PRJ-001")
+        assert monitoring_row[0] == "POD-001"
+        assert monitoring_row[1] == "outlook"
+        assert "Baseline POD plan data." in metadata[0]
 
     def test_load_replaces_existing_table(self, runner, isolated_config, tmp_path):
         schema_path = _write_schema(tmp_path / "schema.yaml")
@@ -431,6 +493,217 @@ class TestLoadCommand:
         assert "A-1" not in column_result
 
 
+def _make_pod_rows(
+    plan_pod_id: str = "POD-001",
+    project_pod_id: str = "POD-001",
+    monitoring_pod_id: str = "POD-001",
+    project_id: str = "PRJ-001",
+):
+    schema = load_schema_from_yaml(POD_SCHEMA_PATH)
+    metric_columns = [
+        column
+        for column in schema.columns
+        if column.name
+        not in {
+            "report_date",
+            "effective_date",
+            "case_type",
+            "pod_id",
+            "pod_letter_num",
+            "pod_name",
+            "pod_scope",
+            "supercedes_by",
+        }
+    ]
+    plan_row = {
+        "pod_id": plan_pod_id,
+        "pod_letter_num": "POD-L-001",
+        "pod_name": "POD Alpha",
+        "pod_scope": "Development",
+        "supercedes_by": "",
+        "report_date": pd.Timestamp("2024-01-01"),
+        "effective_date": pd.Timestamp("2024-12-31"),
+    }
+    monitoring_row = {
+        "pod_id": monitoring_pod_id,
+        "case_type": "outlook",
+        "report_date": pd.Timestamp("2024-04-01"),
+        "effective_date": pd.Timestamp("2024-03-31"),
+    }
+    for column in metric_columns:
+        plan_row[column.name] = 1.0
+        monitoring_row[column.name] = 2.0
+    project_row = {"pod_id": project_pod_id, "project_id": project_id}
+    return plan_row, project_row, monitoring_row
+
+
+def _write_pod_excel_with_data(path, plan_row, project_row, monitoring_row):
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        pd.DataFrame([plan_row]).to_excel(
+            writer, index=False, sheet_name=POD_PLAN_SHEET_NAME, startrow=1
+        )
+        pd.DataFrame([project_row]).to_excel(
+            writer, index=False, sheet_name=POD_PROJECT_SHEET_NAME, startrow=1
+        )
+        pd.DataFrame([monitoring_row]).to_excel(
+            writer, index=False, sheet_name=POD_MONITORING_SHEET_NAME, startrow=1
+        )
+    workbook = load_workbook(path)
+    try:
+        descriptions = {
+            POD_PLAN_SHEET_NAME: "Baseline POD plan data.",
+            POD_PROJECT_SHEET_NAME: "Many-to-many POD to project mapping.",
+            POD_MONITORING_SHEET_NAME: "POD outlook and actual monitoring data.",
+        }
+        for sheet_name, description in descriptions.items():
+            ws = workbook[sheet_name]
+            ws.merge_cells(
+                start_row=1, start_column=1, end_row=1, end_column=ws.max_column
+            )
+            ws.cell(1, 1).value = description
+    finally:
+        workbook.save(path)
+        workbook.close()
+    return path
+
+
+class TestPodLoadValidation:
+    def test_load_pod_views_exist(self, runner, isolated_config, tmp_path):
+        Config.init_config()
+        Config.get_db_dir().mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(str(Config.get_db_file()))
+        conn.execute(
+            "CREATE TABLE project_resources "
+            "(project_id TEXT, report_date TEXT, project_name TEXT, "
+            "project_stage TEXT, project_class TEXT, field_name TEXT, wk_name TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO project_resources VALUES "
+            "('PRJ-001', '2024-06-01', 'Test Project', "
+            "'DEVELOPMENT', 'CLASS A', 'Field Alpha', 'WK Alpha')"
+        )
+        conn.close()
+
+        excel_path = _write_pod_excel(tmp_path / "pod.xlsx")
+        result = runner.invoke(
+            app, ["load", "--from-excel", str(excel_path), "--schema-pod"]
+        )
+        assert result.exit_code == 0
+
+        conn = duckdb.connect(str(Config.get_db_file()))
+        try:
+            views = conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_type = 'VIEW'"
+            ).fetchall()
+            view_names = {v[0] for v in views}
+            assert "pod_economics" in view_names
+            assert "pod_project_economics" in view_names
+
+            eco_rows = conn.execute(
+                "SELECT case_type, pod_id, lifting_oil FROM pod_economics ORDER BY case_type"
+            ).fetchall()
+            assert len(eco_rows) == 2
+            assert eco_rows[0][0] == "outlook"
+            assert eco_rows[0][2] == 2.0
+            assert eco_rows[1][0] == "plan"
+            assert eco_rows[1][2] == 1.0
+
+            plan_letter = conn.execute(
+                "SELECT pod_letter_num FROM pod_economics WHERE case_type = 'plan'"
+            ).fetchone()[0]
+            mon_letter = conn.execute(
+                "SELECT pod_letter_num FROM pod_economics WHERE case_type = 'outlook'"
+            ).fetchone()[0]
+            assert plan_letter == "POD-L-001"
+            assert mon_letter is None
+
+            proj_eco = conn.execute(
+                "SELECT pod_id, project_id, case_type FROM pod_project_economics ORDER BY case_type"
+            ).fetchall()
+            assert len(proj_eco) == 2
+            assert proj_eco[0][1] == "PRJ-001"
+            assert proj_eco[1][1] == "PRJ-001"
+        finally:
+            conn.close()
+
+    def test_load_pod_broken_project_pod_id_fails(self, runner, isolated_config, tmp_path):
+        plan_row, _, monitoring_row = _make_pod_rows(
+            plan_pod_id="POD-001",
+            monitoring_pod_id="POD-001",
+        )
+        project_row = {"pod_id": "POD-999", "project_id": "PRJ-001"}
+        excel_path = _write_pod_excel_with_data(
+            tmp_path / "pod.xlsx", plan_row, project_row, monitoring_row
+        )
+        result = runner.invoke(
+            app, ["load", "--from-excel", str(excel_path), "--schema-pod"]
+        )
+        assert result.exit_code == 1
+        assert "pod_project references pod_id values not found in pod_plan" in result.stdout
+
+    def test_load_pod_broken_monitoring_pod_id_fails(self, runner, isolated_config, tmp_path):
+        plan_row, project_row, _ = _make_pod_rows(
+            plan_pod_id="POD-001",
+            project_pod_id="POD-001",
+        )
+        schema = load_schema_from_yaml(POD_SCHEMA_PATH)
+        metric_columns = [
+            col
+            for col in schema.columns
+            if col.name
+            not in {
+                "report_date",
+                "effective_date",
+                "case_type",
+                "pod_id",
+                "pod_letter_num",
+                "pod_name",
+                "pod_scope",
+                "supercedes_by",
+            }
+        ]
+        monitoring_row = {
+            "pod_id": "POD-999",
+            "case_type": "outlook",
+            "report_date": pd.Timestamp("2024-04-01"),
+            "effective_date": pd.Timestamp("2024-03-31"),
+        }
+        for col in metric_columns:
+            monitoring_row[col.name] = 2.0
+        excel_path = _write_pod_excel_with_data(
+            tmp_path / "pod.xlsx", plan_row, project_row, monitoring_row
+        )
+        result = runner.invoke(
+            app, ["load", "--from-excel", str(excel_path), "--schema-pod"]
+        )
+        assert result.exit_code == 1
+        assert "pod_monitoring references pod_id values not found in pod_plan" in result.stdout
+
+    def test_load_pod_unknown_project_id_warns(self, runner, isolated_config, tmp_path):
+        Config.init_config()
+        Config.get_db_dir().mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(str(Config.get_db_file()))
+        conn.execute(
+            "CREATE TABLE project_resources "
+            "(project_id TEXT, report_date TEXT, project_name TEXT, "
+            "project_stage TEXT, project_class TEXT, field_name TEXT, wk_name TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO project_resources VALUES "
+            "('KNOWN-001', '2024-06-01', '', '', '', '', '')"
+        )
+        conn.close()
+
+        excel_path = _write_pod_excel(tmp_path / "pod.xlsx")
+        result = runner.invoke(
+            app, ["load", "--from-excel", str(excel_path), "--schema-pod"]
+        )
+        assert result.exit_code == 0
+        assert "Warning" in result.stdout
+        assert "project_id" in result.stdout
+        assert "did not match" in result.stdout
+
+
 class TestSchemaCommand:
     def test_schema_help(self, runner):
         result = runner.invoke(app, ["schema", "--help"])
@@ -449,17 +722,54 @@ class TestSchemaCommand:
 
         result = runner.invoke(app, ["schema", "--schema-pod"])
 
-        output_path = tmp_path / "pod_schema.yaml"
+        output_path = tmp_path / "pod_template.xlsx"
         assert result.exit_code == 0
         assert output_path.exists()
-        assert f"Copied POD schema template to {output_path}" in result.stdout
-        schema = load_schema_from_yaml(output_path)
-        assert schema.table_name == "pod_plan"
+        assert f"Generated POD workbook template at {output_path}" in result.stdout
+        workbook = load_workbook(output_path)
+        try:
+            assert workbook.sheetnames == [
+                POD_PLAN_SHEET_NAME,
+                POD_PROJECT_SHEET_NAME,
+                POD_MONITORING_SHEET_NAME,
+            ]
+            plan_headers = [cell.value for cell in workbook[POD_PLAN_SHEET_NAME][2]]
+            project_headers = [cell.value for cell in workbook[POD_PROJECT_SHEET_NAME][2]]
+            monitoring_headers = [
+                cell.value for cell in workbook[POD_MONITORING_SHEET_NAME][2]
+            ]
+        finally:
+            workbook.close()
+        assert plan_headers[:4] == ["pod_id", "pod_letter_num", "pod_name", "pod_scope"]
+        assert project_headers == ["pod_id", "project_id"]
+        assert monitoring_headers[:4] == [
+            "pod_id",
+            "case_type",
+            "report_date",
+            "effective_date",
+        ]
+
+        assert "pod_plan_ids" in workbook.defined_names
+        plan_sheet = workbook[POD_PLAN_SHEET_NAME]
+        project_sheet = workbook[POD_PROJECT_SHEET_NAME]
+        monitoring_sheet = workbook[POD_MONITORING_SHEET_NAME]
+        assert len(plan_sheet.data_validations.dataValidation) == 0
+        assert len(project_sheet.data_validations.dataValidation) == 1
+        assert len(monitoring_sheet.data_validations.dataValidation) == 2
+        proj_dv = project_sheet.data_validations.dataValidation[0]
+        mon_dv_case = monitoring_sheet.data_validations.dataValidation[0]
+        mon_dv_pod = monitoring_sheet.data_validations.dataValidation[1]
+        assert "pod_plan_ids" in proj_dv.formula1
+        assert proj_dv.sqref == "A3:A1048576"
+        assert "pod_plan_ids" in mon_dv_pod.formula1
+        assert mon_dv_pod.sqref == "A3:A1048576"
+        assert "outlook" in mon_dv_case.formula1
+        assert mon_dv_case.sqref == "B3:B1048576"
 
     def test_schema_pod_existing_output_fails_without_overwrite(
         self, runner, tmp_path
     ):
-        output_path = tmp_path / "pod_schema.yaml"
+        output_path = tmp_path / "pod_template.xlsx"
         output_path.write_text("keep: true\n", encoding="utf-8")
 
         result = runner.invoke(

@@ -197,6 +197,8 @@ class TestCreateLlmFromConfigFallback:
             assert isinstance(llm, ProviderFallbackChatModel)
             response = await llm.ainvoke([HumanMessage(content="hello")])
             assert response.content == "fallback ok"
+            assert llm.last_provider_name == "deepseek"
+            assert llm.last_model_name == "deepseek-v4-flash"
 
     def test_creation_skips_provider_that_fails_to_construct(self):
         from esdc.providers import create_llm_from_config
@@ -228,9 +230,11 @@ class TestCreateLlmFromConfigFallback:
                         }
                     ],
                 }
-            )
+        )
 
         assert llm is fallback_model
+        assert llm._esdc_provider_name == "deepseek"
+        assert llm._esdc_model_name == "deepseek-v4-flash"
 
     @patch("esdc.providers.anthropic.ChatAnthropic")
     def test_anthropic_no_config_leak(self, mock_cls):

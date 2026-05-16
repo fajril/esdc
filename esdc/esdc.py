@@ -49,6 +49,7 @@ import requests
 import rich
 import typer
 from rich.logging import RichHandler
+from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -71,15 +72,21 @@ from esdc.dbmanager import (  # noqa: E402
     run_query,
 )
 from esdc.loaders import (  # noqa: E402
-    POD_SCHEMA_PATH,
     LoadSchemaError,
     SpreadsheetLoadError,
     copy_pod_schema_template,
     generate_schema_template_from_excel,
     load_excel_to_duckdb,
+    load_pod_workbook_to_duckdb,
     print_load_result,
 )
 from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
+from esdc.summarizer import (  # noqa: E402
+    SummaryDependencyError,
+    SummaryLookupError,
+    get_resource_summary,
+    summarize_resources,
+)
 from esdc.validate import ValidationResult, run_validation
 
 TABLES: tuple[TableName, TableName] = (
@@ -176,11 +183,11 @@ def schema_command(
         bool,
         typer.Option(
             "--schema-pod",
-            help="Copy the built-in POD schema template.",
+            help="Generate the built-in POD workbook template.",
         ),
     ] = False,
 ) -> None:
-    """Generate and inspect YAML schemas for spreadsheet loading."""
+    """Generate and inspect spreadsheet schemas and POD workbook templates."""
     if schema_pod:
         try:
             destination = copy_pod_schema_template(
@@ -190,7 +197,7 @@ def schema_command(
         except (LoadSchemaError, SpreadsheetLoadError) as e:
             typer.echo(f"Error: {e}")
             raise typer.Exit(1) from None
-        typer.echo(f"Copied POD schema template to {destination}")
+        typer.echo(f"Generated POD workbook template at {destination}")
         return
 
     if not generate:
@@ -251,19 +258,172 @@ def load(
     """Load a spreadsheet into DuckDB and register its data dictionary.
 
     Run `esdc schema --generate --from-excel data.xlsx` to create a starter schema.
-    Use `--schema-pod` to load POD data with the built-in POD schema.
+    Use `--schema-pod` to load POD workbook data with the built-in POD template.
     """
     if (schema is None) == (not schema_pod):
         typer.echo("Error: specify exactly one of --schema or --schema-pod.")
         raise typer.Exit(1) from None
-    schema_path = POD_SCHEMA_PATH if schema_pod else schema
-    assert schema_path is not None
     try:
+        if schema_pod:
+            results = load_pod_workbook_to_duckdb(from_excel)
+            for result in results:
+                print_load_result(result)
+            return
+        schema_path = schema
+        assert schema_path is not None
         result = load_excel_to_duckdb(from_excel, schema_path)
     except (LoadSchemaError, SpreadsheetLoadError) as e:
         typer.echo(f"Error: {e}")
         raise typer.Exit(1) from None
     print_load_result(result)
+
+
+@app.command()
+def summarize(
+    target: Annotated[
+        str,
+        typer.Argument(help="Target to summarize: all, field, wk, or nkri."),
+    ],
+    name: Annotated[
+        str | None,
+        typer.Argument(help="Field or working area name. Omit for all/nkri."),
+    ] = None,
+    year: Annotated[
+        int | None,
+        typer.Option(
+            "--year",
+            help="Report year to summarize.",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Regenerate summaries even when the source hash is unchanged.",
+        ),
+    ] = False,
+) -> None:
+    """Generate LLM executive summaries for Eureka resource dashboards."""
+    if year is None:
+        typer.echo("Error: --year is required.")
+        raise typer.Exit(1) from None
+
+    try:
+        result = summarize_resources(
+            year=year,
+            target=target,
+            name=name,
+            force=force,
+        )
+    except (FileNotFoundError, ValueError, SummaryDependencyError) as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+
+    typer.echo(
+        "Summary complete: "
+        f"fields {result.fields_created} created/{result.fields_skipped} skipped; "
+        f"working areas {result.working_areas_created} created/"
+        f"{result.working_areas_skipped} skipped; "
+        f"nkri {result.nkri_created} created/{result.nkri_skipped} skipped"
+    )
+
+
+@app.command()
+def summary(
+    level: Annotated[
+        str,
+        typer.Argument(help="Summary level: field, wk, working_area, or nkri."),
+    ],
+    name: Annotated[
+        str | None,
+        typer.Argument(help="Field or working area name. Omit for nkri."),
+    ] = None,
+    year: Annotated[
+        int | None,
+        typer.Option(
+            "--year",
+            help="Report year to show.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Print the raw summary JSON payload.",
+        ),
+    ] = False,
+) -> None:
+    """Show a generated executive summary."""
+    if year is None:
+        typer.echo("Error: --year is required.")
+        raise typer.Exit(1) from None
+
+    try:
+        data = get_resource_summary(level=level, year=year, name=name)
+    except (FileNotFoundError, SummaryLookupError, ValueError) as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+
+    if json_output:
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    rich.print(
+        Panel(
+            _format_summary_for_cli(data),
+            title=f"{data['entity_name']} · {data['report_year']}",
+            subtitle=f"{data['entity_level']} summary",
+            border_style="cyan",
+        )
+    )
+
+
+def _format_summary_for_cli(data: dict) -> str:
+    summary_data = data.get("summary") or {}
+    lines: list[str] = []
+
+    headline = str(summary_data.get("headline") or "").strip()
+    if headline:
+        lines.append(f"[bold]{headline}[/bold]")
+
+    executive = str(summary_data.get("executive_summary") or "").strip()
+    if executive:
+        lines.extend(["", executive])
+
+    sections = [
+        ("Current Situation", summary_data.get("current_situation")),
+        ("Key Challenges", summary_data.get("key_challenges")),
+        ("Solution Proposals", summary_data.get("solution_proposals")),
+        (
+            "Production / Reserve Opportunities",
+            summary_data.get("production_or_reserve_opportunities"),
+        ),
+        ("Management Attention", summary_data.get("management_attention")),
+        ("Data Quality Notes", summary_data.get("data_quality_notes")),
+    ]
+    for title, value in sections:
+        rendered = _render_summary_value(value)
+        if rendered:
+            lines.extend(["", f"[bold cyan]{title}[/bold cyan]", rendered])
+
+    meta_parts = [
+        f"source={data.get('source_level') or '-'}",
+        f"provider={data.get('provider') or '-'}",
+        f"model={data.get('model') or '-'}",
+        f"generated={data.get('generated_at') or '-'}",
+    ]
+    lines.extend(["", f"[dim]{' · '.join(meta_parts)}[/dim]"])
+    return "\n".join(lines)
+
+
+def _render_summary_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return "\n".join(f"• {item}" for item in items)
+    text = str(value).strip()
+    return text
 
 
 @app.command()

@@ -11,6 +11,11 @@ import duckdb
 import pandas as pd
 import typer
 import yaml
+from openpyxl import Workbook
+from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from openpyxl.workbook.defined_name import DefinedName
 
 from esdc.configs import Config
 from esdc.dbmanager import _ensure_duckdb_database, get_duckdb_connection
@@ -19,6 +24,10 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _METADATA_TABLE = "_loaded_table_schemas"
 _DOMAIN_KNOWLEDGE_DIR = Path(__file__).parent / "chat" / "domain_knowledge"
 POD_SCHEMA_PATH = _DOMAIN_KNOWLEDGE_DIR / "pod_schema.yaml"
+POD_TEMPLATE_FILENAME = "pod_template.xlsx"
+POD_PLAN_SHEET_NAME = "pod_plan"
+POD_PROJECT_SHEET_NAME = "pod_project"
+POD_MONITORING_SHEET_NAME = "pod_monitoring"
 _LINK_TARGET_KEYS = {
     "Project": "project_id",
     "Field": "field_id",
@@ -50,6 +59,13 @@ class SchemaTemplateResult:
     column_count: int
 
 
+@dataclass(frozen=True)
+class WorkbookTemplateResult:
+    output_path: Path
+    sheet_names: tuple[str, ...]
+    table_count: int
+
+
 class LinkValidationWarning(NamedTuple):
     entity_type: str
     column: str
@@ -69,19 +85,12 @@ def copy_pod_schema_template(
     output_path: Path | str | None = None,
     overwrite: bool = False,
 ) -> Path:
-    """Copy the built-in POD load schema template to a user-visible path."""
-    if not POD_SCHEMA_PATH.exists():
-        raise LoadSchemaError(f"POD schema template not found: {POD_SCHEMA_PATH}")
-    destination = Path(output_path) if output_path else Path.cwd() / "pod_schema.yaml"
-    if destination.exists() and not overwrite:
-        raise SpreadsheetLoadError(
-            f"Output schema already exists: {destination}. "
-            "Use --overwrite to replace it."
-        )
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    content = POD_SCHEMA_PATH.read_text(encoding="utf-8")
-    destination.write_text(content, encoding="utf-8")
-    return destination
+    """Create the built-in POD workbook template at a user-visible path."""
+    return (
+        generate_pod_workbook_template(
+            output_path=output_path, overwrite=overwrite
+        ).output_path
+    )
 
 
 @dataclass(frozen=True)
@@ -122,6 +131,14 @@ class LinkSchema:
     entity_type: str
     column: str
     target_key: str
+
+
+@dataclass(frozen=True)
+class WorkbookSheetSpec:
+    table_name: str
+    description: str
+    columns: tuple[ColumnSchema, ...]
+    links: tuple[LinkSchema, ...] = ()
 
 
 def _validate_identifier(value: Any, field_name: str) -> str:
@@ -376,6 +393,243 @@ def load_schema_from_yaml(schema_path: Path | str) -> LoadSchema:
     )
 
 
+def _load_pod_domain_schema() -> LoadSchema:
+    if not POD_SCHEMA_PATH.exists():
+        raise LoadSchemaError(f"POD schema template not found: {POD_SCHEMA_PATH}")
+    return load_schema_from_yaml(POD_SCHEMA_PATH)
+
+
+def _pod_metric_columns(schema: LoadSchema) -> tuple[ColumnSchema, ...]:
+    excluded = {
+        "report_date",
+        "effective_date",
+        "case_type",
+        "pod_id",
+        "pod_letter_num",
+        "pod_name",
+        "pod_scope",
+        "supercedes_by",
+    }
+    return tuple(column for column in schema.columns if column.name not in excluded)
+
+
+def _build_pod_workbook_specs() -> tuple[WorkbookSheetSpec, ...]:
+    schema = _load_pod_domain_schema()
+    column_by_name = {column.name: column for column in schema.columns}
+    metric_columns = _pod_metric_columns(schema)
+
+    plan_columns: tuple[ColumnSchema, ...] = tuple(
+        column_by_name[name]
+        for name in (
+            "pod_id",
+            "pod_letter_num",
+            "pod_name",
+            "pod_scope",
+            "supercedes_by",
+            "report_date",
+            "effective_date",
+        )
+        if name in column_by_name
+    ) + metric_columns
+
+    monitoring_columns: tuple[ColumnSchema, ...] = (
+        column_by_name["pod_id"],
+        column_by_name["case_type"],
+        column_by_name["report_date"],
+        column_by_name["effective_date"],
+    ) + metric_columns
+
+    project_columns = (
+        ColumnSchema(
+            name="pod_id",
+            type="string",
+            description="Unique POD identifier.",
+            aliases=("ID POD", "POD ID"),
+            maps_to=("ProducingLicense",),
+        ),
+        ColumnSchema(
+            name="project_id",
+            type="string",
+            description="Linked project identifier.",
+            aliases=("project code", "kode proyek"),
+        ),
+    )
+
+    return (
+        WorkbookSheetSpec(
+            table_name=POD_PLAN_SHEET_NAME,
+            description="Baseline POD plan data.",
+            columns=plan_columns,
+        ),
+        WorkbookSheetSpec(
+            table_name=POD_PROJECT_SHEET_NAME,
+            description="Many-to-many POD to project mapping.",
+            columns=project_columns,
+            links=(
+                LinkSchema(
+                    entity_type="Project",
+                    column="project_id",
+                    target_key="project_id",
+                ),
+            ),
+        ),
+        WorkbookSheetSpec(
+            table_name=POD_MONITORING_SHEET_NAME,
+            description="POD outlook and actual monitoring data.",
+            columns=monitoring_columns,
+        ),
+    )
+
+
+def _sheet_spec_to_load_schema(spec: WorkbookSheetSpec) -> LoadSchema:
+    raw_columns: list[dict[str, Any]] = []
+    for column in spec.columns:
+        item: dict[str, Any] = {
+            "name": column.name,
+            "type": column.type,
+            "description": column.description,
+            "aliases": list(column.aliases),
+        }
+        if column.unit:
+            item["unit"] = column.unit
+        if column.maps_to:
+            item["maps_to"] = list(column.maps_to)
+        raw_columns.append(item)
+
+    return LoadSchema(
+        table_name=spec.table_name,
+        description=spec.description,
+        sheet_name=spec.table_name,
+        columns=spec.columns,
+        links=spec.links,
+        raw={
+            "table_name": spec.table_name,
+            "description": spec.description,
+            "sheet_name": spec.table_name,
+            "columns": raw_columns,
+            "links": [
+                {
+                    "entity_type": link.entity_type,
+                    "column": link.column,
+                    "target_key": link.target_key,
+                }
+                for link in spec.links
+            ],
+        },
+    )
+
+
+def _write_sheet_header(
+    ws: Any,
+    spec: WorkbookSheetSpec,
+    *,
+    add_case_type_validation: bool = False,
+) -> None:
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    header_font = Font(color="FFFFFF", bold=True)
+    header_alignment = Alignment(vertical="center", horizontal="center")
+    description_row = 1
+    header_row = 2
+    ws.freeze_panes = "A3"
+    ws.sheet_view.showGridLines = False
+    ws.row_dimensions[description_row].height = 24
+    ws.row_dimensions[header_row].height = 24
+
+    ws.merge_cells(
+        start_row=description_row,
+        start_column=1,
+        end_row=description_row,
+        end_column=max(len(spec.columns), 1),
+    )
+    ws.cell(description_row, 1).value = spec.description
+    ws.cell(description_row, 1).font = Font(bold=True, color="1F1F1F")
+    ws.cell(description_row, 1).alignment = Alignment(horizontal="left")
+
+    for idx, column in enumerate(spec.columns, start=1):
+        cell = ws.cell(header_row, idx)
+        cell.value = column.name
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_alignment
+        comment_parts = [f"Type: {column.type}", f"Description: {column.description}"]
+        if column.unit:
+            comment_parts.append(f"Unit: {column.unit}")
+        if column.aliases:
+            comment_parts.append(f"Aliases: {', '.join(column.aliases)}")
+        if column.maps_to:
+            comment_parts.append(f"Maps to: {', '.join(column.maps_to)}")
+        cell.comment = Comment("\n".join(comment_parts), "Codex")
+        ws.column_dimensions[get_column_letter(idx)].width = max(
+            14,
+            min(34, len(column.name) + 4),
+        )
+
+    ws.auto_filter.ref = (
+        f"A{header_row}:{get_column_letter(len(spec.columns))}{header_row}"
+    )
+
+    if add_case_type_validation:
+        from openpyxl.worksheet.datavalidation import DataValidation
+
+        dv = DataValidation(
+            type="list",
+            formula1='"outlook,actual"',
+            allow_blank=False,
+        )
+        ws.add_data_validation(dv)
+        dv.add("B3:B1048576")
+
+
+def generate_pod_workbook_template(
+    output_path: Path | str | None = None,
+    overwrite: bool = False,
+) -> WorkbookTemplateResult:
+    """Generate the built-in POD workbook template."""
+    destination = (
+        Path(output_path) if output_path else Path.cwd() / POD_TEMPLATE_FILENAME
+    )
+    if destination.exists() and not overwrite:
+        raise SpreadsheetLoadError(
+            f"Output schema already exists: {destination}. "
+            "Use --overwrite to replace it."
+        )
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    specs = _build_pod_workbook_specs()
+    for spec in specs:
+        ws = workbook.create_sheet(title=spec.table_name)
+        _write_sheet_header(
+            ws,
+            spec,
+            add_case_type_validation=spec.table_name == POD_MONITORING_SHEET_NAME,
+        )
+
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    dn = DefinedName("pod_plan_ids", attr_text=f"{POD_PLAN_SHEET_NAME}!$A$3:$A$1048576")
+    workbook.defined_names.add(dn)
+
+    for sheet_name in (POD_PROJECT_SHEET_NAME, POD_MONITORING_SHEET_NAME):
+        dv = DataValidation(
+            type="list",
+            formula1='INDIRECT("pod_plan_ids")',
+            allow_blank=True,
+            error="Pilih POD ID yang valid dari sheet pod_plan",
+            errorTitle="POD ID tidak valid",
+        )
+        workbook[sheet_name].add_data_validation(dv)
+        dv.add("A3:A1048576")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(destination)
+    return WorkbookTemplateResult(
+        output_path=destination,
+        sheet_names=tuple(spec.table_name for spec in specs),
+        table_count=len(specs),
+    )
+
+
 def _create_metadata_table(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         f"""
@@ -488,6 +742,251 @@ def _validate_link_values(
                 )
             )
     return tuple(warnings)
+
+
+def _write_dataframe_to_table(
+    conn: duckdb.DuckDBPyConnection,
+    schema: LoadSchema,
+    df: pd.DataFrame,
+) -> tuple[int, tuple[LinkValidationWarning, ...]]:
+    columns_sql = ", ".join(
+        f"{column.name} {column.duckdb_type}" for column in schema.columns
+    )
+    conn.execute(f"DROP TABLE IF EXISTS {schema.table_name}")
+    conn.execute(f"CREATE TABLE {schema.table_name} ({columns_sql})")
+    conn.register("_esdc_load_df", df)
+    try:
+        conn.execute(f"INSERT INTO {schema.table_name} SELECT * FROM _esdc_load_df")
+    finally:
+        with contextlib.suppress(Exception):
+            conn.unregister("_esdc_load_df")
+    link_warnings = _validate_link_values(conn, df, schema)
+    return len(df), link_warnings
+
+
+def _load_excel_sheet(
+    excel: Path,
+    sheet_name: str,
+    schema: LoadSchema,
+    *,
+    header_row: int = 0,
+) -> pd.DataFrame:
+    try:
+        df = pd.read_excel(
+            excel,
+            sheet_name=sheet_name,
+            engine="openpyxl",
+            header=header_row,
+        )
+    except ValueError as e:
+        raise SpreadsheetLoadError(
+            f"Excel sheet '{sheet_name}' not found in {excel}."
+        ) from e
+    except Exception as e:
+        raise SpreadsheetLoadError(f"Failed to read Excel file: {e}") from e
+    return _coerce_dataframe(df, schema)
+
+
+def _validate_pod_workbook_crosslinks(
+    plan_df: pd.DataFrame,
+    project_df: pd.DataFrame,
+    monitoring_df: pd.DataFrame,
+) -> None:
+    if plan_df["pod_id"].duplicated().any():
+        raise SpreadsheetLoadError("pod_plan contains duplicate pod_id values.")
+
+    plan_ids = {
+        str(value).strip()
+        for value in plan_df["pod_id"].dropna().tolist()
+        if str(value).strip()
+    }
+
+    project_missing = {
+        str(value).strip()
+        for value in project_df["pod_id"].dropna().tolist()
+        if str(value).strip()
+    } - plan_ids
+    if project_missing:
+        raise SpreadsheetLoadError(
+            "pod_project references pod_id values not found in pod_plan: "
+            f"{', '.join(sorted(project_missing))}"
+        )
+
+    monitoring_missing = {
+        str(value).strip()
+        for value in monitoring_df["pod_id"].dropna().tolist()
+        if str(value).strip()
+    } - plan_ids
+    if monitoring_missing:
+        raise SpreadsheetLoadError(
+            "pod_monitoring references pod_id values not found in pod_plan: "
+            f"{', '.join(sorted(monitoring_missing))}"
+        )
+
+    invalid_case_types = {
+        str(value).strip()
+        for value in monitoring_df["case_type"].dropna().tolist()
+        if str(value).strip()
+    } - {"outlook", "actual"}
+    if invalid_case_types:
+        raise SpreadsheetLoadError(
+            "pod_monitoring.case_type must be one of outlook, actual. "
+            f"Invalid values: {', '.join(sorted(invalid_case_types))}"
+        )
+
+    if project_df.duplicated(subset=["pod_id", "project_id"]).any():
+        raise SpreadsheetLoadError(
+            "pod_project contains duplicate pod_id/project_id pairs."
+        )
+
+    if monitoring_df.duplicated(subset=["pod_id", "case_type", "effective_date"]).any():
+        raise SpreadsheetLoadError(
+            "pod_monitoring contains duplicate pod_id/case_type/effective_date rows."
+        )
+
+
+def _create_pod_views(conn: duckdb.DuckDBPyConnection) -> None:
+    schema = _load_pod_domain_schema()
+    metric_names = tuple(
+        column.name for column in _pod_metric_columns(schema)
+    )
+    plan_meta = ["pod_letter_num", "pod_name", "pod_scope", "supercedes_by"]
+
+    metrics_sql = ", ".join(metric_names)
+    plan_meta_sql = ", ".join(plan_meta)
+    null_meta_sql = ", ".join(f"NULL::TEXT AS {name}" for name in plan_meta)
+
+    conn.execute(f"""
+        CREATE OR REPLACE VIEW pod_economics AS
+        SELECT
+            pod_id,
+            'plan'::TEXT AS case_type,
+            report_date,
+            effective_date,
+            {plan_meta_sql},
+            {metrics_sql}
+        FROM pod_plan
+        UNION ALL
+        SELECT
+            pod_id,
+            case_type,
+            report_date,
+            effective_date,
+            {null_meta_sql},
+            {metrics_sql}
+        FROM pod_monitoring
+    """)
+
+    if _table_has_column(conn, "project_resources", "project_id"):
+        conn.execute("""
+            CREATE OR REPLACE VIEW pod_project_economics AS
+            WITH ranked_pr AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY project_id
+                        ORDER BY report_date DESC NULLS LAST
+                    ) AS rn
+                FROM project_resources
+            )
+            SELECT
+                pe.*,
+                pp.project_id,
+                rpr.project_name,
+                rpr.project_stage,
+                rpr.project_class,
+                rpr.field_name,
+                rpr.wk_name
+            FROM pod_economics pe
+            JOIN pod_project pp ON pe.pod_id = pp.pod_id
+            LEFT JOIN ranked_pr rpr ON pp.project_id = rpr.project_id AND rpr.rn = 1
+        """)
+
+
+def load_pod_workbook_to_duckdb(excel_path: Path | str) -> tuple[LoadResult, ...]:
+    """Load the built-in POD workbook into DuckDB tables."""
+    excel = Path(excel_path)
+    if not excel.exists():
+        raise SpreadsheetLoadError(f"Excel file not found: {excel}")
+    if excel.suffix.lower() != ".xlsx":
+        raise SpreadsheetLoadError("Only .xlsx Excel files are supported.")
+
+    specs = _build_pod_workbook_specs()
+    schemas = {spec.table_name: _sheet_spec_to_load_schema(spec) for spec in specs}
+
+    plan_schema = schemas[POD_PLAN_SHEET_NAME]
+    project_schema = schemas[POD_PROJECT_SHEET_NAME]
+    monitoring_schema = schemas[POD_MONITORING_SHEET_NAME]
+
+    plan_df = _load_excel_sheet(
+        excel, POD_PLAN_SHEET_NAME, plan_schema, header_row=1
+    )
+    project_df = _load_excel_sheet(
+        excel, POD_PROJECT_SHEET_NAME, project_schema, header_row=1
+    )
+    monitoring_df = _load_excel_sheet(
+        excel, POD_MONITORING_SHEET_NAME, monitoring_schema, header_row=1
+    )
+    _validate_pod_workbook_crosslinks(plan_df, project_df, monitoring_df)
+
+    db_path = Config.get_db_file()
+    _ensure_duckdb_database(db_path)
+    Config.get_db_dir().mkdir(parents=True, exist_ok=True)
+    conn = get_duckdb_connection(db_path)
+    results: list[LoadResult] = []
+    try:
+        conn.execute("BEGIN")
+        for schema, df in (
+            (plan_schema, plan_df),
+            (project_schema, project_df),
+            (monitoring_schema, monitoring_df),
+        ):
+            row_count, link_warnings = _write_dataframe_to_table(conn, schema, df)
+            _create_metadata_table(conn)
+            schema_yaml = yaml.safe_dump(
+                schema.raw, sort_keys=False, allow_unicode=True
+            )
+            conn.execute(
+                f"DELETE FROM {_METADATA_TABLE} WHERE table_name = ?",
+                [schema.table_name],
+            )
+            conn.execute(
+                f"""
+                INSERT INTO {_METADATA_TABLE}
+                    (table_name, description, sheet_name, schema_yaml, loaded_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    schema.table_name,
+                    schema.description,
+                    schema.sheet_name,
+                    schema_yaml,
+                    datetime.now(timezone.utc).isoformat(),
+                ],
+            )
+            results.append(
+                LoadResult(
+                    table_name=schema.table_name,
+                    row_count=row_count,
+                    column_count=len(schema.columns),
+                    db_path=db_path,
+                    link_warnings=link_warnings,
+                )
+            )
+        _create_pod_views(conn)
+        conn.execute("COMMIT")
+        conn.execute("CHECKPOINT")
+    except Exception:
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+    from esdc.chat.tools import invalidate_tool_cache, reset_sql_cache
+
+    reset_sql_cache()
+    invalidate_tool_cache()
+    return tuple(results)
 
 
 def _cypher_escape(value: Any) -> str:
@@ -648,16 +1147,10 @@ def load_excel_to_duckdb(
 
     conn = get_duckdb_connection(db_path)
     link_warnings: tuple[LinkValidationWarning, ...] = ()
+    row_count = len(df)
     try:
-        columns_sql = ", ".join(
-            f"{column.name} {column.duckdb_type}" for column in schema.columns
-        )
-        conn.execute(f"DROP TABLE IF EXISTS {schema.table_name}")
-        conn.execute(f"CREATE TABLE {schema.table_name} ({columns_sql})")
-        conn.register("_esdc_load_df", df)
-        conn.execute(f"INSERT INTO {schema.table_name} SELECT * FROM _esdc_load_df")
-        conn.unregister("_esdc_load_df")
-        link_warnings = _validate_link_values(conn, df, schema)
+        conn.execute("BEGIN")
+        row_count, link_warnings = _write_dataframe_to_table(conn, schema, df)
 
         _create_metadata_table(conn)
         schema_yaml = yaml.safe_dump(schema.raw, sort_keys=False, allow_unicode=True)
@@ -679,7 +1172,12 @@ def load_excel_to_duckdb(
                 datetime.now(timezone.utc).isoformat(),
             ],
         )
+        conn.execute("COMMIT")
         conn.execute("CHECKPOINT")
+    except Exception:
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK")
+        raise
     finally:
         conn.close()
 
@@ -689,7 +1187,7 @@ def load_excel_to_duckdb(
     invalidate_tool_cache()
     return LoadResult(
         table_name=schema.table_name,
-        row_count=len(df),
+        row_count=row_count,
         column_count=len(schema.columns),
         db_path=db_path,
         link_warnings=link_warnings,

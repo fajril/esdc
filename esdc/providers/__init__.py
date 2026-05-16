@@ -46,6 +46,9 @@ class ProviderFallbackChatModel(BaseChatModel):
 
     models: list[BaseChatModel]
     provider_names: list[str]
+    model_names: list[str]
+    last_provider_name: str | None = None
+    last_model_name: str | None = None
 
     @property
     def _llm_type(self) -> str:
@@ -69,9 +72,13 @@ class ProviderFallbackChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         last_error: Exception | None = None
-        for model in self.models:
+        for model, provider_name, model_name in zip(
+            self.models, self.provider_names, self.model_names, strict=False
+        ):
             try:
                 message = model.invoke(messages, stop=stop, **kwargs)
+                self.last_provider_name = provider_name
+                self.last_model_name = model_name
                 return ChatResult(generations=[ChatGeneration(message=message)])
             except Exception as exc:
                 last_error = exc
@@ -87,9 +94,13 @@ class ProviderFallbackChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         last_error: Exception | None = None
-        for model in self.models:
+        for model, provider_name, model_name in zip(
+            self.models, self.provider_names, self.model_names, strict=False
+        ):
             try:
                 message = await model.ainvoke(messages, stop=stop, **kwargs)
+                self.last_provider_name = provider_name
+                self.last_model_name = model_name
                 return ChatResult(generations=[ChatGeneration(message=message)])
             except Exception as exc:
                 last_error = exc
@@ -149,12 +160,15 @@ def _create_single_llm_from_config(config: dict[str, Any]):
     if provider_config.reasoning_effort is not None:
         llm_kwargs["reasoning_effort"] = provider_config.reasoning_effort
 
-    return provider_class.create_llm(
+    llm = provider_class.create_llm(
         model=provider_config.model or None,
         base_url=provider_config.base_url or None,
         api_key=provider_config.api_key or None,
         **llm_kwargs,
     )
+    object.__setattr__(llm, "_esdc_provider_name", provider_config.name)
+    object.__setattr__(llm, "_esdc_model_name", provider_config.model)
+    return llm
 
 
 def create_llm_from_config(config: dict[str, Any]):
@@ -166,6 +180,7 @@ def create_llm_from_config(config: dict[str, Any]):
     configs = [config] + list(config.get("fallback_configs") or [])
     llms: list[BaseChatModel] = []
     provider_names: list[str] = []
+    model_names: list[str] = []
     errors: list[str] = []
 
     for cfg in configs:
@@ -173,6 +188,7 @@ def create_llm_from_config(config: dict[str, Any]):
             llm = _create_single_llm_from_config(cfg)
             llms.append(llm)
             provider_names.append(str(cfg.get("name") or cfg.get("provider_type")))
+            model_names.append(str(cfg.get("model") or ""))
         except Exception as exc:
             provider_name = str(cfg.get("name") or cfg.get("provider_type") or "?")
             errors.append(f"{provider_name}: {exc}")
@@ -184,7 +200,11 @@ def create_llm_from_config(config: dict[str, Any]):
     if len(llms) == 1:
         return llms[0]
 
-    return ProviderFallbackChatModel(models=llms, provider_names=provider_names)
+    return ProviderFallbackChatModel(
+        models=llms,
+        provider_names=provider_names,
+        model_names=model_names,
+    )
 
 
 __all__ = [

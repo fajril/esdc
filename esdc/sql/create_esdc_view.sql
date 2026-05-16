@@ -1,10 +1,25 @@
+CREATE TABLE IF NOT EXISTS resource_summaries (
+	entity_level TEXT NOT NULL,
+	report_year INTEGER NOT NULL,
+	entity_id TEXT NOT NULL,
+	entity_name TEXT,
+	summary_json TEXT NOT NULL,
+	summary_text TEXT,
+	source_hash TEXT NOT NULL,
+	source_level TEXT NOT NULL,
+	provider TEXT,
+	model TEXT,
+	generated_at TEXT NOT NULL,
+	PRIMARY KEY (entity_level, report_year, entity_id)
+);
+
 -- create view field_resources from project resources
 DROP VIEW IF EXISTS field_resources;
 
 CREATE VIEW field_resources AS
 	SELECT 
 		MIN(report_date) as report_date,
-		MIN(report_year) as report_year,
+		MIN(pr.report_year) as report_year,
 		MIN(report_status) as report_status,
 		MAX(is_offshore) as is_offshore,
 		MIN(wk_id) as wk_id,
@@ -44,6 +59,7 @@ CREATE VIEW field_resources AS
 			END
 			ELSE ANY_VALUE(project_remarks)
 		END as field_remarks,
+		ANY_VALUE(fs.summary_text) as field_summary,
 		MAX(is_discovered) as is_discovered,
 		MIN(project_stage) as project_stage,
 		MIN(project_class) as project_class,
@@ -152,7 +168,11 @@ CREATE VIEW field_resources AS
 		SUM(ghv_avg) as ghv_avg,
 		gen_random_uuid() as uuid
 	FROM project_resources pr
-	GROUP BY report_year, wk_id, field_id, project_stage, project_class, uncert_level
+	LEFT JOIN resource_summaries fs
+		ON fs.entity_level = 'field'
+		AND fs.report_year = pr.report_year
+		AND fs.entity_id = COALESCE(NULLIF(pr.field_id, ''), pr.field_name)
+	GROUP BY pr.report_year, wk_id, field_id, project_stage, project_class, uncert_level
 	ORDER BY report_year DESC, wk_name, field_name, project_stage, project_class, uncert_level;
 
 -- create view wa_resources
@@ -161,7 +181,7 @@ DROP VIEW IF EXISTS wa_resources;
 CREATE VIEW wa_resources AS
 	SELECT 
 		MIN(report_date) as report_date,
-		MIN(report_year) as report_year,
+		MIN(fr.report_year) as report_year,
 		MIN(report_status) as report_status,
 		MAX(is_offshore) as is_offshore,
 		mAX(is_discovered) as is_discovered,
@@ -198,6 +218,7 @@ CREATE VIEW wa_resources AS
 			END
 			ELSE ANY_VALUE(field_remarks)
 		END as wa_remarks,
+		ANY_VALUE(ws.summary_text) as wk_summary,
 		MIN(project_stage) as project_stage,
 		MIN(project_class) as project_class,
 		MIN(project_level) as project_level,
@@ -305,14 +326,18 @@ CREATE VIEW wa_resources AS
 		SUM(ghv_avg) as ghv_avg,
 		gen_random_uuid() as uuid
 	FROM field_resources fr
-	GROUP BY report_year, wk_name, project_stage, project_class, uncert_level
+	LEFT JOIN resource_summaries ws
+		ON ws.entity_level = 'working_area'
+		AND ws.report_year = fr.report_year
+		AND ws.entity_id = COALESCE(NULLIF(fr.wk_id, ''), fr.wk_name)
+	GROUP BY fr.report_year, wk_name, project_stage, project_class, uncert_level
 	ORDER BY report_year DESC, wk_name, project_stage, project_class, uncert_level;
 
 DROP VIEW IF EXISTS nkri_resources;
 
 CREATE VIEW nkri_resources AS
 	SELECT 
-		MIN(report_year) as report_year,
+		MIN(wr.report_year) as report_year,
 		MIN(report_status) as report_status,
 		COUNT(NULLIF(wk_id, '')) as wa_count,
 		SUM(field_count) as field_count,
@@ -322,6 +347,7 @@ CREATE VIEW nkri_resources AS
 		SUM(project_active_count) as project_active_count,
 		SUM(groovy_count) as groovy_count,
 		SUM(fusion_count) as fusion_count,
+		ANY_VALUE(ns.summary_text) as nkri_summary,
 		MAX(is_discovered) as is_discovered,
 		MIN(project_stage) as project_stage,
 		MIN(project_class) as project_class,
@@ -415,5 +441,9 @@ CREATE VIEW nkri_resources AS
 		SUM(ghv_avg) as ghv_avg,
 		gen_random_uuid() as uuid
 	FROM wa_resources wr
-	GROUP BY report_year, project_stage, project_class, uncert_level
+	LEFT JOIN resource_summaries ns
+		ON ns.entity_level = 'nkri'
+		AND ns.report_year = wr.report_year
+		AND ns.entity_id = 'NKRI'
+	GROUP BY wr.report_year, project_stage, project_class, uncert_level
 	ORDER BY report_year DESC, project_stage, project_class, uncert_level;
