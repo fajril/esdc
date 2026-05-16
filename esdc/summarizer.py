@@ -643,15 +643,13 @@ def _summarize_entity(
                 summary = _parse_summary_response(content)
                 break
             except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(
-                    "Attempt %d/%d failed for %s '%s' (%s): %.200s",
-                    attempt + 1,
-                    retry + 1,
-                    level,
-                    entity_name,
-                    type(e).__name__,
-                    content.strip()[:200],
+                msg = (
+                    f"[yellow]Attempt {attempt + 1}/{retry + 1} failed[/yellow] "
+                    f"for {level} '[bold]{entity_name}[/bold]' "
+                    f"({type(e).__name__}): {e}"
                 )
+                logger.warning("%s | Response: %.200s", msg, content.strip()[:200])
+                console.print(msg)
                 if attempt < retry:
                     last_error = str(e)
                 else:
