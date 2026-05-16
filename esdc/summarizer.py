@@ -1092,6 +1092,10 @@ def _repair_json(raw: str) -> str:
 
 def _parse_summary_response(content: str) -> dict[str, Any]:
     cleaned = content.strip()
+    if cleaned.startswith("<think>"):
+        end_idx = cleaned.find("</think>")
+        if end_idx != -1:
+            cleaned = cleaned[end_idx + len("</think>"):].strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")
         if cleaned.startswith("json"):
