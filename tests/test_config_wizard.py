@@ -148,6 +148,9 @@ class TestRunWizard:
 class TestProviderCRUDFlows:
     """Test provider add/edit/remove flows."""
 
+    @patch("esdc.config_wizard._fetch_models", return_value=["gpt-4o"])
+    @patch("esdc.config_wizard.Config.get_default_provider", return_value="")
+    @patch("esdc.config_wizard.Config.get_providers", return_value={})
     @patch("esdc.config_wizard.Config.save_provider")
     @patch("esdc.config_wizard.Config.set_default_provider")
     @patch("esdc.config_wizard.questionary.select")
@@ -164,22 +167,28 @@ class TestProviderCRUDFlows:
         mock_select,
         mock_set_default,
         mock_save,
+        mock_get_providers,
+        mock_get_default,
+        mock_fetch_models,
     ):
         from esdc.config_wizard import _add_provider_flow
 
         mock_select.return_value.ask.side_effect = [
             "openai",
+            "(none)",
             "gpt-4o",
         ]
-        mock_text.return_value.ask.side_effect = ["my-openai"]
         mock_password.return_value.ask.return_value = "sk-test"
-        mock_confirm.side_effect = [True, False, False]
+        mock_confirm.return_value.ask.return_value = False
 
         _add_provider_flow()
 
         mock_save.assert_called_once()
-        mock_set_default.assert_called_once_with("my-openai")
+        mock_set_default.assert_called_once_with("openai")
 
+    @patch("esdc.config_wizard._fetch_models", return_value=["llama3"])
+    @patch("esdc.config_wizard.Config.get_default_provider", return_value="openai")
+    @patch("esdc.config_wizard.Config.get_providers", return_value={})
     @patch("esdc.config_wizard.Config.save_provider")
     @patch("esdc.config_wizard.Config.set_default_provider")
     @patch("esdc.config_wizard.questionary.select")
@@ -196,6 +205,9 @@ class TestProviderCRUDFlows:
         mock_select,
         mock_set_default,
         mock_save,
+        mock_get_providers,
+        mock_get_default,
+        mock_fetch_models,
     ):
         from esdc.config_wizard import _add_provider_flow
 
@@ -204,10 +216,9 @@ class TestProviderCRUDFlows:
             "llama3",
         ]
         mock_text.return_value.ask.side_effect = [
-            "my-ollama",
             "http://localhost:11434",
         ]
-        mock_confirm.side_effect = [False, False, False]
+        mock_confirm.return_value.ask.return_value = False
 
         _add_provider_flow()
 
@@ -229,6 +240,35 @@ class TestProviderCRUDFlows:
         _set_default_provider_flow()
 
         mock_set_default.assert_called_once_with("my-openai")
+
+    @patch("esdc.config_wizard.Config.get_provider_order")
+    @patch("esdc.config_wizard.Config.get_providers")
+    @patch("esdc.config_wizard.Config.set_provider_order")
+    @patch("esdc.config_wizard.questionary.select")
+    @patch("esdc.config_wizard.questionary.confirm")
+    @patch("esdc.config_wizard.rich_print")
+    def test_set_provider_order(
+        self,
+        mock_print,
+        mock_confirm,
+        mock_select,
+        mock_set_order,
+        mock_get_providers,
+        mock_get_order,
+    ):
+        from esdc.config_wizard import _set_provider_order_flow
+
+        mock_get_providers.return_value = {
+            "deepseek": {"provider_type": "deepseek"},
+            "openai": {"provider_type": "openai"},
+        }
+        mock_get_order.return_value = []
+        mock_select.return_value.ask.side_effect = ["deepseek", "__done__"]
+        mock_confirm.return_value.ask.return_value = True
+
+        _set_provider_order_flow()
+
+        mock_set_order.assert_called_once_with(["deepseek", "openai"])
 
     @patch("esdc.config_wizard.Config.get_providers")
     @patch("esdc.config_wizard.Config.remove_provider")

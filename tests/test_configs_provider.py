@@ -221,6 +221,54 @@ providers:
             provider_config = Config.get_provider_config()
             assert provider_config is None
 
+    def test_get_provider_config_attaches_fallback_configs(self, tmp_path):
+        """Test provider_order attaches fallback configs to the primary config."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+default_provider: deepseek
+provider_order:
+  - deepseek
+  - openai
+providers:
+  deepseek:
+    provider_type: deepseek
+    api_key: sk-deepseek
+    model: deepseek-v4-flash
+  openai:
+    provider_type: openai
+    api_key: sk-openai
+    model: gpt-4o-mini
+"""
+            )
+
+            provider_config = Config.get_provider_config()
+            assert provider_config is not None
+            assert provider_config["provider_type"] == "deepseek"
+            assert len(provider_config["fallback_configs"]) == 1
+            assert provider_config["fallback_configs"][0]["provider_type"] == "openai"
+
+    def test_get_provider_order_prepends_default_provider(self, tmp_path):
+        """Test default_provider remains primary even with provider_order."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+default_provider: openai
+provider_order:
+  - deepseek
+  - openai
+providers:
+  deepseek:
+    provider_type: deepseek
+  openai:
+    provider_type: openai
+"""
+            )
+
+            assert Config.get_provider_order() == ["openai", "deepseek"]
+
 
 class TestSetDefaultProvider:
     """Tests for set_default_provider()."""
@@ -243,6 +291,65 @@ providers:
             with open(config_file) as f:
                 config = yaml.safe_load(f)
             assert config["default_provider"] == "ollama"
+
+    def test_set_default_provider_moves_provider_order_to_front(self, tmp_path):
+        """Test set_default_provider keeps failover order in sync."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+default_provider: deepseek
+provider_order:
+  - deepseek
+  - openai
+providers:
+  deepseek:
+    provider_type: deepseek
+  openai:
+    provider_type: openai
+"""
+            )
+
+            Config.set_default_provider("openai")
+            with open(config_file) as f:
+                config = yaml.safe_load(f)
+            assert config["default_provider"] == "openai"
+            assert config["provider_order"] == ["openai", "deepseek"]
+
+    def test_set_provider_order_sets_default_provider(self, tmp_path):
+        """Test set_provider_order stores order and updates default provider."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+providers:
+  deepseek:
+    provider_type: deepseek
+  openai:
+    provider_type: openai
+"""
+            )
+
+            Config.set_provider_order(["deepseek", "openai", "deepseek"])
+            with open(config_file) as f:
+                config = yaml.safe_load(f)
+            assert config["default_provider"] == "deepseek"
+            assert config["provider_order"] == ["deepseek", "openai"]
+
+    def test_set_provider_order_rejects_unknown_provider(self, tmp_path):
+        """Test set_provider_order validates provider names."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+providers:
+  deepseek:
+    provider_type: deepseek
+"""
+            )
+
+            with pytest.raises(ValueError, match="Unknown provider"):
+                Config.set_provider_order(["deepseek", "openai"])
 
     def test_set_default_provider_creates_section(self, tmp_path):
         """Test set_default_provider works when no config exists."""

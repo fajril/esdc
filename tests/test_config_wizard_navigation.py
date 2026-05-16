@@ -7,6 +7,7 @@ from esdc.config_wizard import (
     _edit_provider_flow,
     _remove_provider_flow,
     _set_default_provider_flow,
+    _set_provider_order_flow,
     _test_provider_standalone,
 )
 
@@ -80,6 +81,17 @@ class TestSetDefaultProviderFlowBack:
         mock_get_providers.return_value = {"openai": {"provider_type": "openai"}}
         mock_select.return_value.ask.return_value = "__back__"
         _set_default_provider_flow()
+
+
+class TestSetProviderOrderFlowBack:
+    """_set_provider_order_flow must return on Back."""
+
+    @patch("esdc.config_wizard.Config.get_providers")
+    @patch("esdc.config_wizard.questionary.select")
+    def test_back_at_provider_selection(self, mock_select, mock_get_providers):
+        mock_get_providers.return_value = {"openai": {"provider_type": "openai"}}
+        mock_select.return_value.ask.return_value = "__back__"
+        _set_provider_order_flow()
 
 
 class TestTestProviderStandaloneBack:

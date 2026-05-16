@@ -45,12 +45,15 @@ class AgentFactory:
         model = provider_config.get("model")
         base_url = provider_config.get("base_url")
         api_key = provider_config.get("api_key")
+        reasoning_effort = provider_config.get("reasoning_effort")
 
         config = {
             "provider_type": provider_name,
             "model": model,
             "base_url": base_url,
             "api_key": api_key,
+            "reasoning_effort": reasoning_effort,
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
 
         return create_llm_from_config(config)

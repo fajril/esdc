@@ -1,6 +1,45 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+
 from esdc.providers.base import ProviderConfig
+
+
+class _FailingChatModel(BaseChatModel):
+    @property
+    def _llm_type(self) -> str:
+        return "failing-chat-model"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager=None,
+        **kwargs,
+    ) -> ChatResult:
+        raise RuntimeError("primary failed")
+
+
+class _StaticChatModel(BaseChatModel):
+    content: str
+
+    @property
+    def _llm_type(self) -> str:
+        return "static-chat-model"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager=None,
+        **kwargs,
+    ) -> ChatResult:
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content=self.content))]
+        )
 
 
 def test_ollama_get_context_length_from_api():
@@ -119,6 +158,79 @@ class TestCreateLlmFromConfigNoLeak:
 
         call_kwargs = mock_cls.call_args[1]
         assert "config" not in call_kwargs
+
+
+class TestCreateLlmFromConfigFallback:
+    """Verify create_llm_from_config supports ordered provider fallbacks."""
+
+    @pytest.mark.asyncio
+    async def test_runtime_invoke_falls_back_to_next_provider(self):
+        from esdc.providers import ProviderFallbackChatModel, create_llm_from_config
+
+        with (
+            patch(
+                "esdc.providers.openai.OpenAIProvider.create_llm",
+                return_value=_FailingChatModel(),
+            ),
+            patch(
+                "esdc.providers.deepseek.DeepSeekProvider.create_llm",
+                return_value=_StaticChatModel(content="fallback ok"),
+            ),
+        ):
+            llm = create_llm_from_config(
+                {
+                    "name": "openai",
+                    "provider_type": "openai",
+                    "model": "gpt-4o-mini",
+                    "api_key": "sk-openai",
+                    "fallback_configs": [
+                        {
+                            "name": "deepseek",
+                            "provider_type": "deepseek",
+                            "model": "deepseek-v4-flash",
+                            "api_key": "sk-deepseek",
+                        }
+                    ],
+                }
+            )
+
+            assert isinstance(llm, ProviderFallbackChatModel)
+            response = await llm.ainvoke([HumanMessage(content="hello")])
+            assert response.content == "fallback ok"
+
+    def test_creation_skips_provider_that_fails_to_construct(self):
+        from esdc.providers import create_llm_from_config
+
+        fallback_model = _StaticChatModel(content="constructed fallback")
+
+        with (
+            patch(
+                "esdc.providers.openai.OpenAIProvider.create_llm",
+                side_effect=ValueError("bad config"),
+            ),
+            patch(
+                "esdc.providers.deepseek.DeepSeekProvider.create_llm",
+                return_value=fallback_model,
+            ),
+        ):
+            llm = create_llm_from_config(
+                {
+                    "name": "openai",
+                    "provider_type": "openai",
+                    "model": "gpt-4o-mini",
+                    "api_key": "sk-openai",
+                    "fallback_configs": [
+                        {
+                            "name": "deepseek",
+                            "provider_type": "deepseek",
+                            "model": "deepseek-v4-flash",
+                            "api_key": "sk-deepseek",
+                        }
+                    ],
+                }
+            )
+
+        assert llm is fallback_model
 
     @patch("esdc.providers.anthropic.ChatAnthropic")
     def test_anthropic_no_config_leak(self, mock_cls):

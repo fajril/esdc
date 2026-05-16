@@ -25,7 +25,8 @@ class TestReasoningContentPreservation:
                 "name": "execute_sql",
                 "arguments": '{"query": "SELECT * FROM project_resources"}',
                 "reasoning_content": (
-                    "I need to query the project_resources table for Duri's data."
+                    "I need to query the project_resources table "
+                    "for Duri's reserves data."
                 ),
             },
             {

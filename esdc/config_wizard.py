@@ -59,6 +59,7 @@ _PROVIDER_FIELDS: dict[str, list[str]] = {
     "google": ["api_key", "model"],
     "azure_openai": ["base_url", "api_key", "model", "api_version"],
     "groq": ["api_key", "model"],
+    "deepseek": ["api_key", "model", "reasoning_effort"],
     "ollama_cloud": ["base_url", "api_key", "model"],
 }
 
@@ -570,6 +571,74 @@ def _set_default_provider_flow() -> None:
     )
 
 
+def _set_provider_order_flow() -> None:
+    """Set provider failover order."""
+    providers = Config.get_providers()
+    if not providers:
+        rich_print(f"[{_WARNING_COLOR}]No providers configured.[/{_WARNING_COLOR}]")
+        return
+
+    current_order = Config.get_provider_order()
+    if current_order:
+        rich_print(
+            f"[{_SEP_COLOR}]Current order: "
+            f"[{_VALUE_COLOR}]{' > '.join(current_order)}[/{_VALUE_COLOR}]"
+            f"[/{_SEP_COLOR}]"
+        )
+
+    ordered: list[str] = []
+    remaining = list(providers.keys())
+
+    while remaining:
+        choices = [
+            questionary.Choice(name, value=name)
+            for name in remaining
+        ]
+        if ordered:
+            choices.append(questionary.Choice("Done", value="__done__"))
+
+        selected = _select_with_back(
+            "Select next provider in failover order:",
+            choices=choices,
+        )
+        if selected == "__back__":
+            return
+        if selected == "__done__":
+            break
+
+        ordered.append(selected)
+        remaining.remove(selected)
+        rich_print(
+            f"[{_SEP_COLOR}]Order: "
+            f"[{_VALUE_COLOR}]{' > '.join(ordered)}[/{_VALUE_COLOR}]"
+            f"[/{_SEP_COLOR}]"
+        )
+
+    if not ordered:
+        rich_print(f"[{_SEP_COLOR}]No changes made.[/{_SEP_COLOR}]")
+        return
+
+    include_remaining = False
+    if remaining:
+        include_remaining = _prompt(
+            questionary.confirm(
+                "Append unselected providers at the end?",
+                default=True,
+                style=_WIZARD_STYLE,
+            )
+        )
+    if include_remaining:
+        ordered.extend(remaining)
+
+    Config.set_provider_order(ordered)
+    rich_print(
+        f"[{_SUCCESS_COLOR}]Provider order set to "
+        f"[{_VALUE_COLOR}]{' > '.join(ordered)}[/{_VALUE_COLOR}]. "
+        f"Default provider is '[{_VALUE_COLOR}]{ordered[0]}[/{_VALUE_COLOR}]'."
+        f"[/{_SUCCESS_COLOR}]"
+    )
+
+
 # ---------------------------------------------------------------------------
 # General config flows
 # ---------------------------------------------------------------------------
@@ -642,7 +711,7 @@ def run_wizard() -> None:
     Config.init_config()
     _check_default_provider_warning()
 
-    with contextlib.suppress(WizardCancelledError):
+    with contextlib.suppress(WizardCancelledError, KeyboardInterrupt):
         _run_wizard_loop()
 
     rich_print(f"[{_SEP_COLOR}]Goodbye![/{_SEP_COLOR}]")
@@ -669,6 +738,10 @@ def _run_wizard_loop() -> None:
                     questionary.Choice("  — Remove provider", value="Remove provider"),
                     questionary.Choice(
                         "  — Set default provider", value="Set default provider"
+                    ),
+                    questionary.Choice(
+                        "  — Set provider failover order",
+                        value="Set provider order",
                     ),
                     questionary.Choice("  — Test connection", value="Test connection"),
                     questionary.Separator("Configuration"),
@@ -697,6 +770,8 @@ def _run_wizard_loop() -> None:
                 _remove_provider_flow()
             elif selected == "Set default provider":
                 _set_default_provider_flow()
+            elif selected == "Set provider order":
+                _set_provider_order_flow()
             elif selected == "Test connection":
                 _test_provider_standalone()
             elif selected == "Show config":

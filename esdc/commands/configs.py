@@ -24,6 +24,11 @@ def configs(
         "--set-default-provider",
         help="Set the default provider non-interactively.",
     ),
+    set_provider_order: str | None = typer.Option(
+        None,
+        "--set-provider-order",
+        help="Set provider failover order, comma-separated.",
+    ),
 ) -> None:
     """View and edit ESDC configuration interactively.
 
@@ -59,6 +64,25 @@ def configs(
             return
         Config.set_default_provider(set_default_provider)
         typer.echo(f"Default provider set to '{set_default_provider}'.")
+        return
+
+    if set_provider_order:
+        providers = Config.get_providers()
+        names = [name.strip() for name in set_provider_order.split(",") if name.strip()]
+        unknown = [name for name in names if name not in providers]
+        if unknown:
+            typer.echo(
+                f"Error: Provider(s) not found: {', '.join(unknown)}."
+                f" Available: {', '.join(providers.keys())}",
+                err=True,
+            )
+            return
+        try:
+            Config.set_provider_order(names)
+        except ValueError as e:
+            typer.echo(f"Error: {e}", err=True)
+            return
+        typer.echo(f"Provider order set to: {', '.join(names)}")
         return
 
     if show:

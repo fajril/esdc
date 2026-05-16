@@ -22,6 +22,7 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "database_path": "Path to the SQLite database file",
     "tool_format": "Format for tool results (native, markdown, or auto)",
     "default_provider": "Default LLM provider name",
+    "provider_order": "Ordered LLM provider failover list",
     "cache.sql_ttl": "SQL cache time-to-live in seconds",
     "logging.level": "Global logging level",
     "logging.file.enabled": "Enable logging to file",
@@ -275,24 +276,91 @@ class Config:
         """Set the default provider."""
         config = cls._load_config() or {}
         config["default_provider"] = name
+        provider_order = config.get("provider_order")
+        if isinstance(provider_order, list):
+            remaining = [p for p in provider_order if p != name]
+            config["provider_order"] = [name] + remaining
         cls._save_config(config)
 
     @classmethod
     def get_provider_config(cls) -> dict[str, Any] | None:
         """Get provider configuration from config file.
 
-        Returns the config for the default provider.
+        Returns the config for the default provider. If ``provider_order`` is
+        configured, fallback provider configs are attached under
+        ``fallback_configs`` for downstream LLM creation.
         """
+        configs = cls.get_provider_configs_by_priority()
+        if not configs:
+            return None
+
+        primary = dict(configs[0])
+        fallbacks = configs[1:]
+        if fallbacks:
+            primary["fallback_configs"] = fallbacks
+        return primary
+
+    @classmethod
+    def get_provider_order(cls) -> list[str]:
+        """Return provider names in failover priority order."""
         config = cls._load_config()
         if not config:
-            return None
+            return []
 
         default_provider = config.get("default_provider")
-        if not default_provider:
-            return None
+        configured_order = config.get("provider_order", [])
+        providers = config.get("providers", {})
+
+        ordered: list[str] = []
+        if default_provider and default_provider in providers:
+            ordered.append(default_provider)
+
+        if isinstance(configured_order, list):
+            for provider_name in configured_order:
+                if (
+                    isinstance(provider_name, str)
+                    and provider_name in providers
+                    and provider_name not in ordered
+                ):
+                    ordered.append(provider_name)
+
+        return ordered
+
+    @classmethod
+    def set_provider_order(cls, provider_names: list[str]) -> None:
+        """Set ordered provider failover list."""
+        config = cls._load_config() or {}
+        providers = config.get("providers", {})
+        unknown = [name for name in provider_names if name not in providers]
+        if unknown:
+            raise ValueError(f"Unknown provider(s): {', '.join(unknown)}")
+
+        deduped = list(dict.fromkeys(provider_names))
+        config["provider_order"] = deduped
+        if deduped:
+            config["default_provider"] = deduped[0]
+        cls._save_config(config)
+
+    @classmethod
+    def get_provider_configs_by_priority(cls) -> list[dict[str, Any]]:
+        """Return provider configs ordered for failover."""
+        config = cls._load_config()
+        if not config:
+            return []
 
         providers = config.get("providers", {})
-        return providers.get(default_provider)
+        ordered_names = cls.get_provider_order()
+        configs: list[dict[str, Any]] = []
+        for name in ordered_names:
+            provider_config = providers.get(name)
+            if not isinstance(provider_config, dict):
+                continue
+            cfg = dict(provider_config)
+            cfg.setdefault("name", name)
+            cfg.setdefault("provider_type", cfg.get("type") or name)
+            configs.append(cfg)
+
+        return configs
 
     @classmethod
     def get_default_provider(cls) -> str:

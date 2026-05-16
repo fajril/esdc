@@ -435,6 +435,7 @@ async def generate_responses_stream(
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
             "reasoning_effort": "none",
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
         llm = create_llm_from_config(provider_config_obj)
 
@@ -502,7 +503,10 @@ async def generate_responses_stream(
         "model": provider_model,
         "base_url": base_url,
         "api_key": api_key,
-        "reasoning_effort": reasoning_effort,
+        "reasoning_effort": reasoning_effort
+        if reasoning_effort is not None
+        else provider_config.get("reasoning_effort"),
+        "fallback_configs": provider_config.get("fallback_configs"),
     }
 
     # Categorize tools into internal (ESDC) and external (OpenTerminal etc.)
@@ -1411,6 +1415,7 @@ async def generate_responses_sync(
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
             "reasoning_effort": "none",
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
         llm = create_llm_from_config(provider_config_obj)
 
@@ -1464,7 +1469,10 @@ async def generate_responses_sync(
         "model": provider_model,
         "base_url": base_url,
         "api_key": api_key,
-        "reasoning_effort": reasoning_effort,
+        "reasoning_effort": reasoning_effort
+        if reasoning_effort is not None
+        else provider_config.get("reasoning_effort"),
+        "fallback_configs": provider_config.get("fallback_configs"),
     }
 
     # Categorize tools into internal and external

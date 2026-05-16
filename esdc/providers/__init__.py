@@ -1,8 +1,14 @@
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import Runnable
+
 from esdc.providers.anthropic import AnthropicProvider
 from esdc.providers.azure_openai import AzureOpenAIProvider
 from esdc.providers.base import Provider, ProviderConfig
+from esdc.providers.deepseek import DeepSeekProvider
 from esdc.providers.google import GoogleProvider
 from esdc.providers.groq import GroqProvider
 from esdc.providers.ollama import OllamaProvider
@@ -18,6 +24,7 @@ PROVIDER_CLASSES: dict[str, type[Provider]] = {
     "google": GoogleProvider,
     "azure_openai": AzureOpenAIProvider,
     "groq": GroqProvider,
+    "deepseek": DeepSeekProvider,
     "ollama_cloud": OllamaCloudProvider,
 }
 
@@ -29,8 +36,66 @@ PROVIDER_NAMES: dict[str, str] = {
     "google": "Google (Gemini)",
     "azure_openai": "Azure OpenAI",
     "groq": "Groq",
+    "deepseek": "DeepSeek",
     "ollama_cloud": "Ollama Cloud",
 }
+
+
+class ProviderFallbackChatModel(BaseChatModel):
+    """Chat model wrapper that tries configured providers in order."""
+
+    models: list[BaseChatModel]
+    provider_names: list[str]
+
+    @property
+    def _llm_type(self) -> str:
+        return "esdc-provider-fallback"
+
+    def bind_tools(self, tools: list[Any], **kwargs: Any) -> Runnable:
+        """Bind tools to each provider and return a fallback runnable."""
+        if not self.models:
+            raise ValueError("No provider models configured")
+
+        bound_models = [model.bind_tools(tools, **kwargs) for model in self.models]
+        if len(bound_models) == 1:
+            return bound_models[0]
+        return bound_models[0].with_fallbacks(bound_models[1:])
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        last_error: Exception | None = None
+        for model in self.models:
+            try:
+                message = model.invoke(messages, stop=stop, **kwargs)
+                return ChatResult(generations=[ChatGeneration(message=message)])
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise ValueError("No provider models configured")
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        last_error: Exception | None = None
+        for model in self.models:
+            try:
+                message = await model.ainvoke(messages, stop=stop, **kwargs)
+                return ChatResult(generations=[ChatGeneration(message=message)])
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise ValueError("No provider models configured")
 
 
 def get_provider(provider_type: str) -> type[Provider] | None:
@@ -57,8 +122,8 @@ def create_provider(provider_type: str, model: str | None = None, **kwargs) -> P
     return provider_class()
 
 
-def create_llm_from_config(config: dict[str, Any]):
-    """Create a LangChain LLM from provider config dict."""
+def _create_single_llm_from_config(config: dict[str, Any]):
+    """Create a LangChain LLM from a single provider config dict."""
     provider_type = config.get("provider_type") or config.get("type")
     if not provider_type:
         raise ValueError("provider_type is required in config")
@@ -92,6 +157,36 @@ def create_llm_from_config(config: dict[str, Any]):
     )
 
 
+def create_llm_from_config(config: dict[str, Any]):
+    """Create a LangChain LLM from provider config dict.
+
+    If the config contains ``fallback_configs``, returns a wrapper that tries
+    the primary provider first and then each fallback provider in order.
+    """
+    configs = [config] + list(config.get("fallback_configs") or [])
+    llms: list[BaseChatModel] = []
+    provider_names: list[str] = []
+    errors: list[str] = []
+
+    for cfg in configs:
+        try:
+            llm = _create_single_llm_from_config(cfg)
+            llms.append(llm)
+            provider_names.append(str(cfg.get("name") or cfg.get("provider_type")))
+        except Exception as exc:
+            provider_name = str(cfg.get("name") or cfg.get("provider_type") or "?")
+            errors.append(f"{provider_name}: {exc}")
+
+    if not llms:
+        detail = "; ".join(errors) if errors else "no providers configured"
+        raise ValueError(f"Failed to create any provider LLM: {detail}")
+
+    if len(llms) == 1:
+        return llms[0]
+
+    return ProviderFallbackChatModel(models=llms, provider_names=provider_names)
+
+
 __all__ = [
     "Provider",
     "ProviderConfig",
@@ -103,8 +198,10 @@ __all__ = [
     "GoogleProvider",
     "AzureOpenAIProvider",
     "GroqProvider",
+    "DeepSeekProvider",
     "PROVIDER_CLASSES",
     "PROVIDER_NAMES",
+    "ProviderFallbackChatModel",
     "get_provider",
     "get_provider_name",
     "list_provider_types",

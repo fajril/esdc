@@ -101,6 +101,30 @@ providers:
     base_url: http://localhost:11434
 ```
 
+DeepSeek can be configured as a first-class provider:
+
+```yaml
+default_provider: deepseek
+provider_order:
+  - deepseek
+  - openai
+providers:
+  deepseek:
+    provider_type: deepseek
+    api_key: sk-...
+    model: deepseek-v4-flash
+    reasoning_effort: high
+  openai:
+    provider_type: openai
+    api_key: sk-...
+    model: gpt-4o-mini
+```
+
+Use `reasoning_effort: none` for non-thinking mode, or `high` / `max`
+for DeepSeek thinking mode. `provider_order` controls failover priority; ESDC
+uses `default_provider` first, then tries the remaining providers in order if
+the current provider fails.
+
 ### Environment Variables
 
 Set credentials for data fetching:

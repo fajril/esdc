@@ -14,6 +14,7 @@ ProviderType = Literal[
     "google",
     "azure_openai",
     "groq",
+    "deepseek",
     "ollama_cloud",
 ]
 
