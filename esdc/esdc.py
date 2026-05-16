@@ -70,6 +70,15 @@ from esdc.dbmanager import (  # noqa: E402
     load_data_to_db,
     run_query,
 )
+from esdc.loaders import (  # noqa: E402
+    POD_SCHEMA_PATH,
+    LoadSchemaError,
+    SpreadsheetLoadError,
+    copy_pod_schema_template,
+    generate_schema_template_from_excel,
+    load_excel_to_duckdb,
+    print_load_result,
+)
 from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
 from esdc.validate import ValidationResult, run_validation
 
@@ -79,7 +88,9 @@ TABLES: tuple[TableName, TableName] = (
 )
 
 app = typer.Typer(no_args_is_help=False)
+schema_app = typer.Typer(invoke_without_command=True, no_args_is_help=True)
 app.add_typer(configs_app, name="configs")
+app.add_typer(schema_app, name="schema")
 
 
 @app.callback()
@@ -119,6 +130,140 @@ def main(verbose: int = 0):
 
 
 # ... (previous imports remain unchanged)
+
+
+@schema_app.callback()
+def schema_command(
+    generate: Annotated[
+        bool,
+        typer.Option(
+            "--generate",
+            help="Generate a starter YAML schema from an Excel .xlsx file.",
+        ),
+    ] = False,
+    from_excel: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-excel",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Excel .xlsx file to inspect.",
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help=(
+                "Schema YAML output path. Defaults to "
+                "./<excel-stem>.schema.yaml."
+            ),
+        ),
+    ] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--overwrite",
+            help="Replace the output schema file if it already exists.",
+        ),
+    ] = False,
+    schema_pod: Annotated[
+        bool,
+        typer.Option(
+            "--schema-pod",
+            help="Copy the built-in POD schema template.",
+        ),
+    ] = False,
+) -> None:
+    """Generate and inspect YAML schemas for spreadsheet loading."""
+    if schema_pod:
+        try:
+            destination = copy_pod_schema_template(
+                output_path=output,
+                overwrite=overwrite,
+            )
+        except (LoadSchemaError, SpreadsheetLoadError) as e:
+            typer.echo(f"Error: {e}")
+            raise typer.Exit(1) from None
+        typer.echo(f"Copied POD schema template to {destination}")
+        return
+
+    if not generate:
+        typer.echo("Error: specify --generate or --schema-pod.")
+        raise typer.Exit(1) from None
+    if from_excel is None:
+        typer.echo("Error: --from-excel is required when using --generate.")
+        raise typer.Exit(1) from None
+    try:
+        result = generate_schema_template_from_excel(
+            from_excel,
+            output_path=output,
+            overwrite=overwrite,
+        )
+    except (LoadSchemaError, SpreadsheetLoadError) as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+
+    typer.echo(
+        f"Generated schema template for '{result.table_name}' "
+        f"from sheet '{result.sheet_name}' with {result.column_count:,} columns"
+    )
+    typer.echo(f"Schema: {result.output_path}")
+
+
+@app.command()
+def load(
+    from_excel: Annotated[
+        Path,
+        typer.Option(
+            "--from-excel",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Excel .xlsx file to load.",
+        ),
+    ],
+    schema: Annotated[
+        Path | None,
+        typer.Option(
+            "--schema",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="YAML schema/data dictionary for the Excel table.",
+        ),
+    ] = None,
+    schema_pod: Annotated[
+        bool,
+        typer.Option(
+            "--schema-pod",
+            help="Use the built-in POD schema template.",
+        ),
+    ] = False,
+) -> None:
+    """Load a spreadsheet into DuckDB and register its data dictionary.
+
+    Run `esdc schema --generate --from-excel data.xlsx` to create a starter schema.
+    Use `--schema-pod` to load POD data with the built-in POD schema.
+    """
+    if (schema is None) == (not schema_pod):
+        typer.echo("Error: specify exactly one of --schema or --schema-pod.")
+        raise typer.Exit(1) from None
+    schema_path = POD_SCHEMA_PATH if schema_pod else schema
+    assert schema_path is not None
+    try:
+        result = load_excel_to_duckdb(from_excel, schema_path)
+    except (LoadSchemaError, SpreadsheetLoadError) as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+    print_load_result(result)
 
 
 @app.command()

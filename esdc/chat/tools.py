@@ -1770,6 +1770,16 @@ def knowledge_traversal(
 
     Returns formatted text with definitions, key concepts, and rules.
     """
+    if entity:
+        try:
+            from esdc.loaders import lookup_loaded_schema
+
+            loaded_schema_result = lookup_loaded_schema(entity)
+            if loaded_schema_result:
+                return loaded_schema_result
+        except Exception as e:
+            logger.warning("[LoadedSchema-KG] lookup_failed | error=%s", e)
+
     from esdc.chat.domain_knowledge.ksmi_graph_manager import KSMIGraphManager
 
     try:
