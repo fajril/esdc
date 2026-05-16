@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -132,6 +133,7 @@ def summarize_resources(
     target: str = "all",
     name: str | None = None,
     force: bool = False,
+    retry: int = 0,
 ) -> SummaryRunResult:
     """Run field/WK/NKRI executive summary generation for one report year."""
     normalized_target = _normalize_summarize_target(target)
@@ -171,6 +173,7 @@ def summarize_resources(
                 model_name,
                 force,
                 field_rows=field_rows,
+                retry=retry,
             )
             result = result.add("field", created, skipped)
         if normalized_target in {"all", "working_area"}:
@@ -186,12 +189,13 @@ def summarize_resources(
                 model_name,
                 force,
                 working_area_rows=working_area_rows,
+                retry=retry,
             )
             result = result.add("working_area", created, skipped)
         if normalized_target in {"all", "nkri"}:
             _assert_level_complete(conn, year, "working_area")
             created, skipped = _summarize_nkri(
-                conn, llm, year, provider_name, model_name, force
+                conn, llm, year, provider_name, model_name, force, retry=retry
             )
             result = result.add("nkri", created, skipped)
         refresh_resource_views(conn)
@@ -337,6 +341,7 @@ def _summarize_fields(
     model: str,
     force: bool,
     field_rows: list[tuple[Any, Any]] | None = None,
+    retry: int = 0,
 ) -> tuple[int, int]:
     rows = field_rows
     if rows is None:
@@ -374,6 +379,7 @@ def _summarize_fields(
                 provider=provider,
                 model=model,
                 force=force,
+                retry=retry,
             )
             created += int(did_create)
             skipped += int(not did_create)
@@ -389,6 +395,7 @@ def _summarize_working_areas(
     model: str,
     force: bool,
     working_area_rows: list[tuple[Any, Any]] | None = None,
+    retry: int = 0,
 ) -> tuple[int, int]:
     rows = working_area_rows
     if rows is None:
@@ -426,6 +433,7 @@ def _summarize_working_areas(
                 provider=provider,
                 model=model,
                 force=force,
+                retry=retry,
             )
             created += int(did_create)
             skipped += int(not did_create)
@@ -440,6 +448,7 @@ def _summarize_nkri(
     provider: str,
     model: str,
     force: bool,
+    retry: int = 0,
 ) -> tuple[int, int]:
     source_items = _nkri_source_items(conn, year)
     metrics = _nkri_metrics(conn, year)
@@ -458,6 +467,7 @@ def _summarize_nkri(
             provider=provider,
             model=model,
             force=force,
+            retry=retry,
         )
         progress.advance(task)
     return int(did_create), int(not did_create)
@@ -594,6 +604,7 @@ def _summarize_entity(
     provider: str,
     model: str,
     force: bool,
+    retry: int = 0,
 ) -> bool:
     source_hash = _hash_source(source_items, metrics)
     if not force and _existing_hash_matches(conn, level, year, entity_id, source_hash):
@@ -612,15 +623,29 @@ def _summarize_entity(
             metrics=metrics,
             source_quality=_source_quality_context(source_items),
         )
-        content, actual_provider, actual_model = _invoke_llm_with_metadata(
-            llm,
-            prompt,
-            fallback_provider=provider,
-            fallback_model=model,
-        )
-        provider = actual_provider
-        model = actual_model
-        summary = _parse_summary_response(content)
+        last_error: str | None = None
+        for attempt in range(retry + 1):
+            retry_prompt = (
+                prompt + _retry_feedback(last_error) if last_error else prompt
+            )
+            content, actual_provider, actual_model = _invoke_llm_with_metadata(
+                llm,
+                retry_prompt,
+                fallback_provider=provider,
+                fallback_model=model,
+            )
+            provider = actual_provider
+            model = actual_model
+            try:
+                summary = _parse_summary_response(content)
+                break
+            except (json.JSONDecodeError, ValueError) as e:
+                if attempt < retry:
+                    last_error = str(e)
+                else:
+                    raise
+        else:
+            raise RuntimeError("Unexpected: retry loop exhausted without success or raise.")
         summary = _normalize_summary(summary, len(source_items_for_prompt))
 
     summary_json = json.dumps(summary, ensure_ascii=False, sort_keys=True)
@@ -1039,6 +1064,20 @@ def _invoke_llm_with_metadata(
     return content_text, str(provider or ""), str(model or "")
 
 
+def _repair_json(raw: str) -> str:
+    """Repair common LLM JSON formatting issues before parsing."""
+    s = raw.strip()
+    # Remove trailing comma before closing braces/brackets
+    s = re.sub(r",\s*}", "}", s)
+    s = re.sub(r",\s*]", "]", s)
+    # Quote unquoted keys: {key: value} -> {"key": value}
+    s = re.sub(r"([{,]\s*)([a-zA-Z_]\w*)\s*:", r'\1"\2":', s)
+    # Replace Python booleans/null
+    s = s.replace(": True", ": true").replace(": False", ": false")
+    s = s.replace(": None", ": null")
+    return s
+
+
 def _parse_summary_response(content: str) -> dict[str, Any]:
     cleaned = content.strip()
     if cleaned.startswith("```"):
@@ -1049,10 +1088,18 @@ def _parse_summary_response(content: str) -> dict[str, Any]:
     end = cleaned.rfind("}")
     if start != -1 and end != -1:
         cleaned = cleaned[start : end + 1]
+    cleaned = _repair_json(cleaned)
     parsed = json.loads(cleaned)
     if not isinstance(parsed, dict):
         raise ValueError("Summary response must be a JSON object.")
     return parsed
+
+
+def _retry_feedback(error: str) -> str:
+    return (
+        f"\n\nPercobaan sebelumnya gagal dengan error JSON: {error}\n"
+        "Hanya kembalikan JSON valid sesuai struktur yang diminta."
+    )
 
 
 def _normalize_summary(summary: dict[str, Any], source_count: int) -> dict[str, Any]:

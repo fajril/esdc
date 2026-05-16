@@ -302,6 +302,13 @@ def summarize(
             help="Regenerate summaries even when the source hash is unchanged.",
         ),
     ] = False,
+    retry: Annotated[
+        int,
+        typer.Option(
+            "--retry",
+            help="Retry failed LLM N times with error feedback (0 = repair only).",
+        ),
+    ] = 0,
 ) -> None:
     """Generate LLM executive summaries for Eureka resource dashboards."""
     if year is None:
@@ -314,6 +321,7 @@ def summarize(
             target=target,
             name=name,
             force=force,
+            retry=retry,
         )
     except (FileNotFoundError, ValueError, SummaryDependencyError) as e:
         typer.echo(f"Error: {e}")
