@@ -137,11 +137,14 @@ def summarize_resources(
     name: str | None = None,
     force: bool = False,
     retry: int = 0,
+    from_wk: str | None = None,
 ) -> SummaryRunResult:
     """Run field/WK/NKRI executive summary generation for one report year."""
     normalized_target = _normalize_summarize_target(target)
     if normalized_target in {"all", "nkri"} and name:
         raise ValueError(f"esdc summarize {normalized_target} does not accept a name.")
+    if from_wk and normalized_target not in {"all", "field"}:
+        raise ValueError("--from-wk can only be used with 'field' or 'all' target.")
 
     db_path = Config.get_db_file()
     _ensure_duckdb_database(db_path)
@@ -168,6 +171,8 @@ def summarize_resources(
             field_rows = None
             if normalized_target == "field" and name:
                 field_rows = [_resolve_field(conn, year, name)]
+            elif from_wk:
+                field_rows = _resolve_fields_by_wk(conn, year, from_wk)
             created, skipped = _summarize_fields(
                 conn,
                 llm,
@@ -591,6 +596,63 @@ def _raise_ambiguous_entity(
         f"Ambiguous {entity_label} name '{entity_name}'. "
         f"Matching {entity_label}s: {candidates}{more}."
     )
+
+
+def _resolve_fields_by_wk(
+    conn: duckdb.DuckDBPyConnection,
+    year: int,
+    wk_name: str,
+) -> list[tuple[Any, Any]]:
+    """Resolve all field IDs/names belonging to a working area."""
+    normalized = wk_name.strip().lower()
+    if not normalized:
+        raise ValueError("Working area name cannot be empty.")
+
+    exact_wks = list(
+        conn.execute(
+            """
+            SELECT DISTINCT COALESCE(NULLIF(wk_id, ''), wk_name)
+            FROM project_resources
+            WHERE report_year = ? AND lower(trim(wk_name)) = ?
+            """,
+            [year, normalized],
+        ).fetchall()
+    )
+    if len(exact_wks) == 0:
+        fallback_wks = list(
+            conn.execute(
+                """
+                SELECT DISTINCT COALESCE(NULLIF(wk_id, ''), wk_name)
+                FROM project_resources
+                WHERE report_year = ? AND wk_name ILIKE ?
+                """,
+                [year, f"%{wk_name.strip()}%"],
+            ).fetchall()
+        )
+        if len(fallback_wks) == 0:
+            raise ValueError(
+                f"No working area named '{wk_name}' found for report year {year}."
+            )
+        exact_wks = fallback_wks
+
+    wk_values = [w[0] for w in exact_wks]
+    rows = list(
+        conn.execute(
+            f"""
+            SELECT DISTINCT
+                COALESCE(NULLIF(field_id, ''), field_name) AS entity_id,
+                MIN(field_name) AS entity_name
+            FROM project_resources
+            WHERE report_year = ?
+              AND COALESCE(NULLIF(wk_id, ''), wk_name)
+                  IN ({','.join('?' * len(wk_values))})
+            GROUP BY COALESCE(NULLIF(field_id, ''), field_name)
+            ORDER BY entity_name
+            """,
+            [year, *wk_values],
+        ).fetchall()
+    )
+    return rows
 
 
 def _summarize_entity(

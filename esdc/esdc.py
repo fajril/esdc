@@ -309,6 +309,13 @@ def summarize(
             help="Max LLM attempts (1 = no retry, 2 = one retry, etc). Default 1.",
         ),
     ] = 1,
+    from_wk: Annotated[
+        str | None,
+        typer.Option(
+            "--from-wk",
+            help="Only summarize fields belonging to this working area.",
+        ),
+    ] = None,
 ) -> None:
     """Generate LLM executive summaries for Eureka resource dashboards."""
     if year is None:
@@ -322,6 +329,7 @@ def summarize(
             name=name,
             force=force,
             retry=retry,
+            from_wk=from_wk,
         )
     except (FileNotFoundError, ValueError, SummaryDependencyError) as e:
         typer.echo(f"Error: {e}")
