@@ -141,3 +141,60 @@ def test_extract_usage_returns_none_when_missing():
     usage = extract_usage_from_message(message)
 
     assert usage is None
+
+
+def test_extract_usage_from_zero_tokens_via_usage_metadata():
+    """Zero is a valid token count; should be preserved, not dropped by or-chain."""
+    message = AIMessage(content="hello")
+    message.usage_metadata = {  # type: ignore[attr-defined]
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
+
+    usage = extract_usage_from_message(message)
+
+    assert usage is not None
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 0
+    assert usage.total_tokens == 0
+    assert usage.source == "provider_usage"
+    assert usage.confidence == "exact"
+
+
+def test_extract_usage_from_zero_tokens_via_response_metadata():
+    """vLLM-style: response_metadata with all-zero usage."""
+    message = AIMessage(
+        content="hello",
+        response_metadata={
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+        },
+    )
+
+    usage = extract_usage_from_message(message)
+
+    assert usage is not None
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 0
+    assert usage.total_tokens == 0
+
+
+def test_extract_usage_mixed_zero_and_nonzero():
+    """input_tokens=0 but output_tokens=50 — zero should not block output."""
+    message = AIMessage(content="hello")
+    message.usage_metadata = {  # type: ignore[attr-defined]
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "total_tokens": 50,
+    }
+
+    usage = extract_usage_from_message(message)
+
+    assert usage is not None
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 50
+    assert usage.total_tokens == 50

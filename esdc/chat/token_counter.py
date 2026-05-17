@@ -53,6 +53,14 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def _first_non_none(*values: Any) -> Any:
+    """Return first value that is not None."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
 def _content_to_text(content: Any) -> str:
     """Extract countable text from LangChain/OpenAI-style content."""
     if content is None:
@@ -175,15 +183,15 @@ def estimate_messages_tokens(
 
 def _usage_from_mapping(usage: dict[str, Any]) -> TokenUsage | None:
     """Normalize common provider usage mapping shapes."""
-    input_tokens = (
-        _as_int(usage.get("input_tokens"))
-        or _as_int(usage.get("prompt_tokens"))
-        or _as_int(usage.get("prompt_eval_count"))
+    input_tokens = _first_non_none(
+        _as_int(usage.get("input_tokens")),
+        _as_int(usage.get("prompt_tokens")),
+        _as_int(usage.get("prompt_eval_count")),
     )
-    output_tokens = (
-        _as_int(usage.get("output_tokens"))
-        or _as_int(usage.get("completion_tokens"))
-        or _as_int(usage.get("eval_count"))
+    output_tokens = _first_non_none(
+        _as_int(usage.get("output_tokens")),
+        _as_int(usage.get("completion_tokens")),
+        _as_int(usage.get("eval_count")),
     )
     total_tokens = _as_int(usage.get("total_tokens"))
 
@@ -207,15 +215,15 @@ def _usage_from_object(usage: Any) -> TokenUsage | None:
     if isinstance(usage, dict):
         return _usage_from_mapping(usage)
 
-    input_tokens = (
-        _as_int(getattr(usage, "input_tokens", None))
-        or _as_int(getattr(usage, "prompt_tokens", None))
-        or _as_int(getattr(usage, "prompt_eval_count", None))
+    input_tokens = _first_non_none(
+        _as_int(getattr(usage, "input_tokens", None)),
+        _as_int(getattr(usage, "prompt_tokens", None)),
+        _as_int(getattr(usage, "prompt_eval_count", None)),
     )
-    output_tokens = (
-        _as_int(getattr(usage, "output_tokens", None))
-        or _as_int(getattr(usage, "completion_tokens", None))
-        or _as_int(getattr(usage, "eval_count", None))
+    output_tokens = _first_non_none(
+        _as_int(getattr(usage, "output_tokens", None)),
+        _as_int(getattr(usage, "completion_tokens", None)),
+        _as_int(getattr(usage, "eval_count", None)),
     )
     total_tokens = _as_int(getattr(usage, "total_tokens", None))
 

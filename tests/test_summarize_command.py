@@ -68,6 +68,20 @@ class UsageMetadataLLM(FakeLLM):
         return message
 
 
+class ZeroUsageMetadataLLM(FakeLLM):
+    """Simulates vLLM-style provider that returns all-zero usage."""
+
+    def invoke(self, prompt):
+        content = super().invoke(prompt)
+        message = AIMessage(content=content)
+        message.usage_metadata = {  # type: ignore[attr-defined]
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+        return message
+
+
 def _patch_llm(monkeypatch):
     llm = FakeLLM()
     monkeypatch.setattr(
@@ -333,6 +347,40 @@ def test_summarize_estimates_token_usage_without_provider_usage(
     runner, isolated_config, monkeypatch
 ):
     _patch_llm(monkeypatch)
+    _create_minimal_project_resources()
+
+    result = runner.invoke(
+        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
+    )
+
+    assert result.exit_code == 0
+    token_rows = _summary_token_rows()
+    assert len(token_rows) == 1
+    _, _, input_tokens, output_tokens, total_tokens, source, confidence = token_rows[0]
+    assert input_tokens > 0
+    assert output_tokens > 0
+    assert total_tokens == input_tokens + output_tokens
+    assert source == "tiktoken"
+    assert confidence == "estimated"
+
+
+def test_summarize_falls_back_when_provider_returns_zero_usage(
+    runner, isolated_config, monkeypatch
+):
+    """When provider returns usage_metadata with all 0s, fall back to estimation."""
+    llm = ZeroUsageMetadataLLM()
+    monkeypatch.setattr(
+        Config,
+        "get_provider_config",
+        classmethod(
+            lambda cls: {
+                "name": "test-provider",
+                "provider_type": "openai",
+                "model": "gpt-4o-mini",
+            }
+        ),
+    )
+    monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     _create_minimal_project_resources()
 
     result = runner.invoke(

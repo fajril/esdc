@@ -1379,7 +1379,7 @@ def _token_usage_for_summary_response(
     base_url: str,
 ) -> TokenUsage:
     """Return exact provider usage or estimated prompt+response tokens."""
-    if response_usage:
+    if response_usage and response_usage.total_tokens > 0:
         return response_usage
 
     input_tokens = estimate_text_tokens(
