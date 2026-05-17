@@ -6,6 +6,7 @@ import logging
 import traceback
 from pathlib import Path
 
+import markdown as md
 import uvicorn
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -23,6 +24,7 @@ from esdc.eureka.queries import (
     get_inplace_kpis,
     get_latest_year,
     get_nkri_kpis,
+    get_nkri_summary,
     get_nkri_table_data,
     get_nkri_timeseries,
     get_onstream_data,
@@ -36,6 +38,20 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def _markdown_filter(text: str) -> str:
+    """Convert Markdown to HTML, supporting LaTeX via pymdownx.arithmatex."""
+    if not text:
+        return ""
+    return md.markdown(
+        text,
+        extensions=["pymdownx.arithmatex"],
+        extension_configs={"pymdownx.arithmatex": {"generic": True}},
+    )
+
+
+templates.env.filters["markdown"] = _markdown_filter
 
 # Default year from CLI (set by run_eureka)
 _default_year: int | None = None
@@ -116,6 +132,7 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
         fields = get_field_kpis(selected_year)
         projects = get_project_kpis(selected_year)
         inplace = get_inplace_kpis(selected_year)
+        nkri_summary = get_nkri_summary(selected_year)
 
         # Generate charts
         ts_data = get_nkri_timeseries(selected_year)
@@ -133,6 +150,7 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
             "fields": fields,
             "projects": projects,
             "inplace": inplace,
+            "nkri_summary": nkri_summary,
             "ts_oc_fig": ts_oc_fig,
             "ts_an_fig": ts_an_fig,
             "onstream_fig": onstream_fig,

@@ -869,6 +869,27 @@ def get_inplace_kpis(year: int | None = None) -> InPlaceKpiData:
         conn.close()
 
 
+def get_nkri_summary(year: int | None = None) -> str | None:
+    """Get the NKRI-level AI-generated summary text for a given year.
+
+    Returns the headline + executive_summary text from the summarizer,
+    or None if no summary exists for that year.
+    """
+    if year is None:
+        year = get_latest_year()
+
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT nkri_summary FROM nkri_resources"
+            " WHERE report_year = ? AND nkri_summary IS NOT NULL LIMIT 1",
+            [year],
+        ).fetchone()
+        return str(row[0]) if row else None
+    finally:
+        conn.close()
+
+
 def get_nkri_timeseries(
     year: int | None = None,
 ) -> list[NKRITimeseriesRow]:

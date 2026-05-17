@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Eureka — NKRI Dashboard{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="/static/katex/katex.min.css">
+<script src="/static/katex/katex.min.js"></script>
+<script src="/static/katex/auto-render.min.js"></script>
+{% endblock %}
+
 {% block content %}
 {% set k = kpis %}
 {% set w = wk %}
@@ -136,7 +142,7 @@
 </div>
 
 <div class="resources-right animate-fade-up stagger-2">
-  <div class="section-title" style="margin-bottom:0.75rem;">
+  <div class="section-title">
     <span class="section-badge" style="background:var(--info);"></span>
     Production
   </div>
@@ -343,29 +349,65 @@
 <div class="section-separator"></div>
 
 <div class="animate-fade-up stagger-4">
-  <div class="section-title">
-    <span class="section-badge" style="background:var(--oil);"></span>
-    NKRI Timeseries — Oil &amp; Gas Forecast
-  </div>
-  <div class="chart-pair">
-    <div class="chart-panel">
-      <div class="chart-body" id="chart-ts-oc"></div>
-    </div>
-    <div class="chart-panel">
-      <div class="chart-body" id="chart-ts-an"></div>
-    </div>
-  </div>
-</div>
+  <div class="content-with-summary">
+    <div class="content-main">
+      <div class="section-title">
+        <span class="section-badge" style="background:var(--oil);"></span>
+        NKRI Timeseries — Oil &amp; Gas Forecast
+      </div>
+      <div class="chart-panel">
+        <div class="chart-body" id="chart-ts-oc"></div>
+      </div>
+      <div style="margin-top:1rem;">
+        <div class="chart-panel">
+          <div class="chart-body" id="chart-ts-an"></div>
+        </div>
+      </div>
 
-<div class="section-separator"></div>
+      <div class="section-separator"></div>
 
-<div class="animate-fade-up stagger-5">
-  <div class="section-title">
-    <span class="section-badge" style="background:var(--gas);"></span>
-    Projects by Onstream Year
-  </div>
-  <div class="chart-panel">
-    <div class="chart-body" id="chart-onstream"></div>
+      <div class="section-title">
+        <span class="section-badge" style="background:var(--gas);"></span>
+        Projects by Onstream Year
+      </div>
+      <div class="chart-panel">
+        <div class="chart-body" id="chart-onstream"></div>
+      </div>
+    </div>
+
+    <aside class="summary-sidebar">
+      <div class="section-title">
+        <span class="section-badge" style="background:var(--info);"></span>
+        Analysis
+      </div>
+      {% set summary_parts = nkri_summary.split('\n\n', 1) if nkri_summary else none %}
+      {% set summary_headline = summary_parts[0] if summary_parts else '' %}
+      {% set summary_body = summary_parts[1] if summary_parts and summary_parts|length > 1 else '' %}
+      {% if nkri_summary %}
+      <div class="summary-card">
+        <div class="summary-card-accent"></div>
+        {% if summary_headline %}
+        <div class="summary-headline">{{ summary_headline | markdown | safe }}</div>
+        {% endif %}
+        {% if summary_body %}
+        <div class="summary-body">{{ summary_body | markdown | safe }}</div>
+        {% endif %}
+        <div class="summary-footer">
+          <span class="summary-badge">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><path d="M12 2l2 7h7l-5 5 2 7-6-4-6 4 2-7-5-5h7z"/></svg>
+            Summarized by IRIS
+          </span>
+          <span class="summary-year">{{ selected_year }}</span>
+        </div>
+      </div>
+      {% else %}
+      <div class="summary-card summary-empty">
+        <div class="summary-empty-text">No IRIS-generated analysis available for {{ selected_year }}.</div>
+        <div class="summary-empty-latex">\[ \LaTeX \]</div>
+        <div class="summary-empty-hint">Run <code>esdc summarize nkri --year {{ selected_year }}</code></div>
+      </div>
+      {% endif %}
+    </aside>
   </div>
 </div>
 
@@ -529,5 +571,18 @@
   }, {threshold: 0.3});
 
   document.querySelectorAll('.counts-bar').forEach(el => observer.observe(el));
+
+  // ── KaTeX auto-render for NKRI Analysis markdown ──
+  const autoRenderTargets = document.querySelectorAll('.summary-body, .summary-empty-text, .summary-empty-latex');
+  autoRenderTargets.forEach(el => {
+    if (typeof renderMathInElement === 'function') {
+      renderMathInElement(el, {
+        delimiters: [
+          {left: '\\[', right: '\\]', display: true},
+          {left: '\\(', right: '\\)', display: false}
+        ]
+      });
+    }
+  });
 </script>
 {% endblock %}
