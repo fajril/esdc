@@ -314,6 +314,7 @@ body.eureka-body::after {
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
+  position: relative;
 }
 
 .hero-metric {
@@ -339,31 +340,29 @@ body.eureka-body::after {
   border-radius: 0 0 2px 2px;
 }
 
-/* Subtle radial gradient background per class */
-.hero-metric::after {
+.hero-metric.reserves::before { background: var(--reserves); }
+.hero-metric.grr::before { background: var(--grr); }
+.hero-metric.cont-exploit::before { background: var(--cont-exploit); }
+.hero-metric.cont-explore::before { background: var(--cont-explore); }
+.hero-metric.prospective::before { background: var(--prospective); }
+.hero-metric.production::before { background: var(--info); }
+
+/* Unified atmospheric glow across the entire pipeline */
+.hero-pipeline::after {
   content: '';
   position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
+  inset: 0;
   pointer-events: none;
-  opacity: 0.06;
-  border-radius: 50%;
+  mix-blend-mode: screen;
+  opacity: 0.07;
+  z-index: 1;
+  background:
+    radial-gradient(ellipse 80% 35% at 50% 12%, var(--reserves) 0%, transparent 100%),
+    radial-gradient(ellipse 80% 35% at 50% 30%, var(--grr) 0%, transparent 100%),
+    radial-gradient(ellipse 80% 35% at 50% 50%, var(--cont-exploit) 0%, transparent 100%),
+    radial-gradient(ellipse 80% 35% at 50% 70%, var(--cont-explore) 0%, transparent 100%),
+    radial-gradient(ellipse 80% 35% at 50% 90%, var(--prospective) 0%, transparent 100%);
 }
-
-.hero-metric.reserves::before { background: var(--reserves); }
-.hero-metric.reserves::after { background: radial-gradient(circle, var(--reserves) 0%, transparent 70%); }
-.hero-metric.grr::before { background: var(--grr); }
-.hero-metric.grr::after { background: radial-gradient(circle, var(--grr) 0%, transparent 70%); }
-.hero-metric.cont-exploit::before { background: var(--cont-exploit); }
-.hero-metric.cont-exploit::after { background: radial-gradient(circle, var(--cont-exploit) 0%, transparent 70%); }
-.hero-metric.cont-explore::before { background: var(--cont-explore); }
-.hero-metric.cont-explore::after { background: radial-gradient(circle, var(--cont-explore) 0%, transparent 70%); }
-.hero-metric.prospective::before { background: var(--prospective); }
-.hero-metric.prospective::after { background: radial-gradient(circle, var(--prospective) 0%, transparent 70%); }
-.hero-metric.production::before { background: var(--info); }
-.hero-metric.production::after { background: radial-gradient(circle, var(--info) 0%, transparent 70%); }
 
 /* Right-column standalone card */
 .right-section-card {
@@ -440,6 +439,48 @@ body.eureka-body::after {
 .hero-value.gas { color: var(--gas-bright); text-shadow: var(--glow-gas); }
 .hero-value.neutral { color: var(--text-primary); }
 
+/* ── Range triad (Low | MID | High) ── */
+.hero-range-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  width: 100%;
+  position: relative;
+}
+
+.hero-range-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.5px;
+  transition: opacity 0.2s, transform 0.2s;
+  position: relative;
+  z-index: 1;
+}
+
+.hero-range-value.mid {
+  font-size: 1.75rem;
+}
+
+.hero-range-value.low,
+.hero-range-value.high {
+  font-size: 0.95rem;
+  opacity: 0.45;
+  margin-top: 0.35rem;
+}
+.hero-range-value.low:hover,
+.hero-range-value.high:hover {
+  opacity: 0.75;
+}
+
+.hero-metric.reserves .hero-range-value.mid { font-size: 2rem; }
+.hero-metric.reserves .hero-range-value.low,
+.hero-metric.reserves .hero-range-value.high { font-size: 1.1rem; }
+
+.hero-range-value.oil { color: var(--oil-bright); }
+.hero-range-value.gas { color: var(--gas-bright); }
+
 .hero-unit {
   font-family: var(--font-mono);
   font-size: 0.6rem;
@@ -511,6 +552,14 @@ body.eureka-body::after {
 
 @media (max-width: 768px) {
   .hero-metric.reserves .hero-value { font-size: 1.75rem; }
+
+  .hero-range-row { gap: 0.75rem; }
+  .hero-range-value.mid { font-size: 1.5rem; }
+  .hero-range-value.low,
+  .hero-range-value.high { font-size: 0.85rem; margin-top: 0.25rem; }
+  .hero-metric.reserves .hero-range-value.mid { font-size: 1.75rem; }
+  .hero-metric.reserves .hero-range-value.low,
+  .hero-metric.reserves .hero-range-value.high { font-size: 1rem; }
 }
 
 /* ── Counts ──────────────────────────────────────────────────── */
@@ -1021,6 +1070,25 @@ body.eureka-body::after {
 .summary-empty-hint code {
   font-family: var(--font-mono);
   color: var(--info);
+}
+
+.summary-empty-quote {
+  font-style: italic;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid var(--border);
+  text-align: left;
+}
+
+.summary-empty-equation {
+  text-align: center;
+  margin: 1rem 0;
+  font-size: 0.7rem;
+  overflow-x: auto;
+  color: var(--text-muted);
 }
 
 /* ── Scrollbar ────────────────────────────────────────────────── */

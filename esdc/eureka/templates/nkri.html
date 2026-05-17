@@ -21,10 +21,14 @@
     {# ── 1. Reserves (2fr card) ── #}
     <div class="hero-metric reserves">
       <div class="hero-metric-header">Reserves</div>
-      <div class="hero-subheader">2P Best Estimate</div>
+      <div class="hero-subheader">Commercial — 1P · 2P · 3P</div>
       <div class="hero-columns">
         <div class="hero-column">
-          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.res_2p_oc) }}">{{ "%.0f"|format(k.res_2p_oc) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.res_1p_oc) }}">{{ "%.0f"|format(k.res_1p_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.res_2p_oc) }}">{{ "%.0f"|format(k.res_2p_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.res_3p_oc) }}">{{ "%.0f"|format(k.res_3p_oc) }}</span>
+          </div>
           <div class="hero-unit">MMSTB</div>
           <div class="hero-fluid-label">Oil + Condensate</div>
           <div class="hero-yoy {% if k.yoy_res_2p_oc is not none %}{{ 'up' if k.yoy_res_2p_oc >= 0 else 'down' }}{% endif %}">
@@ -32,7 +36,11 @@
           </div>
         </div>
         <div class="hero-column">
-          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.res_2p_an) }}">{{ "%.0f"|format(k.res_2p_an) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.res_1p_an) }}">{{ "%.0f"|format(k.res_1p_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.res_2p_an) }}">{{ "%.0f"|format(k.res_2p_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.res_3p_an) }}">{{ "%.0f"|format(k.res_3p_an) }}</span>
+          </div>
           <div class="hero-unit">TSCF</div>
           <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
           <div class="hero-yoy {% if k.yoy_res_2p_an is not none %}{{ 'up' if k.yoy_res_2p_an >= 0 else 'down' }}{% endif %}">
@@ -45,10 +53,14 @@
     {# ── 2. GRR ── #}
     <div class="hero-metric grr">
       <div class="hero-metric-header">GRR</div>
-      <div class="hero-subheader">GOI Recoverable Resources - Technical</div>
+      <div class="hero-subheader">Technical — 1R · 2R · 3R</div>
       <div class="hero-columns">
         <div class="hero-column">
-          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.grr_oc) }}">{{ "%.0f"|format(k.grr_oc) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.grr_1r_oc) }}">{{ "%.0f"|format(k.grr_1r_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.grr_2r_oc) }}">{{ "%.0f"|format(k.grr_2r_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.grr_3r_oc) }}">{{ "%.0f"|format(k.grr_3r_oc) }}</span>
+          </div>
           <div class="hero-unit">MMSTB</div>
           <div class="hero-fluid-label">Oil + Condensate</div>
           <div class="hero-yoy {% if k.yoy_grr_oc is not none %}{{ 'up' if k.yoy_grr_oc >= 0 else 'down' }}{% endif %}">
@@ -56,7 +68,11 @@
           </div>
         </div>
         <div class="hero-column">
-          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.grr_an) }}">{{ "%.0f"|format(k.grr_an) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.grr_1r_an) }}">{{ "%.0f"|format(k.grr_1r_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.grr_2r_an) }}">{{ "%.0f"|format(k.grr_2r_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.grr_3r_an) }}">{{ "%.0f"|format(k.grr_3r_an) }}</span>
+          </div>
           <div class="hero-unit">TSCF</div>
           <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
           <div class="hero-yoy {% if k.yoy_grr_an is not none %}{{ 'up' if k.yoy_grr_an >= 0 else 'down' }}{% endif %}">
@@ -69,10 +85,14 @@
     {# ── 3. Contingent Resources (Exploitation) ── #}
     <div class="hero-metric cont-exploit">
       <div class="hero-metric-header">Contingent Resources</div>
-      <div class="hero-subheader">Exploitation - 2C</div>
+      <div class="hero-subheader">Exploitation — 1C · 2C · 3C</div>
       <div class="hero-columns">
         <div class="hero-column">
-          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.cont_exploit_oc) }}">{{ "%.0f"|format(k.cont_exploit_oc) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.cont_exploit_1c_oc) }}">{{ "%.0f"|format(k.cont_exploit_1c_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.cont_exploit_2c_oc) }}">{{ "%.0f"|format(k.cont_exploit_2c_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.cont_exploit_3c_oc) }}">{{ "%.0f"|format(k.cont_exploit_3c_oc) }}</span>
+          </div>
           <div class="hero-unit">MMSTB</div>
           <div class="hero-fluid-label">Oil + Condensate</div>
           <div class="hero-yoy {% if k.yoy_cont_exploit_oc is not none %}{{ 'up' if k.yoy_cont_exploit_oc >= 0 else 'down' }}{% endif %}">
@@ -80,7 +100,11 @@
           </div>
         </div>
         <div class="hero-column">
-          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.cont_exploit_an) }}">{{ "%.0f"|format(k.cont_exploit_an) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.cont_exploit_1c_an) }}">{{ "%.0f"|format(k.cont_exploit_1c_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.cont_exploit_2c_an) }}">{{ "%.0f"|format(k.cont_exploit_2c_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.cont_exploit_3c_an) }}">{{ "%.0f"|format(k.cont_exploit_3c_an) }}</span>
+          </div>
           <div class="hero-unit">TSCF</div>
           <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
           <div class="hero-yoy {% if k.yoy_cont_exploit_an is not none %}{{ 'up' if k.yoy_cont_exploit_an >= 0 else 'down' }}{% endif %}">
@@ -93,10 +117,14 @@
     {# ── 4. Contingent Resources (Exploration) ── #}
     <div class="hero-metric cont-explore">
       <div class="hero-metric-header">Contingent Resources</div>
-      <div class="hero-subheader">Exploration - 2C</div>
+      <div class="hero-subheader">Exploration — 1C · 2C · 3C</div>
       <div class="hero-columns">
         <div class="hero-column">
-          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.cont_explore_oc) }}">{{ "%.0f"|format(k.cont_explore_oc) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.cont_explore_1c_oc) }}">{{ "%.0f"|format(k.cont_explore_1c_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.cont_explore_2c_oc) }}">{{ "%.0f"|format(k.cont_explore_2c_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.cont_explore_3c_oc) }}">{{ "%.0f"|format(k.cont_explore_3c_oc) }}</span>
+          </div>
           <div class="hero-unit">MMSTB</div>
           <div class="hero-fluid-label">Oil + Condensate</div>
           <div class="hero-yoy {% if k.yoy_cont_explore_oc is not none %}{{ 'up' if k.yoy_cont_explore_oc >= 0 else 'down' }}{% endif %}">
@@ -104,7 +132,11 @@
           </div>
         </div>
         <div class="hero-column">
-          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.cont_explore_an) }}">{{ "%.0f"|format(k.cont_explore_an) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.cont_explore_1c_an) }}">{{ "%.0f"|format(k.cont_explore_1c_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.cont_explore_2c_an) }}">{{ "%.0f"|format(k.cont_explore_2c_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.cont_explore_3c_an) }}">{{ "%.0f"|format(k.cont_explore_3c_an) }}</span>
+          </div>
           <div class="hero-unit">TSCF</div>
           <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
           <div class="hero-yoy {% if k.yoy_cont_explore_an is not none %}{{ 'up' if k.yoy_cont_explore_an >= 0 else 'down' }}{% endif %}">
@@ -117,10 +149,14 @@
     {# ── 5. Prospective Resources ── #}
     <div class="hero-metric prospective">
       <div class="hero-metric-header">Prospective Resources</div>
-      <div class="hero-subheader">Risked - 2U</div>
+      <div class="hero-subheader">Risked — 1U · 2U · 3U</div>
       <div class="hero-columns">
         <div class="hero-column">
-          <div class="hero-value oil" data-count="{{ "%.0f"|format(k.prospective_oc) }}">{{ "%.0f"|format(k.prospective_oc) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.prospective_1u_oc) }}">{{ "%.0f"|format(k.prospective_1u_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.prospective_2u_oc) }}">{{ "%.0f"|format(k.prospective_2u_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.prospective_3u_oc) }}">{{ "%.0f"|format(k.prospective_3u_oc) }}</span>
+          </div>
           <div class="hero-unit">MMSTB</div>
           <div class="hero-fluid-label">Oil + Condensate</div>
           <div class="hero-yoy {% if k.yoy_prospective_oc is not none %}{{ 'up' if k.yoy_prospective_oc >= 0 else 'down' }}{% endif %}">
@@ -128,7 +164,11 @@
           </div>
         </div>
         <div class="hero-column">
-          <div class="hero-value gas" data-count="{{ "%.0f"|format(k.prospective_an) }}">{{ "%.0f"|format(k.prospective_an) }}</div>
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.prospective_1u_an) }}">{{ "%.0f"|format(k.prospective_1u_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.prospective_2u_an) }}">{{ "%.0f"|format(k.prospective_2u_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.prospective_3u_an) }}">{{ "%.0f"|format(k.prospective_3u_an) }}</span>
+          </div>
           <div class="hero-unit">TSCF</div>
           <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
           <div class="hero-yoy {% if k.yoy_prospective_an is not none %}{{ 'up' if k.yoy_prospective_an >= 0 else 'down' }}{% endif %}">
@@ -404,6 +444,17 @@
       <div class="summary-card summary-empty">
         <div class="summary-empty-text">No IRIS-generated analysis available for {{ selected_year }}.</div>
         <div class="summary-empty-latex">\[ \LaTeX \]</div>
+        <div class="summary-empty-quote">&ldquo;Reservoir engineering is the art of making decisions based on incomplete information.&rdquo;<br>&mdash; L.P. Dake</div>
+        <div class="summary-empty-equation">\[
+\begin{aligned}
+N_p[B_o + (R_p - R_s)B_g] + W_pB_w
+&= N[(B_o - B_{oi}) \\
+&\quad + (R_{si} - R_s)B_g \\
+&\quad + mB_{oi}\left(\frac{B_g}{B_{gi}} - 1\right) \\
+&\quad + (1+m)B_{oi}\frac{c_wS_{wc} + c_f}{1 - S_{wc}}\Delta p] \\
+&\quad + W_eB_w
+\end{aligned}
+\]</div>
         <div class="summary-empty-hint">Run <code>esdc summarize nkri --year {{ selected_year }}</code></div>
       </div>
       {% endif %}
@@ -573,7 +624,7 @@
   document.querySelectorAll('.counts-bar').forEach(el => observer.observe(el));
 
   // ── KaTeX auto-render for NKRI Analysis markdown ──
-  const autoRenderTargets = document.querySelectorAll('.summary-body, .summary-empty-text, .summary-empty-latex');
+  const autoRenderTargets = document.querySelectorAll('.summary-body, .summary-empty-text, .summary-empty-latex, .summary-empty-equation');
   autoRenderTargets.forEach(el => {
     if (typeof renderMathInElement === 'function') {
       renderMathInElement(el, {

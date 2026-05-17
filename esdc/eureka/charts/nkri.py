@@ -295,12 +295,20 @@ def nkri_onstream_chart(
 
     fig = go.Figure()
     fig.update_layout(
-        title="Projects by Onstream Year",
         barmode="stack",
         yaxis_title="Count of Projects",
         hovermode="x unified",
         colorway=[ONSTREAM_PALETTE[c] for c in ONSTREAM_CATEGORIES],
-        **PLOTLY_LAYOUT_DEFAULTS,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.25,
+            "xanchor": "center",
+            "x": 0.5,
+        },
+        margin={"l": 50, "r": 30, "t": 30, "b": 80},
+        **{k: v for k, v in PLOTLY_LAYOUT_DEFAULTS.items()
+           if k not in ("margin", "legend")},
     )
     for cat in ONSTREAM_CATEGORIES:
         vals = [by_year[y].get(cat, 0) for y in sorted_years]

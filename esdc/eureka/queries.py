@@ -55,18 +55,34 @@ class NKRIKpiData:
     res_1p_an: float
     res_2p_an: float
     res_3p_an: float
-    # GRR — total recoverable (rec_* at Reserves & GRR class, 2P)
-    grr_oc: float
-    grr_an: float
-    # Contingent Exploitation (risked, 2C)
-    cont_exploit_oc: float
-    cont_exploit_an: float
-    # Contingent Exploration (risked, 2C)
-    cont_explore_oc: float
-    cont_explore_an: float
-    # Prospective (risked, 2U)
-    prospective_oc: float
-    prospective_an: float
+    # GRR — total recoverable (rec_* at Reserves & GRR class)
+    grr_1r_oc: float
+    grr_1r_an: float
+    grr_2r_oc: float
+    grr_2r_an: float
+    grr_3r_oc: float
+    grr_3r_an: float
+    # Contingent Exploitation (risked, 1C/2C/3C)
+    cont_exploit_1c_oc: float
+    cont_exploit_1c_an: float
+    cont_exploit_2c_oc: float
+    cont_exploit_2c_an: float
+    cont_exploit_3c_oc: float
+    cont_exploit_3c_an: float
+    # Contingent Exploration (risked, 1C/2C/3C)
+    cont_explore_1c_oc: float
+    cont_explore_1c_an: float
+    cont_explore_2c_oc: float
+    cont_explore_2c_an: float
+    cont_explore_3c_oc: float
+    cont_explore_3c_an: float
+    # Prospective (risked, 1U/2U/3U)
+    prospective_1u_oc: float
+    prospective_1u_an: float
+    prospective_2u_oc: float
+    prospective_2u_an: float
+    prospective_3u_oc: float
+    prospective_3u_an: float
     # Sales cumulative
     cumprod_sls_oc: float
     cumprod_sls_an: float
@@ -259,51 +275,68 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
         res_1p = res_map.get("1. Low Value", (0, 0))
         res_2p = res_map.get("2. Middle Value", (0, 0))
         res_3p = res_map.get("3. High Value", (0, 0))
+        rec_1p = rec_map.get("1. Low Value", (0, 0))
         rec_2p = rec_map.get("2. Middle Value", (0, 0))
+        rec_3p = rec_map.get("3. High Value", (0, 0))
 
-        # --- Contingent Exploitation (2C) from nkri_resources ---
+        # --- Contingent Exploitation (1C/2C/3C) from nkri_resources ---
         cont_exploit_sql = f"""
         SELECT
+            uncert_level,
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
         FROM nkri_resources
         WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
-          AND uncert_level = '2. Middle Value'
           AND report_year = {year}
+        GROUP BY uncert_level
         """
-        cont_ex = conn.execute(cont_exploit_sql).fetchone()
-        cont_exploit_oc = cont_ex[0] if cont_ex else 0
-        cont_exploit_an = cont_ex[1] if cont_ex else 0
+        cont_ex_rows = conn.execute(cont_exploit_sql).fetchall()
+        cont_ex_map: dict[str, tuple[float, float]] = {}
+        for r in cont_ex_rows:
+            cont_ex_map[r[0]] = (r[1], r[2])
+        cont_exploit_1c = cont_ex_map.get("1. Low Value", (0, 0))
+        cont_exploit_2c = cont_ex_map.get("2. Middle Value", (0, 0))
+        cont_exploit_3c = cont_ex_map.get("3. High Value", (0, 0))
 
-        # --- Contingent Exploration (2C) from nkri_resources ---
+        # --- Contingent Exploration (1C/2C/3C) from nkri_resources ---
         cont_explore_sql = f"""
         SELECT
+            uncert_level,
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
         FROM nkri_resources
         WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
-          AND uncert_level = '2. Middle Value'
           AND report_year = {year}
+        GROUP BY uncert_level
         """
-        cont_ex2 = conn.execute(cont_explore_sql).fetchone()
-        cont_explore_oc = cont_ex2[0] if cont_ex2 else 0
-        cont_explore_an = cont_ex2[1] if cont_ex2 else 0
+        cont_ex_rows = conn.execute(cont_explore_sql).fetchall()
+        cont_exr_map: dict[str, tuple[float, float]] = {}
+        for r in cont_ex_rows:
+            cont_exr_map[r[0]] = (r[1], r[2])
+        cont_explore_1c = cont_exr_map.get("1. Low Value", (0, 0))
+        cont_explore_2c = cont_exr_map.get("2. Middle Value", (0, 0))
+        cont_explore_3c = cont_exr_map.get("3. High Value", (0, 0))
 
-        # --- Prospective (risked 2U) from nkri_resources ---
+        # --- Prospective (1U/2U/3U) from nkri_resources ---
         prospect_sql = f"""
         SELECT
+            uncert_level,
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
         FROM nkri_resources
         WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
-          AND uncert_level = '2. Middle Value'
           AND report_year = {year}
+        GROUP BY uncert_level
         """
-        prospect = conn.execute(prospect_sql).fetchone()
-        prospective_oc = prospect[0] if prospect else 0
-        prospective_an = prospect[1] if prospect else 0
+        prospect_rows = conn.execute(prospect_sql).fetchall()
+        prospect_map: dict[str, tuple[float, float]] = {}
+        for r in prospect_rows:
+            prospect_map[r[0]] = (r[1], r[2])
+        prospective_1u = prospect_map.get("1. Low Value", (0, 0))
+        prospective_2u = prospect_map.get("2. Middle Value", (0, 0))
+        prospective_3u = prospect_map.get("3. High Value", (0, 0))
 
         # --- Sales cumulative ---
         cumprod_sql = f"""
@@ -343,12 +376,12 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
                 prev_year,
                 res_map,
                 rec_map,
-                cont_exploit_oc,
-                cont_exploit_an,
-                cont_explore_oc,
-                cont_explore_an,
-                prospective_oc,
-                prospective_an,
+                cont_exploit_2c[0],
+                cont_exploit_2c[1],
+                cont_explore_2c[0],
+                cont_explore_2c[1],
+                prospective_2u[0],
+                prospective_2u[1],
             )
 
         return NKRIKpiData(
@@ -358,14 +391,30 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
             res_1p_an=_to_tscf(res_1p[1]),
             res_2p_an=_to_tscf(res_2p[1]),
             res_3p_an=_to_tscf(res_3p[1]),
-            grr_oc=_to_mmstb(rec_2p[0]),
-            grr_an=_to_tscf(rec_2p[1]),
-            cont_exploit_oc=_to_mmstb(cont_exploit_oc),
-            cont_exploit_an=_to_tscf(cont_exploit_an),
-            cont_explore_oc=_to_mmstb(cont_explore_oc),
-            cont_explore_an=_to_tscf(cont_explore_an),
-            prospective_oc=_to_mmstb(prospective_oc),
-            prospective_an=_to_tscf(prospective_an),
+            grr_1r_oc=_to_mmstb(rec_1p[0]),
+            grr_1r_an=_to_tscf(rec_1p[1]),
+            grr_2r_oc=_to_mmstb(rec_2p[0]),
+            grr_2r_an=_to_tscf(rec_2p[1]),
+            grr_3r_oc=_to_mmstb(rec_3p[0]),
+            grr_3r_an=_to_tscf(rec_3p[1]),
+            cont_exploit_1c_oc=_to_mmstb(cont_exploit_1c[0]),
+            cont_exploit_1c_an=_to_tscf(cont_exploit_1c[1]),
+            cont_exploit_2c_oc=_to_mmstb(cont_exploit_2c[0]),
+            cont_exploit_2c_an=_to_tscf(cont_exploit_2c[1]),
+            cont_exploit_3c_oc=_to_mmstb(cont_exploit_3c[0]),
+            cont_exploit_3c_an=_to_tscf(cont_exploit_3c[1]),
+            cont_explore_1c_oc=_to_mmstb(cont_explore_1c[0]),
+            cont_explore_1c_an=_to_tscf(cont_explore_1c[1]),
+            cont_explore_2c_oc=_to_mmstb(cont_explore_2c[0]),
+            cont_explore_2c_an=_to_tscf(cont_explore_2c[1]),
+            cont_explore_3c_oc=_to_mmstb(cont_explore_3c[0]),
+            cont_explore_3c_an=_to_tscf(cont_explore_3c[1]),
+            prospective_1u_oc=_to_mmstb(prospective_1u[0]),
+            prospective_1u_an=_to_tscf(prospective_1u[1]),
+            prospective_2u_oc=_to_mmstb(prospective_2u[0]),
+            prospective_2u_an=_to_tscf(prospective_2u[1]),
+            prospective_3u_oc=_to_mmstb(prospective_3u[0]),
+            prospective_3u_an=_to_tscf(prospective_3u[1]),
             cumprod_sls_oc=_to_mmstb(cumprod_sls_oc),
             cumprod_sls_an=_to_tscf(cumprod_sls_an),
             yearly_sls_oc=_to_mmstb(yearly_sls_oc),
