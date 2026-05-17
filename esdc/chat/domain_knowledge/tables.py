@@ -78,6 +78,19 @@ TABLE_VOL_REMARKS_COLUMNS: dict[str, str | None] = {
     "nkri_timeseries": None,
 }
 
+# Mapping tables to their AI-generated summary columns
+# These are populated by the summarizer (esdc summarize) from resource_summaries table
+TABLE_SUMMARY_COLUMNS: dict[str, str | None] = {
+    "field_resources": "field_summary",
+    "wa_resources": "wk_summary",
+    "nkri_resources": "nkri_summary",
+    "project_resources": None,
+    "project_timeseries": None,
+    "field_timeseries": None,
+    "wa_timeseries": None,
+    "nkri_timeseries": None,
+}
+
 # Columns that require classification context when queried
 # These columns must include project_class and project_stage for proper aggregation
 REQUIRES_CLASSIFICATION_PREFIXES: tuple[str, ...] = (
@@ -126,6 +139,27 @@ def get_remarks_column(table: str) -> str | None:
         None
     """
     return TABLE_REMARKS_COLUMNS.get(table)
+
+
+def get_summary_column(table: str) -> str | None:
+    """
+    Get the AI-generated summary column name for a given table.
+
+    Args:
+        table: Table name (e.g., "field_resources", "wa_resources")
+
+    Returns:
+        Summary column name, or None if table has no summary column
+
+    Examples:
+        >>> get_summary_column("field_resources")
+        'field_summary'
+        >>> get_summary_column("wa_resources")
+        'wk_summary'
+        >>> get_summary_column("project_resources")
+        None
+    """
+    return TABLE_SUMMARY_COLUMNS.get(table)
 
 
 def requires_classification_columns(column: str) -> bool:
