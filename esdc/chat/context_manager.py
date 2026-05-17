@@ -15,6 +15,9 @@ from langchain_core.messages import (
 )
 from langgraph.graph.message import add_messages
 
+# Local
+from esdc.chat.token_counter import estimate_messages_tokens
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,12 +67,18 @@ class ContextManager:
         max_tokens: int = 6000,
         compaction_threshold: float = 0.75,
         recent_messages: int = 6,
+        provider_type: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
     ):
         """Initialize context manager with token budget and compaction settings."""
         self.max_tokens = max_tokens
         self.compaction_threshold = int(max_tokens * compaction_threshold)
         self.recent_messages = recent_messages
         self.compaction_count = 0
+        self.provider_type = provider_type
+        self.model = model
+        self.base_url = base_url
 
     def should_compact(
         self,
@@ -188,7 +197,7 @@ class ContextManager:
         messages: Sequence[AnyMessage],
         system_prompt: str = "",
     ) -> int:
-        """Estimate token count using ~4 chars per token.
+        """Estimate token count with the configured provider strategy.
 
         Counts tokens from all message types including:
         - System prompt (passed separately, not duplicated in messages)
@@ -196,54 +205,53 @@ class ContextManager:
         - ToolMessage content (can be very large, 100K+ chars)
         - AIMessage tool_calls arguments
         """
-        total_chars = len(system_prompt) if system_prompt else 0
-
-        for m in messages:
-            # Count message content
-            if m.content:
-                total_chars += len(str(m.content))
-
-            # Count AIMessage tool_calls arguments
-            if isinstance(m, AIMessage) and m.tool_calls:
-                for tc in m.tool_calls:
-                    total_chars += len(str(tc.get("name", "")))
-                    args = tc.get("args", {})
-                    total_chars += len(str(args))
-
-        return total_chars // 4
+        return estimate_messages_tokens(
+            messages,
+            system_prompt=system_prompt,
+            provider_type=self.provider_type,
+            model=self.model,
+            base_url=self.base_url,
+        )
 
 
-def estimate_tokens(messages: Sequence[AnyMessage], system_prompt: str = "") -> int:
+def estimate_tokens(
+    messages: Sequence[AnyMessage],
+    system_prompt: str = "",
+    provider_type: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> int:
     """Estimate token count from messages list.
 
     Public API for calculating tokens from messages in state.
-    Uses the same algorithm as ContextManager._estimate_tokens.
+    Uses the same provider-aware algorithm as ContextManager._estimate_tokens.
     Includes system prompt in the token budget.
 
     Args:
         messages: List of messages to estimate tokens for
         system_prompt: Optional system prompt content
+        provider_type: Optional provider type for tokenizer selection
+        model: Optional model name for tokenizer selection
+        base_url: Optional provider URL for future tokenizer endpoints
 
     Returns:
         Estimated token count (system + messages)
     """
-    total_chars = len(system_prompt) if system_prompt else 0
-
-    for m in messages:
-        if m.content:
-            total_chars += len(str(m.content))
-
-        if isinstance(m, AIMessage) and m.tool_calls:
-            for tc in m.tool_calls:
-                total_chars += len(str(tc.get("name", "")))
-                args = tc.get("args", {})
-                total_chars += len(str(args))
-
-    return total_chars // 4
+    return estimate_messages_tokens(
+        messages,
+        system_prompt=system_prompt,
+        provider_type=provider_type,
+        model=model,
+        base_url=base_url,
+    )
 
 
 def manage_context_node(
-    state: AgentState, context_length: int = 6000
+    state: AgentState,
+    context_length: int = 6000,
+    provider_type: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
 ) -> dict[str, Any]:
     """LangGraph node wrapper for context management.
 
@@ -253,6 +261,9 @@ def manage_context_node(
     Args:
         state: LangGraph state with 'messages' key (and 'system_prompt')
         context_length: Maximum context length in tokens (default: 6000)
+        provider_type: Optional provider type for tokenizer selection
+        model: Optional model name for tokenizer selection
+        base_url: Optional provider URL for future tokenizer endpoints
 
     Returns:
         State dict with managed messages and context metadata
@@ -276,6 +287,9 @@ def manage_context_node(
         max_tokens=context_length,
         compaction_threshold=0.75,
         recent_messages=6,
+        provider_type=provider_type,
+        model=model,
+        base_url=base_url,
     )
 
     managed_messages, metadata = manager.manage_context(

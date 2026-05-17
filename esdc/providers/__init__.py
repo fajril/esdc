@@ -167,7 +167,9 @@ def _create_single_llm_from_config(config: dict[str, Any]):
         **llm_kwargs,
     )
     object.__setattr__(llm, "_esdc_provider_name", provider_config.name)
+    object.__setattr__(llm, "_esdc_provider_type", provider_config.provider_type)
     object.__setattr__(llm, "_esdc_model_name", provider_config.model)
+    object.__setattr__(llm, "_esdc_base_url", provider_config.base_url)
     return llm
 
 

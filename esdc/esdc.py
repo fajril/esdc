@@ -340,7 +340,8 @@ def summarize(
         f"fields {result.fields_created} created/{result.fields_skipped} skipped; "
         f"working areas {result.working_areas_created} created/"
         f"{result.working_areas_skipped} skipped; "
-        f"nkri {result.nkri_created} created/{result.nkri_skipped} skipped"
+        f"nkri {result.nkri_created} created/{result.nkri_skipped} skipped; "
+        f"tokens {result.total_tokens_processed:,} processed"
     )
 
 

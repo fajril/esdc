@@ -167,6 +167,30 @@ def _find_provider_by_type(provider_type: str) -> str | None:
     return None
 
 
+def _check_name_exists(name: str) -> str | None:
+    """Check if a provider name is already taken.
+
+    Returns the existing name if found, None otherwise.
+    """
+    providers = Config.get_providers()
+    if name in providers:
+        return name
+    return None
+
+
+def _format_provider_label(name: str, cfg: dict) -> str:
+    """Format a provider label for display in selection lists.
+
+    Shows just the name if it matches the provider type (e.g. 'openai'),
+    or 'name (type)' for custom-named providers.
+    """
+    provider_type = cfg.get("provider_type", "")
+    type_label = PROVIDER_NAMES.get(provider_type, provider_type)
+    if name == provider_type:
+        return name
+    return f"{name} ({type_label})"
+
+
 def _check_default_provider_warning() -> None:
     """Show warning if no default provider is set but providers exist."""
     providers = Config.get_providers()
@@ -267,7 +291,33 @@ def _add_provider_flow() -> None:
     if provider_type == "__back__":
         return
 
-    name = provider_type
+    # Prompt custom name for OpenAI-compatible providers (supports multiple instances)
+    if provider_type == "openai_compatible":
+        name = _prompt(
+            questionary.text("Provider name:", default="", style=_WIZARD_STYLE)
+        )
+        while not name:
+            name = _prompt(
+                questionary.text(
+                    "Name cannot be empty. Enter a provider name:",
+                    default="",
+                    style=_WIZARD_STYLE,
+                )
+            )
+        while _check_name_exists(name) is not None:
+            rich_print(
+                f"[{_WARNING_COLOR}]Name '[{_VALUE_COLOR}]{name}"
+                f"[/{_VALUE_COLOR}]' is already taken.[/{_WARNING_COLOR}]"
+            )
+            name = _prompt(
+                questionary.text(
+                    "Enter a different provider name:",
+                    default="",
+                    style=_WIZARD_STYLE,
+                )
+            )
+    else:
+        name = provider_type
     config_data: dict[str, Any] = {"provider_type": provider_type}
     fields = _PROVIDER_FIELDS.get(provider_type, ["model"])
 
@@ -345,7 +395,12 @@ def _add_provider_flow() -> None:
         config_data["model"] = selected
 
     # Check for existing provider of same type
-    existing = _find_provider_by_type(provider_type)
+    # (openai_compatible already validated unique name above)
+    existing = (
+        None
+        if provider_type == "openai_compatible"
+        else _find_provider_by_type(provider_type)
+    )
     if existing is not None:
         overwrite = _prompt(
             questionary.confirm(
@@ -404,7 +459,10 @@ def _test_provider_standalone() -> None:
         rich_print(f"[{_WARNING_COLOR}]No providers configured.[/{_WARNING_COLOR}]")
         return
 
-    choices = [questionary.Choice(name, value=name) for name in providers]
+    choices = [
+        questionary.Choice(_format_provider_label(name, providers[name]), value=name)
+        for name in providers
+    ]
     selected = _select_with_back("Select provider to test:", choices=choices)
     if selected == "__back__":
         return
@@ -449,7 +507,10 @@ def _edit_provider_flow() -> None:
         rich_print(f"[{_WARNING_COLOR}]No providers configured.[/{_WARNING_COLOR}]")
         return
 
-    choices = [questionary.Choice(name, value=name) for name in providers]
+    choices = [
+        questionary.Choice(_format_provider_label(name, providers[name]), value=name)
+        for name in providers
+    ]
     selected = _select_with_back("Select provider to edit:", choices=choices)
     if selected == "__back__":
         return
@@ -464,6 +525,8 @@ def _edit_provider_flow() -> None:
             editable["api_key"] = cfg["api_key"]
         if "base_url" in cfg:
             editable["base_url"] = cfg["base_url"]
+        if provider_type == "openai_compatible":
+            editable["name"] = selected
 
         field_choices = [
             questionary.Choice(f"{k} = {_mask_value(k, v)}", value=k)
@@ -504,6 +567,51 @@ def _edit_provider_flow() -> None:
                 questionary.text("Base URL:", default=default, style=_WIZARD_STYLE)
             )
             cfg["base_url"] = new_url
+        elif field == "name":
+            new_name = _prompt(
+                questionary.text(
+                    "Provider name:", default=selected, style=_WIZARD_STYLE
+                )
+            )
+            while not new_name:
+                new_name = _prompt(
+                    questionary.text(
+                        "Name cannot be empty. Enter a provider name:",
+                        default="",
+                        style=_WIZARD_STYLE,
+                    )
+                )
+            existing = _check_name_exists(new_name)
+            while existing is not None and new_name != selected:
+                rich_print(
+                    f"[{_WARNING_COLOR}]Name '[{_VALUE_COLOR}]{new_name}"
+                    f"[/{_VALUE_COLOR}]' is already taken.[/{_WARNING_COLOR}]"
+                )
+                new_name = _prompt(
+                    questionary.text(
+                        "Enter a different provider name:",
+                        default="",
+                        style=_WIZARD_STYLE,
+                    )
+                )
+                existing = _check_name_exists(new_name)
+            if new_name != selected:
+                Config.save_provider(new_name, cfg)
+                Config.remove_provider(selected)
+                selected = new_name
+                rich_print(
+                    f"[{_SUCCESS_COLOR}]Provider renamed to "
+                    f"'[{_VALUE_COLOR}]{selected}[/{_VALUE_COLOR}]'.[/{_SUCCESS_COLOR}]"
+                )
+
+            edit_another = _prompt(
+                questionary.confirm(
+                    "Edit another field?", default=False, style=_WIZARD_STYLE
+                )
+            )
+            if not edit_another:
+                break
+            continue
 
         Config.save_provider(selected, cfg)
         rich_print(
@@ -527,7 +635,10 @@ def _remove_provider_flow() -> None:
         rich_print(f"[{_WARNING_COLOR}]No providers configured.[/{_WARNING_COLOR}]")
         return
 
-    choices = [questionary.Choice(name, value=name) for name in providers]
+    choices = [
+        questionary.Choice(_format_provider_label(name, providers[name]), value=name)
+        for name in providers
+    ]
     selected = _select_with_back("Select provider to remove:", choices=choices)
     if selected == "__back__":
         return
@@ -559,7 +670,10 @@ def _set_default_provider_flow() -> None:
         rich_print(f"[{_WARNING_COLOR}]No providers configured.[/{_WARNING_COLOR}]")
         return
 
-    choices = [questionary.Choice(name, value=name) for name in providers]
+    choices = [
+        questionary.Choice(_format_provider_label(name, providers[name]), value=name)
+        for name in providers
+    ]
     selected = _select_with_back("Set default provider:", choices=choices)
     if selected == "__back__":
         return
@@ -591,7 +705,9 @@ def _set_provider_order_flow() -> None:
 
     while remaining:
         choices = [
-            questionary.Choice(name, value=name)
+            questionary.Choice(
+                _format_provider_label(name, providers[name]), value=name
+            )
             for name in remaining
         ]
         if ordered:

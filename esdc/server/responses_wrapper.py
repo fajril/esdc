@@ -34,6 +34,7 @@ from esdc.chat.external_tools import (
     categorize_tools,
     convert_external_specs_to_langchain,
 )
+from esdc.chat.token_counter import extract_usage_from_message
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
@@ -890,7 +891,13 @@ async def generate_responses_stream(
                 ai_message = event["ai_message"]
 
                 # Track usage from last LLM response
-                if hasattr(ai_message, "usage_metadata") and ai_message.usage_metadata:
+                normalized_usage = extract_usage_from_message(ai_message)
+                if normalized_usage:
+                    last_usage = normalized_usage.to_dict()
+                elif (
+                    hasattr(ai_message, "usage_metadata")
+                    and ai_message.usage_metadata
+                ):
                     last_usage = ai_message.usage_metadata
 
                 # Close reasoning if still active when message completes

@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -14,6 +15,12 @@ from typing import Any, Literal
 import duckdb
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
+from esdc.chat.token_counter import (
+    TokenCountSource,
+    TokenUsage,
+    estimate_text_tokens,
+    extract_usage_from_message,
+)
 from esdc.configs import Config
 from esdc.console import console
 from esdc.db_security import _load_sql_script
@@ -37,10 +44,23 @@ CREATE TABLE IF NOT EXISTS {SUMMARY_TABLE} (
     source_level TEXT NOT NULL,
     provider TEXT,
     model TEXT,
+    input_tokens_processed INTEGER DEFAULT 0,
+    output_tokens_processed INTEGER DEFAULT 0,
+    total_tokens_processed INTEGER DEFAULT 0,
+    token_count_source TEXT,
+    token_count_confidence TEXT,
     generated_at TEXT NOT NULL,
     PRIMARY KEY (entity_level, report_year, entity_id)
 )
 """
+
+SUMMARY_TOKEN_COLUMNS_SQL = {
+    "input_tokens_processed": "INTEGER DEFAULT 0",
+    "output_tokens_processed": "INTEGER DEFAULT 0",
+    "total_tokens_processed": "INTEGER DEFAULT 0",
+    "token_count_source": "TEXT",
+    "token_count_confidence": "TEXT",
+}
 
 SUMMARY_FIELDS = {
     "headline": "",
@@ -89,19 +109,62 @@ class SummaryRunResult:
     working_areas_skipped: int = 0
     nkri_created: int = 0
     nkri_skipped: int = 0
+    input_tokens_processed: int = 0
+    output_tokens_processed: int = 0
+    total_tokens_processed: int = 0
 
-    def add(self, level: EntityLevel, created: int, skipped: int) -> SummaryRunResult:
+    def add(
+        self, level: EntityLevel, level_result: SummaryLevelResult
+    ) -> SummaryRunResult:
         values = self.__dict__.copy()
         if level == "field":
-            values["fields_created"] += created
-            values["fields_skipped"] += skipped
+            values["fields_created"] += level_result.created
+            values["fields_skipped"] += level_result.skipped
         elif level == "working_area":
-            values["working_areas_created"] += created
-            values["working_areas_skipped"] += skipped
+            values["working_areas_created"] += level_result.created
+            values["working_areas_skipped"] += level_result.skipped
         else:
-            values["nkri_created"] += created
-            values["nkri_skipped"] += skipped
+            values["nkri_created"] += level_result.created
+            values["nkri_skipped"] += level_result.skipped
+        values["input_tokens_processed"] += level_result.input_tokens_processed
+        values["output_tokens_processed"] += level_result.output_tokens_processed
+        values["total_tokens_processed"] += level_result.total_tokens_processed
         return SummaryRunResult(**values)
+
+
+@dataclass(frozen=True)
+class SummaryLevelResult:
+    """Counts from one summarized entity level."""
+
+    created: int = 0
+    skipped: int = 0
+    input_tokens_processed: int = 0
+    output_tokens_processed: int = 0
+    total_tokens_processed: int = 0
+
+    def add_entity(self, entity_result: SummaryEntityResult) -> SummaryLevelResult:
+        usage = entity_result.token_usage
+        return SummaryLevelResult(
+            created=self.created + int(entity_result.created),
+            skipped=self.skipped + int(not entity_result.created),
+            input_tokens_processed=(
+                self.input_tokens_processed + (usage.input_tokens if usage else 0)
+            ),
+            output_tokens_processed=(
+                self.output_tokens_processed + (usage.output_tokens if usage else 0)
+            ),
+            total_tokens_processed=(
+                self.total_tokens_processed + (usage.total_tokens if usage else 0)
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class SummaryEntityResult:
+    """Result from one summary entity generation attempt."""
+
+    created: bool
+    token_usage: TokenUsage | None = None
 
 
 class SummaryDependencyError(RuntimeError):
@@ -115,6 +178,11 @@ class SummaryLookupError(RuntimeError):
 def ensure_summary_table(conn: duckdb.DuckDBPyConnection) -> None:
     """Create the resource summary annotation table if needed."""
     conn.execute(SUMMARY_COLUMNS_SQL)
+    for column, column_type in SUMMARY_TOKEN_COLUMNS_SQL.items():
+        conn.execute(
+            f"ALTER TABLE {SUMMARY_TABLE} "
+            f"ADD COLUMN IF NOT EXISTS {column} {column_type}"
+        )
 
 
 def refresh_resource_views(conn: duckdb.DuckDBPyConnection) -> None:
@@ -161,10 +229,13 @@ def summarize_resources(
     provider_name = str(
         provider_config.get("name") or provider_config.get("provider_type") or ""
     )
+    provider_type = str(provider_config.get("provider_type") or "")
     model_name = str(provider_config.get("model") or "")
+    base_url = str(provider_config.get("base_url") or "")
 
     conn = get_duckdb_connection(db_path)
     result = SummaryRunResult()
+    live_tokens = {"actual": 0, "display": 0}
     try:
         ensure_summary_table(conn)
         if normalized_target in {"all", "field"}:
@@ -173,39 +244,54 @@ def summarize_resources(
                 field_rows = [_resolve_field(conn, year, name)]
             elif from_wk:
                 field_rows = _resolve_fields_by_wk(conn, year, from_wk)
-            created, skipped = _summarize_fields(
+            level_result = _summarize_fields(
                 conn,
                 llm,
                 year,
                 provider_name,
+                provider_type,
                 model_name,
+                base_url,
                 force,
                 field_rows=field_rows,
                 retry=retry,
+                live_tokens=live_tokens,
             )
-            result = result.add("field", created, skipped)
+            result = result.add("field", level_result)
         if normalized_target in {"all", "working_area"}:
             _assert_level_complete(conn, year, "field")
             working_area_rows = None
             if normalized_target == "working_area" and name:
                 working_area_rows = [_resolve_working_area(conn, year, name)]
-            created, skipped = _summarize_working_areas(
+            level_result = _summarize_working_areas(
                 conn,
                 llm,
                 year,
                 provider_name,
+                provider_type,
                 model_name,
+                base_url,
                 force,
                 working_area_rows=working_area_rows,
                 retry=retry,
+                live_tokens=live_tokens,
             )
-            result = result.add("working_area", created, skipped)
+            result = result.add("working_area", level_result)
         if normalized_target in {"all", "nkri"}:
             _assert_level_complete(conn, year, "working_area")
-            created, skipped = _summarize_nkri(
-                conn, llm, year, provider_name, model_name, force, retry=retry
+            level_result = _summarize_nkri(
+                conn,
+                llm,
+                year,
+                provider_name,
+                provider_type,
+                model_name,
+                base_url,
+                force,
+                retry=retry,
+                live_tokens=live_tokens,
             )
-            result = result.add("nkri", created, skipped)
+            result = result.add("nkri", level_result)
         refresh_resource_views(conn)
         conn.execute("CHECKPOINT")
     finally:
@@ -346,11 +432,14 @@ def _summarize_fields(
     llm: Any,
     year: int,
     provider: str,
+    provider_type: str,
     model: str,
+    base_url: str,
     force: bool,
     field_rows: list[tuple[Any, Any]] | None = None,
     retry: int = 0,
-) -> tuple[int, int]:
+    live_tokens: dict[str, int] | None = None,
+) -> SummaryLevelResult:
     rows = field_rows
     if rows is None:
         rows = conn.execute(
@@ -365,16 +454,20 @@ def _summarize_fields(
             """,
             [year],
         ).fetchall()
-    created = skipped = 0
+    result = SummaryLevelResult()
     description = "Summarizing fields"
     if field_rows and len(field_rows) == 1:
         description = f"Summarizing fields: {field_rows[0][1]}"
     with _summary_progress() as progress:
-        task = progress.add_task(description, total=len(rows))
+        task = progress.add_task(
+            description,
+            total=len(rows),
+            tokens_processed=_live_display_tokens(live_tokens),
+        )
         for entity_id, entity_name in rows:
             source_items = _field_source_items(conn, year, entity_id)
             metrics = _field_metrics(conn, year, entity_id)
-            did_create = _summarize_entity(
+            entity_result = _summarize_entity(
                 conn=conn,
                 llm=llm,
                 level="field",
@@ -385,14 +478,29 @@ def _summarize_fields(
                 source_items=source_items,
                 metrics=metrics,
                 provider=provider,
+                provider_type=provider_type,
                 model=model,
+                base_url=base_url,
                 force=force,
                 retry=retry,
+                progress_token_callback=lambda pending_tokens,
+                live_tokens=live_tokens: (
+                    progress.update(
+                        task,
+                        tokens_processed=_preview_live_tokens(
+                            live_tokens, pending_tokens
+                        ),
+                    ),
+                    progress.refresh(),
+                ),
             )
-            created += int(did_create)
-            skipped += int(not did_create)
+            result = result.add_entity(entity_result)
+            progress.update(
+                task,
+                tokens_processed=_commit_live_tokens(live_tokens, entity_result),
+            )
             progress.advance(task)
-    return created, skipped
+    return result
 
 
 def _summarize_working_areas(
@@ -400,11 +508,14 @@ def _summarize_working_areas(
     llm: Any,
     year: int,
     provider: str,
+    provider_type: str,
     model: str,
+    base_url: str,
     force: bool,
     working_area_rows: list[tuple[Any, Any]] | None = None,
     retry: int = 0,
-) -> tuple[int, int]:
+    live_tokens: dict[str, int] | None = None,
+) -> SummaryLevelResult:
     rows = working_area_rows
     if rows is None:
         rows = conn.execute(
@@ -419,16 +530,20 @@ def _summarize_working_areas(
             """,
             [year],
         ).fetchall()
-    created = skipped = 0
+    result = SummaryLevelResult()
     description = "Summarizing working areas"
     if working_area_rows and len(working_area_rows) == 1:
         description = f"Summarizing working areas: {working_area_rows[0][1]}"
     with _summary_progress() as progress:
-        task = progress.add_task(description, total=len(rows))
+        task = progress.add_task(
+            description,
+            total=len(rows),
+            tokens_processed=_live_display_tokens(live_tokens),
+        )
         for entity_id, entity_name in rows:
             source_items = _working_area_source_items(conn, year, entity_id)
             metrics = _working_area_metrics(conn, year, entity_id)
-            did_create = _summarize_entity(
+            entity_result = _summarize_entity(
                 conn=conn,
                 llm=llm,
                 level="working_area",
@@ -439,14 +554,29 @@ def _summarize_working_areas(
                 source_items=source_items,
                 metrics=metrics,
                 provider=provider,
+                provider_type=provider_type,
                 model=model,
+                base_url=base_url,
                 force=force,
                 retry=retry,
+                progress_token_callback=lambda pending_tokens,
+                live_tokens=live_tokens: (
+                    progress.update(
+                        task,
+                        tokens_processed=_preview_live_tokens(
+                            live_tokens, pending_tokens
+                        ),
+                    ),
+                    progress.refresh(),
+                ),
             )
-            created += int(did_create)
-            skipped += int(not did_create)
+            result = result.add_entity(entity_result)
+            progress.update(
+                task,
+                tokens_processed=_commit_live_tokens(live_tokens, entity_result),
+            )
             progress.advance(task)
-    return created, skipped
+    return result
 
 
 def _summarize_nkri(
@@ -454,15 +584,22 @@ def _summarize_nkri(
     llm: Any,
     year: int,
     provider: str,
+    provider_type: str,
     model: str,
+    base_url: str,
     force: bool,
     retry: int = 0,
-) -> tuple[int, int]:
+    live_tokens: dict[str, int] | None = None,
+) -> SummaryLevelResult:
     source_items = _nkri_source_items(conn, year)
     metrics = _nkri_metrics(conn, year)
     with _summary_progress() as progress:
-        task = progress.add_task("Summarizing NKRI", total=1)
-        did_create = _summarize_entity(
+        task = progress.add_task(
+            "Summarizing NKRI",
+            total=1,
+            tokens_processed=_live_display_tokens(live_tokens),
+        )
+        entity_result = _summarize_entity(
             conn=conn,
             llm=llm,
             level="nkri",
@@ -473,12 +610,28 @@ def _summarize_nkri(
             source_items=source_items,
             metrics=metrics,
             provider=provider,
+            provider_type=provider_type,
             model=model,
+            base_url=base_url,
             force=force,
             retry=retry,
+            progress_token_callback=lambda pending_tokens: (
+                progress.update(
+                    task,
+                    tokens_processed=_preview_live_tokens(
+                        live_tokens, pending_tokens
+                    ),
+                ),
+                progress.refresh(),
+            ),
+        )
+        result = SummaryLevelResult().add_entity(entity_result)
+        progress.update(
+            task,
+            tokens_processed=_commit_live_tokens(live_tokens, entity_result),
         )
         progress.advance(task)
-    return int(did_create), int(not did_create)
+    return result
 
 
 def _summary_progress() -> Progress:
@@ -486,9 +639,46 @@ def _summary_progress() -> Progress:
         TextColumn("[bold blue]{task.description}"),
         BarColumn(bar_width=36),
         TextColumn("[green]{task.completed}/{task.total}"),
+        TextColumn("[cyan]processed {task.fields[tokens_processed]:,} tokens[/]"),
         TimeElapsedColumn(),
         console=console,
     )
+
+
+def _live_display_tokens(live_tokens: dict[str, int] | None) -> int:
+    """Return the current monotonic live token display value."""
+    if live_tokens is None:
+        return 0
+    return live_tokens.get("display", 0)
+
+
+def _preview_live_tokens(
+    live_tokens: dict[str, int] | None,
+    pending_input_tokens: int,
+) -> int:
+    """Preview cumulative tokens while the current blocking LLM call runs."""
+    if live_tokens is None:
+        return pending_input_tokens
+    preview = live_tokens.get("actual", 0) + pending_input_tokens
+    live_tokens["display"] = max(live_tokens.get("display", 0), preview)
+    return live_tokens["display"]
+
+
+def _commit_live_tokens(
+    live_tokens: dict[str, int] | None,
+    entity_result: SummaryEntityResult,
+) -> int:
+    """Commit finished entity usage into the cumulative live token counter."""
+    usage = entity_result.token_usage
+    if live_tokens is None:
+        return usage.total_tokens if usage else 0
+    if entity_result.created and usage:
+        live_tokens["actual"] = live_tokens.get("actual", 0) + usage.total_tokens
+    live_tokens["display"] = max(
+        live_tokens.get("display", 0),
+        live_tokens.get("actual", 0),
+    )
+    return live_tokens["display"]
 
 
 def _resolve_field(
@@ -667,14 +857,18 @@ def _summarize_entity(
     source_items: list[dict[str, Any]],
     metrics: dict[str, Any],
     provider: str,
+    provider_type: str,
     model: str,
+    base_url: str,
     force: bool,
     retry: int = 0,
-) -> bool:
+    progress_token_callback: Callable[[int], object] | None = None,
+) -> SummaryEntityResult:
     source_hash = _hash_source(source_items, metrics)
     if not force and _existing_hash_matches(conn, level, year, entity_id, source_hash):
-        return False
+        return SummaryEntityResult(created=False)
 
+    token_usage: TokenUsage | None = None
     if not _has_nonempty_source(source_items):
         summary = _empty_summary(level, entity_name, source_items)
     else:
@@ -694,7 +888,20 @@ def _summarize_entity(
             retry_prompt = (
                 prompt + _retry_feedback(last_error) if last_error else prompt
             )
-            content, actual_provider, actual_model = _invoke_llm_with_metadata(
+            pending_input_tokens = estimate_text_tokens(
+                retry_prompt,
+                provider_type=provider_type,
+                model=model,
+                base_url=base_url,
+            )
+            if progress_token_callback:
+                progress_token_callback(pending_input_tokens)
+            (
+                content,
+                actual_provider,
+                actual_model,
+                response_usage,
+            ) = _invoke_llm_with_metadata(
                 llm,
                 retry_prompt,
                 fallback_provider=provider,
@@ -702,6 +909,14 @@ def _summarize_entity(
             )
             provider = actual_provider
             model = actual_model
+            token_usage = _token_usage_for_summary_response(
+                response_usage=response_usage,
+                prompt=retry_prompt,
+                content=content,
+                provider_type=provider_type,
+                model=model,
+                base_url=base_url,
+            )
             try:
                 summary = _parse_summary_response(content)
                 break
@@ -736,8 +951,11 @@ def _summarize_entity(
         f"""
         INSERT OR REPLACE INTO {SUMMARY_TABLE}
             (entity_level, report_year, entity_id, entity_name, summary_json,
-             summary_text, source_hash, source_level, provider, model, generated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             summary_text, source_hash, source_level, provider, model,
+             input_tokens_processed, output_tokens_processed,
+             total_tokens_processed, token_count_source, token_count_confidence,
+             generated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             level,
@@ -750,10 +968,15 @@ def _summarize_entity(
             source_level,
             provider,
             model,
+            token_usage.input_tokens if token_usage else 0,
+            token_usage.output_tokens if token_usage else 0,
+            token_usage.total_tokens if token_usage else 0,
+            token_usage.source if token_usage else None,
+            token_usage.confidence if token_usage else None,
             generated_at,
         ],
     )
-    return True
+    return SummaryEntityResult(created=True, token_usage=token_usage)
 
 
 def build_summary_prompt(
@@ -1124,8 +1347,9 @@ def _invoke_llm_with_metadata(
     *,
     fallback_provider: str,
     fallback_model: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, TokenUsage | None]:
     response = llm.invoke(prompt)
+    token_usage = extract_usage_from_message(response)
     content = getattr(response, "content", response)
     if isinstance(content, list):
         content_text = "\n".join(str(item) for item in content)
@@ -1142,7 +1366,56 @@ def _invoke_llm_with_metadata(
         or getattr(llm, "_esdc_model_name", None)
         or fallback_model
     )
-    return content_text, str(provider or ""), str(model or "")
+    return content_text, str(provider or ""), str(model or ""), token_usage
+
+
+def _token_usage_for_summary_response(
+    *,
+    response_usage: TokenUsage | None,
+    prompt: str,
+    content: str,
+    provider_type: str,
+    model: str,
+    base_url: str,
+) -> TokenUsage:
+    """Return exact provider usage or estimated prompt+response tokens."""
+    if response_usage:
+        return response_usage
+
+    input_tokens = estimate_text_tokens(
+        prompt,
+        provider_type=provider_type,
+        model=model,
+        base_url=base_url,
+    )
+    output_tokens = estimate_text_tokens(
+        content,
+        provider_type=provider_type,
+        model=model,
+        base_url=base_url,
+    )
+    return TokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+        source=_estimated_token_source(provider_type, model),
+        confidence="estimated",
+    )
+
+
+def _estimated_token_source(provider_type: str, model: str) -> TokenCountSource:
+    """Return the local preflight token source for summary fallback estimates."""
+    provider = provider_type.lower()
+    model_lower = model.lower()
+    if provider in {"openai", "azure_openai"}:
+        return "tiktoken"
+    if provider == "openai_compatible" and (
+        model_lower.startswith(("gpt-", "o1", "o3", "o4"))
+        or "openai/" in model_lower
+        or "chatgpt" in model_lower
+    ):
+        return "tiktoken"
+    return "heuristic"
 
 
 def _repair_json(raw: str) -> str:

@@ -3,7 +3,11 @@
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from esdc.chat.agent import AgentState
-from esdc.chat.context_manager import ContextManager, manage_context_node
+from esdc.chat.context_manager import (
+    ContextManager,
+    estimate_tokens,
+    manage_context_node,
+)
 
 
 class TestContextManager:
@@ -174,6 +178,12 @@ class TestEstimateTokens:
         messages = [AIMessage(content="Hello", tool_calls=[])]
         tokens = manager._estimate_tokens(messages)
         assert tokens == 1  # 5 chars // 4 = 1
+
+    def test_public_estimate_tokens_includes_system_prompt(self):
+        """Test public estimator includes separately stored system prompt."""
+        messages = [HumanMessage(content="Hello")]  # 5 chars
+        tokens = estimate_tokens(messages, system_prompt="System prompt")  # 13 chars
+        assert tokens == 4  # (13 + 5) // 4 = 4
 
 
 class TestManageContextNode:

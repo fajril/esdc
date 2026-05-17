@@ -1,10 +1,19 @@
 import json
 
 import duckdb
+from langchain_core.messages import AIMessage
 
+from esdc.chat.token_counter import TokenUsage
 from esdc.configs import Config
 from esdc.db_security import _load_sql_script
 from esdc.esdc import app
+from esdc.summarizer import (
+    SummaryEntityResult,
+    _commit_live_tokens,
+    _preview_live_tokens,
+    _summarize_entity,
+    ensure_summary_table,
+)
 
 
 class FakeLLM:
@@ -45,6 +54,18 @@ class FakeLLM:
 class MetadataLLM(FakeLLM):
     last_provider_name = "deepseek"
     last_model_name = "deepseek-v4-flash"
+
+
+class UsageMetadataLLM(FakeLLM):
+    def invoke(self, prompt):
+        content = super().invoke(prompt)
+        message = AIMessage(content=content)
+        message.usage_metadata = {  # type: ignore[attr-defined]
+            "input_tokens": 100,
+            "output_tokens": 25,
+            "total_tokens": 125,
+        }
+        return message
 
 
 def _patch_llm(monkeypatch):
@@ -219,6 +240,22 @@ def _summary_metadata():
         conn.close()
 
 
+def _summary_token_rows():
+    conn = duckdb.connect(str(Config.get_db_file()))
+    try:
+        return conn.execute(
+            """
+            SELECT entity_level, entity_id, input_tokens_processed,
+                   output_tokens_processed, total_tokens_processed,
+                   token_count_source, token_count_confidence
+            FROM resource_summaries
+            ORDER BY entity_level, entity_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+
 def test_summarize_field_creates_one_field_summary(
     runner, isolated_config, monkeypatch
 ):
@@ -235,6 +272,8 @@ def test_summarize_field_creates_one_field_summary(
     assert len(rows) == 1
     assert rows[0][0] == "field"
     assert rows[0][2] == "F-1"
+    assert "tokens " in result.stdout
+    assert " processed" in result.stdout
 
 
 def test_summarize_stores_actual_llm_metadata(runner, isolated_config, monkeypatch):
@@ -261,6 +300,54 @@ def test_summarize_stores_actual_llm_metadata(runner, isolated_config, monkeypat
     assert _summary_metadata() == [
         ("field", "F-1", "deepseek", "deepseek-v4-flash")
     ]
+
+
+def test_summarize_stores_actual_token_usage(runner, isolated_config, monkeypatch):
+    llm = UsageMetadataLLM()
+    monkeypatch.setattr(
+        Config,
+        "get_provider_config",
+        classmethod(
+            lambda cls: {
+                "name": "test-provider",
+                "provider_type": "openai",
+                "model": "gpt-4o-mini",
+            }
+        ),
+    )
+    monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
+    _create_minimal_project_resources()
+
+    result = runner.invoke(
+        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
+    )
+
+    assert result.exit_code == 0
+    assert "tokens 125 processed" in result.stdout
+    assert _summary_token_rows() == [
+        ("field", "F-1", 100, 25, 125, "provider_usage", "exact")
+    ]
+
+
+def test_summarize_estimates_token_usage_without_provider_usage(
+    runner, isolated_config, monkeypatch
+):
+    _patch_llm(monkeypatch)
+    _create_minimal_project_resources()
+
+    result = runner.invoke(
+        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
+    )
+
+    assert result.exit_code == 0
+    token_rows = _summary_token_rows()
+    assert len(token_rows) == 1
+    _, _, input_tokens, output_tokens, total_tokens, source, confidence = token_rows[0]
+    assert input_tokens > 0
+    assert output_tokens > 0
+    assert total_tokens == input_tokens + output_tokens
+    assert source == "tiktoken"
+    assert confidence == "estimated"
 
 
 def test_summarize_field_skips_unchanged_hash_and_force_regenerates(
@@ -291,6 +378,7 @@ def test_summarize_field_skips_unchanged_hash_and_force_regenerates(
     assert second.exit_code == 0
     assert forced.exit_code == 0
     assert "fields 0 created/1 skipped" in second.stdout
+    assert "tokens 0 processed" in second.stdout
     assert "fields 1 created/0 skipped" in forced.stdout
     assert len(llm.prompts) == 2
 
@@ -321,6 +409,9 @@ def test_summarize_field_with_empty_remarks_does_not_call_llm(
     assert llm.prompts == []
     rows = _summary_rows()
     summary = json.loads(rows[0][3])
+    assert _summary_token_rows() == [
+        ("field", "F-1", 0, 0, 0, None, None)
+    ]
     assert summary["headline"] == "Tidak ada remarks material untuk field Field Alpha."
     assert summary["data_quality_notes"] == [
         "Source tidak memiliki remarks yang cukup informatif untuk diringkas."
@@ -426,6 +517,76 @@ def test_summarize_progress_text_is_visible(runner, isolated_config, monkeypatch
 
     assert result.exit_code == 0
     assert "Summarizing fields" in result.output
+    assert "processed " in result.output
+    assert " tokens" in result.output
+
+
+def test_summarize_updates_prompt_tokens_before_invoke(isolated_config):
+    token_updates: list[int] = []
+
+    class CallbackAwareLLM(FakeLLM):
+        def invoke(self, prompt):
+            assert token_updates
+            assert token_updates[-1] > 0
+            return super().invoke(prompt)
+
+    conn = duckdb.connect(":memory:")
+    try:
+        ensure_summary_table(conn)
+        result = _summarize_entity(
+            conn=conn,
+            llm=CallbackAwareLLM(),
+            level="field",
+            year=2025,
+            entity_id="F-1",
+            entity_name="Field Alpha",
+            source_level="project_remarks",
+            source_items=[
+                {
+                    "project_id": "P-1",
+                    "project_name": "Project Alpha",
+                    "project_remarks": "Peluang workover untuk menaikkan produksi.",
+                }
+            ],
+            metrics={},
+            provider="test-provider",
+            provider_type="openai",
+            model="gpt-4o-mini",
+            base_url="",
+            force=False,
+            retry=1,
+            progress_token_callback=token_updates.append,
+        )
+    finally:
+        conn.close()
+
+    assert result.created
+    assert token_updates[0] > 0
+
+
+def test_live_token_counter_is_global_and_monotonic():
+    live_tokens = {"actual": 100, "display": 100}
+
+    preview = _preview_live_tokens(live_tokens, 75)
+    committed = _commit_live_tokens(
+        live_tokens,
+        SummaryEntityResult(
+            created=True,
+            token_usage=TokenUsage(
+                input_tokens=30,
+                output_tokens=10,
+                total_tokens=40,
+                source="provider_usage",
+                confidence="exact",
+            ),
+        ),
+    )
+    next_preview = _preview_live_tokens(live_tokens, 20)
+
+    assert preview == 175
+    assert committed == 175
+    assert next_preview == 175
+    assert live_tokens["actual"] == 140
 
 
 def test_summary_field_displays_generated_summary(runner, isolated_config, monkeypatch):
@@ -631,3 +792,41 @@ def test_create_esdc_view_exposes_summary_columns(isolated_config):
     assert field_summary == "Field summary"
     assert wk_summary == "WK summary"
     assert nkri_summary == "NKRI summary"
+
+
+def test_ensure_summary_table_migrates_token_columns(isolated_config):
+    Config.init_config()
+    Config.get_db_dir().mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(Config.get_db_file()))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE resource_summaries (
+                entity_level TEXT NOT NULL,
+                report_year INTEGER NOT NULL,
+                entity_id TEXT NOT NULL,
+                entity_name TEXT,
+                summary_json TEXT NOT NULL,
+                summary_text TEXT,
+                source_hash TEXT NOT NULL,
+                source_level TEXT NOT NULL,
+                provider TEXT,
+                model TEXT,
+                generated_at TEXT NOT NULL,
+                PRIMARY KEY (entity_level, report_year, entity_id)
+            )
+            """
+        )
+        ensure_summary_table(conn)
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(resource_summaries)").fetchall()
+        }
+    finally:
+        conn.close()
+
+    assert "input_tokens_processed" in columns
+    assert "output_tokens_processed" in columns
+    assert "total_tokens_processed" in columns
+    assert "token_count_source" in columns
+    assert "token_count_confidence" in columns

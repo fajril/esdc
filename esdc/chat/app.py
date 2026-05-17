@@ -1301,7 +1301,10 @@ class ESDCChatApp(App):
         self._token_count: int = 0
         self._context_length: int = 4096
         self._provider_name: str = ""
+        self._provider_type: str = ""
         self._model_name: str = ""
+        self._base_url: str = ""
+        self._system_prompt: str = ""
         self._context_panel_visible: bool = True
         self._context_metadata: dict | None = None
 
@@ -1346,13 +1349,16 @@ class ESDCChatApp(App):
 
         self._provider_name = Config.get_default_provider()
         self._model_name = Config.get_provider_model()
+        self._system_prompt = ""
 
         # Get context length from provider
         provider_config = Config.get_provider_config()
         if provider_config and provider_config.get("model"):
             from esdc.providers import get_provider
 
-            provider = get_provider(provider_config.get("provider_type", "ollama"))
+            self._provider_type = provider_config.get("provider_type", "ollama")
+            self._base_url = provider_config.get("base_url", "")
+            provider = get_provider(self._provider_type)
             if provider:
                 # Use static fallback; dynamic resolution from the provider API
                 # happens later inside the agent pipeline when the LLM instance
@@ -1360,6 +1366,12 @@ class ESDCChatApp(App):
                 self._context_length = provider.get_context_length(
                     provider_config.get("model", "")
                 )
+        try:
+            from esdc.chat.prompts import get_system_prompt
+
+            self._system_prompt = get_system_prompt()
+        except Exception as exc:
+            logger.debug("Failed to load system prompt for token panel: %s", exc)
 
         # Log context length
         logger.info(
@@ -1700,7 +1712,13 @@ class ESDCChatApp(App):
             if messages:
                 from esdc.chat.context_manager import estimate_tokens
 
-                self._token_count = estimate_tokens(messages)
+                self._token_count = estimate_tokens(
+                    messages,
+                    system_prompt=self._system_prompt,
+                    provider_type=self._provider_type,
+                    model=self._model_name,
+                    base_url=self._base_url,
+                )
                 if self.status_bar:
                     self.status_bar.set_status(
                         self._provider_name,

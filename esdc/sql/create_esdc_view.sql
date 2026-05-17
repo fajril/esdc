@@ -9,6 +9,11 @@ CREATE TABLE IF NOT EXISTS resource_summaries (
 	source_level TEXT NOT NULL,
 	provider TEXT,
 	model TEXT,
+	input_tokens_processed INTEGER DEFAULT 0,
+	output_tokens_processed INTEGER DEFAULT 0,
+	total_tokens_processed INTEGER DEFAULT 0,
+	token_count_source TEXT,
+	token_count_confidence TEXT,
 	generated_at TEXT NOT NULL,
 	PRIMARY KEY (entity_level, report_year, entity_id)
 );

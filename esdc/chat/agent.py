@@ -29,6 +29,11 @@ from esdc.chat.query_classifier import (
     get_tools_for_classification,
 )
 from esdc.chat.smart_query import simple_data_query
+from esdc.chat.token_counter import (
+    estimate_message_output_tokens,
+    estimate_text_tokens,
+    extract_usage_from_message,
+)
 from esdc.chat.tools import (
     entity_resolver,
     execute_sql,
@@ -170,7 +175,6 @@ def _detect_context_length(llm: BaseChatModel) -> int:
     return model_context_length
 
 
-TOKEN_CHARS_PER_TOKEN = 4
 MAX_TOOL_RESULT_CHARS = 10000
 
 
@@ -406,6 +410,9 @@ def create_agent(
     """
     if context_length is None:
         context_length = _detect_context_length(llm)
+    provider_type = getattr(llm, "_esdc_provider_type", None)
+    model_name = getattr(llm, "_esdc_model_name", None)
+    base_url = getattr(llm, "_esdc_base_url", None)
     if tools is None:
         tools = [
             simple_data_query,
@@ -791,7 +798,13 @@ def create_agent(
 
     def manage_context_with_length(state: AgentState) -> dict[str, Any]:
         """Wrapper for manage_context_node with bound context_length."""
-        return manage_context_node(state, context_length=context_length)
+        return manage_context_node(
+            state,
+            context_length=context_length,
+            provider_type=provider_type,
+            model=model_name,
+            base_url=base_url,
+        )
 
     def query_classification_node(state: AgentState) -> dict[str, Any]:
         """Classify query and inject strategy into system prompt."""
@@ -1234,46 +1247,13 @@ def _extract_token_usage(message: AIMessage, user_input: str) -> int:
     Returns:
         Estimated or actual token count
     """
-    # Try LangChain usage_metadata format
-    if hasattr(message, "usage_metadata") and message.usage_metadata:
-        usage = message.usage_metadata
-        if isinstance(usage, dict):
-            # LangChain format: {'input_tokens': X, 'output_tokens': Y, 'total_tokens': Z}  # noqa: E501
-            if "total_tokens" in usage:
-                return int(usage["total_tokens"])
-            elif "output_tokens" in usage and "input_tokens" in usage:
-                return int(usage.get("input_tokens", 0)) + int(
-                    usage.get("output_tokens", 0)
-                )
-
-    # Try OpenAI response_metadata format
-    if hasattr(message, "response_metadata") and message.response_metadata:
-        metadata = message.response_metadata
-        if isinstance(metadata, dict):
-            usage = metadata.get("usage") or metadata.get("Usage")
-            if usage:
-                if hasattr(usage, "total_tokens"):
-                    return int(usage.total_tokens)
-                if isinstance(usage, dict):
-                    if "total_tokens" in usage:
-                        return int(usage["total_tokens"])
-                    elif "output_tokens" in usage and "prompt_tokens" in usage:
-                        return int(usage.get("prompt_tokens", 0)) + int(
-                            usage.get("output_tokens", 0)
-                        )
+    usage = extract_usage_from_message(message)
+    if usage:
+        return usage.total_tokens
 
     # Fallback: estimate from text content
-    if hasattr(message, "content") and message.content:
-        content = message.content
-        if isinstance(content, list):
-            # Handle list content (e.g., [{"type": "text", "text": "..."}])
-            text = " ".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in content
-            )
-        else:
-            text = str(content)
-        return _estimate_tokens(text)
+    if getattr(message, "content", None):
+        return estimate_message_output_tokens(message)
 
     return 0
 
@@ -1291,4 +1271,4 @@ def _estimate_tokens(text: str) -> int:
     """
     if not text:
         return 0
-    return len(text) // TOKEN_CHARS_PER_TOKEN
+    return estimate_text_tokens(text)

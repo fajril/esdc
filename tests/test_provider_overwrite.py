@@ -2,7 +2,11 @@
 
 from unittest.mock import patch
 
-from esdc.config_wizard import _find_provider_by_type
+from esdc.config_wizard import (
+    _check_name_exists,
+    _find_provider_by_type,
+    _format_provider_label,
+)
 
 
 class TestFindProviderByType:
@@ -96,9 +100,9 @@ class TestAddProviderOverwrite:
         mock_remove.assert_called_once_with("my-openai")
         # Should save new one
         mock_save.assert_called_once()
-        # Call args should be 'company-openai'
+        # Name should be provider_type key for non-custom types
         call_args = mock_save.call_args
-        assert call_args[0][0] == "company-openai"
+        assert call_args[0][0] == "openai"
 
     @patch("esdc.config_wizard.Config.save_provider")
     @patch("esdc.config_wizard.Config.get_providers")
@@ -192,7 +196,7 @@ class TestDefaultProviderAutoSet:
         _add_provider_flow()
 
         # Should auto-set as default (no confirm prompt)
-        mock_set_default.assert_called_once_with("my-openai")
+        mock_set_default.assert_called_once_with("openai")
 
 
 class TestCLISetDefault:
@@ -239,3 +243,94 @@ class TestCLISetDefault:
         mock_set.assert_not_called()
         # Should print error
         assert mock_echo.call_count >= 1
+
+
+class TestCheckNameExists:
+    """Test _check_name_exists() helper."""
+
+    @patch("esdc.config_wizard.Config.get_providers")
+    def test_name_taken(self, mock_get_providers):
+        mock_get_providers.return_value = {
+            "my-qwen": {"provider_type": "openai_compatible"},
+            "openai": {"provider_type": "openai"},
+        }
+        assert _check_name_exists("my-qwen") == "my-qwen"
+        assert _check_name_exists("openai") == "openai"
+
+    @patch("esdc.config_wizard.Config.get_providers")
+    def test_name_available(self, mock_get_providers):
+        mock_get_providers.return_value = {
+            "my-qwen": {"provider_type": "openai_compatible"},
+        }
+        assert _check_name_exists("my-deepseek") is None
+
+
+class TestFormatProviderLabel:
+    """Test _format_provider_label() helper."""
+
+    def test_default_type_name(self):
+        label = _format_provider_label("openai", {"provider_type": "openai"})
+        assert label == "openai"
+
+    def test_custom_name(self):
+        label = _format_provider_label(
+            "my-qwen", {"provider_type": "openai_compatible"}
+        )
+        assert label == "my-qwen (OpenAI Compatible API)"
+
+    def test_custom_name_unknown_type(self):
+        label = _format_provider_label("my-api", {"provider_type": "custom_type"})
+        assert label == "my-api (custom_type)"
+
+
+class TestAddOpenaiCompatibleFlow:
+    """Test adding OpenAI-compatible provider with custom name."""
+
+    @patch("esdc.config_wizard.Config.save_provider")
+    @patch("esdc.config_wizard.Config.get_providers")
+    @patch("esdc.config_wizard.Config.get_default_provider")
+    @patch("esdc.config_wizard.Config.set_default_provider")
+    @patch("esdc.config_wizard.questionary.confirm")
+    @patch("esdc.config_wizard.questionary.select")
+    @patch("esdc.config_wizard.questionary.text")
+    @patch("esdc.config_wizard.questionary.password")
+    @patch("esdc.config_wizard.rich_print")
+    def test_custom_name_saved(
+        self,
+        mock_print,
+        mock_password,
+        mock_text,
+        mock_select,
+        mock_confirm,
+        mock_set_default,
+        mock_default,
+        mock_providers,
+        mock_save,
+    ):
+        from esdc.config_wizard import _add_provider_flow
+
+        mock_providers.return_value = {}  # No existing providers
+        mock_default.return_value = None  # No default set
+        mock_select.return_value.ask.side_effect = [
+            "openai_compatible",  # select provider type
+            "qwen-7b",            # select model
+        ]
+        mock_text.return_value.ask.side_effect = [
+            "my-qwen",            # custom provider name
+            "http://qwen:8000",   # base URL
+            "",                   # unused (model manual entry fallback)
+        ]
+        mock_password.return_value.ask.return_value = ""  # no api key
+        mock_confirm.return_value.ask.side_effect = [
+            False,  # don't set as default
+            False,  # don't test connection
+        ]
+
+        _add_provider_flow()
+
+        mock_save.assert_called_once()
+        call_args = mock_save.call_args
+        assert call_args[0][0] == "my-qwen"
+        saved_config = call_args[0][1]
+        assert saved_config["provider_type"] == "openai_compatible"
+        assert saved_config["model"] == "qwen-7b"
