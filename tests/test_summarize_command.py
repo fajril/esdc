@@ -11,7 +11,9 @@ from esdc.summarizer import (
     SummaryEntityResult,
     _commit_live_tokens,
     _preview_live_tokens,
+    _strategic_analysis_data,
     _summarize_entity,
+    build_summary_prompt,
     ensure_summary_table,
 )
 
@@ -46,6 +48,29 @@ class FakeLLM:
                 "source_coverage": {
                     "source_items_reviewed": 1,
                     "source_items_with_material_issues": 1,
+                },
+            }
+        )
+
+
+class StrategicAnalysisLLM(FakeLLM):
+    def invoke(self, prompt):
+        self.prompts.append(prompt)
+        return json.dumps(
+            {
+                "report_year": 2025,
+                "summary": {
+                    "total_oil_mbopd": 1.0,
+                    "total_gas_mmscfd": 1.0,
+                    "total_field_mmboe": 100.0,
+                    "total_exploration_mmboe": 80.0,
+                    "key_findings": [
+                        "Peluang utama berada pada Big Resource.",
+                        "Pematangan POD menjadi penentu onstream.",
+                    ],
+                    "recommendations": [
+                        "Prioritaskan persetujuan POD dan kesiapan fasilitas."
+                    ],
                 },
             }
         )
@@ -119,6 +144,9 @@ def _create_minimal_project_resources():
                 project_level TEXT,
                 uncert_level TEXT,
                 project_remarks TEXT,
+                onstream_year INTEGER,
+                operator_name TEXT,
+                rec_mboe REAL,
                 res_oc REAL,
                 res_an REAL,
                 rec_oc REAL,
@@ -136,91 +164,72 @@ def _create_minimal_project_resources():
         )
         rows = [
             (
-                2025,
-                "P-1",
-                "Project Alpha",
-                "F-1",
-                "Field Alpha",
-                "WK-1",
-                "WK Alpha",
-                "Contingent Resources",
-                "Development",
-                "E2",
-                "2. Middle Value",
+                2025, "P-1", "Project Alpha", "F-1", "Field Alpha",
+                "WK-1", "WK Alpha", "Contingent Resources", "Development",
+                "E2", "2. Middle Value",
                 "Ada peluang workover untuk menaikkan produksi.",
-                100.0,
-                50.0,
-                200.0,
-                100.0,
-                150.0,
-                75.0,
-                1000.0,
-                500.0,
-                10.0,
-                5.0,
-                300.0,
-                150.0,
+                2026, "Op A", 150.0,
+                100.0, 50.0, 200.0, 100.0, 150.0, 75.0,
+                1000.0, 500.0, 10.0, 5.0, 300.0, 150.0,
             ),
             (
-                2025,
-                "P-2",
-                "Project Beta",
-                "F-2",
-                "Field Beta",
-                "WK-1",
-                "WK Alpha",
-                "Reserves & GRR",
-                "Production",
-                "E0",
-                "2. Middle Value",
+                2025, "P-2", "Project Beta", "F-2", "Field Beta",
+                "WK-1", "WK Alpha", "Reserves & GRR", "Production",
+                "E0", "2. Middle Value",
                 "Perlu debottlenecking fasilitas untuk menjaga produksi.",
-                300.0,
-                150.0,
-                400.0,
-                200.0,
-                350.0,
-                175.0,
-                2000.0,
-                1000.0,
-                20.0,
-                10.0,
-                600.0,
-                300.0,
+                2026, "Op A", 300.0,
+                300.0, 150.0, 400.0, 200.0, 350.0, 175.0,
+                2000.0, 1000.0, 20.0, 10.0, 600.0, 300.0,
             ),
             (
-                2025,
-                "P-3",
-                "Project Gamma",
-                "F-3",
-                "Field Gamma",
-                "WK-2",
-                "WK Beta",
-                "Prospective Resources",
-                "Exploration",
-                "X5",
-                "2. Middle Value",
+                2025, "P-3", "Project Gamma", "F-3", "Field Gamma",
+                "WK-2", "WK Beta", "Prospective Resources", "Exploration",
+                "X5", "2. Middle Value",
                 "Prospek membutuhkan data tambahan untuk unlock resources.",
-                0.0,
-                0.0,
-                500.0,
-                250.0,
-                200.0,
-                100.0,
-                3000.0,
-                1500.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
+                2027, "Op B", 350.0,
+                0.0, 0.0, 500.0, 250.0, 200.0, 100.0,
+                3000.0, 1500.0, 0.0, 0.0, 0.0, 0.0,
             ),
         ]
         conn.executemany(
             """
             INSERT INTO project_resources VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             rows,
+        )
+    finally:
+        conn.close()
+
+
+def _create_project_timeseries():
+    conn = duckdb.connect(str(Config.get_db_file()))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE project_timeseries (
+                project_id TEXT,
+                report_year INTEGER,
+                year INTEGER,
+                onstream_year INTEGER,
+                project_level TEXT,
+                tpf_oc REAL,
+                tpf_an REAL,
+                project_remarks TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO project_timeseries
+            (project_id, report_year, year, onstream_year, project_level,
+             tpf_oc, tpf_an, project_remarks)
+            VALUES
+            ('P-1', 2025, 2026, 2026, 'E2', 365.0, 0.0, 'Workover to increase production'),
+            ('P-2', 2025, 2026, 2026, 'E0', 730.0, 0.5, 'Facility debottlenecking')
+            """
         )
     finally:
         conn.close()
@@ -266,6 +275,415 @@ def _summary_token_rows():
             ORDER BY entity_level, entity_id
             """
         ).fetchall()
+    finally:
+        conn.close()
+
+
+def _create_strategic_analysis_tables(conn):
+    conn.execute(
+        """
+        CREATE TABLE project_resources (
+            report_year INTEGER,
+            project_id TEXT,
+            project_name TEXT,
+            wk_name TEXT,
+            operator_name TEXT,
+            field_name TEXT,
+            project_level TEXT,
+            uncert_level TEXT,
+            onstream_year INTEGER,
+            rec_oc REAL,
+            rec_an REAL,
+            rec_mboe REAL,
+            project_remarks TEXT
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO project_resources VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        """,
+        [
+            (
+                2025,
+                "P-BIG",
+                "Big Resource",
+                "WK Alpha",
+                "Op A",
+                "Field A",
+                "E6. Further Development",
+                "2. Middle Value",
+                2026,
+                1000.0,
+                1000.0,
+                100.0,
+                "Big project requires POD finalization.",
+            ),
+            (
+                2025,
+                "P-X1",
+                "Major Discovery",
+                "WK Alpha",
+                "Op A",
+                "Field B",
+                "X1. Discovery under Evaluation",
+                "2. Middle Value",
+                2027,
+                800.0,
+                800.0,
+                80.0,
+                "Discovery requires appraisal.",
+            ),
+            (
+                2025,
+                "P-X0",
+                "Pending Development",
+                "WK Alpha",
+                "Op A",
+                "Field C",
+                "X0. Development Pending",
+                "2. Middle Value",
+                2026,
+                600.0,
+                600.0,
+                60.0,
+                "Development decision pending.",
+            ),
+            (
+                2025,
+                "P-MID",
+                "Middle Development",
+                "WK Alpha",
+                "Op A",
+                "Field D",
+                "E6. Further Development",
+                "2. Middle Value",
+                2027,
+                400.0,
+                400.0,
+                40.0,
+                "Needs facility optimization.",
+            ),
+            (
+                2025,
+                "P-LOW",
+                "Low Pending",
+                "WK Alpha",
+                "Op A",
+                "Field E",
+                "X0. Development Pending",
+                "2. Middle Value",
+                2026,
+                200.0,
+                200.0,
+                20.0,
+                "Economics under review.",
+            ),
+            (
+                2025,
+                "P-SMALL-FORECAST",
+                "Small High Forecast",
+                "WK Alpha",
+                "Op A",
+                "Field F",
+                "E2. Under Development",
+                "2. Middle Value",
+                2026,
+                100.0,
+                100.0,
+                10.0,
+                "Forecast is high but resources are small.",
+            ),
+            (
+                2025,
+                "P-TINY-FORECAST",
+                "Tiny High Forecast",
+                "WK Alpha",
+                "Op A",
+                "Field G",
+                "E0. On Production",
+                "2. Middle Value",
+                2026,
+                50.0,
+                50.0,
+                5.0,
+                "Very high forecast but lowest resources.",
+            ),
+            (
+                2025,
+                "P-X2",
+                "Exploration Prospect",
+                "WK Alpha",
+                "Op A",
+                "Field H",
+                "X2. Exploration Prospect",
+                "2. Middle Value",
+                2026,
+                300.0,
+                700.0,
+                70.0,
+                "Prospect requires seismic maturation.",
+            ),
+            (
+                2025,
+                "P-X3",
+                "Exploration Lead",
+                "WK Alpha",
+                "Op A",
+                "Field I",
+                "X3. Exploration Lead",
+                "2. Middle Value",
+                2027,
+                250.0,
+                650.0,
+                65.0,
+                "Lead requires prospect maturation.",
+            ),
+        ],
+    )
+    conn.execute(
+        """
+        CREATE TABLE project_timeseries (
+            project_id TEXT,
+            report_year INTEGER,
+            year INTEGER,
+            tpf_oc REAL,
+            tpf_an REAL
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO project_timeseries VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            ("P-BIG", 2025, 2026, 365.0, 0.365),
+            ("P-X1", 2025, 2027, 730.0, 0.730),
+            ("P-X0", 2025, 2026, 1095.0, 1.095),
+            ("P-MID", 2025, 2027, 1460.0, 1.460),
+            ("P-LOW", 2025, 2026, 1825.0, 1.825),
+            ("P-SMALL-FORECAST", 2025, 2026, 36500.0, 36.5),
+            ("P-TINY-FORECAST", 2025, 2026, 73000.0, 73.0),
+        ],
+    )
+
+
+def test_strategic_analysis_data_uses_cumulative_80_percent_contributors():
+    conn = duckdb.connect(":memory:")
+    try:
+        _create_strategic_analysis_tables(conn)
+
+        data = _strategic_analysis_data(conn, 2025)
+
+        assert set(data) == {
+            "report_year",
+            "analysis_year",
+            "outlook_year",
+            "oil_analysis",
+            "gas_analysis",
+            "field_development",
+            "exploration_highlights",
+        }
+        oil_names = {
+            project["project_name"]
+            for project in data["oil_analysis"]["priority_projects"]
+        }
+        gas_names = {
+            project["project_name"]
+            for project in data["gas_analysis"]["priority_projects"]
+        }
+        assert data["analysis_year"] == 2026
+        assert data["outlook_year"] == 2027
+        assert oil_names == {"Tiny High Forecast", "Small High Forecast"}
+        assert gas_names == {"Tiny High Forecast", "Small High Forecast"}
+        assert data["oil_analysis"]["top3_projects"][0]["project_name"] == (
+            "Tiny High Forecast"
+        )
+        assert data["oil_analysis"]["outlook_top3_projects"][0]["project_name"] == (
+            "Middle Development"
+        )
+        assert data["oil_analysis"]["total_projects_reviewed"] == 5
+        assert data["oil_analysis"]["total_priority_projects"] == 2
+        assert data["oil_analysis"]["total_mbopd"] == 309.0
+        assert data["gas_analysis"]["total_mmscfd"] == 309.0
+
+        field_development = data["field_development"]
+        assert field_development["total_projects_reviewed"] == 3
+        assert field_development["priority_projects"][0]["project_level"] == (
+            "E6. Further Development"
+        )
+        assert field_development["priority_projects"][0]["project_name"] == "Big Resource"
+
+        exploration = data["exploration_highlights"]
+        assert exploration["total_projects_reviewed"] == 1
+        assert exploration["priority_projects"][0]["project_level"] == (
+            "X2. Exploration Prospect"
+        )
+        assert [
+            project["project_level"]
+            for project in exploration["outlook_top3_projects"]
+        ] == ["X1. Discovery under Evaluation", "X3. Exploration Lead"]
+    finally:
+        conn.close()
+
+
+def test_strategic_summary_prompt_matches_reference_contributor_rule():
+    prompt = build_summary_prompt(
+        level="nkri",
+        year=2025,
+        entity_name="NKRI",
+        source_level="strategic_analysis",
+        source_items=[],
+        metrics={"project_count": 1},
+        strategic_data={
+            "report_year": 2025,
+            "analysis_year": 2026,
+            "outlook_year": 2027,
+            "oil_analysis": {
+                "total_projects_reviewed": 1,
+                "total_priority_projects": 1,
+                "total_mbopd": 1.0,
+                "priority_projects": [
+                    {
+                        "project_name": "Big Resource",
+                        "mbopd": 1.0,
+                        "project_remarks": "Requires POD finalization.",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert "80% kontribusi" in prompt
+    assert "{report_year} + 1" in prompt
+    assert "top 3 proyek" in prompt
+    assert "Jangan menggunakan Markdown table" in prompt
+    assert "hanya memiliki 4 sub-header" in prompt
+    assert "rec_mboe >= percentile 80" not in prompt
+    assert "pct_rank >= 0.80" not in prompt
+    assert "oil_analysis" in prompt
+    assert "gas_analysis" in prompt
+    assert "field_development" in prompt
+    assert "exploration_highlights" in prompt
+    assert "key_findings" in prompt
+    assert "recommendations" in prompt
+    assert "Jangan keluarkan daftar proyek" in prompt
+    assert '"current_situation"' not in prompt
+    assert '"key_challenges"' not in prompt
+    assert '"solution_proposals"' not in prompt
+    assert '"management_attention"' not in prompt
+    assert '"data_quality_notes"' not in prompt
+
+
+def test_strategic_summary_stores_reference_schema_and_text():
+    conn = duckdb.connect(":memory:")
+    try:
+        ensure_summary_table(conn)
+        result = _summarize_entity(
+            conn=conn,
+            llm=StrategicAnalysisLLM(),
+            level="nkri",
+            year=2025,
+            entity_id="NKRI",
+            entity_name="NKRI",
+            source_level="strategic_analysis",
+            source_items=[],
+            metrics={},
+            provider="test-provider",
+            provider_type="openai",
+            model="gpt-4o-mini",
+            base_url="",
+            force=False,
+            retry=1,
+            strategic_data={
+                "report_year": 2025,
+                "analysis_year": 2026,
+                "outlook_year": 2027,
+                "oil_analysis": {
+                    "total_projects_reviewed": 1,
+                    "total_priority_projects": 1,
+                    "total_mbopd": 1.0,
+                    "priority_projects": [
+                        {
+                            "wk_name": "WK Alpha",
+                            "project_name": "Big Resource",
+                            "project_level": "E6. Further Development",
+                            "onstream_year": 2026,
+                            "rec_oc": 1000.0,
+                            "rec_mboe": 100.0,
+                            "mbopd": 1.0,
+                            "scale": "Besar",
+                            "project_remarks": "Requires POD finalization.",
+                            "issues": ["POD belum final"],
+                            "mitigation": ["Percepat persetujuan POD"],
+                        }
+                    ],
+                    "top3_projects": [
+                        {
+                            "wk_name": "WK Alpha",
+                            "project_name": "Big Resource",
+                            "project_level": "E6. Further Development",
+                            "onstream_year": 2026,
+                            "rec_oc": 1000.0,
+                            "rec_mboe": 100.0,
+                            "mbopd": 1.0,
+                            "scale": "Besar",
+                            "issues": ["POD belum final"],
+                            "mitigation": ["Percepat persetujuan POD"],
+                        }
+                    ],
+                    "outlook_top3_projects": [],
+                },
+                "gas_analysis": {"priority_projects": []},
+                "field_development": {"priority_projects": []},
+                "exploration_highlights": {"priority_projects": []},
+            },
+        )
+
+        assert result.created
+        row = conn.execute(
+            """
+            SELECT summary_json, summary_text
+            FROM resource_summaries
+            WHERE entity_level = 'nkri'
+              AND report_year = 2025
+              AND entity_id = 'NKRI'
+            """
+        ).fetchone()
+        assert row is not None
+        summary = json.loads(row[0])
+        summary_text = row[1]
+        assert "oil_analysis" in summary
+        assert "summary" in summary
+        assert "current_situation" not in summary
+        assert "key_challenges" not in summary
+        assert summary["oil_analysis"]["total_projects_reviewed"] == 1
+        assert summary["oil_analysis"]["priority_projects"][0]["issues"] == [
+            "POD belum final"
+        ]
+        assert summary_text.startswith("# Strategic Evaluation")
+        assert "Pada tahun 2026" in summary_text
+        assert "Pada tahun analisis" not in summary_text
+        assert "## Potensi Peningkatan Produksi Minyak" in summary_text
+        assert "## Potensi Peningkatan Produksi Gas" in summary_text
+        assert "## Potensi Pengembangan Lapangan" in summary_text
+        assert "## Exploration Highlight" in summary_text
+        assert "## Ringkasan Eksekutif" not in summary_text
+        assert "## Arahan Manajemen" not in summary_text
+        assert "| Proyek |" not in summary_text
+        assert "**Big Resource**" in summary_text
+        assert "**WK Alpha**" in summary_text
+        assert "POD belum final" in summary_text
+        assert "Mitigasi yang relevan mencakup percepatan persetujuan POD." in (
+            summary_text
+        )
+        assert "Mitigasi yang relevan adalah" not in summary_text
+        assert ".." not in summary_text
+        assert "Recommendations:" not in summary_text
+        assert "`rec_" not in summary_text
+        assert "Terdapat kendala subsurface" not in summary_text
     finally:
         conn.close()
 
@@ -536,11 +954,19 @@ def test_summarize_field_ambiguous_fallback_fails(
     try:
         conn.execute(
             """
-            INSERT INTO project_resources VALUES (
+            INSERT INTO project_resources (
+                report_year, project_id, project_name, field_id, field_name,
+                wk_id, wk_name, project_class, project_stage, project_level,
+                uncert_level, project_remarks, onstream_year, operator_name,
+                rec_mboe, res_oc, res_an, rec_oc, rec_an, rec_oc_risked,
+                rec_an_risked, prj_ioip, prj_igip, rate_sls_oc, rate_sls_an,
+                cprd_sls_oc, cprd_sls_an
+            ) VALUES (
                 2025, 'P-4', 'Project Delta', 'F-4', 'Field Alpha East',
                 'WK-3', 'WK Gamma', 'Contingent Resources', 'Development', 'E2',
-                '2. Middle Value', 'Remark tambahan untuk alpha east.', 1, 1, 1,
-                1, 1, 1, 1, 1, 1, 1, 1, 1
+                '2. Middle Value', 'Remark tambahan untuk alpha east.',
+                2026, 'Op A', 1.0,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
             )
             """
         )
@@ -654,6 +1080,39 @@ def test_summary_field_displays_generated_summary(runner, isolated_config, monke
     assert "Field Alpha" in result.output
 
 
+def test_summary_nkri_displays_strategic_summary_text(
+    runner, isolated_config, monkeypatch
+):
+    monkeypatch.setattr(
+        Config,
+        "get_provider_config",
+        classmethod(
+            lambda cls: {
+                "name": "test-provider",
+                "provider_type": "openai",
+                "model": "test-model",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "esdc.providers.create_llm_from_config",
+        lambda config: StrategicAnalysisLLM(),
+    )
+    _create_minimal_project_resources()
+    _create_project_timeseries()
+    generate = runner.invoke(app, ["summarize", "nkri", "--year", "2025"])
+    assert generate.exit_code == 0
+
+    result = runner.invoke(app, ["summary", "nkri", "--year", "2025"])
+
+    assert result.exit_code == 0
+    assert "Potensi Peningkatan Produksi Minyak" in result.output
+    assert "Potensi Peningkatan Produksi Gas" in result.output
+    assert "Potensi Pengembangan Lapangan" in result.output
+    assert "Exploration Highlight" in result.output
+    assert "source=strategic_analysis" in result.output
+
+
 def test_summary_json_outputs_raw_payload(runner, isolated_config, monkeypatch):
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
@@ -714,7 +1173,7 @@ def test_summarize_fields_only_creates_field_summaries(
     assert "Peluang" not in llm.prompts[0]
 
 
-def test_summarize_working_areas_requires_field_summaries(
+def test_summarize_working_areas_requires_project_timeseries(
     runner, isolated_config, monkeypatch
 ):
     _patch_llm(monkeypatch)
@@ -725,7 +1184,8 @@ def test_summarize_working_areas_requires_field_summaries(
     )
 
     assert result.exit_code == 1
-    assert "Missing field summaries" in result.stdout
+    assert result.exception is not None
+    assert "project_timeseries" in str(result.exception).lower()
 
 
 def test_summarize_default_runs_field_wk_and_nkri(
@@ -733,6 +1193,7 @@ def test_summarize_default_runs_field_wk_and_nkri(
 ):
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
+    _create_project_timeseries()
 
     result = runner.invoke(app, ["summarize", "all", "--year", "2025"])
 

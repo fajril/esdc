@@ -1,0 +1,18 @@
+name: strategic_analysis
+version: 1
+description: "Analisis strategis: potensi peningkatan produksi migas, pengembangan lapangan, dan eksplorasi"
+triggers:
+  - "analisis nkri"
+  - "analisa nkri"
+  - "analisa nasional"
+  - "analisis nasional"
+  - "analisis strategis"
+  - "analisa strategis"
+  - "analisa wilayah kerja"
+  - "analisis wilayah kerja"
+  - "peningkatan produksi"
+  - "penambahan cadangan"
+  - "potensi lapangan"
+  - "exploration highlight"
+  - "potensi pengembangan"
+instructions: instructions.md

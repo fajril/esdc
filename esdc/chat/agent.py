@@ -28,6 +28,7 @@ from esdc.chat.query_classifier import (
     format_classification_for_prompt,
     get_tools_for_classification,
 )
+from esdc.chat.skills import discover_skills, inject_skills_into_prompt
 from esdc.chat.smart_query import simple_data_query
 from esdc.chat.token_counter import (
     estimate_message_output_tokens,
@@ -441,11 +442,17 @@ def create_agent(
     _external_tool_names = external_tool_names or set()
 
     all_tools: dict[str, Any] = {tool.name: tool for tool in tools}
+
+    # Discover skills and inject their instructions into the system prompt
+    skills = discover_skills()
+
     tools_by_name = dict(all_tools)
 
     def init_node(state: AgentState) -> dict[str, Any]:
         """Initialize system prompt and defaults in state (runs once)."""
         system_prompt = get_system_prompt()
+        if skills:
+            system_prompt = inject_skills_into_prompt(system_prompt, skills)
         logger.debug("[INIT] system_prompt_set | len=%d", len(system_prompt))
         return {
             "system_prompt": system_prompt,

@@ -84,6 +84,7 @@ from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
 from esdc.summarizer import (  # noqa: E402
     SummaryDependencyError,
     SummaryLookupError,
+    _strategic_summary_text,
     get_resource_summary,
     summarize_resources,
 )
@@ -398,6 +399,37 @@ def summary(
 def _format_summary_for_cli(data: dict) -> str:
     summary_data = data.get("summary") or {}
     lines: list[str] = []
+
+    if data.get("source_level") == "strategic_analysis":
+        summary_text = _strategic_summary_text(summary_data).strip()
+        if summary_text:
+            lines.append(summary_text)
+        else:
+            strategic_summary = summary_data.get("summary") or {}
+            rendered_findings = _render_summary_value(
+                strategic_summary.get("key_findings")
+            )
+            rendered_recommendations = _render_summary_value(
+                strategic_summary.get("recommendations")
+            )
+            if rendered_findings:
+                lines.extend(["[bold cyan]Key Findings[/bold cyan]", rendered_findings])
+            if rendered_recommendations:
+                lines.extend(
+                    [
+                        "",
+                        "[bold cyan]Recommendations[/bold cyan]",
+                        rendered_recommendations,
+                    ]
+                )
+        meta_parts = [
+            f"source={data.get('source_level') or '-'}",
+            f"provider={data.get('provider') or '-'}",
+            f"model={data.get('model') or '-'}",
+            f"generated={data.get('generated_at') or '-'}",
+        ]
+        lines.extend(["", f"[dim]{' · '.join(meta_parts)}[/dim]"])
+        return "\n".join(lines)
 
     headline = str(summary_data.get("headline") or "").strip()
     if headline:

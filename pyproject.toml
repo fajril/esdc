@@ -77,7 +77,15 @@ where = ["."]
 exclude = ["screenshot*", "tests*", "docs*"]
 
 [tool.setuptools.package-data]
-esdc = ["sql/*", "chat/domain_knowledge/*.yaml", "eureka/templates/*.html", "eureka/static/*.css"]
+esdc = [
+    "sql/*",
+    "chat/domain_knowledge/*.yaml",
+    "chat/skills/**/*.md",
+    "chat/skills/**/*.yaml",
+    "eureka/templates/*.html",
+    "eureka/static/*.css",
+    "eureka/static/katex/**/*",
+]
 
 [tool.setuptools.exclude-package-data]
 esdc = ["tests"]

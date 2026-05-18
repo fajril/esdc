@@ -10,6 +10,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 import duckdb
@@ -82,6 +83,62 @@ SUMMARY_FIELDS = {
         "source_items_reviewed": 0,
         "source_items_with_material_issues": 0,
     },
+    "strategic_overview": {
+        "oil_projects_reviewed": 0,
+        "gas_projects_reviewed": 0,
+        "field_dev_projects_reviewed": 0,
+        "exploration_projects_reviewed": 0,
+        "total_potential_oil_mbopd": 0,
+        "total_potential_gas_mmscfd": 0,
+        "total_field_dev_mmboe": 0,
+        "total_exploration_mmboe": 0,
+    },
+}
+
+STRATEGIC_SUMMARY_FIELDS = {
+    "report_year": None,
+    "analysis_year": None,
+    "outlook_year": None,
+    "oil_analysis": {
+        "total_projects_reviewed": 0,
+        "total_priority_projects": 0,
+        "total_mbopd": 0,
+        "priority_projects": [],
+        "top3_projects": [],
+        "outlook_top3_projects": [],
+    },
+    "gas_analysis": {
+        "total_projects_reviewed": 0,
+        "total_priority_projects": 0,
+        "total_mmscfd": 0,
+        "priority_projects": [],
+        "top3_projects": [],
+        "outlook_top3_projects": [],
+    },
+    "field_development": {
+        "total_projects_reviewed": 0,
+        "total_priority_projects": 0,
+        "total_rec_mboe": 0,
+        "priority_projects": [],
+        "top3_projects": [],
+        "outlook_top3_projects": [],
+    },
+    "exploration_highlights": {
+        "total_projects_reviewed": 0,
+        "total_priority_projects": 0,
+        "total_rec_mboe": 0,
+        "priority_projects": [],
+        "top3_projects": [],
+        "outlook_top3_projects": [],
+    },
+    "summary": {
+        "total_oil_mbopd": 0,
+        "total_gas_mmscfd": 0,
+        "total_field_mmboe": 0,
+        "total_exploration_mmboe": 0,
+        "key_findings": [],
+        "recommendations": [],
+    },
 }
 
 KSMI_PROMPT_CONTEXT = """
@@ -97,6 +154,15 @@ Konteks KSMI ringkas:
 - Kendala penting dapat berupa teknis, komersial, regulasi/legal, sosial-lingkungan,
   fasilitas, data, atau ketidakpastian subsurface.
 """.strip()
+
+_SKILL_DIR = Path(__file__).parent / "chat" / "skills" / "strategic_analysis"
+
+
+def _load_skill_instructions() -> str | None:
+    instructions_file = _SKILL_DIR / "instructions.md"
+    if instructions_file.exists():
+        return instructions_file.read_text(encoding="utf-8")
+    return None
 
 
 @dataclass(frozen=True)
@@ -193,8 +259,7 @@ def refresh_resource_views(conn: duckdb.DuckDBPyConnection) -> None:
             conn.execute(statement)
     except duckdb.Error as exc:
         console.print(
-            "[yellow]Warning:[/yellow] resource views were not refreshed: "
-            f"{exc}"
+            f"[yellow]Warning:[/yellow] resource views were not refreshed: {exc}"
         )
 
 
@@ -259,7 +324,6 @@ def summarize_resources(
             )
             result = result.add("field", level_result)
         if normalized_target in {"all", "working_area"}:
-            _assert_level_complete(conn, year, "field")
             working_area_rows = None
             if normalized_target == "working_area" and name:
                 working_area_rows = [_resolve_working_area(conn, year, name)]
@@ -278,7 +342,6 @@ def summarize_resources(
             )
             result = result.add("working_area", level_result)
         if normalized_target in {"all", "nkri"}:
-            _assert_level_complete(conn, year, "working_area")
             level_result = _summarize_nkri(
                 conn,
                 llm,
@@ -421,10 +484,7 @@ def _missing_summary_message(level: EntityLevel, year: int, name: str) -> str:
             f"No working area summary found for {name} in {year}. Run: "
             f'esdc summarize wk "{name}" --year {year}'
         )
-    return (
-        f"No NKRI summary found for {year}. Run: "
-        f"esdc summarize nkri --year {year}"
-    )
+    return f"No NKRI summary found for {year}. Run: esdc summarize nkri --year {year}"
 
 
 def _summarize_fields(
@@ -483,15 +543,14 @@ def _summarize_fields(
                 base_url=base_url,
                 force=force,
                 retry=retry,
-                progress_token_callback=lambda pending_tokens,
-                live_tokens=live_tokens: (
-                    progress.update(
-                        task,
-                        tokens_processed=_preview_live_tokens(
-                            live_tokens, pending_tokens
+                progress_token_callback=(
+                    lambda pt, lt=live_tokens: (
+                        progress.update(
+                            task,
+                            tokens_processed=_preview_live_tokens(lt, pt),
                         ),
-                    ),
-                    progress.refresh(),
+                        progress.refresh(),
+                    )
                 ),
             )
             result = result.add_entity(entity_result)
@@ -541,7 +600,8 @@ def _summarize_working_areas(
             tokens_processed=_live_display_tokens(live_tokens),
         )
         for entity_id, entity_name in rows:
-            source_items = _working_area_source_items(conn, year, entity_id)
+            wk_name_str = str(entity_name or entity_id)
+            strategic_data = _strategic_analysis_data(conn, year, wk_name=wk_name_str)
             metrics = _working_area_metrics(conn, year, entity_id)
             entity_result = _summarize_entity(
                 conn=conn,
@@ -549,25 +609,25 @@ def _summarize_working_areas(
                 level="working_area",
                 year=year,
                 entity_id=str(entity_id),
-                entity_name=str(entity_name or entity_id),
-                source_level="field_summary",
-                source_items=source_items,
+                entity_name=wk_name_str,
+                source_level="strategic_analysis",
+                source_items=[],
                 metrics=metrics,
+                strategic_data=strategic_data,
                 provider=provider,
                 provider_type=provider_type,
                 model=model,
                 base_url=base_url,
                 force=force,
                 retry=retry,
-                progress_token_callback=lambda pending_tokens,
-                live_tokens=live_tokens: (
-                    progress.update(
-                        task,
-                        tokens_processed=_preview_live_tokens(
-                            live_tokens, pending_tokens
+                progress_token_callback=(
+                    lambda pt, lt=live_tokens: (
+                        progress.update(
+                            task,
+                            tokens_processed=_preview_live_tokens(lt, pt),
                         ),
-                    ),
-                    progress.refresh(),
+                        progress.refresh(),
+                    )
                 ),
             )
             result = result.add_entity(entity_result)
@@ -591,7 +651,7 @@ def _summarize_nkri(
     retry: int = 0,
     live_tokens: dict[str, int] | None = None,
 ) -> SummaryLevelResult:
-    source_items = _nkri_source_items(conn, year)
+    strategic_data = _strategic_analysis_data(conn, year)
     metrics = _nkri_metrics(conn, year)
     with _summary_progress() as progress:
         task = progress.add_task(
@@ -606,9 +666,10 @@ def _summarize_nkri(
             year=year,
             entity_id="NKRI",
             entity_name="NKRI",
-            source_level="wk_summary",
-            source_items=source_items,
+            source_level="strategic_analysis",
+            source_items=[],
             metrics=metrics,
+            strategic_data=strategic_data,
             provider=provider,
             provider_type=provider_type,
             model=model,
@@ -618,9 +679,7 @@ def _summarize_nkri(
             progress_token_callback=lambda pending_tokens: (
                 progress.update(
                     task,
-                    tokens_processed=_preview_live_tokens(
-                        live_tokens, pending_tokens
-                    ),
+                    tokens_processed=_preview_live_tokens(live_tokens, pending_tokens),
                 ),
                 progress.refresh(),
             ),
@@ -835,7 +894,7 @@ def _resolve_fields_by_wk(
             FROM project_resources
             WHERE report_year = ?
               AND COALESCE(NULLIF(wk_id, ''), wk_name)
-                  IN ({','.join('?' * len(wk_values))})
+                  IN ({",".join("?" * len(wk_values))})
             GROUP BY COALESCE(NULLIF(field_id, ''), field_name)
             ORDER BY entity_name
             """,
@@ -863,13 +922,42 @@ def _summarize_entity(
     force: bool,
     retry: int = 0,
     progress_token_callback: Callable[[int], object] | None = None,
+    strategic_data: dict[str, Any] | None = None,
 ) -> SummaryEntityResult:
-    source_hash = _hash_source(source_items, metrics)
+    is_strategic = strategic_data is not None
+    hash_source = strategic_data if is_strategic else source_items
+    source_hash = _hash_source(hash_source, metrics)
     if not force and _existing_hash_matches(conn, level, year, entity_id, source_hash):
         return SummaryEntityResult(created=False)
 
     token_usage: TokenUsage | None = None
-    if not _has_nonempty_source(source_items):
+    if is_strategic:
+        has_data = _has_strategic_projects(strategic_data)
+        if not has_data:
+            summary = _empty_strategic_summary(year)
+        else:
+            prompt = build_summary_prompt(
+                level=level,
+                year=year,
+                entity_name=entity_name,
+                source_level=source_level,
+                source_items=source_items,
+                metrics=metrics,
+                strategic_data=strategic_data,
+            )
+            summary, token_usage, provider, model = _invoke_and_parse(
+                llm=llm,
+                prompt=prompt,
+                provider=provider,
+                provider_type=provider_type,
+                model=model,
+                base_url=base_url,
+                retry=retry,
+                entity_name=entity_name,
+                progress_token_callback=progress_token_callback,
+            )
+            summary = _normalize_strategic_summary(summary, year, strategic_data)
+    elif not _has_nonempty_source(source_items):
         summary = _empty_summary(level, entity_name, source_items)
     else:
         source_items_for_prompt = _source_items_with_nonempty_source(source_items)
@@ -882,70 +970,23 @@ def _summarize_entity(
             metrics=metrics,
             source_quality=_source_quality_context(source_items),
         )
-        max_attempts = max(retry, 1)
-        last_error: str | None = None
-        for attempt in range(max_attempts):
-            retry_prompt = (
-                prompt + _retry_feedback(last_error) if last_error else prompt
-            )
-            pending_input_tokens = estimate_text_tokens(
-                retry_prompt,
-                provider_type=provider_type,
-                model=model,
-                base_url=base_url,
-            )
-            if progress_token_callback:
-                progress_token_callback(pending_input_tokens)
-            (
-                content,
-                actual_provider,
-                actual_model,
-                response_usage,
-            ) = _invoke_llm_with_metadata(
-                llm,
-                retry_prompt,
-                fallback_provider=provider,
-                fallback_model=model,
-            )
-            provider = actual_provider
-            model = actual_model
-            token_usage = _token_usage_for_summary_response(
-                response_usage=response_usage,
-                prompt=retry_prompt,
-                content=content,
-                provider_type=provider_type,
-                model=model,
-                base_url=base_url,
-            )
-            try:
-                summary = _parse_summary_response(content)
-                break
-            except (json.JSONDecodeError, ValueError) as e:
-                is_last = attempt == max_attempts - 1
-                label = "failed" if is_last else "failed, retrying..."
-                msg = (
-                    f"[yellow]Attempt {attempt + 1}/{max_attempts} {label}"
-                    f"[/yellow] for [bold]{entity_name}[/bold]"
-                )
-                logger.debug(
-                    "%s | Response: %.200s | Error: %s",
-                    msg,
-                    content.strip()[:200],
-                    e,
-                )
-                console.print(msg)
-                if not is_last:
-                    last_error = str(e)
-                else:
-                    raise
-        else:
-            raise RuntimeError(
-                "Retry loop exhausted without success or raise."
-            )
+        summary, token_usage, provider, model = _invoke_and_parse(
+            llm=llm,
+            prompt=prompt,
+            provider=provider,
+            provider_type=provider_type,
+            model=model,
+            base_url=base_url,
+            retry=retry,
+            entity_name=entity_name,
+            progress_token_callback=progress_token_callback,
+        )
         summary = _normalize_summary(summary, len(source_items_for_prompt))
 
     summary_json = json.dumps(summary, ensure_ascii=False, sort_keys=True)
-    summary_text = _summary_text(summary)
+    summary_text = (
+        _strategic_summary_text(summary) if is_strategic else _summary_text(summary)
+    )
     generated_at = datetime.now(timezone.utc).isoformat()
     conn.execute(
         f"""
@@ -979,6 +1020,76 @@ def _summarize_entity(
     return SummaryEntityResult(created=True, token_usage=token_usage)
 
 
+def _invoke_and_parse(
+    *,
+    llm: Any,
+    prompt: str,
+    provider: str,
+    provider_type: str,
+    model: str,
+    base_url: str,
+    retry: int,
+    entity_name: str,
+    progress_token_callback: Callable[[int], object] | None = None,
+) -> tuple[dict[str, Any], TokenUsage | None, str, str]:
+    max_attempts = max(retry, 1)
+    last_error: str | None = None
+    token_usage: TokenUsage | None = None
+    actual_provider: str = provider
+    actual_model: str = model
+    for attempt in range(max_attempts):
+        retry_prompt = prompt + _retry_feedback(last_error) if last_error else prompt
+        pending_input_tokens = estimate_text_tokens(
+            retry_prompt,
+            provider_type=provider_type,
+            model=model,
+            base_url=base_url,
+        )
+        if progress_token_callback:
+            progress_token_callback(pending_input_tokens)
+        (
+            content,
+            actual_provider,
+            actual_model,
+            response_usage,
+        ) = _invoke_llm_with_metadata(
+            llm,
+            retry_prompt,
+            fallback_provider=provider,
+            fallback_model=model,
+        )
+        token_usage = _token_usage_for_summary_response(
+            response_usage=response_usage,
+            prompt=retry_prompt,
+            content=content,
+            provider_type=provider_type,
+            model=model,
+            base_url=base_url,
+        )
+        try:
+            summary = _parse_summary_response(content)
+            return summary, token_usage, actual_provider, actual_model
+        except (json.JSONDecodeError, ValueError) as e:
+            is_last = attempt == max_attempts - 1
+            label = "failed" if is_last else "failed, retrying..."
+            msg = (
+                f"[yellow]Attempt {attempt + 1}/{max_attempts} {label}"
+                f"[/yellow] for [bold]{entity_name}[/bold]"
+            )
+            logger.debug(
+                "%s | Response: %.200s | Error: %s",
+                msg,
+                content.strip()[:200],
+                e,
+            )
+            console.print(msg)
+            if not is_last:
+                last_error = str(e)
+            else:
+                raise
+    raise RuntimeError("Retry loop exhausted without success or raise.")
+
+
 def build_summary_prompt(
     *,
     level: EntityLevel,
@@ -988,6 +1099,7 @@ def build_summary_prompt(
     source_items: list[dict[str, Any]],
     metrics: dict[str, Any],
     source_quality: dict[str, Any] | None = None,
+    strategic_data: dict[str, Any] | None = None,
 ) -> str:
     """Build the executive summary prompt sent to the configured LLM."""
     level_label = {
@@ -995,8 +1107,88 @@ def build_summary_prompt(
         "working_area": "WORKING AREA",
         "nkri": "NKRI",
     }[level]
-    source_json = json.dumps(source_items, ensure_ascii=False, indent=2)
     metrics_json = json.dumps(metrics, ensure_ascii=False, indent=2)
+
+    if strategic_data:
+        skill_instructions = _load_skill_instructions() or KSMI_PROMPT_CONTEXT
+        prompt_data = _strategic_prompt_data(strategic_data)
+        data_json = json.dumps(prompt_data, ensure_ascii=False, indent=2)
+        return f"""
+Anda adalah analis senior SKK Migas yang menyusun executive summary untuk
+dashboard Eureka.
+
+Level ringkasan: {level_label}
+Entitas: {entity_name}
+Tahun laporan: {year}
+
+{skill_instructions}
+
+========== DATA ANALISIS STRATEGIS ==========
+
+{data_json}
+
+=============================================
+
+Technical context key metrics:
+{metrics_json}
+
+Tujuan:
+- Memberi manajemen gambaran jelas mengenai potensi peningkatan produksi,
+  pengembangan lapangan, dan eksplorasi di tingkat {level_label}.
+- Sintesis narasi nasional/{level_label.lower()} dari data analisis strategis.
+- Highlight proyek-proyek material yang perlu perhatian manajemen.
+- Report final wajib hanya memiliki 4 sub-header default: Potensi Peningkatan
+  Produksi Minyak, Potensi Peningkatan Produksi Gas, Potensi Pengembangan
+  Lapangan, dan Exploration Highlight.
+
+Aturan:
+1. Jangan menghilangkan isu, kendala, risiko, solusi, atau tindak lanjut material.
+2. Jika beberapa proyek menyampaikan isu yang sama, gabungkan menjadi satu tema.
+3. Jika ada isu spesifik yang material, tetap sebutkan meskipun hanya muncul sekali.
+4. Jangan membuat asumsi baru di luar data yang diberikan.
+5. Jangan mengubah angka, status, nama project, WK, atau istilah KSMI/spesifik domain.
+6. Highlight opportunity peningkatan produksi, percepatan onstream, EOR/IOR,
+    workover, infill, facility debottlenecking, atau
+    kegiatan lain yang menaikkan produksi.
+7. Highlight opportunity penambahan cadangan/resources, maturation, unlock volume,
+   revisi POD/OPL/POFD, atau pengurangan risiko/ketidakpastian.
+8. Gunakan angka teknis dan skala (Besar/Menengah Atas/Menengah Bawah/Kecil)
+   sebagai konteks materialitas dalam narasi.
+9. Tulis dalam Bahasa Indonesia formal, ringkas, dan cocok untuk executive dashboard.
+10. Perhatikan level kematangan proyek (E0-E8, X0-X6) dan kaitannya dengan risiko
+    keterlambatan onstream dalam narasi.
+11. Jangan gunakan nama kolom database dalam narasi eksekutif; gunakan istilah
+    sumber daya, potensi minyak, potensi gas, potensi produksi, target onstream,
+    tingkat kematangan, isu, dan mitigasi.
+12. Jangan membuat section tambahan seperti Ringkasan Eksekutif, Arahan
+    Manajemen, Kesimpulan, Rekomendasi, atau Data Quality Notes.
+13. Jangan menggunakan Markdown table, bullet list, atau numbered list pada
+    report final. Gaya akhir harus berupa paragraf naratif seperti surat kabar.
+14. Gunakan judul utama "Strategic Evaluation" dan bold untuk nama entitas ESDC
+    seperti proyek, WK, dan field pada narasi.
+
+Kembalikan hanya JSON valid dengan struktur ringkas berikut. Jangan menyalin ulang
+`oil_analysis`, `gas_analysis`, `field_development`, `exploration_highlights`, atau
+daftar proyek; data proyek akan dipertahankan dari DATA ANALISIS STRATEGIS.
+{{
+  "report_year": {year},
+  "summary": {{
+    "total_oil_mbopd": number,
+    "total_gas_mmscfd": number,
+    "total_field_mmboe": number,
+    "total_exploration_mmboe": number,
+    "key_findings": string[],
+    "recommendations": string[]
+  }}
+}}
+
+Batas panjang:
+- `summary.key_findings` maksimal 5 butir.
+- `summary.recommendations` maksimal 5 butir.
+- Jangan keluarkan daftar proyek.
+""".strip()
+
+    source_json = json.dumps(source_items, ensure_ascii=False, indent=2)
     source_quality_json = json.dumps(
         source_quality or _source_quality_context(source_items),
         ensure_ascii=False,
@@ -1042,12 +1234,12 @@ Aturan:
 8. Gunakan angka teknis hanya sebagai konteks materialitas, bukan pengganti isi source.
 9. Tulis dalam Bahasa Indonesia formal, ringkas, dan cocok untuk executive dashboard.
 10. Isi data_quality_notes hanya jika source_quality menunjukkan remarks kosong,
-   terlalu pendek, placeholder, atau tidak informatif. Jika tidak ada masalah
-   kualitas data, data_quality_notes wajib berupa array kosong [] dan jangan
-   menulis catatan seperti "tidak ada isu kualitas data".
+    terlalu pendek, placeholder, atau tidak informatif. Jika tidak ada masalah
+    kualitas data, data_quality_notes wajib berupa array kosong [] dan jangan
+    menulis catatan seperti "tidak ada isu kualitas data".
 11. Bila masalah kualitas remarks material untuk manajemen, masukkan juga ke
-   management_attention dengan bahasa netral seperti "Operator belum membuat
-   remarks yang cukup informatif".
+    management_attention dengan bahasa netral seperti "Operator belum membuat
+    remarks yang cukup informatif".
 
 Technical context key metrics:
 {metrics_json}
@@ -1093,10 +1285,25 @@ def _field_source_items(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         f"""
-        SELECT {', '.join(_available_columns(conn, 'project_resources', [
-            'project_id', 'project_name', 'field_name', 'wk_name', 'project_class',
-            'project_stage', 'project_level', 'uncert_level', 'project_remarks'
-        ]))}
+        SELECT {
+            ", ".join(
+                _available_columns(
+                    conn,
+                    "project_resources",
+                    [
+                        "project_id",
+                        "project_name",
+                        "field_name",
+                        "wk_name",
+                        "project_class",
+                        "project_stage",
+                        "project_level",
+                        "uncert_level",
+                        "project_remarks",
+                    ],
+                )
+            )
+        }
         FROM project_resources
         WHERE report_year = ?
           AND COALESCE(NULLIF(field_id, ''), field_name) = ?
@@ -1120,51 +1327,6 @@ def _field_source_items(
         ],
     )
     return [dict(zip(cols, row, strict=False)) for row in rows]
-
-
-def _working_area_source_items(
-    conn: duckdb.DuckDBPyConnection, year: int, entity_id: str
-) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        f"""
-        SELECT DISTINCT
-            COALESCE(NULLIF(pr.field_id, ''), pr.field_name) AS field_id,
-            MIN(pr.field_name) AS field_name,
-            rs.summary_text
-        FROM project_resources pr
-        JOIN {SUMMARY_TABLE} rs
-          ON rs.entity_level = 'field'
-         AND rs.report_year = pr.report_year
-         AND rs.entity_id = COALESCE(NULLIF(pr.field_id, ''), pr.field_name)
-        WHERE pr.report_year = ?
-          AND COALESCE(NULLIF(pr.wk_id, ''), pr.wk_name) = ?
-        GROUP BY COALESCE(NULLIF(pr.field_id, ''), pr.field_name), rs.summary_text
-        ORDER BY field_name
-        """,
-        [year, entity_id],
-    ).fetchall()
-    return [
-        {"field_id": row[0], "field_name": row[1], "field_summary": row[2]}
-        for row in rows
-    ]
-
-
-def _nkri_source_items(
-    conn: duckdb.DuckDBPyConnection, year: int
-) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        f"""
-        SELECT entity_id, entity_name, summary_text
-        FROM {SUMMARY_TABLE}
-        WHERE entity_level = 'working_area'
-          AND report_year = ?
-        ORDER BY entity_name
-        """,
-        [year],
-    ).fetchall()
-    return [
-        {"wk_id": row[0], "wk_name": row[1], "wk_summary": row[2]} for row in rows
-    ]
 
 
 def _field_metrics(
@@ -1193,6 +1355,434 @@ def _nkri_metrics(conn: duckdb.DuckDBPyConnection, year: int) -> dict[str, Any]:
     return _project_resource_metrics(conn, year, "1 = 1", [])
 
 
+_DAYS = 365.0
+
+
+def _strategic_analysis_data(
+    conn: duckdb.DuckDBPyConnection,
+    year: int,
+    wk_name: str | None = None,
+) -> dict[str, Any]:
+    """Execute 4 strategic analysis queries, return pre-computed data.
+
+    When wk_name is provided, results are scoped to that working area.
+    """
+    wk_filter = "AND pr.wk_name = ?" if wk_name else ""
+    wk_params: list[str] = [wk_name] if wk_name else []
+    days = _DAYS
+    analysis_year = year + 1
+    outlook_year = year + 2
+
+    # --- 1. Oil production potential ---
+    oil_cols = [
+        "wk_name",
+        "project_name",
+        "project_level",
+        "onstream_year",
+        "rec_oc",
+        "rec_mboe",
+        "mbopd",
+        "scale",
+        "project_remarks",
+    ]
+    oil_sql = f"""
+        SELECT
+            pr.wk_name, pr.project_name, pr.project_level,
+            pr.onstream_year, pr.rec_oc, pr.rec_mboe,
+            ROUND(pt.tpf_oc / {days}, 1) AS mbopd,
+            CASE
+                WHEN ROUND(pt.tpf_oc / {days}, 1) >= 1 THEN 'Besar'
+                WHEN ROUND(pt.tpf_oc / {days}, 1) >= 0.5 THEN 'Menengah Atas'
+                WHEN ROUND(pt.tpf_oc / {days}, 1) >= 0.1 THEN 'Menengah Bawah'
+                ELSE 'Kecil'
+            END AS scale,
+            pr.project_remarks
+        FROM project_resources pr
+        JOIN project_timeseries pt
+            ON regexp_replace(pr.project_id, '[^A-Za-z0-9]', '', 'g')
+                = regexp_replace(pt.project_id, '[^A-Za-z0-9]', '', 'g')
+            AND pr.report_year = pt.report_year
+            AND pt.year = ?
+        WHERE pr.report_year = ?
+          AND pr.onstream_year = ?
+          AND pr.uncert_level = '2. Middle Value'
+          AND pt.tpf_oc > 0
+          {wk_filter}
+        ORDER BY mbopd DESC
+    """
+    oil_data = _parse_analysis_query(
+        conn,
+        oil_sql,
+        [analysis_year, year, analysis_year] + wk_params,
+        oil_cols,
+    )
+    oil_outlook = _parse_analysis_query(
+        conn,
+        oil_sql,
+        [outlook_year, year, outlook_year] + wk_params,
+        oil_cols,
+    )
+
+    # --- 2. Gas production potential ---
+    gas_cols = [
+        "wk_name",
+        "project_name",
+        "project_level",
+        "onstream_year",
+        "rec_an",
+        "rec_mboe",
+        "mmscfd",
+        "scale",
+        "project_remarks",
+    ]
+    gas_sql = f"""
+        SELECT
+            pr.wk_name, pr.project_name, pr.project_level,
+            pr.onstream_year, pr.rec_an, pr.rec_mboe,
+            ROUND(pt.tpf_an * 1000 / {days}, 1) AS mmscfd,
+            CASE
+                WHEN ROUND(pt.tpf_an * 1000 / {days}, 1) >= 1 THEN 'Besar'
+                WHEN ROUND(pt.tpf_an * 1000 / {days}, 1) >= 0.5 THEN 'Menengah Atas'
+                WHEN ROUND(pt.tpf_an * 1000 / {days}, 1) >= 0.1 THEN 'Menengah Bawah'
+                ELSE 'Kecil'
+            END AS scale,
+            pr.project_remarks
+        FROM project_resources pr
+        JOIN project_timeseries pt
+            ON regexp_replace(pr.project_id, '[^A-Za-z0-9]', '', 'g')
+                = regexp_replace(pt.project_id, '[^A-Za-z0-9]', '', 'g')
+            AND pr.report_year = pt.report_year
+            AND pt.year = ?
+        WHERE pr.report_year = ?
+          AND pr.onstream_year = ?
+          AND pr.uncert_level = '2. Middle Value'
+          AND pt.tpf_an > 0
+          {wk_filter}
+        ORDER BY mmscfd DESC
+    """
+    gas_data = _parse_analysis_query(
+        conn,
+        gas_sql,
+        [analysis_year, year, analysis_year] + wk_params,
+        gas_cols,
+    )
+    gas_outlook = _parse_analysis_query(
+        conn,
+        gas_sql,
+        [outlook_year, year, outlook_year] + wk_params,
+        gas_cols,
+    )
+
+    # --- 3. Field development potential ---
+    fd_cols = [
+        "wk_name",
+        "project_name",
+        "project_level",
+        "onstream_year",
+        "rec_oc",
+        "rec_an",
+        "rec_mboe",
+        "scale",
+        "project_remarks",
+    ]
+    fd_sql = f"""
+        SELECT
+            wk_name, project_name, project_level,
+            onstream_year, rec_oc, rec_an, rec_mboe,
+            CASE
+                WHEN rec_mboe >= 100 THEN 'Besar'
+                WHEN rec_mboe >= 50 THEN 'Menengah Atas'
+                WHEN rec_mboe >= 1 THEN 'Menengah Bawah'
+                ELSE 'Kecil'
+            END AS scale,
+            project_remarks
+        FROM project_resources
+        WHERE report_year = ?
+          AND project_level IN (
+              'X0. Development Pending',
+              'E6. Further Development',
+              'X1. Discovery under Evaluation'
+          )
+          AND uncert_level = '2. Middle Value'
+          AND rec_mboe > 0
+          AND onstream_year = ?
+          {wk_filter.replace("pr.", "")}
+        ORDER BY rec_mboe DESC
+    """
+    fd_data = _parse_analysis_query(
+        conn, fd_sql, [year, analysis_year] + wk_params, fd_cols
+    )
+    fd_outlook = _parse_analysis_query(
+        conn, fd_sql, [year, outlook_year] + wk_params, fd_cols
+    )
+
+    # --- 4. Exploration highlights ---
+    exp_cols = [
+        "report_year",
+        "wk_name",
+        "operator_name",
+        "field_name",
+        "project_name",
+        "project_level",
+        "rec_oc",
+        "rec_an",
+        "rec_mboe",
+        "scale",
+        "project_remarks",
+    ]
+    exp_wk_filter = ""
+    exp_wk_params: list[str] = []
+    if wk_name:
+        exp_wk_filter = "AND wk_name = ?"
+        exp_wk_params = [wk_name]
+
+    exp_sql = f"""
+        SELECT
+            report_year, wk_name, operator_name, field_name,
+            project_name, project_level,
+            rec_oc, rec_an, rec_mboe,
+            CASE
+                WHEN rec_mboe >= 100 THEN 'Besar'
+                WHEN rec_mboe >= 50 THEN 'Menengah Atas'
+                WHEN rec_mboe >= 1 THEN 'Menengah Bawah'
+                ELSE 'Kecil'
+            END AS scale,
+            project_remarks
+        FROM project_resources
+        WHERE report_year = ?
+          AND project_level IN (
+              'X1. Discovery under Evaluation',
+              'X2. Exploration Prospect',
+              'X3. Exploration Lead'
+          )
+          AND uncert_level = '2. Middle Value'
+          AND rec_mboe > 0
+          AND onstream_year = ?
+          {exp_wk_filter}
+        ORDER BY rec_mboe DESC
+    """
+    exp_data = _parse_analysis_query(
+        conn, exp_sql, [year, analysis_year] + exp_wk_params, exp_cols
+    )
+    exp_outlook = _parse_analysis_query(
+        conn, exp_sql, [year, outlook_year] + exp_wk_params, exp_cols
+    )
+
+    def _production_topic(
+        projects: list[dict[str, Any]],
+        outlook_projects: list[dict[str, Any]],
+        value_key: str,
+    ) -> dict[str, Any]:
+        prepared = _prepare_strategic_projects(projects)
+        priority = _cumulative_priority_projects(prepared, value_key)
+        total = round(sum(p.get(value_key, 0) or 0 for p in prepared), 1)
+        return {
+            "total_projects_reviewed": len(prepared),
+            "total_priority_projects": len(priority),
+            f"total_{value_key}": total,
+            "total_rec_oc": round(
+                sum(p.get("rec_oc", 0) or 0 for p in prepared), 1
+            ),
+            "total_rec_an": round(
+                sum(p.get("rec_an", 0) or 0 for p in prepared), 1
+            ),
+            "total_rec_mboe": round(
+                sum(p.get("rec_mboe", 0) or 0 for p in prepared), 1
+            ),
+            "priority_projects": priority,
+            "top3_projects": prepared[:3],
+            "outlook_top3_projects": _prepare_strategic_projects(outlook_projects)[:3],
+        }
+
+    def _resource_topic(
+        projects: list[dict[str, Any]],
+        outlook_projects: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        prepared = _prepare_strategic_projects(projects)
+        priority = _cumulative_priority_projects(prepared, "rec_mboe")
+        return {
+            "total_projects_reviewed": len(prepared),
+            "total_priority_projects": len(priority),
+            "total_rec_mboe": round(
+                sum(p.get("rec_mboe", 0) or 0 for p in prepared), 1
+            ),
+            "priority_projects": priority,
+            "top3_projects": prepared[:3],
+            "outlook_top3_projects": _prepare_strategic_projects(outlook_projects)[:3],
+        }
+
+    return {
+        "report_year": year,
+        "analysis_year": analysis_year,
+        "outlook_year": outlook_year,
+        "oil_analysis": _production_topic(oil_data, oil_outlook, "mbopd"),
+        "gas_analysis": _production_topic(gas_data, gas_outlook, "mmscfd"),
+        "field_development": _resource_topic(fd_data, fd_outlook),
+        "exploration_highlights": _resource_topic(exp_data, exp_outlook),
+    }
+
+
+def _parse_analysis_query(
+    conn: duckdb.DuckDBPyConnection,
+    sql: str,
+    params: list[Any],
+    columns: list[str],
+) -> list[dict[str, Any]]:
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(zip(columns, row, strict=False)) for row in rows]
+
+
+def _prepare_strategic_projects(
+    projects: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
+    for project in projects:
+        item = dict(project)
+        issues, mitigation = _strategic_project_assessment(
+            str(item.get("project_remarks") or "")
+        )
+        item.setdefault("issues", issues)
+        item.setdefault("mitigation", mitigation)
+        prepared.append(item)
+    return prepared
+
+
+def _cumulative_priority_projects(
+    projects: list[dict[str, Any]],
+    value_key: str,
+    threshold: float = 0.8,
+) -> list[dict[str, Any]]:
+    total = sum(project.get(value_key, 0) or 0 for project in projects)
+    if total <= 0:
+        return []
+    cumulative = 0.0
+    priority: list[dict[str, Any]] = []
+    for project in projects:
+        value = float(project.get(value_key, 0) or 0)
+        if value <= 0:
+            continue
+        cumulative += value
+        item = dict(project)
+        item["contribution_pct"] = round(value / total * 100, 1)
+        item["cumulative_contribution_pct"] = round(cumulative / total * 100, 1)
+        priority.append(item)
+        if cumulative / total >= threshold:
+            break
+    return priority
+
+
+def _strategic_project_assessment(remarks: str) -> tuple[list[str], list[str]]:
+    text = remarks.lower()
+    patterns = [
+        (
+            ("pod", "opl", "opll", "poffd", "fid"),
+            "Persetujuan POD/OPL/FID belum tuntas atau perlu percepatan.",
+            "Percepat persetujuan POD/OPL/FID dan keputusan investasi.",
+        ),
+        (
+            ("permit", "perizin", "ippkh", "lahan", "land", "social", "sosial"),
+            "Kendala perizinan, lahan, atau sosial berpotensi menggeser jadwal.",
+            "Koordinasikan penyelesaian izin dan isu sosial lintas pemangku.",
+        ),
+        (
+            ("market", "sales", "buyer", "offtake", "komersial", "agreement"),
+            "Ketersediaan pasar atau perjanjian penjualan belum terkunci.",
+            "Amankan offtake dan sales agreement untuk mendukung keekonomian proyek.",
+        ),
+        (
+            ("economic", "uneconomic", "keekonomian", "portfolio", "marginal"),
+            "Keekonomian atau prioritas portofolio masih menjadi hambatan.",
+            "Optimalkan skema komersial, biaya, dan prioritas portofolio proyek.",
+        ),
+        (
+            ("subsurface", "uncertain", "uncertainty", "appraisal", "reservoir"),
+            "Ketidakpastian subsurface masih mempengaruhi estimasi volume atau profil.",
+            "Lanjutkan studi subsurface dan appraisal untuk menurunkan ketidakpastian.",
+        ),
+        (
+            ("facility", "facilities", "fasilitas", "flow assurance", "debottleneck"),
+            "Keterbatasan fasilitas atau flow assurance dapat membatasi onstream.",
+            "Siapkan optimasi fasilitas, debottlenecking, dan mitigasi flow assurance.",
+        ),
+        (
+            ("workover", "infill", "ior", "eor"),
+            "Eksekusi workover, infill, IOR, atau EOR perlu diprioritaskan.",
+            "Prioritaskan eksekusi teknis dan kesiapan fasilitas pendukung produksi.",
+        ),
+    ]
+    issues: list[str] = []
+    mitigation: list[str] = []
+    for keywords, issue, action in patterns:
+        if any(keyword in text for keyword in keywords):
+            issues.append(issue)
+            mitigation.append(action)
+    return issues[:3], mitigation[:3]
+
+
+def _strategic_prompt_data(strategic_data: dict[str, Any]) -> dict[str, Any]:
+    prompt_data: dict[str, Any] = {
+        "report_year": strategic_data.get("report_year"),
+        "analysis_year": strategic_data.get("analysis_year"),
+        "outlook_year": strategic_data.get("outlook_year"),
+    }
+    topic_keys = (
+        "oil_analysis",
+        "gas_analysis",
+        "field_development",
+        "exploration_highlights",
+    )
+    for key in topic_keys:
+        topic = strategic_data.get(key)
+        if not isinstance(topic, dict):
+            continue
+        prompt_topic = {
+            topic_key: topic_value
+            for topic_key, topic_value in topic.items()
+            if topic_key
+            not in {
+                "priority_projects",
+                "top3_projects",
+                "outlook_top3_projects",
+            }
+        }
+        for project_key in (
+            "priority_projects",
+            "top3_projects",
+            "outlook_top3_projects",
+        ):
+            projects = topic.get(project_key)
+            if isinstance(projects, list):
+                prompt_topic[project_key] = [
+                    _strategic_prompt_project(project)
+                    for project in projects[:12]
+                    if isinstance(project, dict)
+                ]
+        prompt_data[key] = prompt_topic
+    return prompt_data
+
+
+def _strategic_prompt_project(project: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "wk_name",
+        "project_name",
+        "project_level",
+        "onstream_year",
+        "rec_oc",
+        "rec_an",
+        "rec_mboe",
+        "mbopd",
+        "mmscfd",
+        "scale",
+        "issues",
+        "mitigation",
+    )
+    result = {key: project.get(key) for key in keys if key in project}
+    remarks = str(project.get("project_remarks") or "").strip()
+    if remarks and not result.get("issues"):
+        result["project_remarks_excerpt"] = remarks[:240]
+    return result
+
+
 def _project_resource_metrics(
     conn: duckdb.DuckDBPyConnection,
     year: int,
@@ -1215,9 +1805,7 @@ def _project_resource_metrics(
         "cprd_sls_an",
     ]
     sums = {
-        name: f"SUM({name}) AS {name}"
-        for name in numeric_candidates
-        if name in columns
+        name: f"SUM({name}) AS {name}" for name in numeric_candidates if name in columns
     }
     count_parts = ["COUNT(*) AS project_count"]
     if "field_id" in columns:
@@ -1263,54 +1851,6 @@ def _value_mix(
     return [{"value": row[0], "count": row[1]} for row in rows]
 
 
-def _assert_level_complete(
-    conn: duckdb.DuckDBPyConnection, year: int, level: EntityLevel
-) -> None:
-    if level == "field":
-        expected = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM (
-                SELECT DISTINCT COALESCE(NULLIF(field_id, ''), field_name)
-                FROM project_resources
-                WHERE report_year = ?
-            )
-            """,
-            [year],
-        ).fetchone()[0]
-    else:
-        expected = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM (
-                SELECT DISTINCT COALESCE(NULLIF(wk_id, ''), wk_name)
-                FROM project_resources
-                WHERE report_year = ?
-            )
-            """,
-            [year],
-        ).fetchone()[0]
-    actual = conn.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM {SUMMARY_TABLE}
-        WHERE entity_level = ?
-          AND report_year = ?
-        """,
-        [level, year],
-    ).fetchone()[0]
-    if expected == 0:
-        raise SummaryDependencyError(
-            f"No project_resources rows found for report year {year}."
-        )
-    if actual < expected:
-        name = "field summaries" if level == "field" else "working area summaries"
-        raise SummaryDependencyError(
-            f"Missing {name} for {year}: expected {expected}, found {actual}. "
-            "Run the lower-level summarize step first."
-        )
-
-
 def _existing_hash_matches(
     conn: duckdb.DuckDBPyConnection,
     level: EntityLevel,
@@ -1331,7 +1871,10 @@ def _existing_hash_matches(
     return bool(row and row[0] == source_hash)
 
 
-def _hash_source(source_items: list[dict[str, Any]], metrics: dict[str, Any]) -> str:
+def _hash_source(
+    source_items: list[dict[str, Any]] | dict[str, Any],
+    metrics: dict[str, Any],
+) -> str:
     payload = json.dumps(
         {"source_items": source_items, "metrics": metrics},
         ensure_ascii=False,
@@ -1437,7 +1980,7 @@ def _parse_summary_response(content: str) -> dict[str, Any]:
     if cleaned.startswith("<think>"):
         end_idx = cleaned.find("</think>")
         if end_idx != -1:
-            cleaned = cleaned[end_idx + len("</think>"):].strip()
+            cleaned = cleaned[end_idx + len("</think>") :].strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")
         if cleaned.startswith("json"):
@@ -1469,6 +2012,114 @@ def _retry_feedback(error: str) -> str:
         f"\n\nPercobaan sebelumnya gagal dengan error JSON: {error}\n"
         "Hanya kembalikan JSON valid sesuai struktur yang diminta."
     )
+
+
+def _has_strategic_projects(strategic_data: dict[str, Any]) -> bool:
+    for key in (
+        "oil_analysis",
+        "gas_analysis",
+        "field_development",
+        "exploration_highlights",
+    ):
+        topic = strategic_data.get(key)
+        if isinstance(topic, dict) and (
+            topic.get("priority_projects") or topic.get("top3_projects")
+        ):
+            return True
+    return False
+
+
+def _empty_strategic_summary(year: int) -> dict[str, Any]:
+    summary = json.loads(json.dumps(STRATEGIC_SUMMARY_FIELDS))
+    summary["report_year"] = year
+    summary["summary"]["key_findings"] = [
+        "Tidak ada data analisis strategis yang memenuhi kriteria untuk periode ini."
+    ]
+    summary["summary"]["recommendations"] = []
+    return summary
+
+
+def _normalize_strategic_summary(
+    summary: dict[str, Any],
+    year: int,
+    strategic_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized = json.loads(json.dumps(STRATEGIC_SUMMARY_FIELDS))
+    source = strategic_data if isinstance(strategic_data, dict) else {}
+    normalized["report_year"] = (
+        source.get("report_year") or summary.get("report_year") or year
+    )
+    normalized["analysis_year"] = source.get("analysis_year") or summary.get(
+        "analysis_year"
+    )
+    normalized["outlook_year"] = source.get("outlook_year") or summary.get(
+        "outlook_year"
+    )
+
+    topic_keys = (
+        "oil_analysis",
+        "gas_analysis",
+        "field_development",
+        "exploration_highlights",
+    )
+    for key in topic_keys:
+        value = (
+            source.get(key)
+            if isinstance(source.get(key), dict)
+            else summary.get(key)
+        )
+        if not isinstance(value, dict):
+            continue
+        topic = normalized[key]
+        for topic_key, topic_value in value.items():
+            if topic_key in {"projects", "top_projects"} and (
+                "priority_projects" not in value
+            ):
+                topic["priority_projects"] = topic_value
+            elif topic_key in topic:
+                topic[topic_key] = topic_value
+        topic["priority_projects"] = _normalize_strategic_projects(
+            topic.get("priority_projects")
+        )
+        topic["top3_projects"] = _normalize_strategic_projects(
+            topic.get("top3_projects")
+        )
+        topic["outlook_top3_projects"] = _normalize_strategic_projects(
+            topic.get("outlook_top3_projects")
+        )
+
+    summary_value = summary.get("summary")
+    if isinstance(summary_value, dict):
+        for key, value in summary_value.items():
+            if key in normalized["summary"]:
+                normalized["summary"][key] = value
+
+    for key in ("key_findings", "recommendations"):
+        normalized["summary"][key] = _normalize_string_list(
+            normalized["summary"].get(key)
+        )
+    return normalized
+
+
+def _normalize_strategic_projects(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    projects: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        project = dict(item)
+        project["issues"] = _normalize_string_list(project.get("issues"))
+        project["mitigation"] = _normalize_string_list(project.get("mitigation"))
+        projects.append(project)
+    return projects
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [str(item).strip() for item in values if str(item).strip()]
 
 
 def _normalize_summary(summary: dict[str, Any], source_count: int) -> dict[str, Any]:
@@ -1519,7 +2170,6 @@ def _empty_summary(
     summary["data_quality_notes"] = [
         "Source tidak memiliki remarks yang cukup informatif untuk diringkas."
     ]
-    summary["source_coverage"]["source_items_reviewed"] = len(source_items)
     return summary
 
 
@@ -1529,6 +2179,349 @@ def _summary_text(summary: dict[str, Any]) -> str:
         str(summary.get("executive_summary") or "").strip(),
     ]
     return "\n\n".join(part for part in parts if part)
+
+
+def _strategic_summary_text(summary: dict[str, Any]) -> str:
+    summary_section = summary.get("summary")
+    if not isinstance(summary_section, dict):
+        return ""
+
+    parts: list[str] = ["# Strategic Evaluation"]
+    segment_specs = (
+        (
+            "Potensi Peningkatan Produksi Minyak",
+            "oil_analysis",
+            "Potensi produksi",
+            "mbopd",
+            "MBOPD",
+            "Sumber daya minyak",
+            "rec_oc",
+            "MSTB",
+        ),
+        (
+            "Potensi Peningkatan Produksi Gas",
+            "gas_analysis",
+            "Potensi produksi",
+            "mmscfd",
+            "MMSCFD",
+            "Sumber daya gas",
+            "rec_an",
+            "BSCF",
+        ),
+        (
+            "Potensi Pengembangan Lapangan",
+            "field_development",
+            "Sumber daya",
+            "rec_mboe",
+            "MMBOE",
+            None,
+            None,
+            None,
+        ),
+        (
+            "Exploration Highlight",
+            "exploration_highlights",
+            "Sumber daya",
+            "rec_mboe",
+            "MMBOE",
+            None,
+            None,
+            None,
+        ),
+    )
+    for spec in segment_specs:
+        rendered = _render_strategic_segment(summary, *spec)
+        if rendered:
+            parts.append(rendered)
+    return "\n\n".join(parts)
+
+
+def _render_strategic_segment(
+    summary: dict[str, Any],
+    title: str,
+    topic_key: str,
+    primary_label: str,
+    primary_key: str,
+    primary_unit: str,
+    secondary_label: str | None,
+    secondary_key: str | None,
+    secondary_unit: str | None,
+) -> str:
+    topic = summary.get(topic_key)
+    if not isinstance(topic, dict):
+        return ""
+
+    reviewed = int(topic.get("total_projects_reviewed") or 0)
+    total_priority = int(topic.get("total_priority_projects") or 0)
+    projects = topic.get("priority_projects")
+    projects = projects if isinstance(projects, list) else []
+    top3_projects = topic.get("top3_projects")
+    top3_projects = top3_projects if isinstance(top3_projects, list) else []
+    outlook_projects = topic.get("outlook_top3_projects")
+    outlook_projects = outlook_projects if isinstance(outlook_projects, list) else []
+    primary_total = _format_number(topic.get(f"total_{primary_key}"))
+    analysis_year = _clean_cell(summary.get("analysis_year") or "tahun analisis")
+    paragraphs = [f"## {title}"]
+    overview = (
+        f"Pada tahun {analysis_year} terdapat {reviewed} proyek yang akan "
+        f"onstream atau menjadi kandidat utama pada segmen ini, dengan total "
+        f"{primary_label.lower()} {primary_total} {primary_unit}. Dari jumlah "
+        f"tersebut, {total_priority} proyek membentuk kelompok prioritas yang "
+        "menyumbang sekitar 80% kontribusi terbesar."
+    )
+    distribution = _strategic_distribution_phrase(reviewed, total_priority)
+    if distribution:
+        overview += f" Secara high level, distribusi kontribusi {distribution}."
+    if secondary_key and secondary_unit:
+        secondary_total = _format_number(topic.get(f"total_{secondary_key}"))
+        overview += (
+            f" {secondary_label} terindikasi {secondary_total} {secondary_unit}."
+        )
+    paragraphs.append(overview)
+
+    if top3_projects:
+        ranking = ", ".join(
+            _project_contribution_phrase(
+                project,
+                primary_key,
+                primary_unit,
+            )
+            for project in top3_projects
+        )
+        paragraphs.append(
+            f"Proyek yang paling berpeluang menjadi kontributor utama adalah "
+            f"{ranking}."
+        )
+
+    if top3_projects:
+        first = top3_projects[0]
+        paragraphs.append(
+            _project_narrative(
+                first,
+                primary_key,
+                primary_unit,
+                prefix="Kontributor terbesar",
+            )
+        )
+    if len(top3_projects) > 1:
+        other_top = " Sementara itu, ".join(
+            _project_narrative(
+                project,
+                primary_key,
+                primary_unit,
+                prefix="",
+            )
+            for project in top3_projects[1:3]
+        )
+        if other_top:
+            paragraphs.append(other_top)
+
+    remaining_projects = projects[3:8] if len(projects) > 3 else []
+    if remaining_projects:
+        names = ", ".join(
+            _bold_entity(project.get("project_name"))
+            for project in remaining_projects
+        )
+        issue_themes = _top_project_items(remaining_projects, "issues")
+        sentence = (
+            f"Di luar tiga kontributor utama, proyek {names} juga masuk dalam "
+            "kelompok kontributor 80% dan perlu dipantau agar kontribusinya "
+            "tidak bergeser."
+        )
+        if issue_themes:
+            sentence += (
+                " Isu yang menonjol mencakup "
+                f"{_format_clause_list(issue_themes)}."
+            )
+        paragraphs.append(sentence)
+
+    issue_themes = _top_project_items(top3_projects or projects, "issues")
+    mitigations = _top_project_items(top3_projects or projects, "mitigation")
+    if issue_themes or mitigations:
+        issue_text = (
+            _format_clause_list(issue_themes)
+            if issue_themes
+            else "tidak ada isu material yang tercatat"
+        )
+        mitigation_text = (
+            _format_clause_list(mitigations)
+            if mitigations
+            else "pemantauan eksekusi sesuai rencana kerja"
+        )
+        paragraphs.append(
+            f"Secara keseluruhan, isu utama pada segmen ini mencakup {issue_text}. "
+            f"Arah tindak lanjut yang perlu dijaga mencakup {mitigation_text}."
+        )
+    if outlook_projects:
+        outlook = ", ".join(
+            _project_contribution_phrase(
+                project,
+                primary_key,
+                primary_unit,
+            )
+            for project in outlook_projects
+        )
+        paragraphs.append(
+            f"Untuk outlook tahun berikutnya, tiga kandidat yang perlu dicermati "
+            f"adalah {outlook}. Proyek-proyek ini menjadi pipeline lanjutan yang "
+            "perlu dipastikan kesiapan teknis, komersial, dan perizinannya agar "
+            "kontribusi tidak tertunda."
+        )
+    return "\n\n".join(paragraphs)
+
+
+def _project_contribution_phrase(
+    project: dict[str, Any],
+    value_key: str,
+    unit: str,
+) -> str:
+    name = _bold_entity(project.get("project_name"))
+    value = _format_number(project.get(value_key))
+    return f"{name} ({value} {unit})"
+
+
+def _project_narrative(
+    project: dict[str, Any],
+    value_key: str,
+    unit: str,
+    *,
+    prefix: str,
+) -> str:
+    name = _bold_entity(project.get("project_name"))
+    wk_name = _bold_entity(project.get("wk_name"))
+    field_name = _bold_entity(project.get("field_name"))
+    level = _clean_cell(project.get("project_level"))
+    onstream = _clean_cell(project.get("onstream_year"))
+    value = _format_number(project.get(value_key))
+    issue = _first_item(project.get("issues"))
+    mitigation = _first_item(project.get("mitigation"))
+    opening = f"{prefix} {name}".strip()
+    location = f"di {wk_name}"
+    if field_name != "-":
+        location = f"di field {field_name}, {wk_name}"
+    text = (
+        f"{opening} {location} tercatat pada tingkat kematangan {level} "
+        f"dengan target onstream {onstream} dan kontribusi {value} {unit}."
+    )
+    if issue != "-":
+        text += (
+            " Kendala utama yang perlu diperhatikan mencakup "
+            f"{_format_sentence_fragment(issue)}."
+        )
+    if mitigation != "-":
+        text += (
+            " Mitigasi yang relevan mencakup "
+            f"{_format_sentence_fragment(mitigation)}."
+        )
+    return text
+
+
+def _strategic_distribution_phrase(reviewed: int, priority_count: int) -> str:
+    if reviewed <= 0 or priority_count <= 0:
+        return ""
+    if priority_count <= 3 and reviewed > priority_count:
+        return "didominasi oleh beberapa proyek besar"
+    if priority_count >= max(4, reviewed // 2):
+        return "tersebar pada banyak proyek kecil dan menengah"
+    return (
+        "terkonsentrasi pada kelompok proyek material namun tetap memiliki "
+        "ekor proyek pendukung"
+    )
+
+
+def _clean_cell(value: Any) -> str:
+    text = str(value if value is not None else "-").strip() or "-"
+    return text.replace("|", "/").replace("\n", " ")
+
+
+def _bold_entity(value: Any) -> str:
+    text = _clean_cell(value)
+    if text == "-":
+        return text
+    return f"**{text}**"
+
+
+def _first_item(value: Any) -> str:
+    values = _normalize_string_list(value)
+    return _format_sentence_fragment(values[0]) if values else "-"
+
+
+def _top_project_items(projects: list[Any], key: str) -> list[str]:
+    seen: list[str] = []
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        for item in _normalize_string_list(project.get(key)):
+            formatted = _format_sentence_fragment(item)
+            if formatted not in seen:
+                seen.append(formatted)
+            if len(seen) >= 5:
+                return seen
+    return seen
+
+
+def _format_clause_list(items: list[str]) -> str:
+    return ", ".join(_format_sentence_fragment(item) for item in items)
+
+
+def _format_sentence_fragment(value: Any) -> str:
+    text = _clean_cell(value)
+    if text == "-":
+        return text
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.rstrip(" .;:")
+    replacements = (
+        ("Koordinasikan ", "koordinasi "),
+        ("Percepat ", "percepatan "),
+        ("Lanjutkan ", "kelanjutan "),
+        ("Amankan ", "pengamanan "),
+        ("Optimalkan ", "optimalisasi "),
+        ("Prioritaskan ", "prioritisasi "),
+        ("Siapkan ", "penyiapan "),
+    )
+    for prefix, replacement in replacements:
+        if text.startswith(prefix):
+            text = replacement + text[len(prefix) :]
+            break
+    if len(text) > 1 and text[:2].isupper():
+        return text
+    return text[:1].lower() + text[1:] if text else text
+
+
+def _format_number(value: Any) -> str:
+    if value is None:
+        return "0"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number == 0:
+        return "0"
+    if abs(number) >= 100:
+        return f"{number:,.1f}"
+    return f"{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def _executive_label_text(text: str) -> str:
+    replacements = {
+        "`rec_oc`": "potensi minyak",
+        "`rec_an`": "potensi gas",
+        "`rec_mboe`": "sumber daya",
+        "`mbopd`": "potensi produksi minyak",
+        "`mmscfd`": "potensi produksi gas",
+        "`project_remarks`": "catatan proyek",
+        "`project_level`": "tingkat kematangan",
+        "rec_oc": "potensi minyak",
+        "rec_an": "potensi gas",
+        "rec_mboe": "sumber daya",
+        "project_remarks": "catatan proyek",
+        "project_level": "tingkat kematangan",
+        "production forecast": "prakiraan produksi",
+    }
+    cleaned = text
+    for raw, replacement in replacements.items():
+        cleaned = cleaned.replace(raw, replacement)
+    return cleaned
 
 
 def _has_nonempty_source(source_items: list[dict[str, Any]]) -> bool:

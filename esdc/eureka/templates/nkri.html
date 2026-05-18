@@ -426,19 +426,19 @@
       {% if nkri_summary %}
       <div class="summary-card">
         <div class="summary-card-accent"></div>
+        <div class="summary-meta">
+          <span class="summary-badge">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><path d="M12 2l2 7h7l-5 5 2 7-6-4-6 4 2-7-5-5h7z"/></svg>
+            Evaluated by IRIS
+          </span>
+          <span class="summary-year">{{ selected_year }}</span>
+        </div>
         {% if summary_headline %}
         <div class="summary-headline">{{ summary_headline | markdown | safe }}</div>
         {% endif %}
         {% if summary_body %}
         <div class="summary-body">{{ summary_body | markdown | safe }}</div>
         {% endif %}
-        <div class="summary-footer">
-          <span class="summary-badge">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><path d="M12 2l2 7h7l-5 5 2 7-6-4-6 4 2-7-5-5h7z"/></svg>
-            Summarized by IRIS
-          </span>
-          <span class="summary-year">{{ selected_year }}</span>
-        </div>
       </div>
       {% else %}
       <div class="summary-card summary-empty">
@@ -551,16 +551,55 @@ N_p[B_o + (R_p - R_s)B_g] + W_pB_w
     'chart-onstream': {{ onstream_fig.to_json() | safe }}
   };
 
+  const chartRenderPromises = [];
   for (const [id, figJson] of Object.entries(charts)) {
     try {
       const parsed = typeof figJson === 'string' ? JSON.parse(figJson) : figJson;
       const layout = { ...plotlyLayoutDefaults, ...parsed.layout };
-      Plotly.newPlot(id, parsed.data, layout, plotlyConfig);
+      const chartEl = document.getElementById(id);
+      const renderPromise = Plotly.newPlot(chartEl, parsed.data, layout, plotlyConfig)
+        .then(() => {
+          if (id === 'chart-onstream') {
+            chartEl.on('plotly_afterplot', syncSummarySidebarHeight);
+          }
+          syncSummarySidebarHeight();
+        });
+      chartRenderPromises.push(renderPromise);
     } catch(e) {
       console.error('Chart render failed', id, e);
       document.getElementById(id).innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;"><span style="color:var(--danger);margin-right:0.5rem;">×</span>Chart unavailable</div>';
     }
   }
+
+  function syncSummarySidebarHeight() {
+    const section = document.querySelector('.content-with-summary');
+    const sidebar = document.querySelector('.summary-sidebar');
+    const onstreamPanel = document.querySelector('#chart-onstream')?.closest('.chart-panel');
+    const titles = Array.from(document.querySelectorAll('.section-title'));
+    const onstreamTitle = titles.find((el) =>
+      el.textContent.trim().toLowerCase().includes('projects by onstream')
+    );
+    if (!section || !sidebar || !onstreamPanel || !onstreamTitle) return;
+    if (window.matchMedia('(max-width: 991px)').matches) {
+      sidebar.style.removeProperty('--summary-sidebar-height');
+      sidebar.style.removeProperty('--summary-sidebar-offset');
+      return;
+    }
+    const sectionTop = section.getBoundingClientRect().top;
+    const onstreamBottom = onstreamPanel.getBoundingClientRect().bottom;
+    const height = Math.max(420, Math.round(onstreamBottom - sectionTop));
+    sidebar.style.setProperty('--summary-sidebar-offset', '0px');
+    sidebar.style.setProperty('--summary-sidebar-height', `${height}px`);
+  }
+
+  window.addEventListener('resize', syncSummarySidebarHeight);
+  Promise.allSettled(chartRenderPromises).then(syncSummarySidebarHeight);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(syncSummarySidebarHeight);
+  }
+  requestAnimationFrame(syncSummarySidebarHeight);
+  window.setTimeout(syncSummarySidebarHeight, 750);
+  window.setTimeout(syncSummarySidebarHeight, 1500);
 
   // ── Data table loader ──
   function loadTable(detail) {
