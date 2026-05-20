@@ -1143,14 +1143,19 @@ def get_pod_list_for_wk(wk_name: str) -> list[dict]:
 
 
 def get_pod_years(pod_id: str) -> list[int]:
-    """Get available report years for a POD."""
+    """Get available report years for a POD.
+
+    Returns years from project_resources where this POD has projects,
+    since report_year is the ESDC report year used across the dashboard.
+    """
     conn = _get_conn()
     try:
         rows = conn.execute(
             """
-            SELECT DISTINCT EXTRACT(YEAR FROM report_date) AS yr
-            FROM pod_economics
-            WHERE pod_id = ?
+            SELECT DISTINCT pr.report_year AS yr
+            FROM project_resources pr
+            JOIN pod_project pp ON pr.project_id = pp.project_id
+            WHERE pp.pod_id = ?
             ORDER BY yr DESC
         """,
             [pod_id],
@@ -1257,11 +1262,12 @@ def get_pod_kpis(
         if year is None:
             yr_row = conn.execute(
                 """
-                SELECT EXTRACT(YEAR FROM MAX(report_date))
-                FROM pod_economics
-                WHERE pod_id = ? AND case_type = ?
+                SELECT MAX(pr.report_year)
+                FROM project_resources pr
+                JOIN pod_project pp ON pr.project_id = pp.project_id
+                WHERE pp.pod_id = ?
             """,
-                [pod_id, case_type],
+                [pod_id],
             ).fetchone()
             year = int(yr_row[0]) if yr_row and yr_row[0] else 2024
 
