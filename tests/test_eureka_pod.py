@@ -383,6 +383,7 @@ def _create_seeded_db(db_path):
                 pod_id TEXT,
                 pod_name TEXT,
                 case_type TEXT,
+                report_date DATE,
                 effective_date DATE,
                 lifting_oil DOUBLE,
                 lifting_gas DOUBLE,
@@ -426,9 +427,9 @@ def _create_seeded_db(db_path):
         """)
         conn.execute("""
             INSERT INTO pod_economics VALUES
-                ('POD-001', 'Test POD Alpha', 'plan', '2024-01-01',
+                ('POD-001', 'Test POD Alpha', 'plan', '2024-01-01', '2021-09-30',
                  365000, 365000000, 10000, 2000, 1500, 500, 0.15, 8000, 1000),
-                ('POD-001', 'Test POD Alpha', 'plan', '2025-01-01',
+                ('POD-001', 'Test POD Alpha', 'plan', '2025-01-01', '2021-09-30',
                  730000, 730000000, 20000, 4000, 3000, 1000, 0.18, 16000, 2000);
         """)
         conn.execute("""
