@@ -423,14 +423,30 @@ class EntityResolver:
         )
         limit = 10 if return_multiple else 3
         sql = f"""
-            SELECT DISTINCT {id_expr} AS entity_id, {spec.name_column} AS entity_name
-            FROM {spec.lookup_table}
-            WHERE {spec.name_column} ILIKE '%' || ? || '%'{id_condition}
+            SELECT entity_id, entity_name
+            FROM (
+                SELECT DISTINCT
+                    {id_expr} AS entity_id,
+                    {spec.name_column} AS entity_name
+                FROM {spec.lookup_table}
+                WHERE {spec.name_column} ILIKE '%' || ? || '%'{id_condition}
+            ) matches
+            ORDER BY
+                CASE
+                    WHEN lower(trim(entity_name)) = lower(trim(?)) THEN 0
+                    WHEN lower(trim(entity_name)) LIKE lower(trim(?)) || '%' THEN 1
+                    WHEN lower(trim(entity_name)) LIKE '%' || lower(trim(?)) || '%'
+                        THEN 2
+                    ELSE 3
+                END,
+                length(trim(entity_name)),
+                lower(trim(entity_name))
             LIMIT {limit}
         """
 
         try:
             params = [search_term, search_term] if id_condition else [search_term]
+            params.extend([search_term, search_term, search_term])
             result = self.db.execute(sql, params).fetchall()
         except Exception:
             logger.debug(

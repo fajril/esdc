@@ -94,6 +94,36 @@ def mock_db() -> duckdb.DuckDBPyConnection:
                 "minor issues",
                 "gas decline",
             ),
+            (
+                "u4",
+                2024,
+                "WID",
+                "Widuri",
+                "WID-WK",
+                "WK Widuri",
+                "PT Widuri",
+                "Widuri Base",
+                "1. Reserves & GRR",
+                "1. Exploitation",
+                "2. Middle Value",
+                "contains duri as substring",
+                "no change",
+            ),
+            (
+                "u5",
+                2024,
+                "DURNFR",
+                "Duri NFR",
+                "ROK",
+                "WK Rokan",
+                "PT Pertamina Hulu Rokan",
+                "Duri NFR Base",
+                "1. Reserves & GRR",
+                "1. Exploitation",
+                "2. Middle Value",
+                "prefix candidate",
+                "no change",
+            ),
         ],
     )
     return conn
@@ -168,6 +198,16 @@ class TestEntityResolver:
         assert any(e["type"] == "Field" for e in result["entities"])
         field_entity = next(e for e in result["entities"] if e["type"] == "Field")
         assert "Duri" in field_entity["name"]
+
+    def test_single_best_prefers_exact_field_over_prefix_and_substring(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=mock_db)
+        result = resolver.resolve("Duri", return_multiple=False)
+        assert result["status"] == "success"
+        field_entity = next(e for e in result["entities"] if e["type"] == "Field")
+        assert field_entity["name"] == "Duri"
+        assert field_entity["match_type"] == "exact"
 
     def test_resolve_year(self, mock_db: duckdb.DuckDBPyConnection):
         resolver = EntityResolver(db=mock_db)
