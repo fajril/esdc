@@ -284,11 +284,21 @@ class TestEntityResolverTool:
         assert "suggested_table" in parsed
         assert "where_conditions" in parsed
 
+    @patch("esdc.chat.tools._get_tool_cache")
     @patch("esdc.chat.domain_knowledge.entity_resolver_lib.EntityResolver")
     @patch("esdc.chat.tools.get_db_connection")
     def test_tool_defaults_return_multiple_true(
-        self, mock_get_db, mock_resolver_class, mock_db: duckdb.DuckDBPyConnection
+        self,
+        mock_get_db,
+        mock_resolver_class,
+        mock_get_tool_cache,
+        mock_db: duckdb.DuckDBPyConnection,
     ):
+        class EmptyCache(dict):
+            def set(self, key, value):
+                self[key] = value
+
+        mock_get_tool_cache.return_value = EmptyCache()
         mock_get_db.return_value = mock_db
         mock_resolver = mock_resolver_class.return_value
         mock_resolver.resolve.return_value = {
@@ -302,8 +312,9 @@ class TestEntityResolverTool:
         }
         from esdc.chat.tools import entity_resolver
 
-        entity_resolver.invoke({"query": "Batanghari"})
+        query = "__return_multiple_default_test__"
+        entity_resolver.invoke({"query": query})
 
         mock_resolver.resolve.assert_called_once_with(
-            query="Batanghari", return_multiple=True
+            query=query, return_multiple=True
         )

@@ -514,11 +514,24 @@ class EntityResolver:
         if named_entities:
             if self._needs_project_detail(query) or any(
                 e["entity_type"] in ("project_name", "operator_name")
+                and e.get("hinted")
                 for e in named_entities
             ):
                 if self._is_production_query(query):
                     return "project_timeseries"
                 return "project_resources"
+            if pattern and pattern.get("primary_entity"):
+                primary_key = ENTITY_LABEL_TO_KEY.get(pattern["primary_entity"])
+                if primary_key:
+                    for entity in named_entities:
+                        if entity["entity_type"] == primary_key:
+                            spec = ENTITY_REGISTRY[primary_key]
+                            if (
+                                self._is_production_query(query)
+                                and spec.timeseries_table
+                            ):
+                                return spec.timeseries_table
+                            return spec.default_table
             primary = min(
                 named_entities,
                 key=lambda e: ENTITY_REGISTRY[e["entity_type"]].priority,
