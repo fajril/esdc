@@ -1246,9 +1246,10 @@ def get_pod_kpis(
 ) -> PodKpiData:
     """Get POD KPI data including resources, production, and economics.
 
+    Economics are filtered by POD approval/monitoring year (effective_date).
+    If the requested year has no data, falls back to the latest available year.
     Resources are always fetched from the latest project_resources report_year
-    since pod_economics effective_date years (e.g. 2019) don't align with
-    resource report years (e.g. 2024).
+    since resource report years (e.g. 2024) are independent of POD years.
     """
     conn = _get_conn()
     try:
@@ -1271,11 +1272,27 @@ def get_pod_kpis(
                    ctr_irr, ctr_npv, goi_take
             FROM pod_economics
             WHERE pod_id = ? AND case_type = ?
+              AND EXTRACT(YEAR FROM effective_date) = ?
             ORDER BY effective_date DESC
             LIMIT 1
         """,
-            [pod_id, case_type],
+            [pod_id, case_type, year],
         ).fetchone()
+
+        if not row:
+            row = conn.execute(
+                """
+                SELECT pod_id, pod_name, case_type,
+                       lifting_oil, lifting_gas,
+                       grs_rev, investment, opex, asr,
+                       ctr_irr, ctr_npv, goi_take
+                FROM pod_economics
+                WHERE pod_id = ? AND case_type = ?
+                ORDER BY effective_date DESC
+                LIMIT 1
+            """,
+                [pod_id, case_type],
+            ).fetchone()
 
         if not row:
             raise ValueError(
