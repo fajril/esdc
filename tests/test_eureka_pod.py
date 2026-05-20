@@ -404,7 +404,7 @@ def _create_seeded_db(db_path):
         conn.execute("""
             CREATE TABLE project_resources (
                 project_id TEXT,
-                report_date DATE,
+                report_date VARCHAR,
                 report_year INTEGER,
                 report_status TEXT,
                 project_name TEXT,
@@ -414,8 +414,8 @@ def _create_seeded_db(db_path):
                 uncert_level TEXT,
                 wk_name TEXT,
                 field_name TEXT,
-                fluid TEXT,
-                value DOUBLE,
+                rec_oc DOUBLE,
+                rec_an DOUBLE,
                 rec_oc_risked DOUBLE,
                 rec_an_risked DOUBLE,
                 res_oc DOUBLE,
@@ -440,18 +440,20 @@ def _create_seeded_db(db_path):
             INSERT INTO project_resources
                 (project_id, report_date, report_year, report_status,
                  project_name, project_stage, project_class, project_level,
-                 uncert_level, wk_name, field_name, fluid, value,
+                 uncert_level, wk_name, field_name, rec_oc, rec_an,
                  rec_oc_risked, rec_an_risked, res_oc, res_an,
                  prj_ioip, prj_igip)
             VALUES
                 ('PROJ-001', '2024-01-01', 2024, 'ACTIVE',
                  'Project Alpha', '1. Exploitation',
-                 '1P Reserves', '1. Low Value', 'WK-01', 'Field A',
-                 'OC', 5000.0, 1000.0, 500.0, 5000.0, 2500.0, 500.0, 250.0, 125.0),
+                 '1P Reserves', '1. Low Value', '1. Low Value',
+                 'WK-01', 'Field A',
+                 5000.0, 2500.0, 1000.0, 500.0, 5000.0, 2500.0, 500.0, 250.0),
                 ('PROJ-002', '2024-01-01', 2024, 'ACTIVE',
                  'Project Beta', '2. Exploration',
-                 'Contingent Resources', '2. Middle Value', 'WK-01', 'Field B',
-                 'OC', 10000.0, 2000.0, 1000.0, 10000.0, 5000.0, 1000.0, 500.0, 250.0);
+                 'Contingent Resources', '2. Middle Value', '2. Middle Value',
+                 'WK-01', 'Field B',
+                 10000.0, 5000.0, 2000.0, 1000.0, 10000.0, 5000.0, 1000.0, 500.0);
         """)
     finally:
         conn.close()

@@ -1175,8 +1175,8 @@ def _get_pod_resources(conn, pod_id: str, year: int | None = None) -> dict[str, 
     rows = conn.execute(
         f"""
         SELECT pr.project_class, pr.project_stage, pr.uncert_level,
-               SUM(CASE WHEN pr.fluid = 'OC' THEN pr.value ELSE 0 END) AS oc,
-               SUM(CASE WHEN pr.fluid = 'AN' THEN pr.value ELSE 0 END) AS an
+               SUM(COALESCE(pr.rec_oc, 0)) AS oc,
+               SUM(COALESCE(pr.rec_an, 0)) AS an
         FROM project_resources pr
         JOIN pod_project pp ON pr.project_id = pp.project_id
         WHERE pp.pod_id = ?
@@ -1195,7 +1195,7 @@ def _get_pod_resources(conn, pod_id: str, year: int | None = None) -> dict[str, 
         if "Reserves" in raw_class:
             category = "Reserves"
         elif "Contingent" in raw_class or "Contigent" in raw_class:
-            stage_norm = raw_stage.strip()
+            stage_norm = (raw_stage or "").strip()
             if "Exploit" in stage_norm:
                 category = "Contingent Exploitation"
             else:
