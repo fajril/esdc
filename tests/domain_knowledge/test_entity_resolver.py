@@ -283,3 +283,27 @@ class TestEntityResolverTool:
         assert "pattern" in parsed
         assert "suggested_table" in parsed
         assert "where_conditions" in parsed
+
+    @patch("esdc.chat.domain_knowledge.entity_resolver_lib.EntityResolver")
+    @patch("esdc.chat.tools.get_db_connection")
+    def test_tool_defaults_return_multiple_true(
+        self, mock_get_db, mock_resolver_class, mock_db: duckdb.DuckDBPyConnection
+    ):
+        mock_get_db.return_value = mock_db
+        mock_resolver = mock_resolver_class.return_value
+        mock_resolver.resolve.return_value = {
+            "status": "success",
+            "entities": [],
+            "pattern": None,
+            "suggested_table": None,
+            "where_conditions": [],
+            "required_columns": [],
+            "confidence": 0.0,
+        }
+        from esdc.chat.tools import entity_resolver
+
+        entity_resolver.invoke({"query": "Batanghari"})
+
+        mock_resolver.resolve.assert_called_once_with(
+            query="Batanghari", return_multiple=True
+        )

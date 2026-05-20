@@ -123,7 +123,7 @@ class EntityResolver:
         self.db = db
         self._columns_cache: dict[str, set[str]] = {}
 
-    def resolve(self, query: str, return_multiple: bool = False) -> dict[str, Any]:
+    def resolve(self, query: str, return_multiple: bool = True) -> dict[str, Any]:
         """Resolve entities and patterns from a natural language query.
 
         Returns structured context for single-shot SQL generation.

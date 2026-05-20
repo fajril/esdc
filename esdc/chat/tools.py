@@ -1049,9 +1049,9 @@ def entity_resolver(
     return_multiple: Annotated[
         bool,
         "If True, return all matching entities instead of single best match. "
-        "Use when user asks for multiple matches "
-        "(e.g., 'lapangan yang ada kata duri apa saja').",
-    ] = False,
+        "Defaults to True so ambiguous or partial entity names surface all "
+        "matches. Set False only when a single best match is required.",
+    ] = True,
 ) -> str:
     """Resolve entities and match query patterns from the ESDC knowledge graph.
 

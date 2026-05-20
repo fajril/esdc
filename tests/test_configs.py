@@ -120,6 +120,17 @@ class TestDbFile:
             config_file.write_text("database_path: /custom/path/db.db\n")
             assert Config.get_db_file() == Path("/custom/path/db.db")
 
+    def test_get_db_file_copies_chat_database_path_when_missing(self, tmp_path):
+        """Test database.path is copied to database_path when top-level is absent."""
+        db_path = tmp_path / "chat.duckdb"
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(f"database:\n  path: {db_path}\n")
+
+            assert Config.get_db_file() == db_path
+            config_text = config_file.read_text()
+            assert f"database_path: {db_path}" in config_text
+
     def test_get_db_file_default(self, tmp_path):
         """Test default database file path."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):

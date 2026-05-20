@@ -108,9 +108,28 @@ class Config:
         if config_file.exists():
             with open(config_file) as f:
                 cls._config_cache = yaml.safe_load(f) or {}
+                cls._normalize_database_config()
                 return cls._config_cache
         cls._config_cache = {}
         return None
+
+    @classmethod
+    def _normalize_database_config(cls) -> None:
+        """Keep legacy chat database.path compatible with database_path."""
+        config = cls._config_cache
+        if not config or "database_path" in config:
+            return
+
+        database_config = config.get("database")
+        if not isinstance(database_config, dict):
+            return
+
+        db_path = database_config.get("path")
+        if not db_path:
+            return
+
+        config["database_path"] = db_path
+        cls._save_config(config)
 
     @classmethod
     def init_config(cls) -> None:
