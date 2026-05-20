@@ -1160,17 +1160,28 @@ def get_pod_years(pod_id: str) -> list[int]:
         conn.close()
 
 
-def _get_pod_resources(conn, pod_id: str, year: int | None = None) -> dict[str, dict]:
+def _get_pod_resources(conn, pod_id: str) -> dict[str, dict]:
     """Get resources breakdown for a POD from project_resources join.
 
-    Returns dict mapping normalized class name to dict with keys:
-    low_oc, mid_oc, high_oc, low_an, mid_an, high_an
+    Always uses the latest report_year from project_resources since
+    POD effective_date years (e.g. 2019) don't correspond to resource
+    report years (e.g. 2024).
     """
-    year_filter = ""
+    latest_year_row = conn.execute("""
+        SELECT MAX(pr.report_year)
+        FROM project_resources pr
+        JOIN pod_project pp ON pr.project_id = pp.project_id
+        WHERE pp.pod_id = ?
+    """, [pod_id]).fetchone()
+    resource_year = (
+        latest_year_row[0] if latest_year_row and latest_year_row[0] else None
+    )
+
     params: list = [pod_id]
-    if year is not None:
+    year_filter = ""
+    if resource_year is not None:
         year_filter = "AND pr.report_year = ?"
-        params.append(year)
+        params.append(resource_year)
 
     rows = conn.execute(
         f"""
@@ -1233,7 +1244,12 @@ def _get_pod_resources(conn, pod_id: str, year: int | None = None) -> dict[str, 
 def get_pod_kpis(
     pod_id: str, case_type: str = "plan", year: int | None = None
 ) -> PodKpiData:
-    """Get POD KPI data including resources, production, and economics."""
+    """Get POD KPI data including resources, production, and economics.
+
+    Resources are always fetched from the latest project_resources report_year
+    since pod_economics effective_date years (e.g. 2019) don't align with
+    resource report years (e.g. 2024).
+    """
     conn = _get_conn()
     try:
         if year is None:
@@ -1255,19 +1271,18 @@ def get_pod_kpis(
                    ctr_irr, ctr_npv, goi_take
             FROM pod_economics
             WHERE pod_id = ? AND case_type = ?
-              AND EXTRACT(YEAR FROM effective_date) = ?
             ORDER BY effective_date DESC
             LIMIT 1
         """,
-            [pod_id, case_type, year],
+            [pod_id, case_type],
         ).fetchone()
 
         if not row:
             raise ValueError(
-                f"No data for pod_id={pod_id}, case_type={case_type}, year={year}"
+                f"No data for pod_id={pod_id}, case_type={case_type}"
             )
 
-        resources = _get_pod_resources(conn, pod_id, year)
+        resources = _get_pod_resources(conn, pod_id)
 
         def _make_breakdown(key: str) -> PodResourceBreakdown:
             d = resources.get(key, {})
@@ -1414,7 +1429,7 @@ def get_pod_table_data(
             ]
 
         elif detail == "resources":
-            resources = _get_pod_resources(conn, pod_id, year)
+            resources = _get_pod_resources(conn, pod_id)
             result = []
             for class_name, vals in resources.items():
                 result.append(
