@@ -290,7 +290,7 @@ async def run_python(
             "Python code to execute. Visible in OpenWebUI tool panel. "
             "For visualizations, use the pre-defined `output_image_path` variable. "
             "For database queries, use the pre-defined `DB_PATH` variable "
-            "(DuckDB at /home/user/esdc.db). "
+            "(DuckDB at /home/user/esdc.duckdb). "
             "When this tool returns image markdown, copy it into your final response."
         ),
     ],
@@ -300,7 +300,7 @@ async def run_python(
     The code is written to a temporary file, executed, and the file is
     automatically deleted. Pre-defined variables: `output_image_path` for saving
     plots, `DB_PATH` for connecting to the DuckDB database (read-only at
-    /home/user/esdc.db).
+    /home/user/esdc.duckdb).
 
     Pre-installed libraries: pandas, scikit-learn, seaborn, statsmodels, xgboost,
     duckdb, matplotlib, numpy, scipy, plotly.
@@ -322,7 +322,7 @@ async def run_python(
     output_path = f"/home/user/img/{img_uuid}.png"
 
     # Inject pre-defined variables into the code
-    db_path = "/home/user/esdc.db"
+    db_path = "/home/user/esdc.duckdb"
     injected_code = (
         f'output_image_path = "{output_path}"\nDB_PATH = "{db_path}"\n{code}'
     )

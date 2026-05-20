@@ -13,36 +13,15 @@ from typing import Any
 import duckdb
 
 from .entity_patterns import QueryPatternMatcher
+from .entity_registry import ENTITY_LABEL_TO_KEY, ENTITY_REGISTRY, EntitySpec
 from .entity_schema import KGSchema
 
 logger = logging.getLogger(__name__)
 
 _CONFIDENCE_THRESHOLD = 0.7
 
-_ENTITY_TYPE_QUERIES: dict[str, str] = {
-    "Field": """
-        SELECT DISTINCT field_id, field_name
-        FROM project_resources
-        WHERE field_name ILIKE '%' || ? || '%'
-           OR field_id ILIKE '%' || ? || '%'
-        LIMIT 10
-    """,
-    "WorkingArea": """
-        SELECT DISTINCT wk_id, wk_name
-        FROM project_resources
-        WHERE wk_name ILIKE '%' || ? || '%'
-           OR wk_id ILIKE '%' || ? || '%'
-        LIMIT 10
-    """,
-    "Operator": """
-        SELECT DISTINCT operator_name
-        FROM project_resources
-        WHERE operator_name ILIKE '%' || ? || '%'
-        LIMIT 10
-    """,
-}
-
 _YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
+_PHRASE_WORD_PATTERN = re.compile(r"[a-zA-Z0-9\u00C0-\u024F][\w&./'-]*")
 
 _UNCERTAINTY_MAP: dict[str, str] = {
     "1p": "1. Low Value",
@@ -79,8 +58,13 @@ _ENTITY_HINTS: dict[str, str] = {
     "field": "Field",
     "wk": "WorkingArea",
     "wilayah": "WorkingArea",
+    "wilayah kerja": "WorkingArea",
+    "working area": "WorkingArea",
+    "proyek": "Project",
+    "project": "Project",
     "operator": "Operator",
     "perusahaan": "Operator",
+    "oleh": "Operator",
 }
 
 _STOP_WORDS: set[str] = {
@@ -137,6 +121,7 @@ class EntityResolver:
         self.schema = KGSchema()
         self.pattern_matcher = QueryPatternMatcher(self.schema)
         self.db = db
+        self._columns_cache: dict[str, set[str]] = {}
 
     def resolve(self, query: str, return_multiple: bool = False) -> dict[str, Any]:
         """Resolve entities and patterns from a natural language query.
@@ -260,33 +245,48 @@ class EntityResolver:
     def _resolve_named_entities(
         self, query: str, entity_type_hint: str | None, return_multiple: bool
     ) -> list[dict[str, Any]]:
-        type_order = (
-            [entity_type_hint]
-            if entity_type_hint
-            else ["Field", "WorkingArea", "Operator"]
-        )
-        type_order = [t for t in type_order if t in _ENTITY_TYPE_QUERIES]
-
-        search_term = self._extract_entity_name(query)
-        if not search_term:
-            return []
-
+        candidates = self._extract_entity_candidates(query, entity_type_hint)
         all_results: list[dict[str, Any]] = []
-        for etype in type_order:
-            results = self._query_entity_type(etype, search_term, return_multiple)
-            if results:
-                all_results.extend(results)
-                if not return_multiple and results[0]["confidence"] >= 1.0:
-                    break
+        seen: set[tuple[str, str, str]] = set()
 
-        if not return_multiple and all_results:
-            all_results.sort(key=lambda x: x["confidence"], reverse=True)
-            return [all_results[0]]
+        for entity_key, search_term, hinted in candidates:
+            specs = (
+                [ENTITY_REGISTRY[entity_key]]
+                if entity_key
+                else list(ENTITY_REGISTRY.values())
+            )
+            for spec in specs:
+                results = self._query_entity_spec(spec, search_term, return_multiple)
+                for result in results:
+                    dedupe_key = (
+                        result["entity_type"],
+                        str(result.get("id")),
+                        result["name"].lower(),
+                    )
+                    if dedupe_key in seen:
+                        continue
+                    seen.add(dedupe_key)
+                    if hinted:
+                        result["confidence"] = min(result["confidence"] + 0.08, 1.0)
+                    result["matched_text"] = search_term
+                    result["hinted"] = hinted
+                    all_results.append(result)
 
-        return all_results
+        if return_multiple:
+            return sorted(
+                all_results,
+                key=lambda x: (
+                    x["confidence"],
+                    -ENTITY_REGISTRY[x["entity_type"]].priority,
+                    len(x["name"]),
+                ),
+                reverse=True,
+            )
+
+        return self._select_named_entities(all_results)
 
     def _extract_entity_name(self, query: str) -> str:
-        words = re.findall(r"[a-zA-Z\u00C0-\u024F]+", query)
+        words = _PHRASE_WORD_PATTERN.findall(query)
         skip_words = (
             set(_ENTITY_HINTS.keys())
             | set(_CLASS_MAP.keys())
@@ -301,26 +301,140 @@ class EntityResolver:
 
         return " ".join(candidates) if candidates else ""
 
-    def _query_entity_type(
-        self, entity_type: str, search_term: str, return_multiple: bool
+    def _extract_entity_candidates(
+        self, query: str, entity_type_hint: str | None
+    ) -> list[tuple[str | None, str, bool]]:
+        candidates: list[tuple[str | None, str, bool]] = []
+        seen: set[tuple[str | None, str]] = set()
+
+        def add(entity_key: str | None, phrase: str, hinted: bool) -> None:
+            normalized = self._normalize_candidate_phrase(
+                phrase, remove_domain_keywords=not hinted
+            )
+            if not normalized:
+                return
+            key = (entity_key, normalized.lower())
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append((entity_key, normalized, hinted))
+
+        for quoted in re.findall(r'"([^"]+)"|' r"'([^']+)'", query):
+            phrase = quoted[0] or quoted[1]
+            add(None, phrase, True)
+
+        query_lower = query.lower()
+        for entity_key, spec in ENTITY_REGISTRY.items():
+            for hint in sorted(spec.hints, key=len, reverse=True):
+                pattern = (
+                    rf"\b{re.escape(hint)}\s+(.+?)"
+                    rf"(?=\s+(?:tahun|year|oleh|operator|di|pada|untuk|dengan|dan|yang)\b|$)"
+                )
+                for match in re.finditer(pattern, query_lower, re.IGNORECASE):
+                    add(entity_key, match.group(1), True)
+
+        if entity_type_hint:
+            entity_key = ENTITY_LABEL_TO_KEY.get(entity_type_hint)
+            add(entity_key, self._extract_entity_name(query), True)
+        else:
+            fallback = self._extract_entity_name(query)
+            words = fallback.split()
+            for size in range(min(5, len(words)), 0, -1):
+                for start in range(0, len(words) - size + 1):
+                    add(None, " ".join(words[start : start + size]), False)
+
+        return candidates
+
+    def _normalize_candidate_phrase(
+        self, phrase: str, *, remove_domain_keywords: bool
+    ) -> str:
+        words = _PHRASE_WORD_PATTERN.findall(phrase)
+        if not words:
+            return ""
+        skip_words = (
+            set(_ENTITY_HINTS.keys())
+            | set(_CLASS_MAP.keys())
+            | set(_UNCERTAINTY_MAP.keys())
+            | _STOP_WORDS
+        )
+        pattern_keywords = set()
+        if remove_domain_keywords:
+            for pattern in self.schema.query_patterns.values():
+                pattern_keywords.update(
+                    kw.lower() for kw in pattern.get("keywords", [])
+                )
+        filtered = [
+            w
+            for w in words
+            if not _YEAR_PATTERN.fullmatch(w)
+            and w.lower() not in skip_words
+            and w.lower() not in pattern_keywords
+        ]
+        return " ".join(filtered).strip()
+
+    def _select_named_entities(
+        self, results: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        sql = _ENTITY_TYPE_QUERIES.get(entity_type)
-        if not sql:
+        if not results:
             return []
 
+        best_by_type: dict[str, dict[str, Any]] = {}
+        for result in sorted(
+            results,
+            key=lambda x: (
+                x["confidence"],
+                -ENTITY_REGISTRY[x["entity_type"]].priority,
+                len(x["name"]),
+            ),
+            reverse=True,
+        ):
+            best_by_type.setdefault(result["entity_type"], result)
+
+        selected = list(best_by_type.values())
+        selected.sort(
+            key=lambda x: (
+                x["confidence"],
+                -ENTITY_REGISTRY[x["entity_type"]].priority,
+                len(x["name"]),
+            ),
+            reverse=True,
+        )
+
+        hinted = [e for e in selected if e.get("hinted")]
+        if len(hinted) > 1:
+            return [e for e in selected if e["confidence"] >= _CONFIDENCE_THRESHOLD]
+
+        if selected[0]["confidence"] >= _CONFIDENCE_THRESHOLD:
+            return [selected[0]]
+        return []
+
+    def _query_entity_spec(
+        self, spec: EntitySpec, search_term: str, return_multiple: bool
+    ) -> list[dict[str, Any]]:
+        columns = self._table_columns(spec.lookup_table)
+        if spec.name_column not in columns:
+            return []
+
+        id_expr = spec.id_column if spec.id_column in columns else "NULL"
+        id_condition = (
+            f" OR {spec.id_column} ILIKE '%' || ? || '%'"
+            if spec.id_column in columns
+            else ""
+        )
         limit = 10 if return_multiple else 3
-        limited_sql = sql.replace("LIMIT 10", f"LIMIT {limit}")
+        sql = f"""
+            SELECT DISTINCT {id_expr} AS entity_id, {spec.name_column} AS entity_name
+            FROM {spec.lookup_table}
+            WHERE {spec.name_column} ILIKE '%' || ? || '%'{id_condition}
+            LIMIT {limit}
+        """
 
         try:
-            if entity_type == "Operator":
-                result = self.db.execute(limited_sql, [search_term]).fetchall()
-            else:
-                result = self.db.execute(
-                    limited_sql, [search_term, search_term]
-                ).fetchall()
+            params = [search_term, search_term] if id_condition else [search_term]
+            result = self.db.execute(sql, params).fetchall()
         except Exception:
             logger.debug(
-                "[KG] entity_query_failed | type=%s term=%s", entity_type, search_term
+                "[KG] entity_query_failed | type=%s term=%s", spec.label, search_term
             )
             return []
 
@@ -329,11 +443,8 @@ class EntityResolver:
 
         entities: list[dict[str, Any]] = []
         for row in result:
-            if entity_type == "Field" or entity_type == "WorkingArea":
-                entity_id, entity_name = row[0], row[1]
-            elif entity_type == "Operator":
-                entity_id, entity_name = None, row[0]
-            else:
+            entity_id, entity_name = row[0], row[1]
+            if not entity_name:
                 continue
 
             search_lower = search_term.lower()
@@ -348,19 +459,35 @@ class EntityResolver:
                 confidence = 0.6
 
             entity: dict[str, Any] = {
-                "type": entity_type,
+                "type": spec.label,
+                "entity_type": spec.key,
+                "entity_level": spec.level,
                 "id": entity_id,
                 "name": entity_name,
                 "confidence": confidence,
+                "match_type": self._match_type(search_lower, name_lower),
+                "filter_column": spec.name_column,
+                "recommended_table": spec.default_table,
             }
-            if entity_type in ("Field", "WorkingArea"):
-                entity["filter_column"] = (
-                    "field_name" if entity_type == "Field" else "wk_name"
-                )
 
             entities.append(entity)
 
         return entities
+
+    def _table_columns(self, table: str) -> set[str]:
+        if table not in self._columns_cache:
+            rows = self.db.execute(f"PRAGMA table_info('{table}')").fetchall()
+            self._columns_cache[table] = {str(row[1]) for row in rows}
+        return self._columns_cache[table]
+
+    def _match_type(self, search_lower: str, name_lower: str) -> str:
+        if name_lower == search_lower:
+            return "exact"
+        if name_lower.startswith(search_lower):
+            return "prefix"
+        if search_lower in name_lower:
+            return "substring"
+        return "weak"
 
     def _build_where_conditions(self, entities: list[dict[str, Any]]) -> list[str]:
         conditions: list[str] = []
@@ -372,42 +499,61 @@ class EntityResolver:
                 conditions.append(f"uncert_level = '{entity['db_value']}'")
             elif etype == "ProjectClass":
                 conditions.append(f"project_class = '{entity['db_value']}'")
-            elif (
-                etype in ("Field", "WorkingArea")
-                and entity.get("filter_column")
-                and entity.get("name")
-            ):
+            elif entity.get("entity_type") in ENTITY_REGISTRY and entity.get("name"):
                 col = entity["filter_column"]
                 name = entity["name"].replace("'", "''")
                 conditions.append(f"{col} = '{name}'")
-            elif etype == "Operator" and entity.get("name"):
-                name = entity["name"].replace("'", "''")
-                conditions.append(f"operator_name = '{name}'")
         return conditions
 
     def _determine_table(
         self, query: str, entities: list[dict[str, Any]], pattern: dict[str, Any] | None
     ) -> str:
-        if pattern and pattern.get("suggested_table"):
-            return pattern["suggested_table"]
+        named_entities = [
+            e for e in entities if e.get("entity_type") in ENTITY_REGISTRY
+        ]
+        if named_entities:
+            if self._needs_project_detail(query) or any(
+                e["entity_type"] in ("project_name", "operator_name")
+                for e in named_entities
+            ):
+                if self._is_production_query(query):
+                    return "project_timeseries"
+                return "project_resources"
+            primary = min(
+                named_entities,
+                key=lambda e: ENTITY_REGISTRY[e["entity_type"]].priority,
+            )
+            spec = ENTITY_REGISTRY[primary["entity_type"]]
+            if self._is_production_query(query) and spec.timeseries_table:
+                return spec.timeseries_table
+            return spec.default_table
 
         for entity in entities:
             etype = entity.get("type")
             if etype == "Field":
-                if any(
-                    kw in query.lower()
-                    for kw in ("produksi", "forecast", "profil", "produksi", "rate")
-                ):
+                if self._is_production_query(query):
                     return "field_timeseries"
                 return "field_resources"
             elif etype == "WorkingArea":
-                if any(
-                    kw in query.lower()
-                    for kw in ("produksi", "forecast", "profil", "rate")
-                ):
+                if self._is_production_query(query):
                     return "wa_timeseries"
                 return "wa_resources"
             elif etype == "Operator":
                 return "project_resources"
 
+        if pattern and pattern.get("suggested_table"):
+            return pattern["suggested_table"]
+
         return "project_resources"
+
+    def _is_production_query(self, query: str) -> bool:
+        return any(
+            kw in query.lower()
+            for kw in ("produksi", "forecast", "profil", "rate", "production")
+        )
+
+    def _needs_project_detail(self, query: str) -> bool:
+        return any(
+            kw in query.lower()
+            for kw in ("proyek", "project", "operator", "perusahaan", "oleh")
+        )

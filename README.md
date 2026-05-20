@@ -28,7 +28,7 @@ Ask questions about Indonesian oil & gas data in English or Bahasa Indonesia.
 Fetch and manage ESDC data from the command line.
 
 - **Fetch Data**: Download from ESDC API (CSV, JSON, ZIP formats)
-- **Load Data**: Import into SQLite database
+- **Load Data**: Import into DuckDB database
 - **Query Data**: Display with filters
 
 ## Installation
@@ -86,7 +86,7 @@ Configuration is stored in `~/.esdc/`:
 ```
 ~/.esdc/
 ├── config.yaml    # Provider and model settings
-└── esdc.db        # SQLite database
+└── esdc.duckdb        # DuckDB database
 ```
 
 ### Provider Configuration

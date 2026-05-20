@@ -19,7 +19,7 @@ ENUM_CHOICES: dict[str, list[str]] = {
 KEY_DESCRIPTIONS: dict[str, str] = {
     "api_url": "Base URL for the ESDC API",
     "api.verify_ssl": "Verify SSL certificates for API requests",
-    "database_path": "Path to the SQLite database file",
+    "database_path": "Path to the DuckDB database file",
     "tool_format": "Format for tool results (native, markdown, or auto)",
     "default_provider": "Default LLM provider name",
     "provider_order": "Ordered LLM provider failover list",
@@ -44,6 +44,8 @@ class Config:
     """ESDC application configuration manager."""
 
     APP_NAME: str = "esdc"
+    DB_FILENAME: str = "esdc.duckdb"
+    LEGACY_DB_FILENAME: str = "esdc.db"
     BASE_API_URL_V2: str = "https://esdc.skkmigas.go.id/"
     _config_cache: dict[str, Any] | None = None
 
@@ -64,6 +66,37 @@ class Config:
     def get_config_file(cls) -> Path:
         """Return the config file path (~/.esdc/config.yaml)."""
         return cls.get_config_dir() / "config.yaml"
+
+    @classmethod
+    def _default_db_file(cls) -> Path:
+        """Return the default DuckDB file path."""
+        return cls.get_config_dir() / cls.DB_FILENAME
+
+    @classmethod
+    def _legacy_default_db_file(cls) -> Path:
+        """Return the pre-rename default database file path."""
+        return cls.get_config_dir() / cls.LEGACY_DB_FILENAME
+
+    @classmethod
+    def _migrate_legacy_default_db_file(cls, *, update_config: bool) -> Path:
+        """Rename the old default database file to the new default path once."""
+        default_db_file = cls._default_db_file()
+        legacy_db_file = cls._legacy_default_db_file()
+
+        if not default_db_file.exists() and legacy_db_file.exists():
+            legacy_db_file.rename(default_db_file)
+
+        if update_config:
+            config = cls._load_config() or {}
+            configured_path = config.get("database_path")
+            if (
+                configured_path
+                and Path(configured_path).expanduser() == legacy_db_file
+            ):
+                config["database_path"] = str(default_db_file)
+                cls._save_config(config)
+
+        return default_db_file
 
     @classmethod
     def _load_config(cls) -> dict[str, Any] | None:
@@ -92,7 +125,7 @@ class Config:
             default_config = {
                 "api_url": cls.BASE_API_URL_V2,
                 "api": {"verify_ssl": True},
-                "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
+                "database_path": str(cls._default_db_file()),
                 "tool_format": "native",  # native, markdown, or auto
                 "cache": {"sql_ttl": 604800},
                 "logging": {
@@ -216,7 +249,7 @@ class Config:
         Priority:
         1. ESDC_DB_FILE environment variable (full file path)
         2. config.yaml database_path
-        3. ~/.esdc/esdc.db (default)
+        3. ~/.esdc/esdc.duckdb (default)
         """
         env_file = os.environ.get("ESDC_DB_FILE")
         if env_file:
@@ -224,9 +257,12 @@ class Config:
 
         config = cls._load_config()
         if config and "database_path" in config:
-            return Path(config["database_path"]).expanduser()
+            db_path = Path(config["database_path"]).expanduser()
+            if db_path == cls._legacy_default_db_file():
+                return cls._migrate_legacy_default_db_file(update_config=True)
+            return db_path
 
-        return cls.get_config_dir() / f"{cls.APP_NAME}.db"
+        return cls._migrate_legacy_default_db_file(update_config=False)
 
     @classmethod
     def get_db_path(cls) -> Path:
@@ -501,7 +537,7 @@ class Config:
         db_config = config.get("database", {})
         if db_path := db_config.get("path"):
             return Path(db_path).expanduser().resolve()
-        return (cls.get_db_dir() / f"{cls.APP_NAME}.db").resolve()
+        return cls.get_db_file().resolve()
 
     @classmethod
     def set_chat_db_path(cls, path: Path) -> None:
@@ -743,7 +779,7 @@ class Config:
         return {
             "api_url": cls.BASE_API_URL_V2,
             "api": {"verify_ssl": True},
-            "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
+            "database_path": str(config_dir / cls.DB_FILENAME),
             "tool_format": "native",
             "cache": {"sql_ttl": 604800},
             "logging": {

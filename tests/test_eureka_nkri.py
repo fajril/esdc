@@ -55,7 +55,7 @@ def test_agg_timeseries_an_uses_spf_for_sales_potential_resources():
 
 def test_get_nkri_timeseries_returns_spf_fields(tmp_path, monkeypatch):
     config_dir = tmp_path / ".esdc"
-    db_file = config_dir / "esdc.db"
+    db_file = config_dir / "esdc.duckdb"
     monkeypatch.setenv("ESDC_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("ESDC_DB_FILE", str(db_file))
     Config._config_cache = None

@@ -4,7 +4,7 @@ Thank you for your interest in contributing to ESDC!
 
 ## Project Overview
 
-ESDC is a Python CLI package for managing data from the ESDC API (https://esdc.skkmigas.go.id). It provides commands for fetching, validating, and displaying data from various resources, with SQLite database storage.
+ESDC is a Python CLI package for managing data from the ESDC API (https://esdc.skkmigas.go.id). It provides commands for fetching, validating, and displaying data from various resources, with DuckDB database storage.
 
 ## Build/Lint/Test Commands
 
@@ -198,14 +198,14 @@ The application uses `~/.esdc/config.yaml` for configuration. On first run, a de
 ```
 ~/.esdc/
 ├── config.yaml    # Configuration settings
-└── esdc.db       # Database file
+└── esdc.duckdb       # Database file
 ```
 
 ### Config File Structure
 
 ```yaml
 api_url: https://esdc.skkmigas.go.id/
-database_path: ~/.esdc/esdc.db
+database_path: ~/.esdc/esdc.duckdb
 ```
 
 ### Environment Variables

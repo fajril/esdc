@@ -211,6 +211,44 @@ class TestEntityResolver:
         result = resolver.resolve("data di WK Rokan 2024")
         assert any(e["type"] == "WorkingArea" for e in result["entities"])
 
+    def test_working_area_prefers_wa_resources(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=mock_db)
+        result = resolver.resolve("cadangan WK Rokan 2024")
+        assert result["suggested_table"] == "wa_resources"
+        assert "wk_name = 'WK Rokan'" in result["where_conditions"]
+
+    def test_project_entity_prefers_project_resources(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=mock_db)
+        result = resolver.resolve("cadangan proyek Abadi LNG 2024")
+        assert result["status"] == "success"
+        assert result["suggested_table"] == "project_resources"
+        assert any(e.get("entity_type") == "project_name" for e in result["entities"])
+        assert "project_name = 'Abadi LNG'" in result["where_conditions"]
+
+    def test_operator_entity_prefers_project_resources(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=mock_db)
+        result = resolver.resolve("cadangan operator Pertamina Hulu Rokan 2024")
+        assert result["status"] == "success"
+        assert result["suggested_table"] == "project_resources"
+        assert any(e.get("entity_type") == "operator_name" for e in result["entities"])
+        assert "operator_name = 'PT Pertamina Hulu Rokan'" in result["where_conditions"]
+
+    def test_multi_entity_working_area_and_operator(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=mock_db)
+        result = resolver.resolve("top proyek di WK Rokan oleh Pertamina")
+        entity_types = {e["entity_type"] for e in result["entities"]}
+        assert {"wk_name", "operator_name"}.issubset(entity_types)
+        assert "wk_name = 'WK Rokan'" in result["where_conditions"]
+        assert "operator_name = 'PT Pertamina Hulu Rokan'" in result["where_conditions"]
+
     def test_determine_table_for_production(self, mock_db: duckdb.DuckDBPyConnection):
         resolver = EntityResolver(db=mock_db)
         result = resolver.resolve("profil produksi Duri 2024")

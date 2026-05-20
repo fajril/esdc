@@ -3,13 +3,13 @@
 This module provides functionality for managing data
 related to the ESDC (https://esdc.skkmigas.go.id).
 It includes commands for fetching and displaying data from various resources,
-as well as loading data into a SQLite database.
+as well as loading data into a DuckDB database.
 The module utilizes the Typer library for command-line interface (CLI) interactions
 and Rich for enhanced logging and output formatting.
 
 Key Features:
 - Fetch data from the ESDC API in various formats (CSV, JSON, ZIP).
-- Load data into a SQLite database.
+- Load data into a DuckDB database.
 - Display data from specific tables with filtering options.
 - Save output data to files.
 
@@ -18,7 +18,7 @@ Dependencies:
 - requests: For making HTTP requests to the ESDC API.
 - rich: For enhanced terminal output and logging.
 - pyyaml: For loading configuration from config.yaml.
-- sqlite3: For database operations.
+- duckdb: For database operations.
 
 Commands:
 - init: Initializes the application and fetches data.

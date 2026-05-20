@@ -36,6 +36,26 @@ class TestQueryClassifier:
         assert result.detected_entities.get("wk_name") == "rokan"
         assert result.suggested_table == "wa_resources"
 
+    def test_simple_reserves_project_query(self):
+        """Test classification of project-level reserves query."""
+        result = self.classifier.classify("berapa cadangan proyek Abadi LNG 2024?")
+
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.detected_entities.get("project_name") == "abadi lng"
+        assert result.suggested_table == "project_resources"
+
+    def test_simple_reserves_operator_query(self):
+        """Test classification of operator-level reserves query."""
+        result = self.classifier.classify(
+            "berapa cadangan operator Pertamina Hulu Rokan 2024?"
+        )
+
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+        assert result.detected_entities.get("operator_name") == (
+            "pertamina hulu rokan"
+        )
+        assert result.suggested_table == "project_resources"
+
     def test_production_profile_query(self):
         """Test classification of production profile query."""
         result = self.classifier.classify("profil produksi lapangan Duri 2024")

@@ -32,7 +32,7 @@ class TestFetchCreatesDatabase:
     """Tests that fetch command creates database correctly."""
 
     def test_fetch_creates_database(self, isolated_config, mock_esdc_api, monkeypatch):
-        """First fetch run should create ~/.esdc/esdc.db."""
+        """First fetch run should create ~/.esdc/esdc.duckdb."""
         project_resources_data = [
             {
                 "project_id": "PRJ-001",
@@ -52,7 +52,7 @@ class TestFetchCreatesDatabase:
 
         result = runner.invoke(app, ["fetch", "--filetype", "json"])
 
-        db_file = isolated_config / ".esdc" / "esdc.db"
+        db_file = isolated_config / ".esdc" / "esdc.duckdb"
         assert db_file.exists(), f"Database not created at {db_file}"
         assert result.exit_code == 0
 
@@ -83,7 +83,7 @@ class TestFetchJsonToDatabase:
 
         assert result.exit_code == 0
 
-        db_file = isolated_config / ".esdc" / "esdc.db"
+        db_file = isolated_config / ".esdc" / "esdc.duckdb"
         assert db_file.exists()
 
         conn = duckdb.connect(str(db_file))
@@ -129,7 +129,7 @@ class TestFetchJsonToDatabase:
 
         assert result.exit_code == 0
 
-        db_file = isolated_config / ".esdc" / "esdc.db"
+        db_file = isolated_config / ".esdc" / "esdc.duckdb"
         assert db_file.exists()
 
         conn = duckdb.connect(str(db_file))
@@ -167,9 +167,9 @@ class TestFetchJsonToDatabase:
         result = runner.invoke(app, ["fetch", "--filetype", "json"])
         assert result.exit_code == 0
 
-        db_file = isolated_config / ".esdc" / "esdc.db"
+        db_file = isolated_config / ".esdc" / "esdc.duckdb"
 
-        db_file = isolated_config / ".esdc" / "esdc.db"
+        db_file = isolated_config / ".esdc" / "esdc.duckdb"
         conn = duckdb.connect(str(db_file))
         row = conn.execute("SELECT COUNT(*) FROM project_resources").fetchone()
         assert row is not None
@@ -258,7 +258,7 @@ class TestFetchCsvToDatabase:
 
         assert result.exit_code == 0
 
-        db_file = isolated_config / ".esdc" / "esdc.db"
+        db_file = isolated_config / ".esdc" / "esdc.duckdb"
         assert db_file.exists()
 
         conn = duckdb.connect(str(db_file))
@@ -343,5 +343,5 @@ class TestFetchWithEnvCredentials:
 
         assert result.exit_code == 0
 
-        db_file = isolated_config / ".esdc" / "esdc.db"
+        db_file = isolated_config / ".esdc" / "esdc.duckdb"
         assert db_file.exists()

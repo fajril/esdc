@@ -124,15 +124,18 @@ class QueryClassifier:
 
     # Entity detection patterns
     ENTITY_PATTERNS = {
+        "project_name": [
+            r"(?:proyek|project)\s+(.+?)(?=\s+(?:tahun|year|di|pada|oleh|operator|untuk|dengan|dan)\b|$)",
+        ],
         "field_name": [
-            r"lapangan\s+(\w+)",
-            r"field\s+(\w+)",
+            r"(?:lapangan|field)\s+(.+?)(?=\s+(?:tahun|year|di|pada|oleh|operator|untuk|dengan|dan|wk|wilayah\s+kerja)\b|$)",
             r"di\s+(\w+)\s+(?:tahun|tahun\s+\d{4})",  # Contextual
         ],
         "wk_name": [
-            r"wk\s+(\w+)",
-            r"wilayah\s+kerja\s+(\w+)",
-            r"working\s+area\s+(\w+)",
+            r"(?:wk|wilayah\s+kerja|working\s+area)\s+(.+?)(?=\s+(?:tahun|year|di|pada|oleh|operator|untuk|dengan|dan|lapangan|field)\b|$)",
+        ],
+        "operator_name": [
+            r"(?:operator|perusahaan|oleh)\s+(.+?)(?=\s+(?:tahun|year|di|pada|untuk|dengan|dan|wk|wilayah\s+kerja|lapangan|field)\b|$)",
         ],
         "report_year": [
             r"tahun\s+(\d{4})",
@@ -295,9 +298,23 @@ class QueryClassifier:
             for pattern in patterns:
                 match = re.search(pattern, query, re.IGNORECASE)
                 if match:
-                    entities[entity_type] = match.group(1)
+                    value = match.group(1)
+                    if entity_type != "report_year":
+                        value = self._clean_entity_value(value)
+                    if value:
+                        entities[entity_type] = value
                     break
         return entities
+
+    def _clean_entity_value(self, value: str) -> str:
+        """Normalize a regex-captured entity phrase."""
+        cleaned = re.sub(r"\b20\d{2}\b", "", value)
+        cleaned = re.sub(r"[^\w\s&./'-]", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        first_word = cleaned.split(" ", 1)[0] if cleaned else ""
+        if first_word in {"apa", "yang", "siapa", "berapa", "mana"}:
+            return ""
+        return cleaned
 
     def _match_patterns(self, query: str, pattern_groups: dict) -> str | None:
         """Check if query matches any pattern in groups.
@@ -332,6 +349,11 @@ class QueryClassifier:
                 return "wa_resources"
             elif query_category == "production_profile":
                 return "wa_timeseries"
+
+        if "project_name" in entities or "operator_name" in entities:
+            if query_category == "production_profile":
+                return "project_timeseries"
+            return "project_resources"
 
         if query_category in _resource_categories:
             return "field_resources"

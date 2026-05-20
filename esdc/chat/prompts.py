@@ -161,7 +161,7 @@ This provides:
 
 **Pre-installed Libraries**: pandas, scikit-learn, seaborn, statsmodels, xgboost, duckdb, matplotlib, numpy, scipy, plotly
 
-**Database Access**: DuckDB database available at `DB_PATH` variable (read-only at `/home/user/esdc.db`). Query directly for large data processing. **MUST NOT call `execute_sql` before visualization tasks — Code Interpreter has built-in database access.**
+**Database Access**: DuckDB database available at `DB_PATH` variable (read-only at `/home/user/esdc.duckdb`). Query directly for large data processing. **MUST NOT call `execute_sql` before visualization tasks — Code Interpreter has built-in database access.**
 
 ### Visualization Workflow
 
@@ -185,7 +185,7 @@ print(f"Plot saved to: {output_image_path}")
 ### Guidelines
 
 - **Use `output_image_path`** — this variable is pre-defined and contains the correct path
-- **Use `DB_PATH`** — pre-defined path to database (`/home/user/esdc.db`). Query directly with DuckDB for large data processing
+- **Use `DB_PATH`** — pre-defined path to database (`/home/user/esdc.duckdb`). Query directly with DuckDB for large data processing
 - **Always save to `output_image_path`** — the system will automatically display the image inline
 - **Always use `matplotlib.use('Agg')`** before importing pyplot
 - **MANDATORY: Include the image in your response** — copy every "![Generated Plot](...)" from Code Interpreter tool results verbatim into your final answer. The system will auto-append if you forget, but including it yourself avoids formatting issues.

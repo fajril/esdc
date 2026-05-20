@@ -15,7 +15,7 @@ from esdc.eureka.queries import get_field_kpis
 def field_kpi_db(tmp_path, monkeypatch):
     """Create seeded database with realistic field project data."""
     config_dir = tmp_path / ".esdc"
-    db_file = config_dir / "esdc.db"
+    db_file = config_dir / "esdc.duckdb"
     monkeypatch.setenv("ESDC_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("ESDC_DB_FILE", str(db_file))
     Config.init_config()

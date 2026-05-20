@@ -49,7 +49,7 @@ def isolated_config(tmp_path, monkeypatch):
     to avoid polluting the user's actual ~/.esdc/ directory.
     """
     config_dir = tmp_path / ".esdc"
-    db_file = config_dir / "esdc.db"
+    db_file = config_dir / "esdc.duckdb"
     monkeypatch.setenv("ESDC_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("ESDC_DB_FILE", str(db_file))
     yield tmp_path
