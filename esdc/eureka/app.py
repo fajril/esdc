@@ -18,6 +18,7 @@ from esdc.eureka.charts.nkri import (
     nkri_timeseries_an,
     nkri_timeseries_oc,
 )
+from esdc.eureka.charts.pod import pod_timeseries_an, pod_timeseries_oc
 from esdc.eureka.queries import (
     get_available_years,
     get_field_kpis,
@@ -28,6 +29,12 @@ from esdc.eureka.queries import (
     get_nkri_table_data,
     get_nkri_timeseries,
     get_onstream_data,
+    get_pod_kpis,
+    get_pod_list_for_wk,
+    get_pod_table_data,
+    get_pod_timeseries,
+    get_pod_wk_list,
+    get_pod_years,
     get_project_kpis,
     get_wk_kpis,
 )
@@ -256,6 +263,160 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
                 )
         except FileNotFoundError:
             return JSONResponse({"error": "Database not found"}, status_code=500)
+
+    # --- POD page ---
+    @app.get("/eureka/pod", response_class=HTMLResponse)
+    async def pod_dashboard(
+        request: Request,
+        pod_id: str | None = None,
+        wk: str | None = None,
+        case_type: str = "plan",
+        year: int | None = None,
+    ) -> HTMLResponse:
+        """POD dashboard page."""
+        wks = get_pod_wk_list()
+        if not wk and wks:
+            wk = wks[0]
+
+        pods = get_pod_list_for_wk(wk) if wk else []
+        if not pod_id and pods:
+            pod_id = pods[0]["pod_id"]
+
+        if not pod_id:
+            ctx = {
+                "request": request,
+                "wks": wks,
+                "pods": [],
+                "selected_wk": wk,
+                "selected_pod_id": None,
+                "selected_pod_name": None,
+                "selected_case_type": case_type,
+                "selected_year": year,
+                "years": [],
+                "kpis": None,
+                "ts_oc_fig": None,
+                "ts_an_fig": None,
+            }
+            return templates.TemplateResponse(request, "pod.html", ctx)
+
+        years = get_pod_years(pod_id)
+        if not year and years:
+            year = years[0]
+
+        kpis = get_pod_kpis(pod_id, case_type, year)
+        ts_data = get_pod_timeseries(pod_id, case_type)
+        ts_oc_fig = pod_timeseries_oc(ts_data)
+        ts_an_fig = pod_timeseries_an(ts_data)
+
+        ctx = {
+            "request": request,
+            "wks": wks,
+            "pods": pods,
+            "selected_wk": wk,
+            "selected_pod_id": pod_id,
+            "selected_pod_name": kpis.pod_name,
+            "selected_case_type": case_type,
+            "selected_year": year,
+            "years": years,
+            "kpis": kpis,
+            "ts_oc_fig": ts_oc_fig,
+            "ts_an_fig": ts_an_fig,
+        }
+        return templates.TemplateResponse(request, "pod.html", ctx)
+
+    @app.get("/eureka/api/pod/kpis")
+    async def pod_kpis(
+        pod_id: str, case_type: str = "plan", year: int | None = None
+    ) -> JSONResponse:
+        """API endpoint for POD KPI data."""
+        try:
+            kpis = get_pod_kpis(pod_id, case_type, year)
+            return JSONResponse(_dataclass_to_dict(kpis))
+        except FileNotFoundError:
+            return JSONResponse({"error": "Database not found"}, status_code=500)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+
+    @app.get("/eureka/api/pod/chart/{chart_name}")
+    async def pod_chart(
+        chart_name: str, pod_id: str, case_type: str = "plan"
+    ) -> JSONResponse:
+        """API endpoint for POD chart data as Plotly JSON."""
+        try:
+            ts_data = get_pod_timeseries(pod_id, case_type)
+            if chart_name == "timeseries_oc":
+                fig = pod_timeseries_oc(ts_data)
+            elif chart_name == "timeseries_an":
+                fig = pod_timeseries_an(ts_data)
+            else:
+                return JSONResponse(
+                    {"error": f"Unknown chart: {chart_name}"}, status_code=404
+                )
+            return JSONResponse(fig.to_json(), media_type="application/json")
+        except FileNotFoundError:
+            return JSONResponse({"error": "Database not found"}, status_code=500)
+
+    @app.get("/eureka/api/pod/table")
+    async def pod_table(
+        pod_id: str,
+        case_type: str = "plan",
+        year: int | None = None,
+        detail: str = "economics",
+    ) -> JSONResponse:
+        """API endpoint for POD data table."""
+        try:
+            data = get_pod_table_data(pod_id, case_type, year, detail)
+            return JSONResponse(data)
+        except FileNotFoundError:
+            return JSONResponse({"error": "Database not found"}, status_code=500)
+
+    @app.get("/eureka/api/pod/export", response_model=None)
+    async def pod_export(
+        pod_id: str,
+        case_type: str = "plan",
+        year: int | None = None,
+        detail: str = "economics",
+        format: str = Query("csv", alias="format"),
+    ):
+        """Export POD data as CSV."""
+        import io
+
+        import pandas as pd
+
+        try:
+            data = get_pod_table_data(pod_id, case_type, year, detail)
+            df = pd.DataFrame(data)
+
+            if format == "csv":
+                output = io.StringIO()
+                df.to_csv(output, index=False)
+                fname = f"pod_{pod_id}_{detail}.csv"
+                return HTMLResponse(
+                    content=output.getvalue(),
+                    media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"},
+                )
+            else:
+                output = io.BytesIO()
+                df.to_excel(output, index=False, sheet_name="POD Data")
+                fname = f"pod_{pod_id}_{detail}.xlsx"
+                return HTMLResponse(
+                    content=output.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"},
+                )
+        except FileNotFoundError:
+            return JSONResponse({"error": "Database not found"}, status_code=500)
+
+    @app.get("/eureka/api/pod/wks")
+    async def pod_wks() -> JSONResponse:
+        """API endpoint for WK list."""
+        return JSONResponse(get_pod_wk_list())
+
+    @app.get("/eureka/api/pod/pods")
+    async def pod_pods(wk: str) -> JSONResponse:
+        """API endpoint for POD list in a WK."""
+        return JSONResponse(get_pod_list_for_wk(wk))
 
     # Mount static files AFTER routes to prevent path conflicts
     if STATIC_DIR.exists():

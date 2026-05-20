@@ -1,0 +1,451 @@
+{% extends "base.html" %}
+{% block title %}Eureka — POD Dashboard{% endblock %}
+
+{% block content %}
+{% if kpis is none %}
+<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:1.5rem;">
+  <h2 style="font-family:var(--font-display);font-size:1.5rem;color:var(--text-primary);margin:0;">Select a POD</h2>
+  <p style="color:var(--text-muted);margin:0;">Choose a Working Area and POD to view data.</p>
+  <div class="pod-selector-bar" style="display:flex;gap:1rem;padding:0.75rem 1rem;background:var(--bg-elevated);border-radius:8px;align-items:center;">
+    <div style="display:flex;flex-direction:column;gap:0.25rem;">
+      <label style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Working Area</label>
+      <select id="wk-select" class="detail-filter" style="min-width:200px;">
+        {% for w in wks %}<option value="{{ w }}" {% if w == selected_wk %}selected{% endif %}>{{ w }}</option>{% endfor %}
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.25rem;">
+      <label style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">POD</label>
+      <select id="pod-select" class="detail-filter" style="min-width:300px;">
+        {% for p in pods %}<option value="{{ p.pod_id }}" {% if p.pod_id == selected_pod_id %}selected{% endif %}>{{ p.pod_name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.25rem;">
+      <label style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Case Type</label>
+      <select id="case-select" class="detail-filter" style="min-width:120px;">
+        <option value="plan" {% if selected_case_type == 'plan' %}selected{% endif %}>Plan</option>
+        <option value="outlook" {% if selected_case_type == 'outlook' %}selected{% endif %}>Outlook</option>
+        <option value="actual" {% if selected_case_type == 'actual' %}selected{% endif %}>Actual</option>
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.25rem;">
+      <label style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Year</label>
+      <select id="pod-year-select" class="detail-filter" style="min-width:100px;">
+        {% for y in years %}<option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+</div>
+{% else %}
+{% set k = kpis %}
+{% set e = kpis.economics %}
+
+{# 1. SELECTOR BAR #}
+<div class="pod-selector-bar" style="display:flex;gap:1rem;padding:0.75rem 1rem;background:var(--bg-elevated);border-radius:8px;margin-bottom:1.5rem;align-items:center;">
+  <div style="display:flex;flex-direction:column;gap:0.25rem;">
+    <label style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Working Area</label>
+    <select id="wk-select" class="detail-filter" style="min-width:200px;">
+      {% for w in wks %}<option value="{{ w }}" {% if w == selected_wk %}selected{% endif %}>{{ w }}</option>{% endfor %}
+    </select>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:0.25rem;">
+    <label style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">POD</label>
+    <select id="pod-select" class="detail-filter" style="min-width:300px;">
+      {% for p in pods %}<option value="{{ p.pod_id }}" {% if p.pod_id == selected_pod_id %}selected{% endif %}>{{ p.pod_name }}</option>{% endfor %}
+    </select>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:0.25rem;">
+    <label style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Case Type</label>
+    <select id="case-select" class="detail-filter" style="min-width:120px;">
+      <option value="plan" {% if selected_case_type == 'plan' %}selected{% endif %}>Plan</option>
+      <option value="outlook" {% if selected_case_type == 'outlook' %}selected{% endif %}>Outlook</option>
+      <option value="actual" {% if selected_case_type == 'actual' %}selected{% endif %}>Actual</option>
+    </select>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:0.25rem;">
+    <label style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Year</label>
+    <select id="pod-year-select" class="detail-filter" style="min-width:100px;">
+      {% for y in years %}<option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>{% endfor %}
+    </select>
+  </div>
+</div>
+
+{# 2. RESOURCE CLASSIFICATION #}
+<div class="resources-layout animate-scale-in stagger-1">
+  <div class="resources-left">
+    <div class="section-title"><span class="section-badge" style="background:var(--reserves);"></span>Resource Classification</div>
+    <div class="hero-pipeline">
+      {# Reserves #}
+      <div class="hero-metric reserves">
+        <div class="hero-metric-header">Reserves</div>
+        <div class="hero-subheader">Commercial — 1P · 2P · 3P</div>
+        <div class="hero-columns">
+          <div class="hero-column">
+            <div class="hero-range-row">
+              <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.reserves.low_oc or 0) }}">{{ "%.0f"|format(k.reserves.low_oc or 0) }}</span>
+              <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.reserves.mid_oc or 0) }}">{{ "%.0f"|format(k.reserves.mid_oc or 0) }}</span>
+              <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.reserves.high_oc or 0) }}">{{ "%.0f"|format(k.reserves.high_oc or 0) }}</span>
+            </div>
+            <div class="hero-unit">MMSTB</div>
+            <div class="hero-fluid-label">Oil + Condensate</div>
+          </div>
+          <div class="hero-column">
+            <div class="hero-range-row">
+              <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.reserves.low_an or 0) }}">{{ "%.0f"|format(k.reserves.low_an or 0) }}</span>
+              <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.reserves.mid_an or 0) }}">{{ "%.0f"|format(k.reserves.mid_an or 0) }}</span>
+              <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.reserves.high_an or 0) }}">{{ "%.0f"|format(k.reserves.high_an or 0) }}</span>
+            </div>
+            <div class="hero-unit">TSCF</div>
+            <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          </div>
+        </div>
+      </div>
+
+      {# Contingent Exploitation #}
+      <div class="hero-metric cont-exploit">
+        <div class="hero-metric-header">Contingent Resources</div>
+        <div class="hero-subheader">Exploitation — 1C · 2C · 3C</div>
+        <div class="hero-columns">
+          <div class="hero-column">
+            <div class="hero-range-row">
+              <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.contingent_exploit.low_oc or 0) }}">{{ "%.0f"|format(k.contingent_exploit.low_oc or 0) }}</span>
+              <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.contingent_exploit.mid_oc or 0) }}">{{ "%.0f"|format(k.contingent_exploit.mid_oc or 0) }}</span>
+              <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.contingent_exploit.high_oc or 0) }}">{{ "%.0f"|format(k.contingent_exploit.high_oc or 0) }}</span>
+            </div>
+            <div class="hero-unit">MMSTB</div>
+            <div class="hero-fluid-label">Oil + Condensate</div>
+          </div>
+          <div class="hero-column">
+            <div class="hero-range-row">
+              <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.contingent_exploit.low_an or 0) }}">{{ "%.0f"|format(k.contingent_exploit.low_an or 0) }}</span>
+              <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.contingent_exploit.mid_an or 0) }}">{{ "%.0f"|format(k.contingent_exploit.mid_an or 0) }}</span>
+              <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.contingent_exploit.high_an or 0) }}">{{ "%.0f"|format(k.contingent_exploit.high_an or 0) }}</span>
+            </div>
+            <div class="hero-unit">TSCF</div>
+            <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          </div>
+        </div>
+      </div>
+
+      {# Contingent Exploration #}
+      <div class="hero-metric cont-explore">
+        <div class="hero-metric-header">Contingent Resources</div>
+        <div class="hero-subheader">Exploration — 1C · 2C · 3C</div>
+        <div class="hero-columns">
+          <div class="hero-column">
+            <div class="hero-range-row">
+              <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.contingent_explore.low_oc or 0) }}">{{ "%.0f"|format(k.contingent_explore.low_oc or 0) }}</span>
+              <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.contingent_explore.mid_oc or 0) }}">{{ "%.0f"|format(k.contingent_explore.mid_oc or 0) }}</span>
+              <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.contingent_explore.high_oc or 0) }}">{{ "%.0f"|format(k.contingent_explore.high_oc or 0) }}</span>
+            </div>
+            <div class="hero-unit">MMSTB</div>
+            <div class="hero-fluid-label">Oil + Condensate</div>
+          </div>
+          <div class="hero-column">
+            <div class="hero-range-row">
+              <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.contingent_explore.low_an or 0) }}">{{ "%.0f"|format(k.contingent_explore.low_an or 0) }}</span>
+              <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.contingent_explore.mid_an or 0) }}">{{ "%.0f"|format(k.contingent_explore.mid_an or 0) }}</span>
+              <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.contingent_explore.high_an or 0) }}">{{ "%.0f"|format(k.contingent_explore.high_an or 0) }}</span>
+            </div>
+            <div class="hero-unit">TSCF</div>
+            <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          </div>
+        </div>
+      </div>
+
+      {# Prospective Resources #}
+      <div class="hero-metric prospective">
+        <div class="hero-metric-header">Prospective Resources</div>
+        <div class="hero-subheader">Risked — 1U · 2U · 3U</div>
+        <div class="hero-columns">
+          <div class="hero-column">
+            <div class="hero-range-row">
+              <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.prospective.low_oc or 0) }}">{{ "%.0f"|format(k.prospective.low_oc or 0) }}</span>
+              <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.prospective.mid_oc or 0) }}">{{ "%.0f"|format(k.prospective.mid_oc or 0) }}</span>
+              <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.prospective.high_oc or 0) }}">{{ "%.0f"|format(k.prospective.high_oc or 0) }}</span>
+            </div>
+            <div class="hero-unit">MMSTB</div>
+            <div class="hero-fluid-label">Oil + Condensate</div>
+          </div>
+          <div class="hero-column">
+            <div class="hero-range-row">
+              <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.prospective.low_an or 0) }}">{{ "%.0f"|format(k.prospective.low_an or 0) }}</span>
+              <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.prospective.mid_an or 0) }}">{{ "%.0f"|format(k.prospective.mid_an or 0) }}</span>
+              <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.prospective.high_an or 0) }}">{{ "%.0f"|format(k.prospective.high_an or 0) }}</span>
+            </div>
+            <div class="hero-unit">TSCF</div>
+            <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# 3. PRODUCTION RIGHT SIDEBAR #}
+  <div class="resources-right animate-fade-up stagger-2">
+    <div class="section-title"><span class="section-badge" style="background:var(--info);"></span>Production</div>
+    <div class="hero-metric production right-section-card">
+      <div class="hero-metric-header">Production</div>
+      <div class="hero-subheader">{{ selected_pod_name }} — {{ selected_case_type|capitalize }}</div>
+      <div class="prod-grid">
+        <div class="prod-cell">
+          <div class="prod-cell-value" style="color:var(--oil-bright)" data-count="{{ "%.0f"|format(k.cum_oil) }}">{{ "%.0f"|format(k.cum_oil) }}</div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="prod-cell-label">Cumulative Oil + Condensate</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-value" style="color:var(--gas-bright)" data-count="{{ "%.0f"|format(k.cum_gas) }}">{{ "%.0f"|format(k.cum_gas) }}</div>
+          <div class="hero-unit">TSCF</div>
+          <div class="prod-cell-label">Cumulative Gas</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-value" style="color:var(--oil-bright)">{{ "%.0f"|format(k.yearly_oil) }}</div>
+          <div class="hero-unit">MSTB/yr</div>
+          <div class="prod-cell-label">Yearly Oil + Condensate</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.yearly_gas) }}</div>
+          <div class="hero-unit">MSCF/yr</div>
+          <div class="prod-cell-label">Yearly Gas</div>
+        </div>
+      </div>
+    </div>
+
+    {# 4. ECONOMIC DATA TABLE #}
+    <div class="section-title" style="margin-top:1.25rem;">
+      <span class="section-badge" style="background:var(--cont-exploit);"></span>
+      Economic Data
+    </div>
+    <div style="background:var(--bg-elevated);border-radius:8px;padding:1rem;border:1px solid var(--border);">
+      <table class="eureka-table" style="width:100%;font-size:0.8rem;">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th style="text-align:right;">Value</th>
+            <th style="text-align:right;">% of GR</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="font-weight:600;">Gross Revenue</td>
+            <td style="text-align:right;color:var(--text-primary);">{{ "%.0f"|format(e.gross_revenue) }} MUSD</td>
+            <td style="text-align:right;color:var(--text-muted);">100.0%</td>
+          </tr>
+          <tr>
+            <td>Investment</td>
+            <td style="text-align:right;">{{ "%.0f"|format(e.investment) }} MUSD</td>
+            <td style="text-align:right;{% if e.pct_investment %}color:var(--info){% endif %}">{% if e.pct_investment %}{{ "%.1f"|format(e.pct_investment) }}%{% else %}—{% endif %}</td>
+          </tr>
+          <tr>
+            <td>OPEX</td>
+            <td style="text-align:right;">{{ "%.0f"|format(e.opex) }} MUSD</td>
+            <td style="text-align:right;{% if e.pct_opex %}color:var(--info){% endif %}">{% if e.pct_opex %}{{ "%.1f"|format(e.pct_opex) }}%{% else %}—{% endif %}</td>
+          </tr>
+          <tr>
+            <td>ASR</td>
+            <td style="text-align:right;">{{ "%.0f"|format(e.asr) }} MUSD</td>
+            <td style="text-align:right;{% if e.pct_asr %}color:var(--info){% endif %}">{% if e.pct_asr %}{{ "%.1f"|format(e.pct_asr) }}%{% else %}—{% endif %}</td>
+          </tr>
+          <tr>
+            <td>IRR</td>
+            <td style="text-align:right;{% if e.irr %}color:var(--success){% endif %}">{% if e.irr %}{{ "%.1f"|format(e.irr) }}%{% else %}—{% endif %}</td>
+            <td style="text-align:right;color:var(--text-muted);">—</td>
+          </tr>
+          <tr>
+            <td>NPV</td>
+            <td style="text-align:right;">{{ "%.0f"|format(e.npv) }} MUSD</td>
+            <td style="text-align:right;color:var(--text-muted);">—</td>
+          </tr>
+          <tr style="border-top:2px solid var(--border);">
+            <td style="font-weight:600;">GOI Take</td>
+            <td style="text-align:right;font-weight:600;">{{ "%.0f"|format(e.goi_take) }} MUSD</td>
+            <td style="text-align:right;font-weight:600;{% if e.pct_goi_take %}color:var(--success){% endif %}">{% if e.pct_goi_take %}{{ "%.1f"|format(e.pct_goi_take) }}%{% else %}—{% endif %}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# 5. TIMESERIES CHARTS #}
+<div class="section-separator"></div>
+<div class="animate-fade-up stagger-3">
+  <div class="section-title">
+    <span class="section-badge" style="background:var(--oil);"></span>
+    POD Timeseries — {{ selected_pod_name }} ({{ selected_case_type|capitalize }})
+  </div>
+  <div class="chart-panel">
+    <div class="chart-body" id="chart-ts-oc"></div>
+  </div>
+  <div style="margin-top:1rem;">
+    <div class="chart-panel">
+      <div class="chart-body" id="chart-ts-an"></div>
+    </div>
+  </div>
+</div>
+
+{# 6. DATA EXPLORER #}
+<div class="section-separator"></div>
+<div class="animate-fade-up stagger-6">
+  <div class="section-title">
+    <span class="section-badge" style="background:var(--gas);"></span>
+    Data Explorer
+  </div>
+  <div class="table-section">
+    <div class="table-toolbar">
+      <div style="display:flex;align-items:center;gap:0.75rem;">
+        <span class="table-toolbar-label">View</span>
+        <select id="detail-select" class="detail-filter">
+          <option value="economics" selected>Economics</option>
+          <option value="resources">Resources</option>
+          <option value="production">Production</option>
+        </select>
+      </div>
+      <a id="export-link" href="/eureka/api/pod/export?pod_id={{ selected_pod_id }}&case_type={{ selected_case_type }}{% if selected_year %}&year={{ selected_year }}{% endif %}&format=csv" class="btn-export">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Export CSV
+      </a>
+    </div>
+    <div class="table-container" id="data-table-container">
+      <div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem;">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4;margin-bottom:0.5rem;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        <br>Loading data...
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // POD selector logic
+  document.getElementById('wk-select').addEventListener('change', function() {
+    const wk = this.value;
+    fetch('/eureka/api/pod/pods?wk=' + encodeURIComponent(wk))
+      .then(r => r.json())
+      .then(pods => {
+        const podSelect = document.getElementById('pod-select');
+        podSelect.innerHTML = '';
+        pods.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.pod_id;
+          opt.textContent = p.pod_name;
+          podSelect.appendChild(opt);
+        });
+        if (pods.length > 0) {
+          podSelect.value = pods[0].pod_id;
+          podSelect.dispatchEvent(new Event('change'));
+        }
+      });
+  });
+
+  function navigateToPod() {
+    const podId = document.getElementById('pod-select').value;
+    const caseType = document.getElementById('case-select').value;
+    const year = document.getElementById('pod-year-select').value;
+    window.location.href = '/eureka/pod?wk=' + encodeURIComponent(document.getElementById('wk-select').value) + '&pod_id=' + encodeURIComponent(podId) + '&case_type=' + caseType + '&year=' + year;
+  }
+
+  document.getElementById('pod-select').addEventListener('change', navigateToPod);
+  document.getElementById('case-select').addEventListener('change', navigateToPod);
+  document.getElementById('pod-year-select').addEventListener('change', navigateToPod);
+
+  {% if kpis is none %}
+  // No charts to render
+  {% else %}
+
+  // Count-up animation for hero values
+  function animateValue(el, end, duration) {
+    const start = 0;
+    let startTimestamp = null;
+    const step = (timestamp) => {
+      if (!startTimestamp) startTimestamp = timestamp;
+      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      el.textContent = Math.floor(eased * (end - start) + start).toLocaleString();
+      if (progress < 1) window.requestAnimationFrame(step);
+    };
+    window.requestAnimationFrame(step);
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[data-count]').forEach(el => {
+      const raw = el.getAttribute('data-count');
+      const parsed = parseFloat(raw.replace(/,/g, ''));
+      if (!isNaN(parsed) && parsed > 0) {
+        el.textContent = '0';
+        animateValue(el, parsed, 1200);
+      }
+    });
+  });
+
+  // Plotly dark theme config
+  const plotlyConfig = {responsive:true,displayModeBar:true,modeBarButtonsToRemove:['lasso2d','select2d','sendDataToCloud'],displaylogo:false,toImageButtonOptions:{format:'png',filename:'eureka-pod-chart'}};
+  const plotlyLayoutDefaults = {
+    paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',
+    font:{family:'JetBrains Mono, monospace',color:'#E6EDF3',size:12},
+    margin:{l:50,r:30,t:30,b:50},
+    hoverlabel:{bgcolor:'#1C2128',bordercolor:'#21262D',font:{color:'#E6EDF3',size:11,family:'JetBrains Mono, monospace'}},
+    legend:{orientation:'h',yanchor:'bottom',y:1.02,xanchor:'right',x:1,font:{color:'#E6EDF3',size:11}},
+    xaxis:{gridcolor:'rgba(48,54,61,0.3)',zerolinecolor:'rgba(48,54,61,0.5)',tickfont:{size:11},showspikes:false},
+    yaxis:{gridcolor:'rgba(48,54,61,0.3)',zerolinecolor:'rgba(48,54,61,0.5)',tickfont:{size:11},showspikes:false}
+  };
+
+  const charts = {
+    'chart-ts-oc': {{ ts_oc_fig.to_json() | safe }},
+    'chart-ts-an': {{ ts_an_fig.to_json() | safe }}
+  };
+
+  for (const [id, figJson] of Object.entries(charts)) {
+    try {
+      const parsed = typeof figJson === 'string' ? JSON.parse(figJson) : figJson;
+      const layout = {...plotlyLayoutDefaults, ...parsed.layout};
+      Plotly.newPlot(document.getElementById(id), parsed.data, layout, plotlyConfig);
+    } catch(e) {
+      console.error('Chart render failed', id, e);
+      document.getElementById(id).innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;"><span style="color:var(--danger);margin-right:0.5rem;">×</span>Chart unavailable</div>';
+    }
+  }
+
+  // Data table loader
+  function loadTable(detail) {
+    const container = document.getElementById('data-table-container');
+    container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4;margin-bottom:0.5rem;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><br>Loading...</div>';
+    const podId = '{{ selected_pod_id }}';
+    const caseType = '{{ selected_case_type }}';
+    const year = '{{ selected_year }}';
+    fetch('/eureka/api/pod/table?pod_id=' + podId + '&case_type=' + caseType + '&year=' + year + '&detail=' + detail)
+      .then(r => r.json())
+      .then(data => {
+        if (!data || data.length === 0) {
+          container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted);">No data available.</div>';
+          return;
+        }
+        const cols = Object.keys(data[0]);
+        let html = '<table class="eureka-table"><thead><tr>';
+        cols.forEach(c => html += '<th>' + c + '</th>');
+        html += '</tr></thead><tbody>';
+        data.forEach(row => {
+          html += '<tr>';
+          cols.forEach(c => {
+            let val = row[c];
+            if (typeof val === 'number' && !Number.isInteger(val)) val = val.toLocaleString(undefined, {maximumFractionDigits: 0});
+            else if (typeof val === 'number') val = val.toLocaleString();
+            html += '<td>' + (val !== null && val !== undefined ? val : '—') + '</td>';
+          });
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        container.innerHTML = html;
+      })
+      .catch(err => {
+        console.error('Table load failed', err);
+        container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--danger);">Failed to load data.</div>';
+      });
+  }
+
+  document.getElementById('detail-select').addEventListener('change', function() { loadTable(this.value); });
+  loadTable('economics');
+  {% endif %}
+</script>
+{% endblock %}
