@@ -1093,6 +1093,118 @@ class PodTimeseriesRow:
     an_bscfy: float
 
 
+def _pod_resources_relation(conn) -> str:
+    """Return the pod_resources view, or a compatible inline relation."""
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_name = 'pod_resources'
+        LIMIT 1
+    """
+    ).fetchone()
+    if row:
+        return "pod_resources"
+
+    pod_name_col = conn.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'project_resources'
+          AND column_name = 'pod_name'
+        LIMIT 1
+    """
+    ).fetchone()
+    if pod_name_col:
+        pod_name_expr = "COALESCE(pod_names.pod_name, pp.pod_id)"
+        resource_columns = "pr.* EXCLUDE (pod_name)"
+        pod_name_join = """
+        LEFT JOIN LATERAL (
+            SELECT string_agg(name, ';' ORDER BY ord) AS pod_name
+            FROM (
+                SELECT trim(part) AS name, MIN(ord) AS ord
+                FROM unnest(string_split(COALESCE(pr.pod_name, ''), ';'))
+                     WITH ORDINALITY AS t(part, ord)
+                WHERE trim(part) != ''
+                GROUP BY trim(part)
+            ) names
+        ) pod_names ON true
+        """
+    else:
+        pod_name_expr = "pp.pod_id"
+        resource_columns = "pr.*"
+        pod_name_join = ""
+
+    return f"""
+        (
+            SELECT
+                pp.pod_id,
+                {pod_name_expr} AS pod_name,
+                {resource_columns}
+            FROM pod_project pp
+            JOIN project_resources pr ON pp.project_id = pr.project_id
+            {pod_name_join}
+        )
+    """
+
+
+def _pod_timeseries_relation(conn) -> str:
+    """Return the pod_timeseries view, or a compatible inline relation."""
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_name = 'pod_timeseries'
+        LIMIT 1
+    """
+    ).fetchone()
+    if row:
+        return "pod_timeseries"
+
+    pod_name_col = conn.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'project_timeseries'
+          AND column_name = 'pod_name'
+        LIMIT 1
+    """
+    ).fetchone()
+    if pod_name_col:
+        pod_name_expr = "COALESCE(pod_names.pod_name, pp.pod_id)"
+        timeseries_columns = "pt.* EXCLUDE (pod_name)"
+        pod_name_join = """
+        LEFT JOIN LATERAL (
+            SELECT string_agg(name, ';' ORDER BY ord) AS pod_name
+            FROM (
+                SELECT trim(part) AS name, MIN(ord) AS ord
+                FROM unnest(string_split(COALESCE(pt.pod_name, ''), ';'))
+                     WITH ORDINALITY AS t(part, ord)
+                WHERE trim(part) != ''
+                GROUP BY trim(part)
+            ) names
+        ) pod_names ON true
+        """
+    else:
+        pod_name_expr = "pp.pod_id"
+        timeseries_columns = "pt.*"
+        pod_name_join = ""
+
+    return f"""
+        (
+            SELECT
+                pp.pod_id,
+                {pod_name_expr} AS pod_name,
+                {timeseries_columns}
+            FROM pod_project pp
+            JOIN project_timeseries pt
+              ON regexp_replace(pp.project_id, '[^A-Za-z0-9]', '', 'g')
+               = regexp_replace(pt.project_id, '[^A-Za-z0-9]', '', 'g')
+            {pod_name_join}
+        )
+    """
+
+
 def _pod_normalize_class(raw: str | None) -> str:
     """Normalize project_class for POD resource grouping."""
     if not raw:
@@ -1110,12 +1222,12 @@ def get_pod_wk_list() -> list[str]:
     """Get distinct WK names that have PODs."""
     conn = _get_conn()
     try:
-        rows = conn.execute("""
-            SELECT DISTINCT pr.wk_name
-            FROM project_resources pr
-            JOIN pod_project pp ON pr.project_id = pp.project_id
-            WHERE pr.wk_name IS NOT NULL AND pr.wk_name != ''
-            ORDER BY pr.wk_name
+        pod_resources = _pod_resources_relation(conn)
+        rows = conn.execute(f"""
+            SELECT DISTINCT wk_name
+            FROM {pod_resources}
+            WHERE wk_name IS NOT NULL AND wk_name != ''
+            ORDER BY wk_name
         """).fetchall()
         return [r[0] for r in rows]
     finally:
@@ -1126,14 +1238,15 @@ def get_pod_list_for_wk(wk_name: str) -> list[dict]:
     """Get PODs in a specific WK."""
     conn = _get_conn()
     try:
+        pod_resources = _pod_resources_relation(conn)
         rows = conn.execute(
-            """
-            SELECT DISTINCT pe.pod_id, pe.pod_name
-            FROM pod_economics pe
-            JOIN pod_project pp ON pe.pod_id = pp.pod_id
-            JOIN project_resources pr ON pp.project_id = pr.project_id
-            WHERE pr.wk_name = ?
-            ORDER BY pe.pod_name
+            f"""
+            SELECT pod_id,
+                   COALESCE(MAX(NULLIF(pod_name, '')), pod_id) AS pod_name
+            FROM {pod_resources}
+            WHERE wk_name = ?
+            GROUP BY pod_id
+            ORDER BY pod_name
         """,
             [wk_name],
         ).fetchall()
@@ -1150,12 +1263,12 @@ def get_pod_years(pod_id: str) -> list[int]:
     """
     conn = _get_conn()
     try:
+        pod_resources = _pod_resources_relation(conn)
         rows = conn.execute(
-            """
-            SELECT DISTINCT pr.report_year AS yr
-            FROM project_resources pr
-            JOIN pod_project pp ON pr.project_id = pp.project_id
-            WHERE pp.pod_id = ?
+            f"""
+            SELECT DISTINCT report_year AS yr
+            FROM {pod_resources}
+            WHERE pod_id = ?
             ORDER BY yr DESC
         """,
             [pod_id],
@@ -1166,18 +1279,18 @@ def get_pod_years(pod_id: str) -> list[int]:
 
 
 def _get_pod_resources(conn, pod_id: str, year: int | None = None) -> dict[str, dict]:
-    """Get resources breakdown for a POD from project_resources join.
+    """Get resources breakdown for a POD from pod_resources.
 
     Filters by report_year. If year is None, uses the latest available year.
     """
+    pod_resources = _pod_resources_relation(conn)
     resource_year = year
     if resource_year is None:
         latest_year_row = conn.execute(
-            """
-            SELECT MAX(pr.report_year)
-            FROM project_resources pr
-            JOIN pod_project pp ON pr.project_id = pp.project_id
-            WHERE pp.pod_id = ?
+            f"""
+            SELECT MAX(report_year)
+            FROM {pod_resources}
+            WHERE pod_id = ?
         """,
             [pod_id],
         ).fetchone()
@@ -1188,26 +1301,25 @@ def _get_pod_resources(conn, pod_id: str, year: int | None = None) -> dict[str, 
     params: list = [pod_id]
     year_filter = ""
     if resource_year is not None:
-        year_filter = "AND pr.report_year = ?"
+        year_filter = "AND report_year = ?"
         params.append(resource_year)
 
     rows = conn.execute(
         f"""
-        SELECT pr.project_class, pr.project_stage, pr.uncert_level,
-               SUM(COALESCE(pr.rec_oc, 0)) AS oc,
-               SUM(COALESCE(pr.rec_an, 0)) AS an
-        FROM project_resources pr
-        JOIN pod_project pp ON pr.project_id = pp.project_id
-        WHERE pp.pod_id = ?
+        SELECT project_class, project_stage, uncert_level,
+               SUM(COALESCE(rec_oc, 0)) AS oc,
+               SUM(COALESCE(rec_an, 0)) AS an
+        FROM {pod_resources}
+        WHERE pod_id = ?
         {year_filter}
-        GROUP BY pr.project_class, pr.project_stage, pr.uncert_level
+        GROUP BY project_class, project_stage, uncert_level
     """,
         params,
     ).fetchall()
 
     result: dict[str, dict] = {}
     for r in rows:
-        raw_class = r[0]
+        raw_class = r[0] or ""
         raw_stage = r[1]
         uncert = r[2]
 
@@ -1249,64 +1361,95 @@ def _get_pod_resources(conn, pod_id: str, year: int | None = None) -> dict[str, 
     return result
 
 
+def _get_pod_report_year(conn, pod_id: str) -> int | None:
+    pod_resources = _pod_resources_relation(conn)
+    row = conn.execute(
+        f"""
+        SELECT MAX(report_year)
+        FROM {pod_resources}
+        WHERE pod_id = ?
+    """,
+        [pod_id],
+    ).fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def _get_pod_identity(conn, pod_id: str, year: int | None) -> tuple[str, str] | None:
+    pod_resources = _pod_resources_relation(conn)
+    params: list = [pod_id]
+    year_filter = ""
+    if year is not None:
+        year_filter = "AND report_year = ?"
+        params.append(year)
+
+    row = conn.execute(
+        f"""
+        SELECT pod_id,
+               COALESCE(
+                   MAX(NULLIF(pod_name, '')),
+                   MAX(NULLIF(project_name, '')),
+                   pod_id
+               ) AS pod_name
+        FROM {pod_resources}
+        WHERE pod_id = ?
+        {year_filter}
+        GROUP BY pod_id
+        LIMIT 1
+    """,
+        params,
+    ).fetchone()
+    return (str(row[0]), str(row[1])) if row else None
+
+
+def _pod_category(raw_class: str | None, raw_stage: str | None) -> str:
+    raw_class = raw_class or ""
+    raw_stage = raw_stage or ""
+    if "Reserves" in raw_class:
+        return "Reserves"
+    if "Contingent" in raw_class or "Contigent" in raw_class:
+        if "Exploit" in raw_stage or "Develop" in raw_stage:
+            return "Contingent Exploitation"
+        return "Contingent Exploration"
+    if "Prospective" in raw_class:
+        return "Prospective"
+    return raw_class
+
+
 def get_pod_kpis(
     pod_id: str, case_type: str = "plan", year: int | None = None
 ) -> PodKpiData:
     """Get POD KPI data including resources, production, and economics.
 
-    All data is filtered by report_year — the year of the ESDC report.
-    Economics uses EXTRACT(YEAR FROM report_date), resources uses report_year.
+    POD dashboard data is sourced from project_resources and project_timeseries.
+    case_type is currently accepted for UI compatibility but is not used to
+    filter data.
     """
     conn = _get_conn()
     try:
+        pod_timeseries = _pod_timeseries_relation(conn)
         if year is None:
-            yr_row = conn.execute(
-                """
-                SELECT MAX(pr.report_year)
-                FROM project_resources pr
-                JOIN pod_project pp ON pr.project_id = pp.project_id
-                WHERE pp.pod_id = ?
-            """,
-                [pod_id],
-            ).fetchone()
-            year = int(yr_row[0]) if yr_row and yr_row[0] else 2024
+            year = _get_pod_report_year(conn, pod_id) or 2024
 
-        row = conn.execute(
-            """
-            SELECT pod_id, pod_name, case_type,
-                   lifting_oil, lifting_gas,
-                   grs_rev, investment, opex, asr,
-                   ctr_irr, ctr_npv, goi_take
-            FROM pod_economics
-            WHERE pod_id = ? AND case_type = ?
-              AND EXTRACT(YEAR FROM report_date) = ?
-            ORDER BY report_date DESC
-            LIMIT 1
-        """,
-            [pod_id, case_type, year],
-        ).fetchone()
-
-        if not row:
-            row = conn.execute(
-                """
-                SELECT pod_id, pod_name, case_type,
-                       lifting_oil, lifting_gas,
-                       grs_rev, investment, opex, asr,
-                       ctr_irr, ctr_npv, goi_take
-                FROM pod_economics
-                WHERE pod_id = ? AND case_type = ?
-                ORDER BY report_date DESC
-                LIMIT 1
-            """,
-                [pod_id, case_type],
-            ).fetchone()
-
-        if not row:
+        identity = _get_pod_identity(conn, pod_id, year)
+        if not identity:
             raise ValueError(
                 f"No data for pod_id={pod_id}, case_type={case_type}"
             )
+        resolved_pod_id, pod_name = identity
 
         resources = _get_pod_resources(conn, pod_id, year)
+        production_row = conn.execute(
+            f"""
+            SELECT SUM(COALESCE(pt.cprd_grs_oc, 0)) AS oc,
+                   SUM(COALESCE(pt.cprd_grs_an, 0)) AS an
+            FROM {pod_timeseries} pt
+            WHERE pt.pod_id = ?
+              AND pt.report_year = ?
+        """,
+            [pod_id, year],
+        ).fetchone()
+        yearly_oil = float(production_row[0] or 0) if production_row else 0.0
+        yearly_gas = float(production_row[1] or 0) if production_row else 0.0
 
         def _make_breakdown(key: str) -> PodResourceBreakdown:
             d = resources.get(key, {})
@@ -1325,81 +1468,74 @@ def get_pod_kpis(
                 yoy_high_an=None,
             )
 
-        grs_rev = row[5] or 0
         economics = PodEconomics(
-            gross_revenue=grs_rev,
-            investment=row[6] or 0,
-            opex=row[7] or 0,
-            asr=row[8] or 0,
-            irr=row[9],
-            npv=row[10] or 0,
-            goi_take=row[11] or 0,
-            pct_investment=round(row[6] / grs_rev * 100, 1) if grs_rev else None,
-            pct_opex=round(row[7] / grs_rev * 100, 1) if grs_rev else None,
-            pct_asr=round(row[8] / grs_rev * 100, 1) if grs_rev else None,
-            pct_goi_take=round(row[11] / grs_rev * 100, 1) if grs_rev else None,
+            gross_revenue=0,
+            investment=0,
+            opex=0,
+            asr=0,
+            irr=None,
+            npv=0,
+            goi_take=0,
+            pct_investment=None,
+            pct_opex=None,
+            pct_asr=None,
+            pct_goi_take=None,
         )
 
         return PodKpiData(
-            pod_id=row[0],
-            pod_name=row[1],
-            case_type=row[2],
+            pod_id=resolved_pod_id,
+            pod_name=pod_name,
+            case_type=case_type,
             year=year,
             reserves=_make_breakdown("Reserves"),
             contingent_exploit=_make_breakdown("Contingent Exploitation"),
             contingent_explore=_make_breakdown("Contingent Exploration"),
             prospective=_make_breakdown("Prospective"),
-            cum_oil=_to_mmstb(row[3]) or 0,
-            cum_gas=_to_tscf(row[4]) or 0,
-            yearly_oil=row[3] or 0,
-            yearly_gas=row[4] or 0,
+            cum_oil=_to_mmstb(yearly_oil) or 0,
+            cum_gas=_to_tscf(yearly_gas) or 0,
+            yearly_oil=yearly_oil,
+            yearly_gas=yearly_gas,
             economics=economics,
         )
     finally:
         conn.close()
 
 
-def get_pod_timeseries(pod_id: str, case_type: str = "plan") -> list[PodTimeseriesRow]:
+def get_pod_timeseries(
+    pod_id: str, case_type: str = "plan", year: int | None = None
+) -> list[PodTimeseriesRow]:
     """Get timeseries data for POD charts.
 
-    Joins pod_economics production with project_resources classification,
-    matching on report_year = EXTRACT(YEAR FROM report_date).
+    case_type is currently accepted for UI compatibility but is not used to
+    filter data.
     """
     conn = _get_conn()
     try:
+        pod_timeseries = _pod_timeseries_relation(conn)
+        if year is None:
+            year = _get_pod_report_year(conn, pod_id)
+        if year is None:
+            return []
+
         rows = conn.execute(
-            """
-            SELECT EXTRACT(YEAR FROM pe.report_date) AS yr,
-                   pr.project_class, pr.project_stage,
-                   SUM(pe.lifting_oil) AS oc,
-                   SUM(pe.lifting_gas) AS an
-            FROM pod_economics pe
-            JOIN pod_project pp ON pe.pod_id = pp.pod_id
-            JOIN project_resources pr ON pp.project_id = pr.project_id
-               AND pr.report_year = EXTRACT(YEAR FROM pe.report_date)
-            WHERE pe.pod_id = ?
-              AND pe.case_type = ?
-            GROUP BY yr, pr.project_class, pr.project_stage
-            ORDER BY yr
+            f"""
+            SELECT pt.year,
+                   pt.project_class,
+                   COALESCE(pt.project_level, pt.prod_stage) AS stage_or_level,
+                   SUM(COALESCE(pt.cprd_grs_oc, 0)) AS oc,
+                   SUM(COALESCE(pt.cprd_grs_an, 0)) AS an
+            FROM {pod_timeseries} pt
+            WHERE pt.pod_id = ?
+              AND pt.report_year = ?
+            GROUP BY pt.year, pt.project_class, stage_or_level
+            ORDER BY pt.year
         """,
-            [pod_id, case_type],
+            [pod_id, year],
         ).fetchall()
 
         result = []
         for r in rows:
-            raw_class = r[1] or ""
-            raw_stage = r[2] or ""
-            if "Reserves" in raw_class:
-                category = "Reserves"
-            elif "Contingent" in raw_class or "Contigent" in raw_class:
-                if "Exploit" in raw_stage:
-                    category = "Contingent Exploitation"
-                else:
-                    category = "Contingent Exploration"
-            elif "Prospective" in raw_class:
-                category = "Prospective"
-            else:
-                category = raw_class
+            category = _pod_category(r[1], r[2])
 
             result.append(
                 PodTimeseriesRow(
@@ -1423,35 +1559,9 @@ def get_pod_table_data(
     """Get tabular data for POD Data Explorer."""
     conn = _get_conn()
     try:
+        pod_timeseries = _pod_timeseries_relation(conn)
         if detail == "economics":
-            year_clause = "AND EXTRACT(YEAR FROM report_date) = ?" if year else ""
-            params: list = [pod_id, case_type]
-            if year:
-                params.append(year)
-            rows = conn.execute(
-                f"""
-                SELECT report_date, grs_rev, investment, opex, asr,
-                       ctr_irr, ctr_npv, goi_take
-                FROM pod_economics
-                WHERE pod_id = ? AND case_type = ?
-                {year_clause}
-                ORDER BY report_date
-            """,
-                params,
-            ).fetchall()
-            return [
-                {
-                    "year": int(str(r[0])[:4]),
-                    "gross_revenue": r[1],
-                    "investment": r[2],
-                    "opex": r[3],
-                    "asr": r[4],
-                    "irr": r[5],
-                    "npv": r[6],
-                    "goi_take": r[7],
-                }
-                for r in rows
-            ]
+            return []
 
         elif detail == "resources":
             resources = _get_pod_resources(conn, pod_id, year)
@@ -1471,23 +1581,25 @@ def get_pod_table_data(
             return result
 
         elif detail == "production":
-            year_clause = "AND EXTRACT(YEAR FROM report_date) = ?" if year else ""
-            params = [pod_id, case_type]
-            if year:
-                params.append(year)
+            report_year = year or _get_pod_report_year(conn, pod_id)
+            if report_year is None:
+                return []
             rows = conn.execute(
                 f"""
-                SELECT report_date, lifting_oil, lifting_gas
-                FROM pod_economics
-                WHERE pod_id = ? AND case_type = ?
-                {year_clause}
-                ORDER BY report_date
+                SELECT pt.year,
+                       SUM(COALESCE(pt.cprd_grs_oc, 0)) AS oc,
+                       SUM(COALESCE(pt.cprd_grs_an, 0)) AS an
+                FROM {pod_timeseries} pt
+                WHERE pt.pod_id = ?
+                  AND pt.report_year = ?
+                GROUP BY pt.year
+                ORDER BY pt.year
             """,
-                params,
+                [pod_id, report_year],
             ).fetchall()
             return [
                 {
-                    "year": int(str(r[0])[:4]),
+                    "year": int(r[0]),
                     "lifting_oil_mstb": r[1],
                     "lifting_gas_mscf": r[2],
                 }

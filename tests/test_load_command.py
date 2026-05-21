@@ -582,6 +582,17 @@ class TestPodLoadValidation:
             "('PRJ-001', '2024-06-01', 'Test Project', "
             "'DEVELOPMENT', 'CLASS A', 'Field Alpha', 'WK Alpha')"
         )
+        conn.execute(
+            "CREATE TABLE project_timeseries "
+            "(project_id TEXT, report_date TEXT, report_year INTEGER, year INTEGER, "
+            "project_class TEXT, project_level TEXT, prod_stage TEXT, "
+            "cprd_grs_oc DOUBLE, cprd_grs_an DOUBLE)"
+        )
+        conn.execute(
+            "INSERT INTO project_timeseries VALUES "
+            "('PRJ-001', '2024-06-01', 2024, 2025, "
+            "'CLASS A', 'L1', 'PRIMARY', 1.0, 2.0)"
+        )
         conn.close()
 
         excel_path = _write_pod_excel(tmp_path / "pod.xlsx")
@@ -597,6 +608,8 @@ class TestPodLoadValidation:
             ).fetchall()
             view_names = {v[0] for v in views}
             assert "pod_economics" in view_names
+            assert "pod_resources" in view_names
+            assert "pod_timeseries" in view_names
             assert "pod_project_economics" in view_names
 
             eco_rows = conn.execute(

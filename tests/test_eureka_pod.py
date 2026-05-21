@@ -20,6 +20,9 @@ from esdc.eureka.queries import (
     PodKpiData,
     PodResourceBreakdown,
     PodTimeseriesRow,
+    get_pod_kpis,
+    get_pod_table_data,
+    get_pod_timeseries,
 )
 
 # ---------------------------------------------------------------------------
@@ -408,6 +411,8 @@ def _create_seeded_db(db_path):
                 report_date VARCHAR,
                 report_year INTEGER,
                 report_status TEXT,
+                pod_name TEXT,
+                pod_letter_num TEXT,
                 project_name TEXT,
                 project_stage TEXT,
                 project_class TEXT,
@@ -426,6 +431,19 @@ def _create_seeded_db(db_path):
             );
         """)
         conn.execute("""
+            CREATE TABLE project_timeseries (
+                project_id TEXT,
+                report_date VARCHAR,
+                report_year INTEGER,
+                year INTEGER,
+                project_class TEXT,
+                project_level TEXT,
+                prod_stage TEXT,
+                cprd_grs_oc DOUBLE,
+                cprd_grs_an DOUBLE
+            );
+        """)
+        conn.execute("""
             INSERT INTO pod_economics VALUES
                 ('POD-001', 'Test POD Alpha', 'plan', '2024-01-01', '2021-09-30',
                  365000, 365000000, 10000, 2000, 1500, 500, 0.15, 8000, 1000),
@@ -435,26 +453,67 @@ def _create_seeded_db(db_path):
         conn.execute("""
             INSERT INTO pod_project VALUES
                 ('POD-001', 'PROJ-001'),
-                ('POD-001', 'PROJ-002');
+                ('POD-001', 'PROJ-002'),
+                ('549', 'P-3722782-01');
         """)
         conn.execute("""
             INSERT INTO project_resources
                 (project_id, report_date, report_year, report_status,
-                 project_name, project_stage, project_class, project_level,
+                 pod_name, pod_letter_num, project_name, project_stage,
+                 project_class, project_level,
                  uncert_level, wk_name, field_name, rec_oc, rec_an,
                  rec_oc_risked, rec_an_risked, res_oc, res_an,
                  prj_ioip, prj_igip)
             VALUES
                 ('PROJ-001', '2024-01-01', 2024, 'ACTIVE',
+                 'Test POD Alpha', 'POD-L-001',
                  'Project Alpha', '1. Exploitation',
                  '1P Reserves', '1. Low Value', '1. Low Value',
                  'WK-01', 'Field A',
                  5000.0, 2500.0, 1000.0, 500.0, 5000.0, 2500.0, 500.0, 250.0),
                 ('PROJ-002', '2024-01-01', 2024, 'ACTIVE',
+                 'Test POD Alpha', 'POD-L-001',
                  'Project Beta', '2. Exploration',
                  'Contingent Resources', '2. Middle Value', '2. Middle Value',
                  'WK-01', 'Field B',
-                 10000.0, 5000.0, 2000.0, 1000.0, 10000.0, 5000.0, 1000.0, 500.0);
+                 10000.0, 5000.0, 2000.0, 1000.0, 10000.0, 5000.0, 1000.0, 500.0),
+                ('P-3722782-01', '2025-01-01', 2025, 'ACTIVE',
+                 'POD I Lapangan North West Kenanga;POD I Lapangan North West Kenanga',
+                 'SRT-0404/SKKMA0000/2017/S1',
+                 'KENANGA BASE', '1. Exploitation',
+                 '1P Reserves', '2. Middle Value', '2. Middle Value',
+                 'WK-02', 'Kenanga',
+                 1254.73, 83.08, 1000.0, 70.0, 1254.73, 83.08, 500.0, 250.0);
+        """)
+        conn.execute("""
+            CREATE VIEW pod_resources AS
+            SELECT
+                pp.pod_id,
+                COALESCE(pod_names.pod_name, pp.pod_id) AS pod_name,
+                pr.* EXCLUDE (pod_name)
+            FROM pod_project pp
+            JOIN project_resources pr ON pp.project_id = pr.project_id
+            LEFT JOIN LATERAL (
+                SELECT string_agg(name, ';' ORDER BY ord) AS pod_name
+                FROM (
+                    SELECT trim(part) AS name, MIN(ord) AS ord
+                    FROM unnest(string_split(COALESCE(pr.pod_name, ''), ';'))
+                         WITH ORDINALITY AS t(part, ord)
+                    WHERE trim(part) != ''
+                    GROUP BY trim(part)
+                ) names
+            ) pod_names ON true;
+        """)
+        conn.execute("""
+            INSERT INTO project_timeseries VALUES
+                ('PROJ-001', '2024-01-01', 2024, 2025,
+                 '1P Reserves', '1. Low Value', 'PRIMARY', 365000.0, 365000000.0),
+                ('PROJ-002', '2024-01-01', 2024, 2025,
+                 'Contingent Resources', '2. Middle Value', 'PRIMARY',
+                 730000.0, 730000000.0),
+                ('P372278201', '2025-01-01', 2025, 2026,
+                 '2. Contigent Resources', 'E5. Development Unclarified',
+                 'PRIMARY', 1000.0, 2000000.0);
         """)
     finally:
         conn.close()
@@ -499,9 +558,6 @@ class TestPodApiEndpoints:
         data = response.json()
         assert isinstance(data, list)
 
-    @pytest.mark.xfail(
-        reason="_dataclass_to_dict does not handle nested dataclasses; app bug"
-    )
     def test_pod_kpis_endpoint(self, client):
         response = client.get(
             "/eureka/api/pod/kpis?pod_id=POD-001&case_type=plan&year=2024",
@@ -511,6 +567,20 @@ class TestPodApiEndpoints:
         data = response.json()
         assert isinstance(data, dict)
         assert "pod_id" in data
+        assert data["economics"]["gross_revenue"] == 0
+
+    def test_pod_kpis_endpoint_outlook_without_pod_economics_returns_200(
+        self, client
+    ):
+        response = client.get(
+            "/eureka/api/pod/kpis?pod_id=549&case_type=outlook&year=2025",
+            follow_redirects=False,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["pod_id"] == "549"
+        assert data["case_type"] == "outlook"
+        assert data["pod_name"] == "POD I Lapangan North West Kenanga"
 
     def test_pod_chart_timeseries_oc(self, client):
         response = client.get(
@@ -551,7 +621,46 @@ class TestPodApiEndpoints:
 
 class TestPodTimeseriesQuery:
     def test_get_pod_timeseries(self, seeded_pod_db):
-        from esdc.eureka.queries import get_pod_timeseries
-
         rows = get_pod_timeseries("POD-001", "plan")
         assert isinstance(rows, list)
+
+    def test_get_pod_timeseries_joins_normalized_project_id(self, seeded_pod_db):
+        rows = get_pod_timeseries("549", "outlook", 2025)
+
+        assert rows == [
+            PodTimeseriesRow(
+                year=2026,
+                category="Contingent Exploitation",
+                oc_mstby=1000.0,
+                an_bscfy=2.0,
+            )
+        ]
+
+    def test_get_pod_kpis_ignores_case_type_for_project_resources(
+        self, seeded_pod_db
+    ):
+        plan = get_pod_kpis("549", "plan", 2025)
+        outlook = get_pod_kpis("549", "outlook", 2025)
+        actual = get_pod_kpis("549", "actual", 2025)
+
+        assert plan.case_type == "plan"
+        assert outlook.case_type == "outlook"
+        assert actual.case_type == "actual"
+        assert plan.reserves.mid_oc == outlook.reserves.mid_oc == actual.reserves.mid_oc
+        assert outlook.pod_name == "POD I Lapangan North West Kenanga"
+
+    def test_get_pod_table_data_economics_returns_empty(self, seeded_pod_db):
+        assert get_pod_table_data("549", "outlook", 2025, "economics") == []
+
+    def test_get_pod_table_data_production_uses_project_timeseries(
+        self, seeded_pod_db
+    ):
+        rows = get_pod_table_data("549", "outlook", 2025, "production")
+
+        assert rows == [
+            {
+                "year": 2026,
+                "lifting_oil_mstb": 1000.0,
+                "lifting_gas_mscf": 2000000.0,
+            }
+        ]

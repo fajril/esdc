@@ -878,6 +878,71 @@ def _create_pod_views(conn: duckdb.DuckDBPyConnection) -> None:
     """)
 
     if _table_has_column(conn, "project_resources", "project_id"):
+        if _table_has_column(conn, "project_resources", "pod_name"):
+            pod_name_expr = "COALESCE(pod_names.pod_name, pp.pod_id)"
+            resource_columns = "pr.* EXCLUDE (pod_name)"
+            pod_name_join = """
+            LEFT JOIN LATERAL (
+                SELECT string_agg(name, ';' ORDER BY ord) AS pod_name
+                FROM (
+                    SELECT trim(part) AS name, MIN(ord) AS ord
+                    FROM unnest(string_split(COALESCE(pr.pod_name, ''), ';'))
+                         WITH ORDINALITY AS t(part, ord)
+                    WHERE trim(part) != ''
+                    GROUP BY trim(part)
+                ) names
+            ) pod_names ON true
+            """
+        else:
+            pod_name_expr = "pp.pod_id"
+            resource_columns = "pr.*"
+            pod_name_join = ""
+
+        conn.execute(f"""
+            CREATE OR REPLACE VIEW pod_resources AS
+            SELECT
+                pp.pod_id,
+                {pod_name_expr} AS pod_name,
+                {resource_columns}
+            FROM pod_project pp
+            JOIN project_resources pr ON pp.project_id = pr.project_id
+            {pod_name_join}
+        """)
+
+        if _table_has_column(conn, "project_timeseries", "project_id"):
+            if _table_has_column(conn, "project_timeseries", "pod_name"):
+                ts_pod_name_expr = "COALESCE(pod_names.pod_name, pp.pod_id)"
+                timeseries_columns = "pt.* EXCLUDE (pod_name)"
+                ts_pod_name_join = """
+                LEFT JOIN LATERAL (
+                    SELECT string_agg(name, ';' ORDER BY ord) AS pod_name
+                    FROM (
+                        SELECT trim(part) AS name, MIN(ord) AS ord
+                        FROM unnest(string_split(COALESCE(pt.pod_name, ''), ';'))
+                             WITH ORDINALITY AS t(part, ord)
+                        WHERE trim(part) != ''
+                        GROUP BY trim(part)
+                    ) names
+                ) pod_names ON true
+                """
+            else:
+                ts_pod_name_expr = "pp.pod_id"
+                timeseries_columns = "pt.*"
+                ts_pod_name_join = ""
+
+            conn.execute(f"""
+                CREATE OR REPLACE VIEW pod_timeseries AS
+                SELECT
+                    pp.pod_id,
+                    {ts_pod_name_expr} AS pod_name,
+                    {timeseries_columns}
+                FROM pod_project pp
+                JOIN project_timeseries pt
+                  ON regexp_replace(pp.project_id, '[^A-Za-z0-9]', '', 'g')
+                   = regexp_replace(pt.project_id, '[^A-Za-z0-9]', '', 'g')
+                {ts_pod_name_join}
+            """)
+
         conn.execute("""
             CREATE OR REPLACE VIEW pod_project_economics AS
             WITH ranked_pr AS (

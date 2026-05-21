@@ -304,7 +304,7 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
             year = years[0]
 
         kpis = get_pod_kpis(pod_id, case_type, year)
-        ts_data = get_pod_timeseries(pod_id, case_type)
+        ts_data = get_pod_timeseries(pod_id, case_type, year)
         ts_oc_fig = pod_timeseries_oc(ts_data)
         ts_an_fig = pod_timeseries_an(ts_data)
 
@@ -339,11 +339,14 @@ def create_eureka_app(default_year: int | None = None) -> FastAPI:
 
     @app.get("/eureka/api/pod/chart/{chart_name}")
     async def pod_chart(
-        chart_name: str, pod_id: str, case_type: str = "plan"
+        chart_name: str,
+        pod_id: str,
+        case_type: str = "plan",
+        year: int | None = None,
     ) -> JSONResponse:
         """API endpoint for POD chart data as Plotly JSON."""
         try:
-            ts_data = get_pod_timeseries(pod_id, case_type)
+            ts_data = get_pod_timeseries(pod_id, case_type, year)
             if chart_name == "timeseries_oc":
                 fig = pod_timeseries_oc(ts_data)
             elif chart_name == "timeseries_an":
@@ -459,5 +462,9 @@ def _prev_year(years: list[int], current: int) -> int | None:
 def _dataclass_to_dict(obj: object) -> dict | object:
     """Convert a dataclass instance to a dict."""
     if hasattr(obj, "__dataclass_fields__"):
-        return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
+        return {
+            k: _dataclass_to_dict(v)
+            for k, v in obj.__dict__.items()
+            if not k.startswith("_")
+        }
     return obj
