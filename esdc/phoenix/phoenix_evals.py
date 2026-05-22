@@ -39,7 +39,7 @@ ESDC_TOOLS_DESCRIPTION = (
     "Spatial Resolver: Execute spatial queries using DuckDB's "
     "native spatial capabilities.\n"
     "Semantic Search: Search for documents by semantic similarity to the query.\n"
-    "Compute Engine: Execute a shell command in a sandboxed environment.\n"
+    "Shell Executor: Execute a shell command in a sandboxed environment.\n"
     "File Processing: Write text content to a file in the sandboxed environment.\n"
     "View File: Display a file from the sandbox inline in the chat."
 )

@@ -70,6 +70,8 @@ When writing SQL queries, use DuckDB syntax:
 - **get_timeseries_columns**: Validate timeseries column selection (data_type, forecast_type, substance)
 - **get_resources_columns**: Validate resources column selection (volume_type, substance)
 - **simple_data_query**: Execute standardized aggregate queries for reserves/resources data. Use for simple factual questions: reserves, resources, contingent, prospective, cumprod, prodrate. Parameters: query_type, entity_level, entity_name, uncertainty, report_year.
+- **Code Interpreter**: Execute Python code for data analysis, computation, and visualization. Pre-defined variables: `output_image_path` for saving plots, `DB_PATH` for DuckDB database access (read-only). Pre-installed: pandas, scikit-learn, seaborn, statsmodels, xgboost, duckdb, matplotlib, numpy, scipy, plotly.
+- **Shell Executor**: Execute shell commands in a sandboxed Linux environment for system-level operations, file management, and data processing pipelines.
 
 **Entity resolution is automatic.** If a `[Knowledge Graph - Auto-resolved entities]` message is present, use those entities to write SQL directly. Only call `entity_resolver` manually if auto-resolution was insufficient.
 
@@ -149,7 +151,7 @@ Call `get_schema(table_name)` for column details, or `get_recommended_table` if 
 
 ## Visualization Support
 
-**Compute Engine**: You have access to a sandboxed Linux terminal environment via this tool.
+**Shell Executor**: You have access to a sandboxed Linux terminal environment via this tool.
 This provides:
 
 - **Shell Access**: Full bash shell to run commands, navigate filesystem, and manage processes

@@ -32,7 +32,7 @@ INTERNAL_TOOL_NAMES: set[str] = {
     "get_timeseries_columns",
     "get_resources_columns",
     "list_available_models",
-    "Compute Engine",
+    "Shell Executor",
     "File Processing",
     "View File",
 }

@@ -389,6 +389,10 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
         "Knowledge Traversal",
         "SQL Executor",
         "Simple Data Query",
+        "Code Interpreter",
+        "Shell Executor",
+        "Resources Column Guide",
+        "Timeseries Column Guide",
     ] + _SCHEMA_TOOLS
 
     if classification.query_type in (

@@ -1,6 +1,6 @@
 """OpenTerminal integration for sandboxed code execution.
 
-Provides Compute Engine (run_command) and Code Interpreter (run_python)
+Provides Shell Executor (run_command) and Code Interpreter (run_python)
 tools for data visualization and file operations.
 Compatible with Open Terminal v2 (procman) API.
 """
@@ -28,7 +28,7 @@ def get_openterminal_tools() -> list[Any] | None:
     """Return OpenTerminal tool instances if configured, else None.
 
     Called by agent.py during agent creation to conditionally register
-    Compute Engine, File Processing, and View File tools.
+    Shell Executor, File Processing, and View File tools.
     """
     from esdc.configs import Config
 
@@ -59,7 +59,7 @@ def get_openterminal_tools() -> list[Any] | None:
         "Example workflow for creating a plot:\n"
         "1. Query data using execute_sql\n"
         "2. Construct a Python script with the data embedded\n"
-        "3. Save via File Processing, then Compute Engine to execute\n"
+        "3. Save via File Processing, then Shell Executor to execute\n"
         "4. Use View File to display the plot inline in the chat"
     )
 
@@ -183,7 +183,7 @@ async def _poll_until_done(
     }
 
 
-@tool("Compute Engine")
+@tool("Shell Executor")
 async def run_command(
     command: Annotated[
         str,
@@ -264,7 +264,7 @@ async def run_command(
     except httpx.ConnectError:
         logger.error("[OPENTERM] run_command CONNECT_ERROR | url=%s", url)
         return (
-            f"Error: Cannot connect to Compute Engine at {config['url']}. "
+            f"Error: Cannot connect to Shell Executor at {config['url']}. "
             "The service may not be running."
         )
     except httpx.HTTPStatusError as e:
@@ -274,7 +274,7 @@ async def run_command(
             url,
         )
         return (
-            f"Error: Compute Engine returned HTTP "
+            f"Error: Shell Executor returned HTTP "
             f"{e.response.status_code}: {e.response.text[:500]}"
         )
     except Exception as e:
@@ -441,7 +441,7 @@ async def run_python(
         return "Error: Python execution timed out after 120s."
     except httpx.ConnectError:
         logger.error("[OPENTERM] run_python CONNECT_ERROR")
-        return "Error: Cannot connect to Compute Engine."
+        return "Error: Cannot connect to Shell Executor."
     except Exception as e:
         logger.error("[OPENTERM] run_python ERROR | %s", e)
         return f"Error: {e}"
@@ -456,14 +456,14 @@ def _get_ow_config() -> dict[str, Any]:
 
 
 def _build_file_url(filepath: str, description: str = "") -> str:
-    """Build an OpenWebUI proxy URL for a file on the Compute Engine.
+    """Build an OpenWebUI proxy URL for a file on the Shell Executor.
 
     Constructs a URL that routes through OpenWebUI's reverse proxy to
-    access files on the Compute Engine sandbox. Uses proxy_url (the
+    access files on the Shell Executor sandbox. Uses proxy_url (the
     browser-facing URL) rather than the server-side url.
 
     Args:
-        filepath: Absolute path to the file on the Compute Engine.
+        filepath: Absolute path to the file on the Shell Executor.
         description: Optional alt text for the image.
 
     Returns:

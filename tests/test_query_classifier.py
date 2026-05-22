@@ -396,18 +396,27 @@ class TestConditionalToolPreservation:
 
     The bug: query_classification_node overrides allowed_tools with only
     classifier-selected tools, dropping conditionally-registered tools
-    like Compute Engine, File Processing, View File. Fix: preserve tools
-    that exist in all_tools but are missing from classifier output.
+    like File Processing, View File. Fix: preserve tools that exist in
+    all_tools but are missing from classifier output.
+
+    Note: Code Interpreter, Shell Executor, Resources Column Guide, and
+    Timeseries Column Guide are now in base_tools (not conditional).
+    Only File Processing and View File are truly conditional.
     """
 
     # Tools that the classifier never returns (conditionally registered)
-    CONDITIONAL_TOOLS = {"Compute Engine", "File Processing", "View File"}
+    CONDITIONAL_TOOLS = {"File Processing", "View File"}
 
     # All possible tools = classifier tools + conditional tools
     ALL_TOOLS = {
         "Entity Resolver",
         "Knowledge Traversal",
         "SQL Executor",
+        "Simple Data Query",
+        "Code Interpreter",
+        "Shell Executor",
+        "Resources Column Guide",
+        "Timeseries Column Guide",
         "Schema Inspector",
         "Table Lister",
         "Table Selector",
@@ -420,7 +429,10 @@ class TestConditionalToolPreservation:
     def test_classifier_never_includes_conditional_tools(self):
         """Verify classifier output never includes conditional tools.
 
-        Confirms the bug exists at the classifier level.
+        Confirms the bug exists at the classifier level for truly
+        conditional tools (File Processing, View File).
+        Code Interpreter, Shell Executor, Resources Column Guide,
+        and Timeseries Column Guide are now in base_tools.
         """
         from esdc.chat.query_classifier import QueryType
 
@@ -486,7 +498,14 @@ class TestConditionalToolPreservation:
             )
 
     def test_preservation_logic_no_conditional_tools(self):
-        """Conditional tools not in all_tools should NOT be preserved."""
+        """Conditional tools not in all_tools should NOT be preserved.
+
+        When sandbox is not configured, all_tools won't have
+        File Processing or View File, so they should not appear in
+        final_tools even though they are in CONDITIONAL_TOOLS.
+        Code Interpreter and Shell Executor are in base_tools now,
+        so they will always be in classifier output regardless.
+        """
         classification = QueryClassification(
             query_type=QueryType.SIMPLE_FACTUAL,
             confidence=0.9,
@@ -499,15 +518,22 @@ class TestConditionalToolPreservation:
         classifier_tools = get_tools_for_classification(classification)
         classifier_tool_set = set(classifier_tools)
 
-        # Simulate all_tools WITHOUT conditional tools (sandbox not configured)
-        all_tools_without_sandbox = {
-            "Entity Resolver",
-            "Knowledge Traversal",
-            "SQL Executor",
-            "Schema Inspector",
-            "Table Lister",
-            "Table Selector",
-        }
+        # Simulate all_tools WITHOUT sandbox-only conditional tools
+        all_tools_without_sandbox = (
+            {
+                "Entity Resolver",
+                "Knowledge Traversal",
+                "SQL Executor",
+                "Simple Data Query",
+                "Code Interpreter",
+                "Shell Executor",
+                "Resources Column Guide",
+                "Timeseries Column Guide",
+                "Schema Inspector",
+                "Table Lister",
+                "Table Selector",
+            }
+        )
 
         preserved = all_tools_without_sandbox - classifier_tool_set
         final_tools = list(classifier_tool_set | preserved)

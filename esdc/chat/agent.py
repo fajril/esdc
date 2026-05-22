@@ -839,7 +839,7 @@ def create_agent(
             allowed_tools = get_tools_for_classification(classification)
 
             # Preserve conditionally-registered tools (e.g. OpenTerminal
-            # Compute Engine, File Processing, View File) that exist in
+            # Shell Executor, File Processing, View File) that exist in
             # all_tools but are not returned by the classifier. Without
             # this, query_classification_node would override allowed_tools
             # with only classifier-selected tools, dropping any tools that
