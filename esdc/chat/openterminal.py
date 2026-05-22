@@ -28,7 +28,7 @@ def get_openterminal_tools() -> list[Any] | None:
     """Return OpenTerminal tool instances if configured, else None.
 
     Called by agent.py during agent creation to conditionally register
-    Shell Executor, File Processing, and View File tools.
+    Shell Executor and Code Interpreter tools.
     """
     from esdc.configs import Config
 
@@ -59,8 +59,8 @@ def get_openterminal_tools() -> list[Any] | None:
         "Example workflow for creating a plot:\n"
         "1. Query data using execute_sql\n"
         "2. Construct a Python script with the data embedded\n"
-        "3. Save via File Processing, then Shell Executor to execute\n"
-        "4. Use View File to display the plot inline in the chat"
+        "3. Run the script via Shell Executor or Code Interpreter\n"
+        "4. The plot image will be displayed inline in the chat automatically"
     )
 
     logger.info(

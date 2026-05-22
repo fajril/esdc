@@ -395,17 +395,19 @@ class TestConditionalToolPreservation:
     """Test conditionally-registered tools are preserved in allowed_tools.
 
     The bug: query_classification_node overrides allowed_tools with only
-    classifier-selected tools, dropping conditionally-registered tools
-    like File Processing, View File. Fix: preserve tools that exist in
-    all_tools but are missing from classifier output.
+    classifier-selected tools, dropping conditionally-registered tools.
+    Fix: preserve tools that exist in all_tools but are missing from
+    classifier output.
 
-    Note: Code Interpreter, Shell Executor, Resources Column Guide, and
+    Code Interpreter, Shell Executor, Resources Column Guide, and
     Timeseries Column Guide are now in base_tools (not conditional).
-    Only File Processing and View File are truly conditional.
+    CONDITIONAL_TOOLS is empty since File Processing and View File
+    have been removed from the codebase.
     """
 
     # Tools that the classifier never returns (conditionally registered)
-    CONDITIONAL_TOOLS = {"File Processing", "View File"}
+    # Currently empty — all formerly-conditional tools are now in base_tools
+    CONDITIONAL_TOOLS: set[str] = set()
 
     # All possible tools = classifier tools + conditional tools
     ALL_TOOLS = {
@@ -429,10 +431,9 @@ class TestConditionalToolPreservation:
     def test_classifier_never_includes_conditional_tools(self):
         """Verify classifier output never includes conditional tools.
 
-        Confirms the bug exists at the classifier level for truly
-        conditional tools (File Processing, View File).
-        Code Interpreter, Shell Executor, Resources Column Guide,
-        and Timeseries Column Guide are now in base_tools.
+        Since all formerly-conditional tools are now in base_tools,
+        there are no conditional tools to exclude. This test serves
+        as a regression guard in case new conditional tools are added.
         """
         from esdc.chat.query_classifier import QueryType
 
@@ -453,7 +454,7 @@ class TestConditionalToolPreservation:
                 )
 
     def test_preservation_logic_simple_factual(self):
-        """Simulate the fix: classifier tools + preserved conditional tools."""
+        """Verify base_tools are always present in classifier output."""
         classification = QueryClassification(
             query_type=QueryType.SIMPLE_FACTUAL,
             confidence=0.9,
@@ -466,17 +467,20 @@ class TestConditionalToolPreservation:
         classifier_tools = get_tools_for_classification(classification)
         classifier_tool_set = set(classifier_tools)
 
-        # Simulate the fix: preserve tools in all_tools not in classifier output
-        preserved = self.ALL_TOOLS - classifier_tool_set
-        final_tools = list(classifier_tool_set | preserved)
-
-        for ct in self.CONDITIONAL_TOOLS:
-            assert ct in final_tools, (
-                f"Conditional tool {ct!r} should be preserved in final tools"
+        # Base tools should always be present
+        base_tools = {
+            "Code Interpreter",
+            "Shell Executor",
+            "Resources Column Guide",
+            "Timeseries Column Guide",
+        }
+        for bt in base_tools:
+            assert bt in classifier_tool_set, (
+                f"Base tool {bt!r} should be in classifier output for ALL query types"
             )
 
     def test_preservation_logic_ambiguous(self):
-        """Test preservation with ambiguous query type (most tools)."""
+        """Verify base_tools present even for ambiguous query type."""
         classification = QueryClassification(
             query_type=QueryType.AMBIGUOUS,
             confidence=0.5,
@@ -489,22 +493,24 @@ class TestConditionalToolPreservation:
         classifier_tools = get_tools_for_classification(classification)
         classifier_tool_set = set(classifier_tools)
 
-        preserved = self.ALL_TOOLS - classifier_tool_set
-        final_tools = list(classifier_tool_set | preserved)
-
-        for ct in self.CONDITIONAL_TOOLS:
-            assert ct in final_tools, (
-                f"Conditional tool {ct!r} should be preserved in final tools"
+        # Base tools should always be present
+        base_tools = {
+            "Code Interpreter",
+            "Shell Executor",
+            "Resources Column Guide",
+            "Timeseries Column Guide",
+        }
+        for bt in base_tools:
+            assert bt in classifier_tool_set, (
+                f"Base tool {bt!r} should be in classifier output for AMBIGUOUS"
             )
 
     def test_preservation_logic_no_conditional_tools(self):
-        """Conditional tools not in all_tools should NOT be preserved.
+        """Verify all base_tools are in classifier output without preservation.
 
-        When sandbox is not configured, all_tools won't have
-        File Processing or View File, so they should not appear in
-        final_tools even though they are in CONDITIONAL_TOOLS.
-        Code Interpreter and Shell Executor are in base_tools now,
-        so they will always be in classifier output regardless.
+        Code Interpreter, Shell Executor, Resources Column Guide, and
+        Timeseries Column Guide are now in base_tools, so they appear
+        in classifier output directly — no preservation mechanism needed.
         """
         classification = QueryClassification(
             query_type=QueryType.SIMPLE_FACTUAL,
@@ -518,27 +524,14 @@ class TestConditionalToolPreservation:
         classifier_tools = get_tools_for_classification(classification)
         classifier_tool_set = set(classifier_tools)
 
-        # Simulate all_tools WITHOUT sandbox-only conditional tools
-        all_tools_without_sandbox = (
-            {
-                "Entity Resolver",
-                "Knowledge Traversal",
-                "SQL Executor",
-                "Simple Data Query",
-                "Code Interpreter",
-                "Shell Executor",
-                "Resources Column Guide",
-                "Timeseries Column Guide",
-                "Schema Inspector",
-                "Table Lister",
-                "Table Selector",
-            }
-        )
-
-        preserved = all_tools_without_sandbox - classifier_tool_set
-        final_tools = list(classifier_tool_set | preserved)
-
-        for ct in self.CONDITIONAL_TOOLS:
-            assert ct not in final_tools, (
-                f"Conditional tool {ct!r} should NOT be preserved when not in all_tools"
+        # Base tools should always be present
+        base_tools = {
+            "Code Interpreter",
+            "Shell Executor",
+            "Resources Column Guide",
+            "Timeseries Column Guide",
+        }
+        for bt in base_tools:
+            assert bt in classifier_tool_set, (
+                f"Base tool {bt!r} should be in classifier output without preservation"
             )

@@ -33,8 +33,6 @@ INTERNAL_TOOL_NAMES: set[str] = {
     "get_resources_columns",
     "list_available_models",
     "Shell Executor",
-    "File Processing",
-    "View File",
 }
 
 EXTERNAL_TOOL_MARKER_PREFIX = "[EXTERNAL_TOOL_CALL:"
