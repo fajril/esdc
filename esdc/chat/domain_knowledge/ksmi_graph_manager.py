@@ -355,6 +355,51 @@ class KSMIGraphManager:
             logger.warning("[KSMI-KG] get_transitions_error | error=%s", e)
             return []
 
+    def format_reachability(
+        self, highlight: str | None = None
+    ) -> str:
+        """Format reachability matrix as compact markdown.
+
+        Reads CAN_TRANSITION_TO edges from the graph and renders a
+        level-by-level table of allowed targets. Optionally highlights
+        one source level with a marker for visual focus.
+
+        A1 and A2 (Abandoned absorbing states) are always included even
+        if they are not stored as ProjectLevel nodes in the graph.
+
+        Args:
+            highlight: Optional level code to mark (e.g., "E3").
+
+        Returns:
+            Formatted string covering all 18 levels (E0-E8, X0-X6, A1, A2).
+        """
+        self._ensure_initialized()
+        transitions = self.get_transitions()
+
+        from collections import defaultdict
+
+        matrix: dict[str, set[str]] = defaultdict(set)
+        for t in transitions:
+            matrix[t["from"]].add(t["to"])
+
+        for absorbing in ("A1", "A2"):
+            if absorbing not in matrix:
+                matrix[absorbing].add(absorbing)
+
+        def sort_key(code: str) -> tuple[int, int]:
+            if code.startswith("E"):
+                return (0, int(code[1:]))
+            if code.startswith("X"):
+                return (1, int(code[1:]))
+            return (2, int(code[1:]))
+
+        lines = ["## Reachability Matrix (Level → Allowed Targets)", ""]
+        for code in sorted(matrix.keys(), key=sort_key):
+            targets = sorted(matrix[code], key=sort_key)
+            prefix = ">>>" if code == highlight else "   "
+            lines.append(f"{prefix} {code} → {', '.join(targets)}")
+        return "\n".join(lines)
+
     def close(self) -> None:
         with KSMIGraphManager._lock:
             if self._initialized:

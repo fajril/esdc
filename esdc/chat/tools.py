@@ -1748,6 +1748,14 @@ def knowledge_traversal(
         "'BELONGS_TO_FRAMEWORK' (what entities belong to KSMI). "
         "Only effective when entity is also provided.",
     ] = None,
+    include_reachability: Annotated[
+        bool,
+        "If True and topic is 'transition' or 'level', auto-append the full "
+        "reachability matrix (Level → Allowed Targets) to the output. The "
+        "queried entity, if any, is highlighted with a marker. Prevents "
+        "common reasoning errors like claiming E3 can transition to E4 "
+        "(only E0, E2, E5 are valid targets for E3). Default: True.",
+    ] = True,
 ) -> str:
     """Retrieve domain knowledge — definitions, rules, transitions, formulas.
 
@@ -1768,6 +1776,11 @@ def knowledge_traversal(
     - entity='Reserves', relationship='REPORTED_AS' → returns gross, net, sales
     - entity='E0', relationship='CAN_TRANSITION_TO' → returns E1, E4, E7
 
+    When 'include_reachability' is True (default) and topic is 'transition'
+    or 'level', the output is automatically extended with a compact
+    reachability matrix covering all 18 levels (E0-E8, X0-X6, A1, A2).
+    The queried entity, if provided, is visually highlighted.
+
     Returns formatted text with definitions, key concepts, and rules.
     """
     if entity:
@@ -1780,21 +1793,61 @@ def knowledge_traversal(
         except Exception as e:
             logger.warning("[LoadedSchema-KG] lookup_failed | error=%s", e)
 
+    base_output, matrix_text = _query_graph(
+        entity, relationship, topic, include_reachability
+    )
+
+    if base_output is not None:
+        if matrix_text and matrix_text not in base_output:
+            return f"{base_output}\n\n---\n\n{matrix_text}"
+        return base_output
+
+    if matrix_text is not None:
+        return matrix_text
+
+    from esdc.chat.domain_knowledge.ksmi_loader import ksmi_retrieve
+
+    return ksmi_retrieve(topic=topic, entity=entity)
+
+
+_REACHABILITY_TOPICS = frozenset({"transition", "level"})
+
+
+def _query_graph(
+    entity: str | None,
+    relationship: str | None,
+    topic: str,
+    include_reachability: bool,
+) -> tuple[str | None, str | None]:
+    """Query the KSMI graph for entity info and reachability matrix.
+
+    Returns:
+        Tuple of (base_output, matrix_text). Either or both may be None
+        if the graph is unavailable or the queries return no results.
+    """
     from esdc.chat.domain_knowledge.ksmi_graph_manager import KSMIGraphManager
 
+    base_output: str | None = None
+    matrix_text: str | None = None
     try:
         mgr = KSMIGraphManager()
         if entity and relationship:
             results = mgr.traverse(entity, relationship)
             if results:
-                return _format_traverse_results(entity, relationship, results)
-        if entity:
+                base_output = _format_traverse_results(
+                    entity, relationship, results
+                )
+        if base_output is None and entity:
             results = mgr.find_all(entity)
             if results:
-                return _format_find_results(results)
+                base_output = _format_find_results(results)
+        if include_reachability and topic.lower() in _REACHABILITY_TOPICS:
+            try:
+                matrix_text = mgr.format_reachability(highlight=entity)
+            except Exception as e:
+                logger.warning(
+                    "[KSMI-KG] reachability_format_error | %s", e
+                )
     except Exception as e:
         logger.warning("[KSMI-KG] graph_fallback | error=%s", e)
-
-    from esdc.chat.domain_knowledge.ksmi_loader import ksmi_retrieve
-
-    return ksmi_retrieve(topic=topic, entity=entity)
+    return base_output, matrix_text

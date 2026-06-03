@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixes ILIKE queries returning no results after `esdc fetch --year` because FTS index was stale
 - **FTS zero-row fallback** — when an FTS-rewritten query returns 0 rows, the system automatically retries with the original ILIKE query, ensuring results are never lost due to FTS stemming/stopword issues
 - **FTS index without stemmer/stopwords** — FTS indexes are now created with `stemmer=''` and `stopwords=''` so that short keywords like "Duri" are matched exactly without being filtered by English stemming rules
+- **Reachability matrix in `knowledge_traversal`** — when `topic` is `transition` or `level`, the tool now auto-appends a compact reachability matrix (Level → Allowed Targets) covering all 18 levels (E0-E8, X0-X6, A1, A2), with the queried entity highlighted. Prevents LLM reasoning errors like claiming E3 can transition to E4. Opt-out via `include_reachability=False`.
 
 ### Added
 

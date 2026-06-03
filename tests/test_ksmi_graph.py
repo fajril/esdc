@@ -232,6 +232,54 @@ class TestKSMIGraphManagerGetTransitions:
         assert all(r["from"] == "E0" for r in results)
 
 
+class TestKSMIGraphManagerFormatReachability:
+    """Tests for KSMIGraphManager.format_reachability()."""
+
+    def test_format_reachability_includes_all_levels(self, manager):
+        result = manager.format_reachability()
+        for code in ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8",
+                     "X0", "X1", "X2", "X3", "X4", "X5", "X6", "A1", "A2"]:
+            assert f"{code} →" in result, f"Missing level {code}"
+
+    def test_format_reachability_header(self, manager):
+        result = manager.format_reachability()
+        assert "Reachability Matrix" in result
+        assert "Level → Allowed Targets" in result
+
+    def test_format_reachability_highlight_marks_entity(self, manager):
+        result = manager.format_reachability(highlight="E3")
+        assert ">>>" in result
+        highlighted = [line for line in result.split("\n") if ">>>" in line]
+        assert len(highlighted) == 1
+        assert "E3 →" in highlighted[0]
+
+    def test_format_reachability_no_highlight_when_none(self, manager):
+        result = manager.format_reachability()
+        assert ">>>" not in result
+
+    def test_format_reachability_e3_does_not_include_e4(self, manager):
+        """Regression: E3 can transition to E0, E2, E5 — NOT E4."""
+        result = manager.format_reachability(highlight="E3")
+        for line in result.split("\n"):
+            if "E3 →" in line:
+                assert "E4" not in line
+                assert "E0" in line
+                assert "E2" in line
+                assert "E5" in line
+                break
+
+    def test_format_reachability_sorted_order(self, manager):
+        result = manager.format_reachability()
+        lines = [
+            line for line in result.split("\n")
+            if "→" in line and not line.startswith("#")
+        ]
+        codes = [line.split("→")[0].strip().lstrip(">").strip() for line in lines]
+        expected_order = ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8",
+                          "X0", "X1", "X2", "X3", "X4", "X5", "X6", "A1", "A2"]
+        assert codes == expected_order
+
+
 class TestKSMIGraphManagerIsAvailable:
     """Tests for KSMIGraphManager.is_available property."""
 

@@ -44,7 +44,7 @@ When writing SQL queries, use DuckDB syntax:
 ## Available Tools
 
 - **entity_resolver**: Resolve entity names and match query patterns from knowledge graph (query) — call only if no auto-resolved entities provided
-- **knowledge_traversal**: Retrieve KSMI domain knowledge — definitions, transitions, formulas, hierarchy (topic, entity) — use for domain questions about KSMI levels, rules, or concepts
+- **knowledge_traversal**: Retrieve KSMI domain knowledge — definitions, transitions, formulas, hierarchy (topic, entity) — use for domain questions about KSMI levels, rules, or concepts. For transition/level questions, call with `topic="transition"` and the level code (e.g. `entity="E3"`); the tool auto-includes the full reachability matrix to prevent invalid target assumptions (e.g. E3 cannot transition to E4).
 - **resolve_spatial**: Execute spatial queries using DuckDB spatial extension (query_type, target, radius_km=20, limit=10, wk_name=None) — use for proximity, distance, or working area queries. **IMPORTANT: When a query mentions a working area (e.g., "di WK Mahakam", "in Rokan"), ALWAYS pass wk_name to scope results to that working area.**
 - **semantic_search**: Search documents by semantic similarity (query, limit=10, **filters**) — use for concept-based queries, "proyek dengan masalah X", when FTS returns no results. **NEW: Supports many filters** - report_year, field_name, pod_name, wk_name, province, basin128, project_class, project_stage, project_level, operator_name, operator_group, wk_subgroup, wk_regionisasi_ngi (NGI region), wk_area_perwakilan_skkmigas (SKK Migas region). **IMPORTANT**: If semantic embeddings are not available, this tool automatically falls back to FTS search and returns status="fallback_to_fts". Inform the user that semantic search is not active and how to enable it.
 
@@ -269,7 +269,7 @@ WHERE report_year = (
 | A1 | Dry (Abandoned) | None | ✗ | ✗ | Absorbing state (no exit) |
 | A2 | Dissolved (Abandoned) | None | ✗ | ✗ | Absorbing state (no exit) |
 
-**Key distinctions:** PSE ≠ Izin Berproduksi. PSE = exploration closure document (required for X0). Izin Berproduksi = production approval (POD/POP/POFD/OPL/OPLL, required for E-levels). `is_pod_approved`: true=has approval, false=doesn't have, null=context-dependent. **For detailed definitions, transition rules, volume formulas, and document semantics → use `knowledge_traversal` tool.**
+**Key distinctions:** PSE ≠ Izin Berproduksi. PSE = exploration closure document (required for X0). Izin Berproduksi = production approval (POD/POP/POFD/OPL/OPLL, required for E-levels). `is_pod_approved`: true=has approval, false=doesn't have, null=context-dependent. **For transition rules → `knowledge_traversal(topic="transition", entity="<code>")` — the tool auto-includes the reachability matrix. For level definitions only → `knowledge_traversal(topic="level", entity="<code>")`. For volume formulas or document semantics → `knowledge_traversal(topic="formula"|"document")`.**
 
 ### GRR (Government of Indonesia Recoverable Resources)
 **CRITICAL: GRR ≠ "Geological Resources and Reserves".**
