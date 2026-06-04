@@ -143,6 +143,7 @@ class RE5GroovyProductionTransitionRule(ValidationRule):
     previous_level: str
     groovy_value: bool
     required_level: str
+    require_no_production: bool = False
 
     def check(
         self, conn: duckdb.DuckDBPyConnection, year: list[int] | None = None
@@ -151,8 +152,12 @@ class RE5GroovyProductionTransitionRule(ValidationRule):
             self.previous_level,
             self.groovy_value,
             self.required_level,
+            require_no_production=self.require_no_production,
         )
-        sql = _add_year_filter(sql, year)
+        if self.require_no_production:
+            sql = _add_year_filter_self_join(sql, year)
+        else:
+            sql = _add_year_filter(sql, year)
         return execute_and_build_violations(
             conn,
             sql,
@@ -183,6 +188,7 @@ class RE5003(RE5GroovyProductionTransitionRule):
     previous_level = ProjectLevel.E1
     groovy_value = False
     required_level = ProjectLevel.E4
+    require_no_production = True
 
 
 @register_rule
@@ -197,6 +203,7 @@ class RE5006(RE5GroovyProductionTransitionRule):
     previous_level = ProjectLevel.E4
     groovy_value = True
     required_level = ProjectLevel.E4
+    require_no_production = True
 
 
 # ---------------------------------------------------------------------------
@@ -938,7 +945,7 @@ class RE5041(ValidationRule):
         self, conn: duckdb.DuckDBPyConnection, year: list[int] | None = None
     ) -> list[Violation]:
         sql = build_sales_implies_level_set_sql(E0_E1_E4_E7)
-        sql = _add_year_filter_self_join(sql, year)
+        sql = _add_year_filter(sql, year)
         return execute_and_build_violations(
             conn,
             sql,
@@ -1177,7 +1184,7 @@ class RE5052(ValidationRule):
         self, conn: duckdb.DuckDBPyConnection, year: list[int] | None = None
     ) -> list[Violation]:
         sql = build_level_implies_sales_positive_sql(E0_E1_E4_E7)
-        sql = _add_year_filter_self_join(sql, year)
+        sql = _add_year_filter(sql, year)
         return execute_and_build_violations(
             conn,
             sql,
