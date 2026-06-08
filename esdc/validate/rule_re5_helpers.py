@@ -653,7 +653,7 @@ def _extract_year_sql(column: str = "onstream_actual") -> str:
 
 
 def build_onstream_before_report_year_sql() -> str:
-    """RE5067: onstream_actual < report_year."""
+    """RE5067: onstream_actual <= report_year."""
     ident = ", ".join(IDENTIFIER_COLS)
     year_expr = _extract_year_sql()
     return (
@@ -663,7 +663,7 @@ def build_onstream_before_report_year_sql() -> str:
         f" WHERE onstream_actual IS NOT NULL"
         f" AND onstream_actual != ''"
         f" AND {year_expr} IS NOT NULL"
-        f" AND {year_expr} >= report_year"
+        f" AND {year_expr} > report_year"
     )
 
 

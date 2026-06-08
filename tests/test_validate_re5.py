@@ -663,7 +663,7 @@ class TestRE5066Integration:
 
 
 class TestRE5067Integration:
-    def test_onstream_equals_report_year_fails(self):
+    def test_onstream_equals_report_year_passes(self):
         conn = _make_conn()
         conn.execute(
             "INSERT INTO project_resources VALUES"
@@ -671,6 +671,21 @@ class TestRE5067Integration:
             f"'{ProjectLevel.E0.value}', '{ProjectLevel.E0.value}', '1. Reserves & GRR', '1. Exploitation',"
             "100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,"
             "0, 0, 0, 0, 0, 0, '2024', NULL, 0, 0, 0, 0, 0, 0, 0, 0)"
+        )
+        from esdc.validate.rule_re5 import RE5067
+
+        rule = RE5067()
+        violations = rule.check(conn)
+        assert len(violations) == 0
+
+    def test_onstream_after_report_year_fails(self):
+        conn = _make_conn()
+        conn.execute(
+            "INSERT INTO project_resources VALUES"
+            "(2024, 'P1', 'P1', 'W1', 'F1', '1. Low Value',"
+            f"'{ProjectLevel.E0.value}', '{ProjectLevel.E0.value}', '1. Reserves & GRR', '1. Exploitation',"
+            "100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,"
+            "0, 0, 0, 0, 0, 0, '2026', NULL, 0, 0, 0, 0, 0, 0, 0, 0)"
         )
         from esdc.validate.rule_re5 import RE5067
 

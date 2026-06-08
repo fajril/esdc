@@ -1519,8 +1519,8 @@ class RE5066(ValidationRule):
 @register_rule
 class RE5067(ValidationRule):
     rule_id = "RE5067"
-    description = "Onstream actual must be less than reporting year"
-    formal = r"$t_{ons} < t_R$"
+    description = "Onstream actual must be less than or equal to reporting year"
+    formal = r"$t_{ons} \leq t_R$"
     is_fixable = False
     applies_to_tables = ["project_resources"]
     severity = Severity.STRICT
