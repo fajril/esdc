@@ -13,6 +13,10 @@ from typing import Any
 # Value: parsed dict
 _json_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
+# Cache statistics for JSON parsing cache
+_json_cache_hits: int = 0
+_json_cache_misses: int = 0
+
 # Cache configuration
 MAX_JSON_CACHE_SIZE = 256
 
@@ -70,7 +74,7 @@ def get_parsed_json(args_str: str) -> dict[str, Any]:
     Returns:
         Parsed dictionary (empty dict on parse error)
     """
-    global _json_cache
+    global _json_cache, _json_cache_hits, _json_cache_misses
 
     if not args_str:
         return {}
@@ -78,7 +82,10 @@ def get_parsed_json(args_str: str) -> dict[str, Any]:
     cache_key = (_hash_json_args(args_str), args_str)
 
     if cache_key in _json_cache:
+        _json_cache_hits += 1
         return _json_cache[cache_key]
+
+    _json_cache_misses += 1
 
     try:
         parsed = json.loads(args_str)
@@ -97,8 +104,10 @@ def clear_all_caches():
 
     Useful for testing and memory management.
     """
-    global _json_cache
+    global _json_cache, _json_cache_hits, _json_cache_misses
     _json_cache.clear()
+    _json_cache_hits = 0
+    _json_cache_misses = 0
 
 
 def get_cache_stats() -> dict[str, Any]:
@@ -107,7 +116,12 @@ def get_cache_stats() -> dict[str, Any]:
     Returns:
         Dict with cache sizes and hit rates
     """
+    global _json_cache_hits, _json_cache_misses
+    total = _json_cache_hits + _json_cache_misses
     return {
         "json_cache_size": len(_json_cache),
         "json_cache_max": MAX_JSON_CACHE_SIZE,
+        "json_cache_hits": _json_cache_hits,
+        "json_cache_misses": _json_cache_misses,
+        "json_cache_hit_rate": _json_cache_hits / total if total > 0 else None,
     }

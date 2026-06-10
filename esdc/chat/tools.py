@@ -136,7 +136,9 @@ def _get_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "sql_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _sql_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
+        _sql_cache = diskcache.Cache(
+            str(cache_dir), size_limit=500_000_000, statistics=True
+        )
     return _sql_cache
 
 
@@ -155,8 +157,125 @@ def _get_tool_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "tool_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _tool_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
+        _tool_cache = diskcache.Cache(
+            str(cache_dir), size_limit=500_000_000, statistics=True
+        )
     return _tool_cache
+
+
+def get_sql_cache_stats() -> dict[str, Any]:
+    """Get SQL cache statistics for diagnostics.
+
+    Returns:
+        Dict with cache size, entries, hits, misses, and hit rate.
+    """
+    global _sql_cache
+    if _sql_cache is None:
+        from esdc.configs import Config
+
+        cache_dir = Config.get_cache_dir() / "sql_results"
+        if not cache_dir.exists():
+            return {
+                "directory": str(cache_dir),
+                "entries": 0,
+                "size_bytes": 0,
+                "size_limit": 500_000_000,
+                "hits": 0,
+                "misses": 0,
+                "hit_rate": None,
+                "active": False,
+            }
+        # Create cache handle to read stats without keeping it alive
+        temp_cache = diskcache.Cache(str(cache_dir), statistics=True)
+        try:
+            stats = temp_cache.stats()  # type: ignore[union-attr]
+            t_hits: int = stats[0]  # type: ignore[assignment]
+            t_misses: int = stats[1]  # type: ignore[assignment]
+            total = t_hits + t_misses
+            return {
+                "directory": str(cache_dir),
+                "entries": len(temp_cache),  # type: ignore[arg-type]
+                "size_bytes": temp_cache.volume(),  # type: ignore[union-attr]
+                "size_limit": temp_cache.size_limit,  # type: ignore[attr-defined]
+                "hits": t_hits,
+                "misses": t_misses,
+                "hit_rate": t_hits / total if total > 0 else None,
+                "active": False,
+            }
+        finally:
+            temp_cache.close()
+
+    stats = _sql_cache.stats()  # type: ignore[union-attr]
+    hits: int = stats[0]  # type: ignore[assignment]
+    misses: int = stats[1]  # type: ignore[assignment]
+    total = hits + misses
+    return {
+        "directory": _sql_cache.directory,  # type: ignore[attr-defined]
+        "entries": len(_sql_cache),  # type: ignore[arg-type]
+        "size_bytes": _sql_cache.volume(),  # type: ignore[union-attr]
+        "size_limit": _sql_cache.size_limit,  # type: ignore[attr-defined]
+        "hits": hits,
+        "misses": misses,
+        "hit_rate": hits / total if total > 0 else None,
+        "active": True,
+    }
+
+
+def get_tool_cache_stats() -> dict[str, Any]:
+    """Get tool cache statistics for diagnostics.
+
+    Returns:
+        Dict with cache size, entries, hits, misses, and hit rate.
+    """
+    global _tool_cache
+    if _tool_cache is None:
+        from esdc.configs import Config
+
+        cache_dir = Config.get_cache_dir() / "tool_results"
+        if not cache_dir.exists():
+            return {
+                "directory": str(cache_dir),
+                "entries": 0,
+                "size_bytes": 0,
+                "size_limit": 500_000_000,
+                "hits": 0,
+                "misses": 0,
+                "hit_rate": None,
+                "active": False,
+            }
+        temp_cache = diskcache.Cache(str(cache_dir), statistics=True)
+        try:
+            stats = temp_cache.stats()  # type: ignore[union-attr]
+            t_hits: int = stats[0]  # type: ignore[assignment]
+            t_misses: int = stats[1]  # type: ignore[assignment]
+            total = t_hits + t_misses
+            return {
+                "directory": str(cache_dir),
+                "entries": len(temp_cache),  # type: ignore[arg-type]
+                "size_bytes": temp_cache.volume(),  # type: ignore[union-attr]
+                "size_limit": temp_cache.size_limit,  # type: ignore[attr-defined]
+                "hits": t_hits,
+                "misses": t_misses,
+                "hit_rate": t_hits / total if total > 0 else None,
+                "active": False,
+            }
+        finally:
+            temp_cache.close()
+
+    stats = _tool_cache.stats()  # type: ignore[union-attr]
+    hits: int = stats[0]  # type: ignore[assignment]
+    misses: int = stats[1]  # type: ignore[assignment]
+    total = hits + misses
+    return {
+        "directory": _tool_cache.directory,  # type: ignore[attr-defined]
+        "entries": len(_tool_cache),  # type: ignore[arg-type]
+        "size_bytes": _tool_cache.volume(),  # type: ignore[union-attr]
+        "size_limit": _tool_cache.size_limit,  # type: ignore[attr-defined]
+        "hits": hits,
+        "misses": misses,
+        "hit_rate": hits / total if total > 0 else None,
+        "active": True,
+    }
 
 
 def _tool_cache_key(tool_name: str, **kwargs: Any) -> str:

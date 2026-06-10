@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import logging
 import shutil
 import time
@@ -753,8 +754,44 @@ def verify_indexes(conn: duckdb.DuckDBPyConnection) -> dict:
 
 
 def invalidate_sql_cache() -> None:
-    """Clear the SQL results cache directory."""
+    """Clear the SQL results cache directory and record invalidation timestamp."""
     cache_dir = Config.get_cache_dir() / "sql_results"
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
         logging.info("SQL cache invalidated: %s", cache_dir)
+    # Record invalidation timestamp
+    _record_cache_invalidation(cache_dir)
+
+
+def _record_cache_invalidation(cache_dir: Path) -> None:
+    """Record the timestamp of cache invalidation.
+
+    Stores timestamp in a sibling file so it survives cache directory deletion.
+    """
+    from esdc.configs import Config
+
+    cache_root = Config.get_cache_dir()
+    timestamp_file = cache_root / ".last_invalidated"
+    now = datetime.datetime.now().isoformat()
+    try:
+        timestamp_file.write_text(now)
+    except OSError as e:
+        logging.warning("Could not record cache invalidation timestamp: %s", e)
+
+
+def get_last_cache_invalidation() -> str | None:
+    """Get the timestamp of the last cache invalidation.
+
+    Returns:
+        ISO timestamp string or None if never invalidated.
+    """
+    from esdc.configs import Config
+
+    cache_root = Config.get_cache_dir()
+    timestamp_file = cache_root / ".last_invalidated"
+    if timestamp_file.exists():
+        try:
+            return timestamp_file.read_text().strip()
+        except OSError:
+            return None
+    return None

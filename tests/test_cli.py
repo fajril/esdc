@@ -50,6 +50,20 @@ class TestStatusCommand:
         assert result.exit_code == 0
         assert ".esdc" in result.stdout
 
+    def test_status_shows_cache_section(self):
+        """Test status shows cache diagnostics."""
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        assert "Cache:" in result.stdout
+        assert "Directory:" in result.stdout
+
+    def test_status_shows_hit_rate_when_db_exists(self):
+        """Test status shows cache hit rate when database exists."""
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        # Cache section should appear regardless of DB existence
+        assert "Hit rate:" in result.stdout or "N/A" in result.stdout
+
     def test_status_with_custom_env(self):
         """Test status shows custom path from env var."""
         with patch.dict(os.environ, {"ESDC_DB_FILE": "/custom/path/db.db"}):
