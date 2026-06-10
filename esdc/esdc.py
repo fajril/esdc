@@ -1331,13 +1331,16 @@ def _print_cache_subsection(name: str, stats: dict[str, Any]) -> None:
         f"Size: {_humanize_bytes(stats['size_bytes'])} / "
         f"{_humanize_bytes(stats['size_limit'])}"
     )
-    _print_hit_rate(stats.get("hits", 0), stats.get("misses", 0))
-    if not stats.get("active") and stats["entries"] == 0:
-        rich.print("      Status: Empty (not yet used)")
+    _print_hit_rate(stats.get("hits"), stats.get("misses"))
+    if not stats.get("active"):
+        rich.print("      Status: Inactive (stats available when cache is in use)")
 
 
-def _print_hit_rate(hits: int, misses: int) -> None:
+def _print_hit_rate(hits: int | None, misses: int | None) -> None:
     """Print hit rate line with color coding."""
+    if hits is None or misses is None:
+        rich.print("      Hits: N/A | Misses: N/A | Hit rate: N/A (inactive cache)")
+        return
     total = hits + misses
     if total == 0:
         rich.print("      Hits: 0 | Misses: 0 | Hit rate: N/A (no activity)")
@@ -1352,6 +1355,7 @@ def _print_hit_rate(hits: int, misses: int) -> None:
 
 def _humanize_bytes(n: int) -> str:
     """Convert bytes to human-readable string."""
+    n = max(n, 0)
     if n < 1024:
         return f"{n} B"
     if n < 1024**2:

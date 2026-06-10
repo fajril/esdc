@@ -181,3 +181,69 @@ class TestVerboseFlag:
         with patch("esdc.esdc.Config.init_config"):
             result = runner.invoke(app, ["--verbose", "2", "status"])
             assert result.exit_code == 0
+
+
+class TestHumanizeBytes:
+    """Tests for _humanize_bytes helper."""
+
+    def test_bytes(self):
+        from esdc.esdc import _humanize_bytes
+
+        assert _humanize_bytes(0) == "0 B"
+        assert _humanize_bytes(512) == "512 B"
+        assert _humanize_bytes(1023) == "1023 B"
+
+    def test_kilobytes(self):
+        from esdc.esdc import _humanize_bytes
+
+        assert _humanize_bytes(1024) == "1.0 KB"
+        assert _humanize_bytes(1536) == "1.5 KB"
+
+    def test_megabytes(self):
+        from esdc.esdc import _humanize_bytes
+
+        assert _humanize_bytes(1024**2) == "1.0 MB"
+        assert _humanize_bytes(int(1.5 * 1024**2)) == "1.5 MB"
+
+    def test_gigabytes(self):
+        from esdc.esdc import _humanize_bytes
+
+        assert _humanize_bytes(1024**3) == "1.0 GB"
+        assert _humanize_bytes(500_000_000) == "476.8 MB"
+
+    def test_negative_bytes(self):
+        from esdc.esdc import _humanize_bytes
+
+        assert _humanize_bytes(-1) == "0 B"
+        assert _humanize_bytes(-1024) == "0 B"
+
+
+class TestPrintHitRate:
+    """Tests for _print_hit_rate helper."""
+
+    def test_none_hits_misses(self, capsys):
+
+        from esdc.esdc import _print_hit_rate
+
+        _print_hit_rate(None, None)
+        capsys.readouterr()
+        # When using rich.print, output goes to console
+        # We verify the function doesn't crash with None inputs
+
+    def test_zero_activity(self):
+        from esdc.esdc import _print_hit_rate
+
+        # Should not crash with 0, 0
+        _print_hit_rate(0, 0)
+
+    def test_high_hit_rate(self):
+        from esdc.esdc import _print_hit_rate
+
+        # Should not crash
+        _print_hit_rate(90, 10)
+
+    def test_low_hit_rate(self):
+        from esdc.esdc import _print_hit_rate
+
+        # Should not crash
+        _print_hit_rate(10, 90)
