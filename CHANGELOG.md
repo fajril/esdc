@@ -67,6 +67,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `langchain-anthropic>=0.3.0`, `langchain-google-genai>=2.0.0`, `langchain-groq>=0.2.0`
 - Added `questionary>=2.0.0`
 
+### Added
+
+- **Cache diagnostics in `esdc status`** — hit rate, size, entries, and invalidation history
+  - SQL Results Cache: entries, size, hits, misses, hit rate (via `diskcache` with `statistics=True`)
+  - Tool Results Cache: same stats for get_schema, list_tables, entity_resolver, etc.
+  - JSON Parsing Cache (RAM): entries, hits, misses, hit rate (in-memory counter)
+  - Last invalidated timestamp recorded when `esdc reload` or `invalidate_sql_cache()` runs
+  - New public functions: `get_sql_cache_stats()`, `get_tool_cache_stats()` in `esdc/chat/tools.py`
+  - New `_record_cache_invalidation()` and `get_last_cache_invalidation()` in `esdc/dbmanager.py`
+  - Color-coded hit rate: green ≥80%, yellow ≥50%, red <50%
+
 ## [0.7.0] - 2026-05-13
 
 ### Changed

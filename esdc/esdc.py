@@ -42,7 +42,7 @@ from collections.abc import Iterable
 from contextlib import closing
 from datetime import date
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import pandas as pd
 import requests
@@ -1321,6 +1321,45 @@ def chat(setup: bool = False):
         rich.print("[yellow]Setup incomplete. Chat cannot start.[/yellow]")
 
 
+def _print_cache_subsection(name: str, stats: dict[str, Any]) -> None:
+    """Print a cache subsection in status output."""
+    rich.print()
+    rich.print(f"  [bold]{name}[/bold]")
+    rich.print(f"      Path: {stats['directory']}")
+    rich.print(
+        f"      Entries: {stats['entries']:,} | "
+        f"Size: {_humanize_bytes(stats['size_bytes'])} / "
+        f"{_humanize_bytes(stats['size_limit'])}"
+    )
+    _print_hit_rate(stats.get("hits", 0), stats.get("misses", 0))
+
+
+def _print_hit_rate(hits: int, misses: int) -> None:
+    """Print hit rate line with color coding."""
+    total = hits + misses
+    if total == 0:
+        rich.print("      Hits: 0 | Misses: 0 | Hit rate: N/A (no activity)")
+        return
+    rate = hits / total
+    rate_color = "green" if rate >= 0.8 else "yellow" if rate >= 0.5 else "red"
+    rich.print(
+        f"      Hits: {hits:,} | Misses: {misses:,} | "
+        f"Hit rate: [{rate_color}]{rate:.1%}[/{rate_color}]"
+    )
+
+
+def _humanize_bytes(n: int) -> str:
+    """Convert bytes to human-readable string."""
+    n = max(n, 0)
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024**2:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024**3:
+        return f"{n / (1024 ** 2):.1f} MB"
+    return f"{n / (1024 ** 3):.1f} GB"
+
+
 @app.command(name="status")
 def status(
     verify: Annotated[
@@ -1417,6 +1456,45 @@ def status(
         rich.print()
     hnsw_icon = "[green]✅[/green]" if emb["hnsw_exists"] else "[red]❌[/red]"
     rich.print(f"  {hnsw_icon} HNSW index idx_hnsw_embeddings")
+
+    # Cache diagnostics
+    rich.print()
+    rich.print("[bold]Cache:[/bold]")
+    cache_dir = Config.get_cache_dir()
+    rich.print(f"  Directory: {cache_dir}")
+
+    try:
+        from esdc.chat.tools import get_sql_cache_stats, get_tool_cache_stats
+        from esdc.dbmanager import get_last_cache_invalidation
+        from esdc.server.cache import get_cache_stats
+
+        sql_stats = get_sql_cache_stats()
+        tool_stats = get_tool_cache_stats()
+        json_stats = get_cache_stats()
+
+        _print_cache_subsection("SQL Results Cache", sql_stats)
+        _print_cache_subsection("Tool Results Cache", tool_stats)
+
+        # JSON cache
+        rich.print()
+        rich.print("  [bold]JSON Parsing Cache (RAM):[/bold]")
+        rich.print(
+            f"      Entries: {json_stats['json_cache_size']} /"
+            f" {json_stats['json_cache_max']}"
+        )
+        _print_hit_rate(
+            json_stats.get("json_cache_hits", 0),
+            json_stats.get("json_cache_misses", 0),
+        )
+        rich.print("      Note: In-memory only, resets on restart")
+
+        # Last invalidated
+        last_invalidated = get_last_cache_invalidation()
+        if last_invalidated:
+            rich.print()
+            rich.print(f"  [bold]Last cache invalidated:[/bold] {last_invalidated}")
+    except Exception as e:
+        rich.print(f"[yellow]  Could not check cache: {e}[/yellow]")
 
     if not verify:
         return

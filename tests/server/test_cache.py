@@ -125,12 +125,45 @@ class TestCacheStats:
         stats = get_cache_stats()
         assert stats["json_cache_size"] == 0
         assert "json_cache_max" in stats
+        assert "json_cache_hits" in stats
+        assert "json_cache_misses" in stats
+        assert "json_cache_hit_rate" in stats
 
     def test_stats_after_cache(self):
         """Test stats after caching."""
         get_parsed_json('{"key": "value"}')
         stats = get_cache_stats()
         assert stats["json_cache_size"] == 1
+
+    def test_stats_hit_miss_tracking(self):
+        """Test that hits and misses are tracked correctly."""
+        json_str = '{"key": "value"}'
+        # First call - miss
+        get_parsed_json(json_str)
+        stats = get_cache_stats()
+        assert stats["json_cache_misses"] == 1
+        assert stats["json_cache_hits"] == 0
+        assert stats["json_cache_hit_rate"] == 0.0
+
+        # Second call - hit
+        get_parsed_json(json_str)
+        stats = get_cache_stats()
+        assert stats["json_cache_hits"] == 1
+        assert stats["json_cache_misses"] == 1
+        assert stats["json_cache_hit_rate"] == 0.5
+
+        # Third call - hit
+        get_parsed_json(json_str)
+        stats = get_cache_stats()
+        assert stats["json_cache_hits"] == 2
+        assert stats["json_cache_misses"] == 1
+        assert stats["json_cache_hit_rate"] is not None
+        assert abs(stats["json_cache_hit_rate"] - 2 / 3) < 0.01
+
+    def test_stats_hit_rate_none_when_no_activity(self):
+        """Test that hit_rate is None when there is no activity."""
+        stats = get_cache_stats()
+        assert stats["json_cache_hit_rate"] is None
 
     def test_clear_all_caches(self):
         """Test that clear_all_caches empties the cache."""

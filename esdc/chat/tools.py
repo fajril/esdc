@@ -136,7 +136,9 @@ def _get_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "sql_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _sql_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
+        _sql_cache = diskcache.Cache(
+            str(cache_dir), size_limit=500_000_000, statistics=True
+        )
     return _sql_cache
 
 
@@ -155,8 +157,101 @@ def _get_tool_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "tool_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _tool_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
+        _tool_cache = diskcache.Cache(
+            str(cache_dir), size_limit=500_000_000, statistics=True
+        )
     return _tool_cache
+
+
+def _get_disk_cache_stats(
+    cache: diskcache.Cache | None,
+    cache_dir_name: str,
+    size_limit: int = 500_000_000,
+) -> dict[str, Any]:
+    """Get statistics from a diskcache.Cache instance.
+
+    Opens a temporary read-only handle (without statistics=True) so that
+    esdc status does not interfere with the live cache's hit/miss counters.
+    Stats are persisted by diskcache in its internal SQLite database, so
+    hits/misses are readable even from a separate process.
+
+    Args:
+        cache: The global cache handle, or None if not yet initialized.
+        cache_dir_name: Subdirectory name (e.g. "sql_results" or "tool_results").
+        size_limit: Maximum cache size in bytes.
+
+    Returns:
+        Dict with cache diagnostics.
+    """
+    from esdc.configs import Config
+
+    cache_dir = Config.get_cache_dir() / cache_dir_name
+
+    if not cache_dir.exists():
+        return {
+            "directory": str(cache_dir),
+            "entries": 0,
+            "size_bytes": 0,
+            "size_limit": size_limit,
+            "hits": 0,
+            "misses": 0,
+            "hit_rate": None,
+        }
+
+    # Open a temporary handle to read stats from disk.
+    # Use statistics=False (default) to avoid incrementing counters
+    # in this process — we only want to read what the live process wrote.
+    try:
+        temp_cache = diskcache.Cache(str(cache_dir))
+    except (FileNotFoundError, OSError):
+        return {
+            "directory": str(cache_dir),
+            "entries": 0,
+            "size_bytes": 0,
+            "size_limit": size_limit,
+            "hits": 0,
+            "misses": 0,
+            "hit_rate": None,
+        }
+    try:
+        stats = temp_cache.stats()  # type: ignore[union-attr]
+        hits: int = stats[0]  # type: ignore[assignment]
+        misses: int = stats[1]  # type: ignore[assignment]
+        entries = len(temp_cache)  # type: ignore[arg-type]
+        volume = temp_cache.volume()  # type: ignore[union-attr]
+        limit = temp_cache.size_limit  # type: ignore[attr-defined]
+    except (FileNotFoundError, OSError):
+        hits, misses, entries, volume, limit = 0, 0, 0, 0, size_limit
+    finally:
+        temp_cache.close()
+    total = hits + misses
+    return {
+        "directory": str(cache_dir),
+        "entries": entries,
+        "size_bytes": volume,
+        "size_limit": limit,
+        "hits": hits,
+        "misses": misses,
+        "hit_rate": hits / total if total > 0 else None,
+    }
+
+
+def get_sql_cache_stats() -> dict[str, Any]:
+    """Get SQL cache statistics for diagnostics.
+
+    Returns:
+        Dict with cache size, entries, hits, misses, and hit rate.
+    """
+    return _get_disk_cache_stats(_sql_cache, "sql_results")
+
+
+def get_tool_cache_stats() -> dict[str, Any]:
+    """Get tool cache statistics for diagnostics.
+
+    Returns:
+        Dict with cache size, entries, hits, misses, and hit rate.
+    """
+    return _get_disk_cache_stats(_tool_cache, "tool_results")
 
 
 def _tool_cache_key(tool_name: str, **kwargs: Any) -> str:
@@ -172,11 +267,13 @@ def invalidate_tool_cache() -> None:
         _tool_cache.clear()
         _tool_cache = None
     from esdc.configs import Config
+    from esdc.dbmanager import _record_cache_invalidation
 
     cache_dir = Config.get_cache_dir() / "tool_results"
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
         logger.info("Tool cache invalidated: %s", cache_dir)
+    _record_cache_invalidation(cache_dir)
 
 
 def reset_sql_cache() -> None:
