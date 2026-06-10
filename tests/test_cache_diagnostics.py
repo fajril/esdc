@@ -17,17 +17,16 @@ class TestGetDiskCacheStats:
 
     def test_nonexistent_directory(self, tmp_path: Path):
         """Test stats for a directory that doesn't exist."""
-        result = _get_disk_cache_stats(
-            cache=None,
-            cache_dir_name="nonexistent",
-            active=False,
-        )
+        with patch("esdc.configs.Config.get_cache_dir", return_value=tmp_path):
+            result = _get_disk_cache_stats(
+                cache=None,
+                cache_dir_name="nonexistent",
+            )
         assert result["entries"] == 0
         assert result["size_bytes"] == 0
-        assert result["hits"] is None
-        assert result["misses"] is None
+        assert result["hits"] == 0
+        assert result["misses"] == 0
         assert result["hit_rate"] is None
-        assert result["active"] is False
 
     def test_empty_cache_directory(self, tmp_path: Path):
         """Test stats for an empty cache directory."""
@@ -40,35 +39,35 @@ class TestGetDiskCacheStats:
             result = _get_disk_cache_stats(
                 cache=None,
                 cache_dir_name="test_cache",
-                active=False,
             )
         assert result["entries"] == 0
-        assert result["active"] is False
-        assert result["hits"] is None
+        assert result["hits"] == 0
+        assert result["misses"] == 0
 
-    def test_active_cache_with_statistics(self, tmp_path: Path):
-        """Test stats from an active cache with statistics enabled."""
+    def test_cache_with_hits_and_misses(self, tmp_path: Path):
+        """Test stats from a cache that has recorded hits and misses."""
         cache_dir = tmp_path / "test_cache"
         cache_dir.mkdir()
+        # Write data with statistics=True so hits/misses are tracked
         c = diskcache.Cache(str(cache_dir), statistics=True)
         c.set("key1", "value1")
         # Simulate a hit
         _ = c.get("key1")
         # Simulate a miss
         _ = c.get("nonexistent")
+        c.close()
 
+        # Now open a separate handle (like esdc status does) and read stats
         with patch("esdc.configs.Config.get_cache_dir", return_value=tmp_path):
             result = _get_disk_cache_stats(
-                cache=c,
+                cache=None,
                 cache_dir_name="test_cache",
-                active=True,
             )
         assert result["entries"] == 1
-        assert result["active"] is True
-        assert result["hits"] is not None
-        assert result["misses"] is not None
+        assert result["hits"] >= 1
+        assert result["misses"] >= 1
+        assert result["hit_rate"] is not None
         assert result["size_bytes"] > 0
-        c.close()
 
     def test_race_condition_missing_directory(self, tmp_path: Path):
         """Test that FileNotFoundError is handled gracefully."""
@@ -76,10 +75,10 @@ class TestGetDiskCacheStats:
             result = _get_disk_cache_stats(
                 cache=None,
                 cache_dir_name="will_not_exist",
-                active=False,
             )
         assert result["entries"] == 0
-        assert result["active"] is False
+        assert result["hits"] == 0
+        assert result["misses"] == 0
 
 
 class TestGetSqlCacheStats:
@@ -101,7 +100,6 @@ class TestGetSqlCacheStats:
             "hits",
             "misses",
             "hit_rate",
-            "active",
         }
         assert expected_keys.issubset(result.keys())
 
@@ -125,7 +123,6 @@ class TestGetToolCacheStats:
             "hits",
             "misses",
             "hit_rate",
-            "active",
         }
         assert expected_keys.issubset(result.keys())
 
@@ -144,7 +141,7 @@ class TestCacheInvalidationTimestamp:
             _record_cache_invalidation(tmp_path / "sql_results")
             result = get_last_cache_invalidation()
         assert result is not None
-        assert "T" in result  # ISO format contains T separator
+        assert "T" in result
 
     def test_get_last_invalidated_no_file(self, tmp_path: Path):
         """Test get_last_cache_invalidation returns None when no file exists."""

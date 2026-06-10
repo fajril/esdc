@@ -166,20 +166,18 @@ def _get_tool_cache() -> diskcache.Cache:
 def _get_disk_cache_stats(
     cache: diskcache.Cache | None,
     cache_dir_name: str,
-    active: bool,
     size_limit: int = 500_000_000,
 ) -> dict[str, Any]:
     """Get statistics from a diskcache.Cache instance.
 
-    When cache is active (global handle exists), reads stats from the live
-    handle which has accurate hit/miss tracking. When inactive, opens a
-    temporary read-only handle to read size/entries only — hit/miss stats
-    are not available because opening with statistics=True resets counters.
+    Opens a temporary read-only handle (without statistics=True) so that
+    esdc status does not interfere with the live cache's hit/miss counters.
+    Stats are persisted by diskcache in its internal SQLite database, so
+    hits/misses are readable even from a separate process.
 
     Args:
         cache: The global cache handle, or None if not yet initialized.
         cache_dir_name: Subdirectory name (e.g. "sql_results" or "tool_results").
-        active: Whether the global cache handle is currently alive.
         size_limit: Maximum cache size in bytes.
 
     Returns:
@@ -189,66 +187,52 @@ def _get_disk_cache_stats(
 
     cache_dir = Config.get_cache_dir() / cache_dir_name
 
-    if not active or cache is None:
-        if not cache_dir.exists():
-            return {
-                "directory": str(cache_dir),
-                "entries": 0,
-                "size_bytes": 0,
-                "size_limit": size_limit,
-                "hits": None,
-                "misses": None,
-                "hit_rate": None,
-                "active": False,
-            }
-        # Open temporary read-only handle WITHOUT statistics=True.
-        # statistics=True resets the counters, making stats unreliable.
-        # We can only report size and entries, not hit/miss rates.
-        try:
-            temp_cache = diskcache.Cache(str(cache_dir))
-            try:
-                return {
-                    "directory": str(cache_dir),
-                    "entries": len(temp_cache),  # type: ignore[arg-type]
-                    "size_bytes": temp_cache.volume(),  # type: ignore[union-attr]
-                    "size_limit": temp_cache.size_limit,  # type: ignore[attr-defined]
-                    "hits": None,
-                    "misses": None,
-                    "hit_rate": None,
-                    "active": False,
-                }
-            finally:
-                temp_cache.close()
-        except (FileNotFoundError, OSError):
-            # Cache directory was removed between exists() check and open
-            return {
-                "directory": str(cache_dir),
-                "entries": 0,
-                "size_bytes": 0,
-                "size_limit": size_limit,
-                "hits": None,
-                "misses": None,
-                "hit_rate": None,
-                "active": False,
-            }
+    if not cache_dir.exists():
+        return {
+            "directory": str(cache_dir),
+            "entries": 0,
+            "size_bytes": 0,
+            "size_limit": size_limit,
+            "hits": 0,
+            "misses": 0,
+            "hit_rate": None,
+        }
 
-    # Active cache: read stats from live handle (accurate hit/miss)
+    # Open a temporary handle to read stats from disk.
+    # Use statistics=False (default) to avoid incrementing counters
+    # in this process — we only want to read what the live process wrote.
     try:
-        stats = cache.stats()  # type: ignore[union-attr]
+        temp_cache = diskcache.Cache(str(cache_dir))
+    except (FileNotFoundError, OSError):
+        return {
+            "directory": str(cache_dir),
+            "entries": 0,
+            "size_bytes": 0,
+            "size_limit": size_limit,
+            "hits": 0,
+            "misses": 0,
+            "hit_rate": None,
+        }
+    try:
+        stats = temp_cache.stats()  # type: ignore[union-attr]
         hits: int = stats[0]  # type: ignore[assignment]
         misses: int = stats[1]  # type: ignore[assignment]
+        entries = len(temp_cache)  # type: ignore[arg-type]
+        volume = temp_cache.volume()  # type: ignore[union-attr]
+        limit = temp_cache.size_limit  # type: ignore[attr-defined]
     except (FileNotFoundError, OSError):
-        hits, misses = 0, 0
+        hits, misses, entries, volume, limit = 0, 0, 0, 0, size_limit
+    finally:
+        temp_cache.close()
     total = hits + misses
     return {
-        "directory": cache.directory,  # type: ignore[attr-defined]
-        "entries": len(cache),  # type: ignore[arg-type]
-        "size_bytes": cache.volume(),  # type: ignore[union-attr]
-        "size_limit": cache.size_limit,  # type: ignore[attr-defined]
+        "directory": str(cache_dir),
+        "entries": entries,
+        "size_bytes": volume,
+        "size_limit": limit,
         "hits": hits,
         "misses": misses,
         "hit_rate": hits / total if total > 0 else None,
-        "active": True,
     }
 
 
@@ -258,7 +242,7 @@ def get_sql_cache_stats() -> dict[str, Any]:
     Returns:
         Dict with cache size, entries, hits, misses, and hit rate.
     """
-    return _get_disk_cache_stats(_sql_cache, "sql_results", _sql_cache is not None)
+    return _get_disk_cache_stats(_sql_cache, "sql_results")
 
 
 def get_tool_cache_stats() -> dict[str, Any]:
@@ -267,9 +251,7 @@ def get_tool_cache_stats() -> dict[str, Any]:
     Returns:
         Dict with cache size, entries, hits, misses, and hit rate.
     """
-    return _get_disk_cache_stats(
-        _tool_cache, "tool_results", _tool_cache is not None
-    )
+    return _get_disk_cache_stats(_tool_cache, "tool_results")
 
 
 def _tool_cache_key(tool_name: str, **kwargs: Any) -> str:

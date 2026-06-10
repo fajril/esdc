@@ -221,29 +221,17 @@ class TestHumanizeBytes:
 class TestPrintHitRate:
     """Tests for _print_hit_rate helper."""
 
-    def test_none_hits_misses(self, capsys):
-
-        from esdc.esdc import _print_hit_rate
-
-        _print_hit_rate(None, None)
-        capsys.readouterr()
-        # When using rich.print, output goes to console
-        # We verify the function doesn't crash with None inputs
-
     def test_zero_activity(self):
         from esdc.esdc import _print_hit_rate
 
-        # Should not crash with 0, 0
         _print_hit_rate(0, 0)
 
     def test_high_hit_rate(self):
         from esdc.esdc import _print_hit_rate
 
-        # Should not crash
         _print_hit_rate(90, 10)
 
     def test_low_hit_rate(self):
         from esdc.esdc import _print_hit_rate
 
-        # Should not crash
         _print_hit_rate(10, 90)
