@@ -62,8 +62,8 @@ class StrategicAnalysisLLM(FakeLLM):
                 "summary": {
                     "total_oil_mbopd": 1.0,
                     "total_gas_mmscfd": 1.0,
-                    "total_field_mmboe": 100.0,
-                    "total_exploration_mmboe": 80.0,
+                    "total_field_mboe": 100.0,
+                    "total_exploration_mboe": 80.0,
                     "key_findings": [
                         "Peluang utama berada pada Big Resource.",
                         "Pematangan POD menjadi penentu onstream.",

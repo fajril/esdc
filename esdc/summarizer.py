@@ -90,8 +90,8 @@ SUMMARY_FIELDS = {
         "exploration_projects_reviewed": 0,
         "total_potential_oil_mbopd": 0,
         "total_potential_gas_mmscfd": 0,
-        "total_field_dev_mmboe": 0,
-        "total_exploration_mmboe": 0,
+        "total_field_dev_mboe": 0,
+        "total_exploration_mboe": 0,
     },
 }
 
@@ -134,8 +134,8 @@ STRATEGIC_SUMMARY_FIELDS = {
     "summary": {
         "total_oil_mbopd": 0,
         "total_gas_mmscfd": 0,
-        "total_field_mmboe": 0,
-        "total_exploration_mmboe": 0,
+        "total_field_mboe": 0,
+        "total_exploration_mboe": 0,
         "key_findings": [],
         "recommendations": [],
     },
@@ -1175,8 +1175,8 @@ daftar proyek; data proyek akan dipertahankan dari DATA ANALISIS STRATEGIS.
   "summary": {{
     "total_oil_mbopd": number,
     "total_gas_mmscfd": number,
-    "total_field_mmboe": number,
-    "total_exploration_mmboe": number,
+    "total_field_mboe": number,
+    "total_exploration_mboe": number,
     "key_findings": string[],
     "recommendations": string[]
   }}
@@ -2213,7 +2213,7 @@ def _strategic_summary_text(summary: dict[str, Any]) -> str:
             "field_development",
             "Sumber daya",
             "rec_mboe",
-            "MMBOE",
+            "MBOE",
             None,
             None,
             None,
@@ -2223,7 +2223,7 @@ def _strategic_summary_text(summary: dict[str, Any]) -> str:
             "exploration_highlights",
             "Sumber daya",
             "rec_mboe",
-            "MMBOE",
+            "MBOE",
             None,
             None,
             None,
