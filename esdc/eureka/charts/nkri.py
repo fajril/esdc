@@ -277,14 +277,14 @@ def nkri_onstream_chart(
         cls = row.project_class
         prefix = row.level_prefix
 
-        if cls == "Reserves & GRR":
+        if cls == "1. Reserves & GRR":
             by_year[yr]["Reserves"] += row.project_count
-        elif cls == "Contingent Resources":
+        elif cls == "2. Contingent Resources":
             if prefix == "E":
                 by_year[yr]["Contingent Resources (Exploitation)"] += row.project_count
             elif prefix == "X":
                 by_year[yr]["Contingent Resources (Exploration)"] += row.project_count
-        elif cls == "Prospective Resources":
+        elif cls == "3. Prospective Resources":
             by_year[yr]["Prospective Resources"] += row.project_count
 
     sorted_years = sorted(

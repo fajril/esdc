@@ -431,6 +431,11 @@
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><path d="M12 2l2 7h7l-5 5 2 7-6-4-6 4 2-7-5-5h7z"/></svg>
             Evaluated by IRIS
           </span>
+          <div class="font-controls">
+            <button class="font-btn" id="font-decrease" title="Decrease font size">A&minus;</button>
+            <button class="font-btn" id="font-reset" title="Reset font size">A&#8635;</button>
+            <button class="font-btn" id="font-increase" title="Increase font size">A+</button>
+          </div>
           <span class="summary-year">{{ selected_year }}</span>
         </div>
         {% if summary_headline %}
@@ -498,6 +503,28 @@ N_p[B_o + (R_p - R_s)B_g] + W_pB_w
 
 {% block scripts %}
 <script>
+  // ── Analysis font size controls ──
+  const summaryBody = document.querySelector('.summary-body');
+  const FONT_DEFAULT = 0.85;
+  const FONT_MIN = 0.7;
+  const FONT_MAX = 1.4;
+  const FONT_STEP = 0.05;
+  let currentFontSize = FONT_DEFAULT;
+
+  function setFontSize(size) {
+    currentFontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, size));
+    if (summaryBody) {
+      summaryBody.style.fontSize = currentFontSize + 'rem';
+      summaryBody.querySelectorAll('h1, h2, h3').forEach(h => {
+        h.style.fontSize = (currentFontSize + 0.15) + 'rem';
+      });
+    }
+  }
+
+  document.getElementById('font-decrease')?.addEventListener('click', () => setFontSize(currentFontSize - FONT_STEP));
+  document.getElementById('font-increase')?.addEventListener('click', () => setFontSize(currentFontSize + FONT_STEP));
+  document.getElementById('font-reset')?.addEventListener('click', () => setFontSize(FONT_DEFAULT));
+
   // ── Count-up animation for hero values ──
   function animateValue(el, end, duration) {
     const start = 0;

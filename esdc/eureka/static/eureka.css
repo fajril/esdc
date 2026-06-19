@@ -940,7 +940,7 @@ body.eureka-body::after {
 
 /* ── Markdown rendered content ──────────────────────────────────── */
 .summary-headline p,
-.summary-body p { margin-block: 0; }
+.summary-body p { margin-block: 0; text-align: justify; text-indent: 1.5rem; }
 .summary-body ul,
 .summary-body ol { margin: 0.25rem 0; padding-left: 1.25rem; }
 
@@ -1010,6 +1010,36 @@ body.eureka-body::after {
   gap: 0.75rem;
   margin-bottom: 1.15rem;
   flex: 0 0 auto;
+}
+
+.font-controls {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.font-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.2rem 0.4rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.font-btn:hover {
+  background: var(--reserves-dim);
+  color: var(--reserves);
+  border-color: var(--reserves);
+}
+
+.font-btn:active {
+  transform: scale(0.95);
 }
 
 .summary-headline {

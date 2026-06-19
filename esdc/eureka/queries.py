@@ -24,12 +24,12 @@ END
 
 PROJECT_CLASS_NORM = """
 CASE
-    WHEN project_class LIKE '%Reserves%' THEN 'Reserves & GRR'
+    WHEN project_class LIKE '%Reserves%' THEN '1. Reserves & GRR'
     WHEN project_class LIKE '%Contigent%'
         OR project_class LIKE '%Contingent%'
-        THEN 'Contingent Resources'
-    WHEN project_class LIKE '%Prospective%' THEN 'Prospective Resources'
-    WHEN project_class LIKE '%Abandoned%' THEN 'Abandoned'
+        THEN '2. Contingent Resources'
+    WHEN project_class LIKE '%Prospective%' THEN '3. Prospective Resources'
+    WHEN project_class LIKE '%Abandoned%' THEN '4. Abandoned'
     ELSE project_class
 END
 """
@@ -261,7 +261,7 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
             SUM(rec_oc) as sum_rec_oc,
             SUM(rec_an) as sum_rec_an
         FROM nkri_resources
-        WHERE {PROJECT_CLASS_NORM.strip()} = 'Reserves & GRR'
+        WHERE {PROJECT_CLASS_NORM.strip()} = '1. Reserves & GRR'
           AND report_year = {year}
         GROUP BY uncert_level
         """
@@ -286,7 +286,7 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
         FROM nkri_resources
-        WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
+        WHERE ({PROJECT_CLASS_NORM.strip()}) = '2. Contingent Resources'
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
           AND report_year = {year}
         GROUP BY uncert_level
@@ -306,7 +306,7 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
         FROM nkri_resources
-        WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
+        WHERE ({PROJECT_CLASS_NORM.strip()}) = '2. Contingent Resources'
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
           AND report_year = {year}
         GROUP BY uncert_level
@@ -326,7 +326,7 @@ def get_nkri_kpis(year: int | None = None) -> NKRIKpiData:
             SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
             SUM(COALESCE(rec_an_risked, 0)) as sum_an
         FROM nkri_resources
-        WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
+        WHERE ({PROJECT_CLASS_NORM.strip()}) = '3. Prospective Resources'
           AND report_year = {year}
         GROUP BY uncert_level
         """
@@ -448,7 +448,7 @@ def _compute_yoy(
         SUM(rec_oc) as sum_rec_oc,
         SUM(rec_an) as sum_rec_an
     FROM nkri_resources
-    WHERE {PROJECT_CLASS_NORM.strip()} = 'Reserves & GRR'
+    WHERE {PROJECT_CLASS_NORM.strip()} = '1. Reserves & GRR'
       AND report_year = {prev_year}
     GROUP BY uncert_level
     """
@@ -470,7 +470,7 @@ def _compute_yoy(
         SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
         SUM(COALESCE(rec_an_risked, 0)) as sum_an
     FROM nkri_resources
-    WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
+    WHERE ({PROJECT_CLASS_NORM.strip()}) = '2. Contingent Resources'
       AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
       AND uncert_level = '2. Middle Value'
       AND report_year = {prev_year}
@@ -485,7 +485,7 @@ def _compute_yoy(
         SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
         SUM(COALESCE(rec_an_risked, 0)) as sum_an
     FROM nkri_resources
-    WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
+    WHERE ({PROJECT_CLASS_NORM.strip()}) = '2. Contingent Resources'
       AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
       AND uncert_level = '2. Middle Value'
       AND report_year = {prev_year}
@@ -500,7 +500,7 @@ def _compute_yoy(
         SUM(COALESCE(rec_oc_risked, 0)) as sum_oc,
         SUM(COALESCE(rec_an_risked, 0)) as sum_an
     FROM nkri_resources
-    WHERE ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
+    WHERE ({PROJECT_CLASS_NORM.strip()}) = '3. Prospective Resources'
       AND uncert_level = '2. Middle Value'
       AND report_year = {prev_year}
     """
@@ -674,7 +674,7 @@ def get_field_kpis(year: int | None = None) -> FieldKpiData:
         SELECT COUNT(DISTINCT field_id) FROM project_resources
         WHERE report_year = {year}
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
-          AND ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
+          AND ({PROJECT_CLASS_NORM.strip()}) = '2. Contingent Resources'
           AND field_id IS NOT NULL AND field_id != ''
         """
         disc_row = conn.execute(discovered_sql).fetchone()
@@ -684,7 +684,7 @@ def get_field_kpis(year: int | None = None) -> FieldKpiData:
         SELECT COUNT(DISTINCT field_id) FROM project_resources
         WHERE report_year = {year}
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
-          AND ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
+          AND ({PROJECT_CLASS_NORM.strip()}) = '3. Prospective Resources'
           AND field_id IS NOT NULL AND field_id != ''
         """
         undisc_row = conn.execute(undiscovered_sql).fetchone()
@@ -722,13 +722,14 @@ def get_project_kpis(year: int | None = None) -> ProjectKpiData:
     conn = _get_conn()
     try:
         total_sql = f"""
-        SELECT COUNT(*) FROM project_resources WHERE report_year = {year}
+        SELECT COUNT(DISTINCT project_id) FROM project_resources
+        WHERE report_year = {year}
         """
         total_row = conn.execute(total_sql).fetchone()
         total = total_row[0] if total_row else 0
 
         exploit_sql = f"""
-        SELECT COUNT(*) FROM project_resources
+        SELECT COUNT(DISTINCT project_id) FROM project_resources
         WHERE report_year = {year}
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
         """
@@ -736,7 +737,7 @@ def get_project_kpis(year: int | None = None) -> ProjectKpiData:
         exploit = exploit_row[0] if exploit_row else 0
 
         primary_sql = f"""
-        SELECT COUNT(*) FROM project_resources
+        SELECT COUNT(DISTINCT project_id) FROM project_resources
         WHERE report_year = {year}
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
           AND ({PROD_STAGE_NORM.strip()}) = 'Primary'
@@ -745,7 +746,7 @@ def get_project_kpis(year: int | None = None) -> ProjectKpiData:
         primary = primary_row[0] if primary_row else 0
 
         waterflood_sql = f"""
-        SELECT COUNT(*) FROM project_resources
+        SELECT COUNT(DISTINCT project_id) FROM project_resources
         WHERE report_year = {year}
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
           AND ({PROD_STAGE_NORM.strip()}) = 'Waterflood'
@@ -754,7 +755,7 @@ def get_project_kpis(year: int | None = None) -> ProjectKpiData:
         waterflood = waterflood_row[0] if waterflood_row else 0
 
         eor_sql = f"""
-        SELECT COUNT(*) FROM project_resources
+        SELECT COUNT(DISTINCT project_id) FROM project_resources
         WHERE report_year = {year}
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
           AND ({PROD_STAGE_NORM.strip()}) = 'EOR/EGR'
@@ -843,6 +844,7 @@ def get_nkri_table_data(
         SELECT {cols}
         FROM nkri_resources
         WHERE report_year = {year}
+          AND {PROJECT_CLASS_NORM.strip()} != '4. Abandoned'
         GROUP BY project_stage, project_class{group_clause}
         ORDER BY project_class, project_stage{group_clause}
         """
@@ -870,7 +872,7 @@ def get_inplace_kpis(year: int | None = None) -> InPlaceKpiData:
           AND uncert_level = '2. Middle Value'
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploitation'
           AND ({PROJECT_CLASS_NORM.strip()})
-            IN ('Reserves & GRR', 'Contingent Resources')
+            IN ('1. Reserves & GRR', '2. Contingent Resources')
         """
         de = conn.execute(disc_exploit_sql).fetchone()
         disc_exploit_ioip = de[0] if de else 0
@@ -885,7 +887,7 @@ def get_inplace_kpis(year: int | None = None) -> InPlaceKpiData:
         WHERE report_year = {year}
           AND uncert_level = '2. Middle Value'
           AND ({PROJECT_STAGE_NORM.strip()}) = 'Exploration'
-          AND ({PROJECT_CLASS_NORM.strip()}) = 'Contingent Resources'
+          AND ({PROJECT_CLASS_NORM.strip()}) = '2. Contingent Resources'
         """
         dx = conn.execute(disc_explore_sql).fetchone()
         disc_explore_ioip = dx[0] if dx else 0
@@ -899,7 +901,7 @@ def get_inplace_kpis(year: int | None = None) -> InPlaceKpiData:
             SUM(COALESCE(prj_igip, 0) * COALESCE(gcf_total, 0)) as igip
         FROM project_resources
         WHERE report_year = {year}
-          AND ({PROJECT_CLASS_NORM.strip()}) = 'Prospective Resources'
+          AND ({PROJECT_CLASS_NORM.strip()}) = '3. Prospective Resources'
           AND uncert_level = '2. Middle Value'
         """
         un = conn.execute(undisc_sql).fetchone()
