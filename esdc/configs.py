@@ -691,8 +691,9 @@ class Config:
         "chunk_size": 3000,  # max chars per chunk (~750 tokens)
         "chunk_overlap": 300,  # chars carried over between chunks
         "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
-        "metadata_model": "",  # optional text LLM for metadata; "" = use ocr_model
-        # on the rendered first page (image-based extraction)
+        # metadata_model: optional text LLM for metadata extraction;
+        # "" = use ocr_model on the rendered first page (image-based extraction)
+        "metadata_model": "",
         "ocr_dpi": 200,  # page render resolution; raise to 300 if OCR quality poor
         "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
         "min_chars_per_page": 50,  # text-layer chars below which a page counts as scanned  # noqa: E501
@@ -700,7 +701,15 @@ class Config:
 
     @classmethod
     def get_corpus_config(cls) -> dict[str, Any]:
-        """Corpus settings merged over defaults."""
+        """Get corpus ingestion settings merged over defaults.
+
+        Priority:
+        1. config.yaml: corpus.* section
+        2. CORPUS_DEFAULTS
+
+        No environment variable layer and no value validation by design;
+        consumers validate the values they use.
+        """
         merged = dict(cls.CORPUS_DEFAULTS)
         config = cls._load_config()
         merged.update((config or {}).get("corpus", {}))
