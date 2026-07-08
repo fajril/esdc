@@ -1,12 +1,9 @@
 """Sidecar .corpus.md files: the human-review handoff between extract and commit."""
 
-import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
-
-logger = logging.getLogger(__name__)
 
 DELIMITER = "---"
 
@@ -23,14 +20,17 @@ def write_sidecar(pdf_path: Path, meta: dict[str, Any], body: str) -> Path:
 
 
 def read_sidecar(path: Path) -> tuple[dict[str, Any], str]:
-    text = path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8").lstrip()
     if not text.startswith(DELIMITER):
         raise ValueError(f"{path.name}: missing YAML frontmatter")
     try:
         _, front, body = text.split(DELIMITER, 2)
     except ValueError as e:
         raise ValueError(f"{path.name}: malformed frontmatter") from e
-    meta = yaml.safe_load(front)
+    try:
+        meta = yaml.safe_load(front)
+    except yaml.YAMLError as e:
+        raise ValueError(f"{path.name}: invalid YAML in frontmatter: {e}") from e
     if not isinstance(meta, dict) or "file_hash" not in meta:
         raise ValueError(f"{path.name}: frontmatter must be a mapping with file_hash")
     return meta, body

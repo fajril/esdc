@@ -31,8 +31,23 @@ def test_roundtrip(tmp_path: Path):
 def test_read_missing_frontmatter_raises(tmp_path: Path):
     bad = tmp_path / "x.corpus.md"
     bad.write_text("no frontmatter here")
-    with pytest.raises(ValueError, match="frontmatter"):
+    with pytest.raises(ValueError, match="missing YAML frontmatter"):
         read_sidecar(bad)
+
+
+def test_read_invalid_yaml_raises(tmp_path: Path):
+    bad = tmp_path / "x.corpus.md"
+    bad.write_text('---\nsubject: "unterminated quote\n---\nbody')
+    with pytest.raises(ValueError, match="invalid YAML"):
+        read_sidecar(bad)
+
+
+def test_read_tolerates_leading_blank_line(tmp_path: Path):
+    path = tmp_path / "x.corpus.md"
+    path.write_text(f"\n---\nfile_hash: {'ef' * 32}\n---\nbody")
+    meta, body = read_sidecar(path)
+    assert meta["file_hash"] == "ef" * 32
+    assert body.strip() == "body"
 
 
 def test_body_with_horizontal_rule_survives_roundtrip(tmp_path: Path):
