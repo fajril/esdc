@@ -45,6 +45,8 @@ def extract_pdf(
     ValueError if a page has no text layer and no ocr_client is given.
     """
     pages = pymupdf4llm.to_markdown(str(path), page_chunks=True)
+    if not pages:
+        raise ValueError(f"{path.name}: no extractable pages")
     native_ok = [
         len((p.get("text") or "").strip()) >= min_chars_per_page for p in pages
     ]
@@ -58,15 +60,19 @@ def extract_pdf(
 
     doc = fitz.open(str(path)) if not all(native_ok) else None
     parts: list[str] = []
-    for idx, page_md in enumerate(pages):
-        if native_ok[idx]:
-            parts.append(f"<!-- page {idx + 1}: native -->\n{page_md['text'].strip()}")
-        else:
-            pix = doc[idx].get_pixmap(dpi=ocr_dpi)
-            text = ocr_client.ocr_page(pix.tobytes("png"))
-            parts.append(f"<!-- page {idx + 1}: llm_ocr -->\n{text.strip()}")
-    if doc is not None:
-        doc.close()
+    try:
+        for idx, page_md in enumerate(pages):
+            if native_ok[idx]:
+                parts.append(
+                    f"<!-- page {idx + 1}: native -->\n{page_md['text'].strip()}"
+                )
+            else:
+                pix = doc[idx].get_pixmap(dpi=ocr_dpi)
+                text = ocr_client.ocr_page(pix.tobytes("png"))
+                parts.append(f"<!-- page {idx + 1}: llm_ocr -->\n{text.strip()}")
+    finally:
+        if doc is not None:
+            doc.close()
 
     pages_native = sum(native_ok)
     pages_ocr = len(pages) - pages_native

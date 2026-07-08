@@ -35,6 +35,16 @@ def mixed_pdf(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def scanned_pdf(tmp_path: Path) -> Path:
+    """One blank page (scanned-page stand-in): no text layer at all."""
+    path = tmp_path / "scan.pdf"
+    doc = fitz.open()
+    doc.new_page()
+    doc.save(path)
+    return path
+
+
 class FakeOcr:
     def ocr_page(self, png_bytes: bytes) -> str:
         return "teks hasil OCR halaman scan"
@@ -56,6 +66,13 @@ def test_mixed_uses_ocr_per_page(mixed_pdf):
     assert "<!-- page 2: llm_ocr -->" in result.markdown
     assert "hasil OCR" in result.markdown
     assert result.pages_native == 1 and result.pages_ocr == 1
+
+
+def test_all_scanned_uses_llm_ocr(scanned_pdf):
+    result = extract_pdf(scanned_pdf, ocr_client=FakeOcr())
+    assert result.method == "llm_ocr"
+    assert result.pages_native == 0 and result.pages_ocr == 1
+    assert "<!-- page 1: llm_ocr -->" in result.markdown
 
 
 def test_scanned_without_ocr_raises(mixed_pdf):
