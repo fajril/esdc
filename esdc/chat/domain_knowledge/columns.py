@@ -12,6 +12,7 @@ class ColumnMetadata:
     volume_type: str | None = None
     substance: str | None = None
     requires_classification: bool = False  # True for rec_* columns
+    display_name: str | None = None  # Short name for table headers
 
 
 COLUMN_GROUPS: dict[str, list[str]] = {
@@ -310,17 +311,26 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "is_offshore", "Whether location is offshore (0/1)", None, "location"
     ),
     # Classification
+    "project_stage": ColumnMetadata(
+        "project_stage",
+        "Project stage (Exploitation, Exploration, Abandoned)",
+        None,
+        "classification",
+        display_name="Project Stage",
+    ),
     "project_class": ColumnMetadata(
         "project_class",
         "Project classification (Reserves & GRR, Contingent Resources, Prospective Resources)",  # noqa: E501
         None,
         "classification",
+        display_name="Project Class",
     ),
     "uncert_level": ColumnMetadata(
         "uncert_level",
         "Uncertainty level (1. Low Value, 2. Middle Value, 3. High Value)",
         None,
         "classification",
+        display_name="Uncertainty Level",
     ),
     "project_level": ColumnMetadata(
         "project_level", "Project maturity level", None, "classification"
@@ -383,6 +393,7 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "reserves",
         "reserves",
         "oil_condensate",
+        display_name="Reserves MSTB",
     ),
     "res_an": ColumnMetadata(
         "res_an",
@@ -391,6 +402,7 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "reserves",
         "reserves",
         "total_gas",
+        display_name="Reserves BSCF",
     ),
     # Resources columns
     "rec_oil": ColumnMetadata(
@@ -427,9 +439,11 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "resources",
         "resources",
         "oil_condensate",
+        display_name="Resources MSTB",
     ),
     "rec_an": ColumnMetadata(
-        "rec_an", "Resources total gas", "BSCF", "resources", "resources", "total_gas"
+        "rec_an", "Resources total gas", "BSCF", "resources", "resources", "total_gas",
+        display_name="Resources BSCF",
     ),
     "rec_mboe": ColumnMetadata(
         "rec_mboe", "Resources (MBOE)", "MBOE", "resources", "resources", None
@@ -474,6 +488,7 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "resources_risked",
         "resources",
         "oil_condensate",
+        display_name="Risked Resources MSTB",
     ),
     "rec_an_risked": ColumnMetadata(
         "rec_an_risked",
@@ -482,6 +497,7 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "resources_risked",
         "resources",
         "total_gas",
+        display_name="Risked Resources BSCF",
     ),
     # In-Place columns
     "prj_ioip": ColumnMetadata(
@@ -489,6 +505,15 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
     ),
     "prj_igip": ColumnMetadata(
         "prj_igip", "Initial Gas In Place", "BSCF", "in_place", "inplace", "total_gas"
+    ),
+    # Eureka in-place columns (alias for prj_ioip/prj_igip)
+    "ioip": ColumnMetadata(
+        "ioip", "Initial Oil In Place", "MSTB", "in_place", "inplace", "oil",
+        display_name="IOIP MSTB",
+    ),
+    "igip": ColumnMetadata(
+        "igip", "Initial Gas In Place", "BSCF", "in_place", "inplace", "total_gas",
+        display_name="IGIP BSCF",
     ),
     # EUR columns
     "eur_res_oc": ColumnMetadata(
@@ -1021,6 +1046,7 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "cumulative_production",
         "cumulative",
         "oil_condensate",
+        display_name="Sales Cumprod MSTB",
     ),
     "cprd_sls_an": ColumnMetadata(
         "cprd_sls_an",
@@ -1029,6 +1055,7 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "cumulative_production",
         "cumulative",
         "total_gas",
+        display_name="Sales Cumprod BSCF",
     ),
     # Timeseries Historical Columns - Production Rate
     "rate_oil": ColumnMetadata(
@@ -1078,6 +1105,25 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         "timeseries_historical_rate",
         "rate",
         "total_gas",
+    ),
+    # Eureka rate columns (alias for rate_sls_*)
+    "rate_sls_oc": ColumnMetadata(
+        "rate_sls_oc",
+        "Production rate oil + condensate",
+        "MSTB/Y",
+        "timeseries_historical_rate",
+        "rate",
+        "oil_condensate",
+        display_name="Yearly Sales Rate MSTBY",
+    ),
+    "rate_sls_an": ColumnMetadata(
+        "rate_sls_an",
+        "Production rate total gas",
+        "BSCF/Y",
+        "timeseries_historical_rate",
+        "rate",
+        "total_gas",
+        display_name="Yearly Sales Rate BSCFY",
     ),
 }
 

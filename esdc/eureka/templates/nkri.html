@@ -635,14 +635,19 @@ N_p[B_o + (R_p - R_s)B_g] + W_pB_w
 
     fetch('/eureka/api/nkri/table?year={{ selected_year }}&detail=' + detail)
       .then(r => r.json())
-      .then(data => {
+      .then(response => {
+        const data = response.data;
+        const colNames = response.column_names;
         if (!data || data.length === 0) {
           container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted);">No data available.</div>';
           return;
         }
         const cols = Object.keys(data[0]);
         let html = '<table class="eureka-table"><thead><tr>';
-        cols.forEach(c => html += '<th>' + c + '</th>');
+        cols.forEach(c => {
+          const displayName = colNames[c] || c;
+          html += '<th>' + displayName + '</th>';
+        });
         html += '</tr></thead><tbody>';
         data.forEach(row => {
           html += '<tr>';

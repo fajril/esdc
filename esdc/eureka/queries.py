@@ -5,10 +5,24 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from esdc.chat.domain_knowledge import COLUMN_METADATA
 from esdc.configs import Config
 from esdc.dbmanager import get_duckdb_connection
 
 logger = logging.getLogger(__name__)
+
+
+def get_column_display_name(col: str) -> str:
+    """Get display name for a column.
+
+    Uses display_name > description > column_name.
+    """
+    meta = COLUMN_METADATA.get(col)
+    if meta and meta.display_name:
+        return meta.display_name
+    if meta:
+        return meta.description
+    return col
 
 
 # --- Classification normalization SQL fragments ---
@@ -780,7 +794,7 @@ def get_project_kpis(year: int | None = None) -> ProjectKpiData:
 def get_nkri_table_data(
     year: int | None = None,
     detail: str = "resources",
-) -> list[dict]:
+) -> dict[str, list[dict] | dict[str, str]]:
     """Get NKRI table data with optional detail level filter.
 
     Args:
@@ -812,6 +826,7 @@ def get_nkri_table_data(
             "inplace": f"""
                 {PROJECT_STAGE_NORM.strip()} AS project_stage,
                 {PROJECT_CLASS_NORM.strip()} AS project_class,
+                uncert_level,
                 SUM(COALESCE(ioip,0)) as ioip,
                 SUM(COALESCE(igip,0)) as igip
             """,
@@ -837,6 +852,7 @@ def get_nkri_table_data(
             in (
                 "resources",
                 "reserves",
+                "inplace",
             )
             else ""
         )
@@ -850,7 +866,9 @@ def get_nkri_table_data(
         """
         rows = conn.execute(sql).fetchall()
         col_names = [desc[0] for desc in conn.description]
-        return [dict(zip(col_names, row, strict=False)) for row in rows]
+        data = [dict(zip(col_names, row, strict=False)) for row in rows]
+        column_names = {col: get_column_display_name(col) for col in col_names}
+        return {"data": data, "column_names": column_names}
     finally:
         conn.close()
 
