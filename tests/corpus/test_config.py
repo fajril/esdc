@@ -1,0 +1,28 @@
+from esdc.configs import Config
+
+
+def test_corpus_config_defaults(monkeypatch):
+    monkeypatch.setattr(Config, "_load_config", classmethod(lambda cls: None))
+    cfg = Config.get_corpus_config()
+    assert cfg["chunk_size"] == 3000
+    assert cfg["chunk_overlap"] == 300
+    assert cfg["ocr_model"] == "glm-ocr"
+    assert cfg["metadata_model"] == ""          # empty = use ocr_model on page-1 image
+    assert cfg["ocr_dpi"] == 200
+    assert cfg["num_ctx"] == 16384
+
+
+def test_corpus_config_from_yaml(monkeypatch):
+    yaml_cfg = {"corpus": {"chunk_size": 2000, "ocr_model": "qwen2.5vl:7b"}}
+    monkeypatch.setattr(Config, "_load_config", classmethod(lambda cls: yaml_cfg))
+    cfg = Config.get_corpus_config()
+    assert cfg["chunk_size"] == 2000
+    assert cfg["chunk_overlap"] == 300          # default survives partial override
+    assert cfg["ocr_model"] == "qwen2.5vl:7b"
+
+
+def test_corpus_keys_documented():
+    from esdc.configs import KEY_DESCRIPTIONS
+
+    assert "corpus.ocr_model" in KEY_DESCRIPTIONS
+    assert "corpus.metadata_model" in KEY_DESCRIPTIONS

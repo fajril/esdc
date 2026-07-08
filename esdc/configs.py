@@ -33,6 +33,17 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "logging.agent.level": "Log level for the agent component",
     "logging.chat.level": "Log level for the chat component",
     "semantic_search.embedding_batch_size": ("Number of embeddings per batch (10-500)"),
+    "corpus.ocr_model": "Ollama vision model used for OCR of scanned pages",
+    "corpus.metadata_model": (
+        "Optional text LLM for metadata extraction; empty uses ocr_model on page 1"
+    ),
+    "corpus.chunk_size": "Max characters per corpus chunk",
+    "corpus.chunk_overlap": "Characters carried over between corpus chunks",
+    "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
+    "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
+    "corpus.min_chars_per_page": (
+        "Text-layer character threshold below which a page counts as scanned"
+    ),
 }
 
 
@@ -162,6 +173,7 @@ class Config:
                 "semantic_search": {
                     "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)  # noqa: E501
                 },
+                "corpus": dict(cls.CORPUS_DEFAULTS),
                 "phoenix": {
                     "enabled": False,
                     "collector_endpoint": "http://localhost:4317",
@@ -675,6 +687,25 @@ class Config:
         semantic_config = config.get("semantic_search", {})
         return semantic_config.get("embedding_batch_size", 100)
 
+    CORPUS_DEFAULTS = {
+        "chunk_size": 3000,  # max chars per chunk (~750 tokens)
+        "chunk_overlap": 300,  # chars carried over between chunks
+        "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
+        "metadata_model": "",  # optional text LLM for metadata; "" = use ocr_model
+        # on the rendered first page (image-based extraction)
+        "ocr_dpi": 200,  # page render resolution; raise to 300 if OCR quality poor
+        "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
+        "min_chars_per_page": 50,  # text-layer chars below which a page counts as scanned  # noqa: E501
+    }
+
+    @classmethod
+    def get_corpus_config(cls) -> dict[str, Any]:
+        """Corpus settings merged over defaults."""
+        merged = dict(cls.CORPUS_DEFAULTS)
+        config = cls._load_config()
+        merged.update((config or {}).get("corpus", {}))
+        return merged
+
     @classmethod
     def get_phoenix_config(cls) -> dict[str, Any]:
         """Get Phoenix observability configuration.
@@ -816,6 +847,7 @@ class Config:
             "semantic_search": {
                 "embedding_batch_size": 100,
             },
+            "corpus": dict(cls.CORPUS_DEFAULTS),
         }
 
     @classmethod
