@@ -23,12 +23,14 @@ OCR_PROMPT = (
 
 
 class OllamaVisionOcr:
+    """OCR client for a local Ollama vision model (default glm-ocr via config)."""
+
     def __init__(
         self,
         model: str,
         client: ollama.Client | None = None,
         num_ctx: int = 16384,
-    ):
+    ) -> None:
         self.model = model
         self._client = client or ollama.Client()
         self._options = {"temperature": 0, "num_ctx": num_ctx}
@@ -43,6 +45,7 @@ class OllamaVisionOcr:
         return response["message"]["content"]
 
     def ocr_page(self, png_bytes: bytes) -> str:
+        """OCR a page with the default OCR_PROMPT."""
         return self.query_image(png_bytes, OCR_PROMPT)
 
     def health_check(self) -> bool:

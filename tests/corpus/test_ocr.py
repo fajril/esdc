@@ -1,4 +1,4 @@
-from esdc.corpus.ocr import OllamaVisionOcr
+from esdc.corpus.ocr import OCR_PROMPT, OllamaVisionOcr
 
 
 class FakeOllamaClient:
@@ -23,6 +23,7 @@ def test_ocr_page_returns_markdown():
     assert model == "glm-ocr"
     assert options == {"temperature": 0, "num_ctx": 16384}
     assert messages[0]["images"] == [b"\x89PNG"]
+    assert messages[0]["content"] == OCR_PROMPT
 
 
 def test_query_image_sends_custom_prompt():
