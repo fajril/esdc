@@ -54,6 +54,7 @@ dependencies = [
     "questionary>=2.0.0",
     "markdown>=3.10.2",
     "pymdown-extensions>=10.21.3",
+    "pymupdf4llm>=0.0.17",
 ]
 
 [project.optional-dependencies]
