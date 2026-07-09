@@ -77,7 +77,8 @@ def resolve_entity(
     """Map a raw name to a canonical one.
 
     exact (case-insensitive) -> 1.0
-    substring either direction -> 0.85
+    substring either direction, longest (most specific) candidate wins,
+    candidates shorter than 3 chars skipped -> 0.85
     difflib fuzzy (cutoff 0.75) -> ratio
     otherwise (None, 0.0) — caller stores NULL and warns, never guesses.
     """
@@ -87,9 +88,13 @@ def resolve_entity(
     by_fold = {c.casefold(): c for c in canonical}
     if folded in by_fold:
         return by_fold[folded], 1.0
-    for cand_fold, cand in by_fold.items():
-        if cand_fold in folded or folded in cand_fold:
-            return cand, 0.85
+    substring_hits = [
+        cand_fold
+        for cand_fold in by_fold
+        if len(cand_fold) >= 3 and (cand_fold in folded or folded in cand_fold)
+    ]
+    if substring_hits:
+        return by_fold[max(substring_hits, key=len)], 0.85
     close = difflib.get_close_matches(folded, list(by_fold), n=1, cutoff=0.75)
     if close:
         ratio = difflib.SequenceMatcher(None, folded, close[0]).ratio()

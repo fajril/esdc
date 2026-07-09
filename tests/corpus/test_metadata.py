@@ -42,6 +42,21 @@ def test_resolve_substring():
     assert name == "Rokan" and 0.8 <= conf < 1.0
 
 
+def test_resolve_substring_prefers_most_specific():
+    name, conf = resolve_entity("WK Rokan Hilir", ["Rokan", "Rokan Hilir"])
+    assert name == "Rokan Hilir" and conf == 0.85
+    # Order independence: same result with the canonical list reversed.
+    name, conf = resolve_entity("WK Rokan Hilir", ["Rokan Hilir", "Rokan"])
+    assert name == "Rokan Hilir" and conf == 0.85
+
+
+def test_resolve_substring_ignores_tiny_canonicals():
+    # "B" is a substring of almost anything; substring tier must skip
+    # canonicals shorter than 3 chars (exact tier still handles them).
+    name, conf = resolve_entity("Sembilang", ["B", "Mahakam"])
+    assert name is None and conf == 0.0
+
+
 def test_resolve_fuzzy():
     name, conf = resolve_entity("Mahakem", ["Rokan", "Mahakam"])
     assert name == "Mahakam" and 0.6 <= conf < 1.0
