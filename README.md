@@ -285,6 +285,70 @@ Run OpenAI-compatible API server.
 esdc serve --host 0.0.0.0 --port 3334
 ```
 
+## Document Corpus
+
+`esdc corpus` ingests official PDFs (POD approvals, MoM minutes, BA documents, etc.) into a searchable local corpus that IRIS can query in chat via the `search_documents` and `read_document` tools.
+
+### Prerequisites
+
+```bash
+ollama pull glm-ocr
+```
+
+`glm-ocr` (zai-org/GLM-OCR, 0.9B) OCRs scanned/image-only pages. Pages with a usable native text layer are extracted directly and never sent to the model.
+
+### Configuration
+
+`corpus.*` in `~/.esdc/config.yaml`, merged over these defaults:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `chunk_size` | `3000` | Max characters per chunk (~750 tokens) |
+| `chunk_overlap` | `300` | Characters carried over between consecutive chunks |
+| `ocr_model` | `glm-ocr` | Ollama vision model used to OCR scanned pages |
+| `metadata_model` | `""` | Optional text LLM for metadata extraction; empty uses `ocr_model` on the rendered first page |
+| `ocr_dpi` | `200` | Page render resolution for OCR; raise to 300 if OCR quality is poor |
+| `num_ctx` | `16384` | Ollama context window; `glm-ocr` fails on page images below this |
+| `min_chars_per_page` | `50` | Text-layer character threshold below which a page counts as scanned |
+
+### Workflow
+
+Ingestion is two steps with a human review gate in between — nothing reaches the searchable corpus unreviewed:
+
+1. **Extract** — parse PDFs into reviewable `.corpus.md` sidecar files next to the source, with LLM-prefilled (unreviewed) metadata:
+   ```bash
+   esdc corpus extract path/to/document.pdf
+   esdc corpus extract path/to/folder/          # batch
+   ```
+   Every page is wrapped in a `<!-- page N: native -->` or `<!-- page N: llm_ocr -->` marker.
+
+2. **Review** — open the `.corpus.md` file in an editor, check the `llm_ocr` pages against the source PDF, correct the prefilled frontmatter (doc_type, dates, entities, etc.), then flip `reviewed: false` to `reviewed: true`. Sidecars still marked `reviewed: false` are skipped on commit.
+
+3. **Commit** — ingest reviewed sidecars into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed):
+   ```bash
+   esdc corpus commit path/to/document.corpus.md
+   esdc corpus commit path/to/folder/            # batch
+   ```
+
+### Management
+
+```bash
+esdc corpus status path/to/folder/   # where each PDF/sidecar sits in extract -> review -> commit
+esdc corpus list                     # documents committed to the corpus
+esdc corpus remove <doc_id>...       # remove document(s) (files on disk untouched)
+esdc corpus clear --yes              # delete the entire corpus
+esdc corpus reembed                  # rebuild embeddings after an embedding-model change
+```
+
+### Remote Ollama
+
+`OLLAMA_HOST` is honored for OCR, so extraction can run against a remote Ollama server (e.g. a GPU host) instead of localhost:
+
+```bash
+export OLLAMA_HOST=https://your-ollama-host:11434
+esdc corpus extract path/to/document.pdf
+```
+
 ## Tech Stack
 
 - **Python 3.10+**

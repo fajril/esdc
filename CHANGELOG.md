@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`esdc corpus` document ingestion pipeline** — parse official PDFs (POD approvals, MoM minutes, BA documents) into a searchable local corpus for IRIS document search
+  - Two-phase, human-reviewed workflow: `esdc corpus extract` parses PDFs to reviewable `.corpus.md` sidecars with LLM-prefilled metadata and per-page `native`/`llm_ocr` markers; `esdc corpus commit` ingests only sidecars marked `reviewed: true` into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed). Nothing reaches the searchable corpus without passing through this review gate.
+  - Per-page tiered extraction: native text layer used when present, `glm-ocr` (Ollama vision model, zai-org/GLM-OCR) OCRs scanned/image-only pages
+  - Management commands: `esdc corpus status`, `list`, `remove`, `clear`, `reembed`
+  - New iris chat tools `search_documents` and `read_document` for querying the corpus from chat
+  - Configurable via `corpus.*` in `~/.esdc/config.yaml` (chunk size/overlap, OCR model, DPI, context window, native-text threshold)
 - **Auto-reindex after `esdc fetch`** — FTS and B-tree indexes are rebuilt automatically after data loading, ensuring ILIKE queries return correct results for newly-fetched data
   - Default behavior: reindex is ON after every fetch (both full-replace and per-year append modes)
   - Use `--no-reindex` flag on `esdc fetch` to skip reindexing if desired
