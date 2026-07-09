@@ -1761,6 +1761,174 @@ def _search_remarks_via_fts(
         }
 
 
+@tool("Document Search")
+def search_documents(
+    query: Annotated[
+        str,
+        "Bilingual Indonesian/English query about official documents "
+        "(surat, minutes of meeting, berita acara). "
+        "Example: 'persetujuan POD lapangan Duri 2025'.",
+    ],
+    limit: Annotated[int, "Maximum results (default 5)."] = 5,
+    doc_type: Annotated[str | None, "Filter: surat, mom, ba, other."] = None,
+    year: Annotated[int | None, "Filter by document year."] = None,
+    wk_name: Annotated[str | None, "Filter by working area (ILIKE pattern)."] = None,
+    field_name: Annotated[str | None, "Filter by field name (ILIKE pattern)."] = None,
+    project_name: Annotated[
+        str | None, "Filter by project name (ILIKE pattern)."
+    ] = None,
+) -> str:
+    """Search ingested official documents by meaning.
+
+    Use this tool when:
+    - User asks about official documents: surat, minutes of meeting (MoM),
+      berita acara ingested via `esdc corpus`
+    - User references correspondence, approvals, or meeting decisions:
+      "surat tentang X", "MoM pembahasan Y", "dokumen persetujuan Z"
+    - User wants document hits filtered by type, year, working area,
+      field, or project
+
+    Returns:
+    JSON string with:
+    - status: "success", "no_results", "not_available", or "error"
+    - results: List of matching chunks with doc_id, file_name, doc_type,
+      doc_date, subject, section, chunk_text, and similarity score
+    - count: Number of results
+    - message: Additional information (e.g., how to ingest documents)
+
+    Use read_document(doc_id) to fetch the full text of a hit.
+
+    Examples:
+    - search_documents("persetujuan POD lapangan Duri") -> POD approval letters
+    - search_documents("pembahasan work program", doc_type="mom") -> MoM hits
+    - search_documents("berita acara serah terima", year=2025) -> 2025 BA docs
+    """
+    # Build filters dict from optional parameters
+    filters: dict[str, Any] = {}
+    if doc_type is not None:
+        filters["doc_type"] = doc_type
+    if year is not None:
+        filters["year"] = year
+    if wk_name is not None:
+        filters["wk_name"] = wk_name
+    if field_name is not None:
+        filters["field_name"] = field_name
+    if project_name is not None:
+        filters["project_name"] = project_name
+
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "search_documents", query=query, limit=limit, **filters
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=search_documents key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=search_documents key=%s", cache_key[:16])
+
+    store = None
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        store = CorpusStore()
+        result = store.search(
+            query=query,
+            limit=limit,
+            filters=filters if filters else None,
+        )
+
+        if result.get("status") == "not_available":
+            result["message"] = (
+                "No documents ingested. Run: esdc corpus extract <folder>"
+            )
+
+        result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        if result.get("status") in ("success", "no_results"):
+            cache.set(cache_key, result_str)
+            logger.debug(
+                "[CACHE] stored | tool=search_documents key=%s", cache_key[:16]
+            )
+        return result_str
+
+    except Exception as e:
+        logger.error("[DocSearch] tool failed | query=%s error=%s", query, e)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": str(e),
+                "query": query,
+            }
+        )
+    finally:
+        if store is not None:
+            store.close()
+
+
+@tool("Document Reader")
+def read_document(
+    doc_id: Annotated[str, "doc_id returned by search_documents."],
+    max_chars: Annotated[
+        int, "Truncate markdown to this many chars (default 20000)."
+    ] = 20000,
+) -> str:
+    """Fetch full markdown + metadata of one ingested document as JSON.
+
+    Use this tool when:
+    - search_documents returned a hit and the user needs the full document
+      text (quotes, summaries, detailed answers)
+    - User asks to read a specific ingested document by its doc_id
+
+    Returns:
+    JSON string with:
+    - status: "success", "not_found", or "error"
+    - document: Full metadata row (file_name, doc_type, doc_date, subject,
+      sender, recipient, wk_name, field_name, project_name, ...) with
+      markdown truncated to max_chars
+    - document.truncated: true when markdown was cut at max_chars
+
+    Examples:
+    - read_document("a1b2c3") -> full text of document a1b2c3
+    - read_document("a1b2c3", max_chars=5000) -> first 5000 chars only
+    """
+    store = None
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        store = CorpusStore()
+        doc = store.get_document(doc_id)
+        if doc is None:
+            logger.debug("[DocRead] not_found | doc_id=%s", doc_id)
+            return json.dumps({"status": "not_found", "doc_id": doc_id})
+
+        # Embedding bookkeeping is irrelevant to the chat agent.
+        doc.pop("embedding_model", None)
+        markdown = doc.get("markdown") or ""
+        doc["truncated"] = len(markdown) > max_chars
+        doc["markdown"] = markdown[:max_chars]
+        logger.debug(
+            "[DocRead] success | doc_id=%s truncated=%s", doc_id, doc["truncated"]
+        )
+        return json.dumps(
+            {"status": "success", "document": doc},
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        )
+
+    except Exception as e:
+        logger.error("[DocRead] tool failed | doc_id=%s error=%s", doc_id, e)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": str(e),
+                "doc_id": doc_id,
+            }
+        )
+    finally:
+        if store is not None:
+            store.close()
+
+
 def _format_find_results(
     results: list[dict[str, Any]],
 ) -> str:

@@ -60,6 +60,8 @@ When writing SQL queries, use DuckDB syntax:
 - Queries like "proyek yang namanya ada..." or "project name contains..."
 
 **For project_name keyword matching:** Use execute_sql with ILIKE '%keyword%' — DuckDB auto-optimizes ILIKE to BM25 FTS.
+
+You can also search ingested official documents (surat, minutes of meeting, berita acara) with **search_documents**(query, limit=5, doc_type=None, year=None, wk_name=None, field_name=None, project_name=None) and fetch a hit's full text with **read_document**(doc_id, max_chars=20000). These documents were ingested with `esdc corpus`; if search_documents returns `status="not_available"`, tell the user no documents are ingested yet.
 - **execute_sql**: Execute SELECT queries on the DuckDB database
 - **get_schema**: Get table structure and column information
 - **list_tables**: List all available tables and views

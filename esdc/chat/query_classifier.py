@@ -402,7 +402,7 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
         return base_tools
 
     elif classification.query_type == QueryType.CONCEPTUAL:
-        return ["Semantic Search"] + base_tools
+        return ["Semantic Search", "Document Search", "Document Reader"] + base_tools
 
     elif classification.query_type == QueryType.SPATIAL:
         return ["Spatial Resolver"] + base_tools
@@ -413,6 +413,8 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
     else:  # AMBIGUOUS
         return [
             "Semantic Search",
+            "Document Search",
+            "Document Reader",
             "Spatial Resolver",
             "Uncertainty Resolver",
             "Problem Cluster Search",
