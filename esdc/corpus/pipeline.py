@@ -57,6 +57,8 @@ class CorpusReport:
     skipped: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # Set by run_reembed only: the embedding model chunks were rebuilt with.
+    embedding_model: str = ""
 
 
 def _collect_pdfs(paths: list[Path]) -> list[Path]:
@@ -316,9 +318,10 @@ def run_commit(
             store.insert_document(doc, chunks)
             report.processed.append(name)
             any_processed = True
-    finally:
+
         if any_processed and not dry_run:
             store.rebuild_indexes()
+    finally:
         store.close()
 
     return report
@@ -391,6 +394,7 @@ def run_reembed() -> CorpusReport:
         new_model = store._embedder.model
         new_dim = len(store._embedder.generate_embedding("test"))
         store.set_meta(new_model, new_dim)
+        report.embedding_model = new_model
 
         cfg = Config.get_corpus_config()
         for summary in store.list_documents():

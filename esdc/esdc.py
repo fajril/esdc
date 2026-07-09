@@ -1994,16 +1994,20 @@ def commit(
         )
         raise typer.Exit(1)
 
-    report = run_commit(
-        paths,
-        level=level,
-        doc_type=doc_type,
-        wk_name=wk_name,
-        field_name=field_name,
-        project_name=project_name,
-        force=force,
-        dry_run=dry_run,
-    )
+    try:
+        report = run_commit(
+            paths,
+            level=level,
+            doc_type=doc_type,
+            wk_name=wk_name,
+            field_name=field_name,
+            project_name=project_name,
+            force=force,
+            dry_run=dry_run,
+        )
+    except ValueError as e:  # e.g. embedding-model mismatch -> `corpus reembed`
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     _print_corpus_report(report)
 
 
@@ -2110,13 +2114,12 @@ def clear(
 def reembed() -> None:
     """Rebuild chunk embeddings for the whole corpus after an embedding-model change."""
     from esdc.corpus.pipeline import run_reembed
-    from esdc.corpus.store import CorpusStore
 
     report = run_reembed()
     _print_corpus_report(report)
     typer.echo(
         f"Re-embedded {len(report.processed)} document(s) "
-        f"with model '{CorpusStore()._embedder.model}'."
+        f"with model '{report.embedding_model}'."
     )
 
 
