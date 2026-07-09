@@ -39,8 +39,9 @@ def chunk_markdown(markdown: str, chunk_size: int, overlap: int) -> list[Chunk]:
     Splits on headings (H1-H4) first so a section's content stays
     together; oversized sections are hard-split with overlap chars of
     context repeated at each boundary. Page provenance HTML comments
-    are stripped before chunking. Returns [] for empty/whitespace-only
-    input.
+    are stripped before chunking. When several small sections pack into
+    one chunk, section is the first heading in the chunk. Returns []
+    for empty/whitespace-only input.
     """
     if overlap >= chunk_size:
         raise ValueError("overlap must be smaller than chunk_size")

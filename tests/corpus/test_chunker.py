@@ -33,6 +33,35 @@ def test_oversized_section_splits_with_overlap():
     assert chunks[0].text[-100:] in chunks[1].text
 
 
+def test_small_sections_pack_into_one_chunk():
+    md = "# A\nisi a\n# B\nisi b\n# C\nisi c"
+    chunks = chunk_markdown(md, chunk_size=3000, overlap=300)
+    assert len(chunks) == 1
+    assert chunks[0].section == "A"
+    assert "isi a" in chunks[0].text
+    assert "isi b" in chunks[0].text
+    assert "isi c" in chunks[0].text
+
+
+def test_h2_h4_headings_split():
+    md = "## Keputusan\n" + "x" * 2500 + "\n#### Tindak Lanjut\n" + "y" * 2500
+    chunks = chunk_markdown(md, chunk_size=3000, overlap=100)
+    assert len(chunks) == 2
+    assert chunks[0].section == "Keputusan"
+    assert chunks[1].section == "Tindak Lanjut"
+
+
+def test_overlap_with_realistic_text():
+    md = "# Rapat\n" + ("kalimat panjang dengan spasi " * 300)
+    chunks = chunk_markdown(md, chunk_size=3000, overlap=300)
+    assert len(chunks) >= 2
+    assert all(len(c.text) <= 3000 for c in chunks)
+    for prev, nxt in zip(chunks[:-1], chunks[1:], strict=True):
+        shared = prev.text[-50:].strip()
+        assert shared
+        assert shared in nxt.text
+
+
 def test_empty_markdown_returns_no_chunks():
     assert chunk_markdown("", chunk_size=3000, overlap=300) == []
 
