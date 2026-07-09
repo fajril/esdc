@@ -1788,11 +1788,16 @@ def search_documents(
     - User wants document hits filtered by type, year, working area,
       field, or project
 
+    DO NOT use for project issues/remarks (use semantic_search) or
+    reserves/production numbers (use execute_sql).
+
     Returns:
     JSON string with:
     - status: "success", "no_results", "not_available", or "error"
     - results: List of matching chunks with doc_id, file_name, doc_type,
-      doc_date, subject, section, chunk_text, and similarity score
+      doc_date, subject, wk_name, field_name, project_name, section,
+      chunk_text, and relevance score (RRF fusion, small magnitudes
+      ~0.01-0.03 are normal)
     - count: Number of results
     - message: Additional information (e.g., how to ingest documents)
 
@@ -1838,9 +1843,13 @@ def search_documents(
         )
 
         if result.get("status") == "not_available":
-            result["message"] = (
-                "No documents ingested. Run: esdc corpus extract <folder>"
+            # Keep the store's diagnostic and append the actionable steps.
+            hint = (
+                "Run: esdc corpus extract <folder>, review the sidecars, "
+                "then esdc corpus commit <folder>"
             )
+            store_msg = result.get("message")
+            result["message"] = f"{store_msg} {hint}" if store_msg else hint
 
         result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
         if result.get("status") in ("success", "no_results"):
@@ -1900,8 +1909,11 @@ def read_document(
             logger.debug("[DocRead] not_found | doc_id=%s", doc_id)
             return json.dumps({"status": "not_found", "doc_id": doc_id})
 
-        # Embedding bookkeeping is irrelevant to the chat agent.
-        doc.pop("embedding_model", None)
+        # Drop fields that are noise for the chat agent: embedding
+        # bookkeeping and raw JSON-string blobs (raw_entities, metadata)
+        # whose useful parts are already promoted to top-level columns.
+        for noise_field in ("embedding_model", "raw_entities", "metadata"):
+            doc.pop(noise_field, None)
         markdown = doc.get("markdown") or ""
         doc["truncated"] = len(markdown) > max_chars
         doc["markdown"] = markdown[:max_chars]

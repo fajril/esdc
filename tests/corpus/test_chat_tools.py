@@ -131,6 +131,7 @@ def test_search_documents_empty_db_not_available(tool_env):
     result = json.loads(search_documents.invoke({"query": "persetujuan POD"}))
     assert result["status"] == "not_available"
     assert "esdc corpus extract" in result["message"]
+    assert "esdc corpus commit" in result["message"]
 
 
 def test_read_document_returns_markdown_and_metadata(populated):
@@ -145,6 +146,10 @@ def test_read_document_returns_markdown_and_metadata(populated):
     assert doc["subject"] == "Persetujuan"
     assert doc["doc_type"] == "surat"
     assert doc["wk_name"] == "Rokan"
+    # Noise fields are stripped from the agent-facing payload.
+    assert "embedding_model" not in doc
+    assert "raw_entities" not in doc
+    assert "metadata" not in doc
 
 
 def test_read_document_truncates_markdown(populated):
