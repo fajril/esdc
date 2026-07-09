@@ -97,8 +97,14 @@ TABLES: tuple[TableName, TableName] = (
 
 app = typer.Typer(no_args_is_help=False)
 schema_app = typer.Typer(invoke_without_command=True, no_args_is_help=True)
+corpus_app = typer.Typer(no_args_is_help=True)
 app.add_typer(configs_app, name="configs")
 app.add_typer(schema_app, name="schema")
+app.add_typer(
+    corpus_app,
+    name="corpus",
+    help="Ingest official PDF documents (surat, MoM) for iris document search.",
+)
 
 
 @app.callback()
@@ -1894,6 +1900,224 @@ def _save_violations(results: list[ValidationResult], fmt: str) -> None:
         df.to_json(filename, orient="records", indent=2)
 
     rich.print(f"[green]Saved {len(rows)} violations to {filename}[/green]")
+
+
+def _print_corpus_report(report) -> None:
+    """Print a processed/skipped/failed summary + warnings; exit 1 on total failure."""
+    rows = [
+        ("processed", len(report.processed)),
+        ("skipped", len(report.skipped)),
+        ("failed", len(report.failed)),
+    ]
+    rich.print(tabulate(rows, headers=["", "count"], tablefmt="psql"))
+    for name, error in report.failed.items():
+        typer.echo(f"  FAILED {name}: {error}", err=True)
+    for warning in report.warnings:
+        typer.echo(f"  Warning: {warning}", err=True)
+    if report.failed and not report.processed:
+        raise typer.Exit(1)
+
+
+def _open_corpus_store():
+    """Open a CorpusStore with tables ensured, or exit 1 with a clear error."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore()
+    try:
+        store.ensure_tables()
+    except ValueError as e:
+        store.close()
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+    return store
+
+
+@corpus_app.command()
+def extract(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(exists=True, help="PDF file(s) or folder(s) to extract."),
+    ],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Re-extract even if a sidecar already exists."),
+    ] = False,
+) -> None:
+    """Parse PDFs to reviewable .corpus.md sidecar files (step 1 of 2)."""
+    from esdc.corpus.pipeline import run_extract
+
+    report = run_extract(paths, force=force)
+    _print_corpus_report(report)
+    if report.processed:
+        typer.echo("Review the .corpus.md files, then run: esdc corpus commit <folder>")
+
+
+@corpus_app.command()
+def commit(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(exists=True, help="Sidecar .corpus.md file(s) or folder(s)."),
+    ],
+    level: Annotated[
+        str | None,
+        typer.Option("--level", help="Override doc_level: wk, field, project."),
+    ] = None,
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Override doc_type.")
+    ] = None,
+    wk_name: Annotated[
+        str | None, typer.Option("--wk-name", help="Override wk_name.")
+    ] = None,
+    field_name: Annotated[
+        str | None, typer.Option("--field-name", help="Override field_name.")
+    ] = None,
+    project_name: Annotated[
+        str | None, typer.Option("--project-name", help="Override project_name.")
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Re-ingest even if already committed.")
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Validate and report without writing.")
+    ] = False,
+) -> None:
+    """Ingest reviewed .corpus.md sidecars into the searchable corpus (step 2 of 2)."""
+    from esdc.corpus.metadata import DOC_TYPES
+    from esdc.corpus.pipeline import run_commit
+
+    if level is not None and level not in ("wk", "field", "project"):
+        typer.echo("Error: --level must be one of wk, field, project.", err=True)
+        raise typer.Exit(1)
+    if doc_type is not None and doc_type not in DOC_TYPES:
+        typer.echo(
+            f"Error: --doc-type must be one of {', '.join(DOC_TYPES)}.", err=True
+        )
+        raise typer.Exit(1)
+
+    report = run_commit(
+        paths,
+        level=level,
+        doc_type=doc_type,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+        force=force,
+        dry_run=dry_run,
+    )
+    _print_corpus_report(report)
+
+
+@corpus_app.command(name="status")
+def corpus_status(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(exists=True, help="PDF/sidecar file(s) or folder(s) to check."),
+    ],
+) -> None:
+    """Show each PDF/sidecar's place in the extract -> review -> commit pipeline."""
+    from esdc.corpus.pipeline import run_status
+
+    rows = run_status(paths)
+    rich.print(
+        tabulate(
+            [(r["file"], r["state"]) for r in rows],
+            headers=["file", "state"],
+            tablefmt="psql",
+        )
+    )
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["state"]] = counts.get(r["state"], 0) + 1
+    for state, n in sorted(counts.items()):
+        typer.echo(f"  {state}: {n}")
+
+
+@corpus_app.command(name="list")
+def list_documents() -> None:
+    """List all documents committed to the corpus."""
+    store = _open_corpus_store()
+    try:
+        docs = store.list_documents()
+    finally:
+        store.close()
+
+    rows = [
+        (
+            d["doc_id"],
+            d["file_name"],
+            d["doc_type"],
+            d["doc_date"],
+            d["doc_level"],
+            d.get("wk_name") or d.get("field_name") or d.get("project_name") or "",
+            d["n_chunks"],
+        )
+        for d in docs
+    ]
+    headers = [
+        "doc_id", "file_name", "doc_type", "doc_date",
+        "doc_level", "entity", "n_chunks",
+    ]
+    rich.print(tabulate(rows, headers=headers, tablefmt="psql"))
+
+
+@corpus_app.command()
+def remove(
+    doc_ids: Annotated[list[str], typer.Argument(help="Document ID(s) to remove.")],
+) -> None:
+    """Remove document(s) from the corpus (does not touch files on disk)."""
+    store = _open_corpus_store()
+    removed = 0
+    try:
+        for doc_id in doc_ids:
+            if store.get_document(doc_id) is None:
+                typer.echo(f"Not found: {doc_id}", err=True)
+                continue
+            store.delete_document(doc_id)
+            removed += 1
+        if removed:
+            store.rebuild_indexes()
+    finally:
+        store.close()
+    typer.echo(f"Removed {removed} document(s).")
+
+
+@corpus_app.command()
+def clear(
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Confirm deletion of the entire corpus.")
+    ] = False,
+) -> None:
+    """Delete all documents and chunks from the corpus."""
+    store = _open_corpus_store()
+    try:
+        counts = store.counts()
+        if not yes:
+            typer.echo(
+                f"This deletes {counts['documents']} documents and "
+                f"{counts['chunks']} chunks. Re-run with --yes."
+            )
+            raise typer.Exit(1)
+        removed = store.clear()
+        store.rebuild_indexes()
+    finally:
+        store.close()
+    typer.echo(
+        f"Removed {removed['documents']} documents and {removed['chunks']} chunks."
+    )
+
+
+@corpus_app.command()
+def reembed() -> None:
+    """Rebuild chunk embeddings for the whole corpus after an embedding-model change."""
+    from esdc.corpus.pipeline import run_reembed
+    from esdc.corpus.store import CorpusStore
+
+    report = run_reembed()
+    _print_corpus_report(report)
+    typer.echo(
+        f"Re-embedded {len(report.processed)} document(s) "
+        f"with model '{CorpusStore()._embedder.model}'."
+    )
 
 
 if __name__ == "__main__":
