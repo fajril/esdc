@@ -6,24 +6,38 @@ from esdc.corpus.chunker import Chunk
 from esdc.corpus.store import CorpusStore
 
 
+def _fake_vector(text: str) -> list[float]:
+    """Deterministic text-dependent 3-dim vector, normalized.
+
+    Buckets letters into three alphabet ranges so texts sharing
+    characters point in similar directions — enough signal to make
+    cosine ranking testable (a constant vector would rank everything
+    equally and hide vector-search bugs).
+    """
+    v = [1.0, 1.0, 1.0]
+    for ch in text.lower():
+        if "a" <= ch <= "i":
+            v[0] += 1.0
+        elif "j" <= ch <= "r":
+            v[1] += 1.0
+        elif "s" <= ch <= "z":
+            v[2] += 1.0
+    norm = sum(x * x for x in v) ** 0.5
+    return [x / norm for x in v]
+
+
 class FakeEmbedder:
     model = "fake-embed"
 
     def generate_embedding(self, text: str) -> list[float]:
-        return [0.1, 0.2, 0.3]
+        return _fake_vector(text)
 
     def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
-        return [[0.1, 0.2, 0.3] for _ in texts]
+        return [_fake_vector(t) for t in texts]
 
 
-class FakeEmbedder2:
+class FakeEmbedder2(FakeEmbedder):
     model = "other-model"
-
-    def generate_embedding(self, text: str) -> list[float]:
-        return [0.1, 0.2, 0.3]
-
-    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
-        return [[0.1, 0.2, 0.3] for _ in texts]
 
 
 @pytest.fixture
@@ -102,6 +116,46 @@ def test_replace_chunks(store):
     store.insert_document(DOC, [Chunk(0, None, "lama")])
     store.replace_chunks("abc123", [Chunk(0, None, "baru"), Chunk(1, None, "baru2")])
     assert store.counts() == {"documents": 1, "chunks": 2}
+
+
+def _doc_variant(doc_id: str, file_name: str) -> dict:
+    doc = dict(DOC)
+    doc["doc_id"] = doc_id
+    doc["file_name"] = file_name
+    doc["file_path"] = f"/x/{file_name}"
+    doc["file_hash"] = (doc_id * 32)[:64]
+    return doc
+
+
+def test_search_ranking_multi_doc(store):
+    # Each doc's chunk text is dominated by one letter bucket of the
+    # fake embedder, so cosine ranking is text-dependent and decisive.
+    store.insert_document(
+        _doc_variant("doc-a", "a.pdf"), [Chunk(0, None, "abade beda ada gagah")]
+    )
+    store.insert_document(
+        _doc_variant("doc-j", "j.pdf"), [Chunk(0, None, "jklm nopq lomp okon")]
+    )
+    store.insert_document(
+        _doc_variant("doc-s", "s.pdf"), [Chunk(0, None, "stuv wxyz tusz vwyx")]
+    )
+    store.rebuild_indexes()
+
+    result = store.search("abade beda gagah", limit=5, filters=None)
+    assert result["status"] == "success"
+    assert result["results"][0]["doc_id"] == "doc-a"
+
+    truncated = store.search("abade beda gagah", limit=2, filters=None)
+    assert truncated["count"] == 2
+    assert len(truncated["results"]) == 2
+
+
+def test_set_meta_dim_change_recreates_chunks(store):
+    store.insert_document(DOC, [Chunk(0, None, "isi")])
+    assert store.counts() == {"documents": 1, "chunks": 1}
+    store.set_meta("new-model", dim=5)
+    # chunks are derived data: recreated empty; documents preserved
+    assert store.counts() == {"documents": 1, "chunks": 0}
 
 
 def test_meta_mismatch_raises(tmp_path: Path):

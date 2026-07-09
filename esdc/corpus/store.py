@@ -470,27 +470,31 @@ class CorpusStore:
     ) -> list[dict[str, Any]]:
         conn = self._get_connection()
         filter_clause, filter_params = self._build_filter_clause(filters, "d")
+        # dim comes from len() — always an int, safe to interpolate.
+        # DuckDB VSS only rewrites `array_cosine_distance(...) AS dist
+        # ... ORDER BY dist LIMIT n` over a plain table scan into
+        # HNSW_INDEX_SCAN (EXPLAIN-verified); a JOIN defeats the rewrite,
+        # so the filtered path below is a deliberate sequential scan.
+        dim = len(query_embedding)
+        distance = f"array_cosine_distance(c.embedding, ?::FLOAT[{dim}]) AS dist"
 
-        sql = f"""
-            SELECT
-                c.chunk_id, c.doc_id, c.section, c.chunk_text,
-                list_dot_product(c.embedding, ?::FLOAT[]) /
-                (sqrt(list_dot_product(c.embedding, c.embedding))
-                * sqrt(list_dot_product(?::FLOAT[], ?::FLOAT[])))
-                AS similarity
-            FROM {self.CHUNK_TABLE} c
-            JOIN {self.DOC_TABLE} d ON d.doc_id = c.doc_id
-            WHERE 1=1{filter_clause}
-            ORDER BY similarity DESC
-            LIMIT ?
-        """
-        params = [
-            query_embedding,
-            query_embedding,
-            query_embedding,
-            *filter_params,
-            limit,
-        ]
+        if filter_clause:
+            sql = f"""
+                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, {distance}
+                FROM {self.CHUNK_TABLE} c
+                JOIN {self.DOC_TABLE} d ON d.doc_id = c.doc_id
+                WHERE 1=1{filter_clause}
+                ORDER BY dist ASC
+                LIMIT ?
+            """
+        else:
+            sql = f"""
+                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, {distance}
+                FROM {self.CHUNK_TABLE} c
+                ORDER BY dist ASC
+                LIMIT ?
+            """
+        params = [query_embedding, *filter_params, limit]
         rows = conn.execute(sql, params).fetchall()
         return [
             {
@@ -498,7 +502,7 @@ class CorpusStore:
                 "doc_id": row[1],
                 "section": row[2],
                 "chunk_text": row[3],
-                "similarity": row[4],
+                "similarity": 1 - row[4],
             }
             for row in rows
         ]
@@ -507,6 +511,10 @@ class CorpusStore:
         self, query: str, limit: int, filters: dict[str, Any] | None
     ) -> list[dict[str, Any]]:
         conn = self._get_connection()
+        # Load-bearing escape: the FTS match_bm25 macro cannot take a `?`
+        # bind parameter, so the query text is the ONLY non-bound value in
+        # this module. Doubling single quotes is what keeps it a safe SQL
+        # string literal — do not remove.
         escaped_query = query.replace("'", "''")
         filter_clause, filter_params = self._build_filter_clause(filters, "d")
 
