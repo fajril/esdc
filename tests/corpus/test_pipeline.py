@@ -784,30 +784,43 @@ def test_run_commit_fails_sidecar_missing_file_hash(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-class FakeTqdm:
-    """Iterable stand-in for tqdm that records its kwargs."""
+class FakeProgress:
+    """Stand-in for rich.progress.Progress: records add_task/update/advance."""
 
-    def __init__(self, iterable, **kwargs):
-        self._iterable = iterable
-        self.kwargs = kwargs
+    def __init__(self, *columns, **kwargs):
+        self.console = kwargs.get("console")
+        self.total = None
+        self.descriptions = []
+        self.advances = 0
 
-    def __iter__(self):
-        """Iterate the wrapped iterable, like tqdm does."""
-        return iter(self._iterable)
+    def __enter__(self):
+        """Enter the fake context, like Progress does."""
+        return self
 
-    def set_postfix_str(self, s):
-        pass
+    def __exit__(self, *exc_info):
+        """Exit without suppressing exceptions, like Progress does."""
+        return False
+
+    def add_task(self, description, total=None):
+        self.total = total
+        return 0
+
+    def update(self, task_id, description=None):
+        self.descriptions.append(description)
+
+    def advance(self, task_id):
+        self.advances += 1
 
 
 def test_extract_shows_progress_bar(tmp_path, monkeypatch):
-    captured = []
+    captured = {}
 
-    def fake_tqdm(iterable, **kwargs):
-        bar = FakeTqdm(iterable, **kwargs)
-        captured.append(kwargs)
+    def fake_progress_factory(*columns, **kwargs):
+        bar = FakeProgress(*columns, **kwargs)
+        captured["progress"] = bar
         return bar
 
-    monkeypatch.setattr(pipeline, "tqdm", fake_tqdm)
+    monkeypatch.setattr(pipeline, "Progress", fake_progress_factory)
 
     pdf = make_pdf(tmp_path, "surat.pdf")
 
@@ -818,21 +831,23 @@ def test_extract_shows_progress_bar(tmp_path, monkeypatch):
 
     report = pipeline.run_extract([pdf])
     assert report.failed == {}
-    assert len(captured) == 1
-    # disable=None -> tqdm auto-disables on non-TTY (tests, cron, pipes)
-    assert captured[0]["disable"] is None
-    assert captured[0]["unit"] == "file"
+    bar = captured["progress"]
+    assert bar.total == 1  # one PDF -> total=1
+    assert bar.advances == 1
+    assert bar.descriptions == ["extract surat.pdf"]
+    # shared esdc console, consistent with every other CLI progress bar
+    assert bar.console is pipeline.console
 
 
 def test_commit_shows_progress_bar(tmp_path, monkeypatch):
-    captured = []
+    captured = {}
 
-    def fake_tqdm(iterable, **kwargs):
-        bar = FakeTqdm(iterable, **kwargs)
-        captured.append(kwargs)
+    def fake_progress_factory(*columns, **kwargs):
+        bar = FakeProgress(*columns, **kwargs)
+        captured["progress"] = bar
         return bar
 
-    monkeypatch.setattr(pipeline, "tqdm", fake_tqdm)
+    monkeypatch.setattr(pipeline, "Progress", fake_progress_factory)
 
     store = make_store(tmp_path)
     store.ensure_tables()
@@ -843,9 +858,11 @@ def test_commit_shows_progress_bar(tmp_path, monkeypatch):
 
     report = pipeline.run_commit([tmp_path])
     assert report.processed == ["doc.corpus.md"]
-    assert len(captured) == 1
-    assert captured[0]["disable"] is None
-    assert captured[0]["unit"] == "doc"
+    bar = captured["progress"]
+    assert bar.total == 1
+    assert bar.advances == 1
+    assert bar.descriptions == ["commit doc.corpus.md"]
+    assert bar.console is pipeline.console
     store.close()
 
 

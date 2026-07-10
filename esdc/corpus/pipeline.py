@@ -26,10 +26,11 @@ from typing import Any
 
 import fitz
 import ollama
-from tqdm import tqdm
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
 from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.configs import Config
+from esdc.console import console
 from esdc.corpus.chunker import chunk_markdown
 from esdc.corpus.cleanup import cleanup_markdown
 from esdc.corpus.extractor import extract_pdf
@@ -196,82 +197,91 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
     # sorted by OCR ratio DESC once, instead of per-file.
     entries: list[tuple[str, int, int]] = []
 
-    # disable=None: bar shows on a TTY only; silent in tests/pipes/cron.
-    progress = tqdm(pdfs, desc="extract", unit="file", disable=None)
-    for pdf in progress:
-        name = pdf.name
-        progress.set_postfix_str(name[:40])
-        if sidecar_path(pdf).exists() and not force:
-            report.skipped.append(f"{name} (sidecar exists)")
-            continue
+    with Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(bar_width=36),
+        TextColumn("[green]{task.completed}/{task.total} files"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task_id = progress.add_task("extract", total=len(pdfs))
+        for pdf in pdfs:
+            name = pdf.name
+            progress.update(task_id, description=f"extract {name[:40]}")
+            if sidecar_path(pdf).exists() and not force:
+                report.skipped.append(f"{name} (sidecar exists)")
+                progress.advance(task_id)
+                continue
 
-        try:
-            file_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
-            result = extract_pdf(
-                pdf,
-                ocr_client,
-                cfg["min_chars_per_page"],
-                cfg["ocr_dpi"],
-                cfg["min_image_area"],
-            )
-            markdown = result.markdown
-            if cleanup_caller is not None:
-                markdown, n_cleaned, n_rejected = cleanup_markdown(
-                    markdown, cleanup_caller
+            try:
+                file_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
+                result = extract_pdf(
+                    pdf,
+                    ocr_client,
+                    cfg["min_chars_per_page"],
+                    cfg["ocr_dpi"],
+                    cfg["min_image_area"],
                 )
-                if n_cleaned:
-                    report.warnings.append(
-                        f"{name}: {n_cleaned} page segment(s) reformatted by "
-                        "cleanup model — verify against the original PDF"
+                markdown = result.markdown
+                if cleanup_caller is not None:
+                    markdown, n_cleaned, n_rejected = cleanup_markdown(
+                        markdown, cleanup_caller
                     )
-                if n_rejected:
+                    if n_cleaned:
+                        report.warnings.append(
+                            f"{name}: {n_cleaned} page segment(s) reformatted by "
+                            "cleanup model — verify against the original PDF"
+                        )
+                    if n_rejected:
+                        report.warnings.append(
+                            f"{name}: {n_rejected} segment(s) failed cleanup guard "
+                            "— original text kept"
+                        )
+                meta_fields = _prefill_metadata(
+                    pdf, markdown, metadata_caller, ocr_client, cfg, report, name
+                )
+
+                meta = {
+                    "source_file": name,
+                    "file_hash": file_hash,
+                    "page_count": result.page_count,
+                    "extraction_method": result.method,
+                    "reviewed": False,
+                    "doc_type": meta_fields.get("doc_type"),
+                    "doc_number": meta_fields.get("doc_number"),
+                    "doc_date": meta_fields.get("doc_date"),
+                    "subject": meta_fields.get("subject"),
+                    "sender": meta_fields.get("sender"),
+                    "recipient": meta_fields.get("recipient"),
+                    "doc_level": meta_fields.get("doc_level"),
+                    "wk_name": meta_fields.get("wk_name"),
+                    "field_name": meta_fields.get("field_name"),
+                    "project_name": meta_fields.get("project_name"),
+                    "extras": meta_fields.get("extras"),
+                }
+                meta = normalize_entity_fields(meta)
+                write_sidecar(pdf, meta, markdown)
+
+                if result.pages_ocr > 0:
                     report.warnings.append(
-                        f"{name}: {n_rejected} segment(s) failed cleanup guard "
-                        "— original text kept"
+                        f"{name}: {result.pages_ocr}/{result.page_count} pages "
+                        "from OCR — review carefully"
                     )
-            meta_fields = _prefill_metadata(
-                pdf, markdown, metadata_caller, ocr_client, cfg, report, name
-            )
-
-            meta = {
-                "source_file": name,
-                "file_hash": file_hash,
-                "page_count": result.page_count,
-                "extraction_method": result.method,
-                "reviewed": False,
-                "doc_type": meta_fields.get("doc_type"),
-                "doc_number": meta_fields.get("doc_number"),
-                "doc_date": meta_fields.get("doc_date"),
-                "subject": meta_fields.get("subject"),
-                "sender": meta_fields.get("sender"),
-                "recipient": meta_fields.get("recipient"),
-                "doc_level": meta_fields.get("doc_level"),
-                "wk_name": meta_fields.get("wk_name"),
-                "field_name": meta_fields.get("field_name"),
-                "project_name": meta_fields.get("project_name"),
-                "extras": meta_fields.get("extras"),
-            }
-            meta = normalize_entity_fields(meta)
-            write_sidecar(pdf, meta, markdown)
-
-            if result.pages_ocr > 0:
-                report.warnings.append(
-                    f"{name}: {result.pages_ocr}/{result.page_count} pages "
-                    "from OCR — review carefully"
-                )
-            if result.images_ocr > 0:
-                report.warnings.append(
-                    f"{name}: {result.images_ocr} embedded image(s) OCR'd "
-                    "— review the appended table/chart text carefully"
-                )
-            if result.images_skipped > 0:
-                report.warnings.append(
-                    f"{name}: {result.images_skipped} embedded image(s) skipped "
-                    "(no OCR model) — table/chart content may be missing"
-                )
-            entries.append((name, result.pages_ocr, result.page_count))
-        except Exception as e:
-            report.failed[name] = str(e)
+                if result.images_ocr > 0:
+                    report.warnings.append(
+                        f"{name}: {result.images_ocr} embedded image(s) OCR'd "
+                        "— review the appended table/chart text carefully"
+                    )
+                if result.images_skipped > 0:
+                    report.warnings.append(
+                        f"{name}: {result.images_skipped} embedded image(s) skipped "
+                        "(no OCR model) — table/chart content may be missing"
+                    )
+                entries.append((name, result.pages_ocr, result.page_count))
+            except Exception as e:
+                report.failed[name] = str(e)
+            finally:
+                progress.advance(task_id)
 
     entries.sort(
         key=lambda e: (e[1] / e[2] if e[2] else 0.0),
@@ -371,79 +381,92 @@ def run_commit(
         store.ensure_tables(validate_model=True)
         resolver = EntityResolver(db=store._get_connection())
 
-        # disable=None: bar shows on a TTY only; silent in tests/pipes/cron.
-        progress = tqdm(sidecars, desc="commit", unit="doc", disable=None)
-        for sc in progress:
-            name = sc.name
-            progress.set_postfix_str(name[:40])
-            try:
-                meta, body = read_sidecar(sc)
-            except ValueError as e:
-                report.failed[name] = str(e)
-                continue
+        with Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=36),
+            TextColumn("[green]{task.completed}/{task.total} docs"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("commit", total=len(sidecars))
+            for sc in sidecars:
+                name = sc.name
+                progress.update(task_id, description=f"commit {name[:40]}")
+                try:
+                    try:
+                        meta, body = read_sidecar(sc)
+                    except ValueError as e:
+                        report.failed[name] = str(e)
+                        continue
 
-            if meta.get("reviewed") is not True:
-                report.skipped.append(f"{name} (pending review)")
-                continue
+                    if meta.get("reviewed") is not True:
+                        report.skipped.append(f"{name} (pending review)")
+                        continue
 
-            for key, value in overrides.items():
-                if value is not None:
-                    meta[key] = value
-            meta = normalize_metadata(meta)
-            meta = normalize_entity_fields(meta)
+                    for key, value in overrides.items():
+                        if value is not None:
+                            meta[key] = value
+                    meta = normalize_metadata(meta)
+                    meta = normalize_entity_fields(meta)
 
-            raw_entities = _apply_entity_resolution(meta, resolver, report, name)
+                    raw_entities = _apply_entity_resolution(
+                        meta, resolver, report, name
+                    )
 
-            file_hash = meta.get("file_hash")
-            if not file_hash:
-                report.failed[name] = (
-                    "missing file_hash in sidecar frontmatter; "
-                    "re-run `esdc corpus extract` to regenerate it"
-                )
-                continue
-            exists = store.document_exists(file_hash)
-            if exists and not force:
-                report.skipped.append(f"{name} (already committed)")
-                continue
+                    file_hash = meta.get("file_hash")
+                    if not file_hash:
+                        report.failed[name] = (
+                            "missing file_hash in sidecar frontmatter; "
+                            "re-run `esdc corpus extract` to regenerate it"
+                        )
+                        continue
+                    exists = store.document_exists(file_hash)
+                    if exists and not force:
+                        report.skipped.append(f"{name} (already committed)")
+                        continue
 
-            chunks = chunk_markdown(body, cfg["chunk_size"], cfg["chunk_overlap"])
-            if not chunks:
-                report.failed[name] = "no content"
-                continue
+                    chunks = chunk_markdown(
+                        body, cfg["chunk_size"], cfg["chunk_overlap"]
+                    )
+                    if not chunks:
+                        report.failed[name] = "no content"
+                        continue
 
-            doc = {
-                "doc_id": (file_hash or "")[:16],
-                "file_name": meta.get("source_file"),
-                "file_path": str(sc),
-                "file_hash": file_hash,
-                "doc_type": meta.get("doc_type"),
-                "doc_number": meta.get("doc_number"),
-                "doc_date": meta.get("doc_date"),
-                "subject": meta.get("subject"),
-                "sender": meta.get("sender"),
-                "recipient": meta.get("recipient"),
-                "doc_level": meta.get("doc_level"),
-                "wk_name": meta.get("wk_name"),
-                "field_name": meta.get("field_name"),
-                "project_name": meta.get("project_name"),
-                "raw_entities": json.dumps(raw_entities),
-                "metadata": json.dumps(meta.get("extras") or {}),
-                "markdown": body,
-                "extraction_method": meta.get("extraction_method"),
-                "embedding_model": store._embedder.model,
-                "page_count": meta.get("page_count"),
-            }
+                    doc = {
+                        "doc_id": (file_hash or "")[:16],
+                        "file_name": meta.get("source_file"),
+                        "file_path": str(sc),
+                        "file_hash": file_hash,
+                        "doc_type": meta.get("doc_type"),
+                        "doc_number": meta.get("doc_number"),
+                        "doc_date": meta.get("doc_date"),
+                        "subject": meta.get("subject"),
+                        "sender": meta.get("sender"),
+                        "recipient": meta.get("recipient"),
+                        "doc_level": meta.get("doc_level"),
+                        "wk_name": meta.get("wk_name"),
+                        "field_name": meta.get("field_name"),
+                        "project_name": meta.get("project_name"),
+                        "raw_entities": json.dumps(raw_entities),
+                        "metadata": json.dumps(meta.get("extras") or {}),
+                        "markdown": body,
+                        "extraction_method": meta.get("extraction_method"),
+                        "embedding_model": store._embedder.model,
+                        "page_count": meta.get("page_count"),
+                    }
 
-            if dry_run:
-                report.processed.append(name)
-                any_processed = True
-                continue
+                    if dry_run:
+                        report.processed.append(name)
+                        any_processed = True
+                        continue
 
-            if exists and force:
-                store.delete_document(doc["doc_id"])
-            store.insert_document(doc, chunks)
-            report.processed.append(name)
-            any_processed = True
+                    if exists and force:
+                        store.delete_document(doc["doc_id"])
+                    store.insert_document(doc, chunks)
+                    report.processed.append(name)
+                    any_processed = True
+                finally:
+                    progress.advance(task_id)
 
         if any_processed and not dry_run:
             store.rebuild_indexes()
