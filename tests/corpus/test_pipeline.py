@@ -34,6 +34,7 @@ DEFAULT_CFG = {
     "ocr_dpi": 200,
     "num_ctx": 16384,
     "min_chars_per_page": 50,
+    "min_image_area": 0.05,
 }
 
 
@@ -157,7 +158,7 @@ def patch_entity_resolver(monkeypatch, matches=None):
 def test_extract_writes_sidecar_for_new_pdf(tmp_path, monkeypatch):
     pdf = make_pdf(tmp_path, "surat.pdf")
 
-    def fake_extract(path, ocr_client, min_chars, dpi):
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
         return ExtractionResult(
             markdown="# Surat\nisi dokumen",
             method="native",
@@ -190,7 +191,7 @@ def test_extract_skips_existing_sidecar(tmp_path, monkeypatch):
 
     called = []
 
-    def fake_extract(path, ocr_client, min_chars, dpi):
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
         called.append(path)
         return ExtractionResult("new", "native", 1, 1, 0)
 
@@ -208,7 +209,7 @@ def test_extract_force_overwrites(tmp_path, monkeypatch):
         pdf, {"source_file": "surat.pdf", "file_hash": "x", "reviewed": True}, "old body"
     )
 
-    def fake_extract(path, ocr_client, min_chars, dpi):
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
         return ExtractionResult("new body", "native", 1, 1, 0)
 
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
@@ -233,7 +234,7 @@ def test_extract_ocr_ratio_sort_and_flags(tmp_path, monkeypatch):
         "light.pdf": ExtractionResult("light body", "mixed", 4, 3, 1),
     }
 
-    def fake_extract(path, ocr_client, min_chars, dpi):
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
         return results[path.name]
 
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
@@ -250,11 +251,34 @@ def test_extract_ocr_ratio_sort_and_flags(tmp_path, monkeypatch):
     assert not any("native.pdf" in w and "OCR" in w for w in report.warnings)
 
 
+def test_extract_image_ocr_warnings(tmp_path, monkeypatch):
+    pdf_imgs = make_pdf(tmp_path, "imgs.pdf")
+    pdf_skip = make_pdf(tmp_path, "skip.pdf")
+
+    results = {
+        "imgs.pdf": ExtractionResult("body", "mixed", 3, 3, 0, images_ocr=2),
+        "skip.pdf": ExtractionResult("body", "native", 3, 3, 0, images_skipped=1),
+    }
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return results[path.name]
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf_imgs, pdf_skip])
+    assert any(
+        "imgs.pdf" in w and "2 embedded image(s) OCR'd" in w for w in report.warnings
+    )
+    assert any(
+        "skip.pdf" in w and "1 embedded image(s) skipped" in w for w in report.warnings
+    )
+
+
 def test_extract_failure_isolated(tmp_path, monkeypatch):
     pdf_ok = make_pdf(tmp_path, "ok.pdf")
     pdf_bad = make_pdf(tmp_path, "bad.pdf")
 
-    def fake_extract(path, ocr_client, min_chars, dpi):
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
         if path.name == "bad.pdf":
             raise ValueError("scanned page(s) [1] have no text layer")
         return ExtractionResult("ok body", "native", 1, 1, 0)
@@ -271,7 +295,7 @@ def test_extract_failure_isolated(tmp_path, monkeypatch):
 def test_extract_metadata_prefill_failure_still_writes_sidecar(tmp_path, monkeypatch):
     pdf = make_pdf(tmp_path, "surat.pdf")
 
-    def fake_extract(path, ocr_client, min_chars, dpi):
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
         return ExtractionResult("body text", "native", 1, 1, 0)
 
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
@@ -299,7 +323,7 @@ def test_extract_no_metadata_model_falls_back_to_ocr_image(tmp_path, monkeypatch
 
     pdf = make_pdf(tmp_path, "surat.pdf")
 
-    def fake_extract(path, ocr_client, min_chars, dpi):
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
         return ExtractionResult("body text", "native", 1, 1, 0)
 
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
@@ -319,7 +343,7 @@ def test_extract_no_metadata_model_no_ocr_skips_with_warning(tmp_path, monkeypat
 
     pdf = make_pdf(tmp_path, "surat.pdf")
 
-    def fake_extract(path, ocr_client, min_chars, dpi):
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
         assert ocr_client is None
         return ExtractionResult("body text", "native", 1, 1, 0)
 

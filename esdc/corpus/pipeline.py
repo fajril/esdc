@@ -153,7 +153,11 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
         try:
             file_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
             result = extract_pdf(
-                pdf, ocr_client, cfg["min_chars_per_page"], cfg["ocr_dpi"]
+                pdf,
+                ocr_client,
+                cfg["min_chars_per_page"],
+                cfg["ocr_dpi"],
+                cfg["min_image_area"],
             )
             meta_fields = _prefill_metadata(
                 pdf, result.markdown, ocr_client, cfg, report, name
@@ -184,6 +188,16 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
                 report.warnings.append(
                     f"{name}: {result.pages_ocr}/{result.page_count} pages "
                     "from OCR — review carefully"
+                )
+            if result.images_ocr > 0:
+                report.warnings.append(
+                    f"{name}: {result.images_ocr} embedded image(s) OCR'd "
+                    "— review the appended table/chart text carefully"
+                )
+            if result.images_skipped > 0:
+                report.warnings.append(
+                    f"{name}: {result.images_skipped} embedded image(s) skipped "
+                    "(no OCR model) — table/chart content may be missing"
                 )
             entries.append((name, result.pages_ocr, result.page_count))
         except Exception as e:
