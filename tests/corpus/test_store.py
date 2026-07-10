@@ -1,5 +1,7 @@
+import json
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from esdc.corpus.chunker import Chunk
@@ -166,7 +168,7 @@ def test_meta_mismatch_raises(tmp_path: Path):
 
     s2 = CorpusStore(db_path=db_path, embedder=FakeEmbedder2())
     with pytest.raises(ValueError, match="reembed"):
-        s2.ensure_tables()
+        s2.ensure_tables(validate_model=True)
     s2.close()
 
 
@@ -175,3 +177,94 @@ def test_search_not_available(tmp_path: Path):
     result = s.search("anything", limit=5, filters=None)
     assert result["status"] == "not_available"
     s.close()
+
+
+def test_ensure_tables_migrates_legacy_varchar_entities(tmp_path: Path):
+    """ensure_tables must migrate legacy plain-text entity values.
+
+    Pre-JSON-column DBs store plain text ('Rokan'); ensure_tables must
+    wrap them into JSON arrays so json_each-based filters don't raise.
+    """
+    db = tmp_path / "corpus.duckdb"
+
+    # Simulate a legacy DB: same table name, VARCHAR entity columns,
+    # plain-text values.
+    conn = duckdb.connect(str(db))
+    conn.execute(
+        """
+        CREATE TABLE documents (
+            doc_id VARCHAR PRIMARY KEY, file_name VARCHAR, file_path VARCHAR,
+            file_hash VARCHAR, doc_type VARCHAR, doc_number VARCHAR,
+            doc_date DATE, subject VARCHAR, sender VARCHAR, recipient VARCHAR,
+            doc_level VARCHAR, wk_name VARCHAR, field_name VARCHAR,
+            project_name VARCHAR, raw_entities JSON, metadata JSON,
+            markdown TEXT NOT NULL, extraction_method VARCHAR,
+            embedding_model VARCHAR, page_count INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_path, file_hash, "
+        "wk_name, markdown, extraction_method) "
+        "VALUES ('abc', 'a.pdf', '/a.pdf', 'h1', 'Rokan', 'body', 'text')"
+    )
+    conn.close()
+
+    store = CorpusStore(db_path=db, embedder=FakeEmbedder())
+    try:
+        store.ensure_tables()
+        row = store._get_connection().execute(
+            "SELECT wk_name FROM documents WHERE doc_id = 'abc'"
+        ).fetchone()
+        assert json.loads(row[0]) == ["Rokan"]
+        # And a json_each-based filter must not raise:
+        store._get_connection().execute(
+            "SELECT count(*) FROM documents WHERE wk_name IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM json_each(wk_name))"
+        ).fetchone()
+    finally:
+        store.close()
+
+
+def test_search_entity_filter_is_case_insensitive_substring(tmp_path: Path):
+    store = CorpusStore(db_path=tmp_path / "c.duckdb", embedder=FakeEmbedder())
+    try:
+        store.ensure_tables()
+        doc1 = _doc_variant("d1", "d1.pdf")
+        doc1["wk_name"] = ["Rokan"]
+        store.insert_document(doc1, [Chunk(0, None, "isi d1")])
+        doc2 = _doc_variant("d2", "d2.pdf")
+        doc2["wk_name"] = ["Bangkanai"]
+        store.insert_document(doc2, [Chunk(0, None, "isi d2")])
+
+        clause, params = store._build_filter_clause({"wk_name": "rokan"}, "d")
+        rows = store._get_connection().execute(
+            f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params
+        ).fetchall()
+        assert [r[0] for r in rows] == ["d1"]
+
+        # substring match too — "kan" is a substring of both "Rokan" and
+        # "Bangkanai".
+        clause, params = store._build_filter_clause({"wk_name": "kan"}, "d")
+        rows = store._get_connection().execute(
+            f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params
+        ).fetchall()
+        assert {r[0] for r in rows} == {"d1", "d2"}
+    finally:
+        store.close()
+
+
+def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
+    """search() results must return wk_name as a list, not a JSON string."""
+    store = CorpusStore(db_path=tmp_path / "c2.duckdb", embedder=FakeEmbedder())
+    try:
+        store.ensure_tables()
+        doc = _doc_variant("d1", "d1.pdf")
+        doc["wk_name"] = ["Rokan"]
+        store.insert_document(doc, [Chunk(0, "Report", "drilling report content")])
+        store.rebuild_indexes()
+        result = store.search("drilling")
+        assert result["status"] == "success"
+        assert result["results"][0]["wk_name"] == ["Rokan"]
+    finally:
+        store.close()

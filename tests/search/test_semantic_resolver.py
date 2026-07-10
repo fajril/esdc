@@ -26,7 +26,9 @@ def test_search_by_text():
         resolver._get_connection = Mock()
         mock_conn = Mock()
 
-        # First call: COUNT check, second call: actual search
+        # First two calls: COUNT check (once in search_by_text's
+        # availability check, once again inside search_by_embedding),
+        # third call: actual search
         mock_cursor1 = Mock()
         mock_cursor1.fetchone.return_value = [1]  # Count > 0
 
@@ -59,7 +61,7 @@ def test_search_by_text():
             ),
         ]
 
-        mock_conn.execute.side_effect = [mock_cursor1, mock_cursor2]
+        mock_conn.execute.side_effect = [mock_cursor1, mock_cursor1, mock_cursor2]
         resolver._get_connection.return_value = mock_conn
 
         result = resolver.search_by_text("proyek masalah teknis", limit=5)
@@ -120,6 +122,29 @@ def test_search_not_available():
         mock_conn.execute.return_value.fetchall.return_value = []
         mock_conn.execute.return_value.fetchone.return_value = [0]
         resolver._get_connection.return_value = mock_conn
+
+        result = resolver.search_by_text("test query")
+
+        assert result["status"] == "not_available"
+
+
+def test_search_by_text_no_embeddings_skips_query_embedding():
+    """search_by_text must return not_available without calling the embedder.
+
+    When the store has no embeddings, no Ollama call should be needed.
+    """
+    with patch("esdc.search.semantic_resolver.EmbeddingManager"):
+        resolver = SemanticResolver()
+        resolver._get_connection = Mock()
+        mock_conn = Mock()
+        # Count check returns 0 -> no embeddings
+        mock_conn.execute.return_value.fetchone.return_value = [0]
+        resolver._get_connection.return_value = mock_conn
+
+        def _boom(text):
+            raise AssertionError("embedder must not be called")
+
+        resolver._embedding_manager.generate_embedding = _boom
 
         result = resolver.search_by_text("test query")
 

@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import html
 import os
 import secrets
 import time
@@ -35,19 +36,37 @@ def generate_pkce_pair() -> tuple[str, str]:
     return code_verifier, code_challenge
 
 
+def _record_callback(params: dict[str, list[str]]) -> None:
+    """Record OAuth callback params onto CallbackHandler class state."""
+    CallbackHandler.state = params.get("state", [None])[0]
+    if "code" in params:
+        CallbackHandler.auth_code = params["code"][0]
+    elif "error" in params:
+        CallbackHandler.error = params["error"][0]
+
+
+def _render_error_page(error: str) -> str:
+    """Render the OAuth failure page with the error message HTML-escaped."""
+    return (
+        "<html><body><h1>Authentication failed</h1>"
+        f"<p>Error: {html.escape(error)}</p></body></html>"
+    )
+
+
 class CallbackHandler(BaseHTTPRequestHandler):
     """HTTP request handler for OAuth callback server."""
 
     auth_code: str | None = None
     error: str | None = None
+    state: str | None = None
 
     def do_GET(self):
         """Handle GET requests to the OAuth callback endpoint."""
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
+        _record_callback(params)
 
         if "code" in params:
-            CallbackHandler.auth_code = params["code"][0]
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
@@ -57,14 +76,10 @@ class CallbackHandler(BaseHTTPRequestHandler):
                 b"</body></html>"
             )
         elif "error" in params:
-            CallbackHandler.error = params["error"][0]
             self.send_response(400)
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            self.wfile.write(
-                f"<html><body><h1>Authentication failed</h1>"
-                f"<p>Error: {params['error'][0]}</p></body></html>".encode()
-            )
+            self.wfile.write(_render_error_page(params["error"][0]).encode())
         else:
             self.send_response(400)
             self.end_headers()
@@ -130,6 +145,7 @@ def start_oauth_flow() -> dict[str, Any]:
 
     CallbackHandler.auth_code = None
     CallbackHandler.error = None
+    CallbackHandler.state = None
 
     server = start_callback_server()
 
@@ -146,10 +162,14 @@ def start_oauth_flow() -> dict[str, Any]:
     if not CallbackHandler.auth_code:
         raise RuntimeError("Authentication cancelled")
 
+    if CallbackHandler.state != state:
+        raise RuntimeError(
+            "OAuth state mismatch — possible CSRF attack; aborting login"
+        )
+
     tokens = exchange_code_for_tokens(CallbackHandler.auth_code, code_verifier)
 
     tokens["expires_at"] = int(time.time()) + tokens.get("expires_in", 3600)
-    tokens["code_verifier"] = code_verifier
 
     return tokens
 

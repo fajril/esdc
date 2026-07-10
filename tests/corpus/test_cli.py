@@ -57,3 +57,16 @@ def test_commit_model_mismatch_prints_clean_error(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "Error: [Corpus] embedding model changed" in result.output
     assert "Traceback" not in result.output
+
+
+def test_entity_display_handles_legacy_plain_string():
+    from esdc.esdc import _entity_display
+
+    # Legacy row: store's suppress-parse left it a plain string.
+    assert _entity_display({"wk_name": "Rokan"}) == "Rokan"
+    # Normal parsed row.
+    assert _entity_display({"wk_name": ["Rokan", "Mahakam"]}) == "Rokan, Mahakam"
+    # Unparsed JSON string.
+    assert _entity_display({"field_name": '["Duri"]'}) == "Duri"
+    # Nothing set.
+    assert _entity_display({}) == ""

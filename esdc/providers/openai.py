@@ -109,7 +109,9 @@ class OpenAIProvider(Provider):
                 refresh_token = config.oauth.get("refresh_token", "")
                 new_tokens = refresh_access_token(refresh_token)
                 config.oauth.update(new_tokens)
-                config.oauth["expires_at"] = int(new_tokens.get("expires_in", 3600))
+                config.oauth["expires_at"] = int(time.time()) + int(
+                    new_tokens.get("expires_in", 3600)
+                )
                 effective_api_key = new_tokens.get("access_token")
 
         if reasoning_effort is not None:
@@ -146,7 +148,9 @@ class OpenAIProvider(Provider):
                         config.oauth.get("refresh_token", "")
                     )
                     config.oauth.update(new_tokens)
-                    config.oauth["expires_at"] = int(new_tokens.get("expires_in", 3600))
+                    config.oauth["expires_at"] = int(time.time()) + int(
+                        new_tokens.get("expires_in", 3600)
+                    )
 
                 api_key = config.oauth.get("access_token")
             elif config.api_key:

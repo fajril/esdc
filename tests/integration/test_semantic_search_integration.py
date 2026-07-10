@@ -74,13 +74,23 @@ def test_semantic_search_fallback_no_ollama():
 
 
 @pytest.mark.integration
-def test_semantic_search_no_embeddings():
-    """Test behavior when no embeddings exist."""
+def test_semantic_search_no_embeddings(isolated_config):
+    """Test behavior when no embeddings exist.
+
+    Uses the isolated_config fixture so this doesn't depend on (or
+    get contaminated by) whatever the developer's real ~/.esdc DB
+    happens to contain -- the point is to exercise a store with zero
+    embeddings, not "whatever store is on disk".
+    """
+    from esdc.configs import Config
     from esdc.search.semantic_resolver import SemanticResolver
 
+    Config.get_db_dir().mkdir(parents=True, exist_ok=True)
     resolver = SemanticResolver()
 
-    # This should return not_available, not error
+    # This should return not_available, not error -- and it must not
+    # require Ollama, since search_by_text should short-circuit before
+    # ever generating a query embedding.
     result = resolver.search_by_text("test query")
 
     assert result["status"] == "not_available"

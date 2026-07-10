@@ -19,6 +19,7 @@ merge) rather than inventing new syntax.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -30,10 +31,26 @@ from esdc.corpus.chunker import Chunk
 
 logger = logging.getLogger(__name__)
 
+
+def _to_json(val: Any) -> str | None:
+    """Serialize a value to JSON string, or None if val is None."""
+    return json.dumps(val) if val is not None else None
+
+
+def _parse_json_fields(doc: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Parse JSON-string fields in place; leave unparseable values as-is."""
+    for key in keys:
+        if isinstance(doc.get(key), str):
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                doc[key] = json.loads(doc[key])
+    return doc
+
+
 # Columns on `documents` that may be filtered by exact match in search().
 _EXACT_FILTER_COLUMNS = ("doc_type", "doc_level")
-# Columns on `documents` that may be filtered by ILIKE substring in search().
-_ILIKE_FILTER_COLUMNS = ("wk_name", "field_name", "project_name")
+# Columns on `documents` that store JSON arrays; filtered via case-insensitive
+# substring match over each array element (json_each + ILIKE).
+_JSON_ARRAY_FILTER_COLUMNS = ("wk_name", "field_name", "project_name")
 
 
 class CorpusStore:
@@ -90,20 +107,45 @@ class CorpusStore:
             logger.debug("[Corpus] DuckDB connection established with VSS/FTS")
         return self._conn
 
-    def ensure_tables(self) -> None:
+    def ensure_tables(self, validate_model: bool = False) -> None:
         """Create documents/document_chunks/corpus_meta tables if missing.
 
         Detects the embedding dimension from the configured embedder and
         pins it (with the model name) in corpus_meta. If corpus_meta
         already holds a different model/dim, raises ValueError instructing
         the user to run `esdc corpus reembed`.
+
+        When ``validate_model=False`` (default), skips the embedder probe
+        if tables already exist so read-only commands like ``corpus list``
+        work without Ollama running. Pass ``validate_model=True`` from
+        write paths (commit, reembed) to detect model mismatches.
         """
         conn = self._get_connection()
 
-        logger.info("[Corpus] detecting embedding dimension from model")
-        test_embedding = self._embedder.generate_embedding("test")
-        dim = len(test_embedding)
-        model = self._embedder.model
+        # Check if all tables already exist
+        row = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_name IN (?, ?, ?)",
+            [self.DOC_TABLE, self.CHUNK_TABLE, self.META_TABLE],
+        ).fetchone()
+        tables_exist = row is not None and row[0] == 3
+
+        if tables_exist:
+            existing = conn.execute(
+                f"SELECT embedding_model, dim FROM {self.META_TABLE} LIMIT 1"
+            ).fetchone()
+            if existing is None:
+                # Tables exist but meta is empty — need embedder probe
+                tables_exist = False
+
+        if tables_exist and not validate_model:
+            model, dim = existing  # type: ignore[misc]
+            logger.debug("[Corpus] tables exist, dim=%d from corpus_meta", dim)
+        else:
+            logger.info("[Corpus] detecting embedding dimension from model")
+            test_embedding = self._embedder.generate_embedding("test")
+            dim = len(test_embedding)
+            model = self._embedder.model
 
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.DOC_TABLE} (
@@ -118,9 +160,9 @@ class CorpusStore:
                 sender VARCHAR,
                 recipient VARCHAR,
                 doc_level VARCHAR,
-                wk_name VARCHAR,
-                field_name VARCHAR,
-                project_name VARCHAR,
+                wk_name JSON,
+                field_name JSON,
+                project_name JSON,
                 raw_entities JSON,
                 metadata JSON,
                 markdown TEXT NOT NULL,
@@ -147,23 +189,61 @@ class CorpusStore:
             )
         """)
 
-        existing = conn.execute(
-            f"SELECT embedding_model, dim FROM {self.META_TABLE} LIMIT 1"
-        ).fetchone()
-        if existing is None:
-            conn.execute(
-                f"INSERT INTO {self.META_TABLE} (embedding_model, dim) VALUES (?, ?)",
-                [model, dim],
-            )
-        elif existing[0] != model or existing[1] != dim:
-            raise ValueError(
-                f"[Corpus] embedding model changed "
-                f"(was {existing[0]} dim={existing[1]}, now {model} dim={dim}). "
-                f"Existing chunk embeddings are no longer comparable. "
-                f"Run `esdc corpus reembed` to rebuild them."
-            )
+        if tables_exist:
+            if validate_model:
+                # Check for model mismatch
+                existing = conn.execute(
+                    f"SELECT embedding_model, dim FROM {self.META_TABLE} LIMIT 1"
+                ).fetchone()
+                if existing is not None and (
+                    existing[0] != model or existing[1] != dim
+                ):
+                    raise ValueError(
+                        f"[Corpus] embedding model changed "
+                        f"(was {existing[0]} dim={existing[1]}, "
+                        f"now {model} dim={dim}). "
+                        f"Existing chunk embeddings are no longer comparable. "
+                        f"Run `esdc corpus reembed` to rebuild them."
+                    )
+        else:
+            # First run — seed corpus_meta
+            existing = conn.execute(
+                f"SELECT embedding_model, dim FROM {self.META_TABLE} LIMIT 1"
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    f"INSERT INTO {self.META_TABLE} "
+                    "(embedding_model, dim) VALUES (?, ?)",
+                    [model, dim],
+                )
+            elif existing[0] != model or existing[1] != dim:
+                raise ValueError(
+                    f"[Corpus] embedding model changed "
+                    f"(was {existing[0]} dim={existing[1]}, now {model} dim={dim}). "
+                    f"Existing chunk embeddings are no longer comparable. "
+                    f"Run `esdc corpus reembed` to rebuild them."
+                )
 
+        self._migrate_legacy_entity_columns()
         self._create_document_indexes()
+
+    def _migrate_legacy_entity_columns(self) -> None:
+        """Wrap pre-JSON plain-text entity values into JSON arrays.
+
+        Older schemas stored wk_name/field_name/project_name as bare
+        VARCHAR ('Rokan'). json_each()/json_contains() raise on non-JSON
+        input, so one legacy row would break every filtered search.
+        Idempotent: rows already holding valid JSON are untouched.
+        """
+        conn = self._get_connection()
+        for col in _JSON_ARRAY_FILTER_COLUMNS:
+            conn.execute(
+                f"""
+                UPDATE {self.DOC_TABLE}
+                SET {col} = to_json([{col}])
+                WHERE {col} IS NOT NULL AND NOT json_valid({col})
+                """
+            )
 
     def _create_document_indexes(self) -> None:
         """Create B-tree indexes on documents columns used for filtering."""
@@ -231,9 +311,9 @@ class CorpusStore:
                     doc.get("sender"),
                     doc.get("recipient"),
                     doc.get("doc_level"),
-                    doc.get("wk_name"),
-                    doc.get("field_name"),
-                    doc.get("project_name"),
+                    _to_json(doc.get("wk_name")),
+                    _to_json(doc.get("field_name")),
+                    _to_json(doc.get("project_name")),
                     doc.get("raw_entities"),
                     doc.get("metadata"),
                     doc["markdown"],
@@ -243,21 +323,23 @@ class CorpusStore:
                 ],
             )
 
-            for chunk, embedding in zip(chunks, embeddings, strict=True):
-                chunk_id = f"{doc['doc_id']}:{chunk.index:04d}"
-                conn.execute(
+            if chunks:
+                conn.executemany(
                     f"""
                     INSERT INTO {self.CHUNK_TABLE} (
                         chunk_id, doc_id, chunk_index, section, chunk_text, embedding
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     [
-                        chunk_id,
-                        doc["doc_id"],
-                        chunk.index,
-                        chunk.section,
-                        chunk.text,
-                        embedding,
+                        [
+                            f"{doc['doc_id']}:{chunk.index:04d}",
+                            doc["doc_id"],
+                            chunk.index,
+                            chunk.section,
+                            chunk.text,
+                            embedding,
+                        ]
+                        for chunk, embedding in zip(chunks, embeddings, strict=True)
                     ],
                 )
             conn.execute("COMMIT")
@@ -302,7 +384,12 @@ class CorpusStore:
             "doc_level", "wk_name", "field_name", "project_name",
             "extraction_method", "page_count", "ingested_at", "n_chunks",
         ]
-        return [dict(zip(columns, row, strict=True)) for row in rows]
+        docs = []
+        for row in rows:
+            doc = dict(zip(columns, row, strict=True))
+            _parse_json_fields(doc, ("wk_name", "field_name", "project_name"))
+            docs.append(doc)
+        return docs
 
     def clear(self) -> dict[str, int]:
         """Delete all documents and chunks; corpus_meta is preserved."""
@@ -454,10 +541,16 @@ class CorpusStore:
             if filters.get(col):
                 conditions.append(f"{table_alias}.{col} = ?")
                 params.append(filters[col])
-        for col in _ILIKE_FILTER_COLUMNS:
+        for col in _JSON_ARRAY_FILTER_COLUMNS:
             if filters.get(col):
-                conditions.append(f"{table_alias}.{col} ILIKE ?")
-                params.append(f"%{filters[col]}%")
+                # Case-insensitive substring over each array element.
+                # json_each stringifies elements as '"Name"'; the %...%
+                # pattern makes the surrounding quotes irrelevant.
+                conditions.append(
+                    f"EXISTS (SELECT 1 FROM json_each({table_alias}.{col}) "
+                    f"WHERE CAST(value AS VARCHAR) ILIKE '%' || ? || '%')"
+                )
+                params.append(str(filters[col]))
         if filters.get("year"):
             conditions.append(f"EXTRACT(year FROM {table_alias}.doc_date) = ?")
             params.append(filters["year"])
@@ -632,9 +725,11 @@ class CorpusStore:
                 "doc_id", "file_name", "doc_type", "doc_date", "subject",
                 "wk_name", "field_name", "project_name",
             ]
-            docs_by_id = {
-                row[0]: dict(zip(doc_cols, row, strict=True)) for row in doc_rows
-            }
+            docs_by_id = {}
+            for row in doc_rows:
+                doc = dict(zip(doc_cols, row, strict=True))
+                _parse_json_fields(doc, ("wk_name", "field_name", "project_name"))
+                docs_by_id[row[0]] = doc
 
             results = []
             for r in merged:
@@ -686,7 +781,11 @@ class CorpusStore:
             "raw_entities", "metadata", "markdown", "extraction_method",
             "embedding_model", "page_count", "ingested_at",
         ]
-        return dict(zip(columns, row, strict=True))
+        doc = dict(zip(columns, row, strict=True))
+        _parse_json_fields(
+            doc, ("wk_name", "field_name", "project_name", "raw_entities", "metadata")
+        )
+        return doc
 
     def close(self) -> None:
         """Close the database connection."""

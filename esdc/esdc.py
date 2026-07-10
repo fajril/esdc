@@ -2036,6 +2036,23 @@ def corpus_status(
         typer.echo(f"  {state}: {n}")
 
 
+def _entity_display(d: dict) -> str:
+    """Join first non-empty entity field for display."""
+    for key in ("wk_name", "field_name", "project_name"):
+        val = d.get(key)
+        if not val:
+            continue
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                return val  # legacy plain-text value — show as-is
+        if isinstance(val, list):
+            return ", ".join(str(v) for v in val)
+        return str(val)
+    return ""
+
+
 @corpus_app.command(name="list")
 def list_documents() -> None:
     """List all documents committed to the corpus."""
@@ -2052,7 +2069,7 @@ def list_documents() -> None:
             d["doc_type"],
             d["doc_date"],
             d["doc_level"],
-            d.get("wk_name") or d.get("field_name") or d.get("project_name") or "",
+            _entity_display(d),
             d["n_chunks"],
         )
         for d in docs

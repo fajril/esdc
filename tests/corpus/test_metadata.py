@@ -1,13 +1,10 @@
-import duckdb
 
 from esdc.corpus.metadata import (
     METADATA_PROMPT,
     METADATA_PROMPT_IMAGE,
     llm_extract,
-    load_canonical_names,
     normalize_metadata,
     parse_llm_json,
-    resolve_entity,
 )
 
 
@@ -30,66 +27,6 @@ def test_llm_extract_uses_caller():
     result = llm_extract("# Surat\nisi", lambda prompt: '{"doc_type": "surat"}')
     assert result["doc_type"] == "surat"
     assert result["doc_level"] == "unknown"  # normalized default
-
-
-def test_resolve_exact_case_insensitive():
-    name, conf = resolve_entity("rokan", ["Rokan", "Mahakam"])
-    assert name == "Rokan" and conf == 1.0
-
-
-def test_resolve_substring():
-    name, conf = resolve_entity("WK Rokan (PHR)", ["Rokan", "Mahakam"])
-    assert name == "Rokan" and 0.8 <= conf < 1.0
-
-
-def test_resolve_substring_prefers_most_specific():
-    name, conf = resolve_entity("WK Rokan Hilir", ["Rokan", "Rokan Hilir"])
-    assert name == "Rokan Hilir" and conf == 0.85
-    # Order independence: same result with the canonical list reversed.
-    name, conf = resolve_entity("WK Rokan Hilir", ["Rokan Hilir", "Rokan"])
-    assert name == "Rokan Hilir" and conf == 0.85
-
-
-def test_resolve_substring_ignores_tiny_canonicals():
-    # "B" is a substring of almost anything; substring tier must skip
-    # canonicals shorter than 3 chars (exact tier still handles them).
-    name, conf = resolve_entity("Sembilang", ["B", "Mahakam"])
-    assert name is None and conf == 0.0
-
-
-def test_resolve_fuzzy():
-    name, conf = resolve_entity("Mahakem", ["Rokan", "Mahakam"])
-    assert name == "Mahakam" and 0.6 <= conf < 1.0
-
-
-def test_resolve_no_match_returns_none():
-    name, conf = resolve_entity("Blok Antah Berantah", ["Rokan", "Mahakam"])
-    assert name is None and conf == 0.0
-
-
-def test_load_canonical_names_distinct_non_null():
-    conn = duckdb.connect()
-    conn.execute(
-        "CREATE TABLE project_resources (wk_name VARCHAR, field_name VARCHAR, "
-        "project_name VARCHAR)"
-    )
-    conn.execute(
-        "INSERT INTO project_resources VALUES "
-        "('Rokan', 'Minas', 'POD-1'), "
-        "('Rokan', 'Duri', NULL), "
-        "(NULL, NULL, NULL), "
-        "('Mahakam', 'Minas', 'POD-1')"
-    )
-    names = load_canonical_names(conn)
-    assert sorted(names["wk_name"]) == ["Mahakam", "Rokan"]
-    assert sorted(names["field_name"]) == ["Duri", "Minas"]
-    assert names["project_name"] == ["POD-1"]
-
-
-def test_load_canonical_names_missing_table_returns_empty_lists():
-    conn = duckdb.connect()
-    names = load_canonical_names(conn)
-    assert names == {"wk_name": [], "field_name": [], "project_name": []}
 
 
 def test_metadata_prompt_image_excludes_markdown_section_includes_keys():

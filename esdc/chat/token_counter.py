@@ -3,6 +3,7 @@
 # Standard library
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Literal
 
 # Third-party
@@ -105,21 +106,25 @@ def _is_openai_tokenizer_candidate(
     return False
 
 
+@lru_cache(maxsize=8)
+def _get_tiktoken_encoding(model: str):
+    import tiktoken
+
+    try:
+        return tiktoken.encoding_for_model(model)
+    except Exception:
+        try:
+            return tiktoken.get_encoding("o200k_base")
+        except Exception:
+            return tiktoken.get_encoding("cl100k_base")
+
+
 def _tiktoken_count(text: str, model: str | None) -> int | None:
     """Count text with tiktoken, returning None if it cannot be used."""
     try:
-        import tiktoken
+        encoding = _get_tiktoken_encoding(model or "")
     except ImportError:
         return None
-
-    try:
-        encoding = tiktoken.encoding_for_model(model or "")
-    except Exception:
-        try:
-            encoding = tiktoken.get_encoding("o200k_base")
-        except Exception:
-            encoding = tiktoken.get_encoding("cl100k_base")
-
     return len(encoding.encode(text))
 
 

@@ -375,10 +375,40 @@ class SemanticResolver:
         Returns:
             Dict with status and results including all contextual columns
         """
+        unavailable = self._embeddings_available()
+        if unavailable is not None:
+            return unavailable
+
         # Generate query embedding
         query_embedding = self._embedding_manager.generate_embedding(query)
 
         return self.search_by_embedding(query_embedding, limit, filters)
+
+    def _embeddings_available(self) -> dict[str, Any] | None:
+        """Check whether the embeddings table exists and has rows.
+
+        Returns the ``not_available`` response dict if there are no
+        embeddings yet, otherwise ``None``. Shared by ``search_by_text``
+        (checked before the query is embedded, so no Ollama call is
+        needed when there's nothing to search) and ``search_by_embedding``.
+        """
+        conn = self._get_connection()
+        try:
+            check = conn.execute(f"""
+                SELECT COUNT(*) FROM {self.EMBEDDING_TABLE}
+            """).fetchone()
+        except Exception:
+            # Table doesn't exist yet (e.g. fresh DB, `esdc reload` never
+            # run) -- that's just another form of "no embeddings".
+            check = None
+
+        if check is None or check[0] == 0:
+            return {
+                "status": "not_available",
+                "message": "No embeddings found. Run 'esdc reload' to generate embeddings.",  # noqa: E501
+                "results": [],
+            }
+        return None
 
     def search_by_embedding(
         self,
@@ -415,16 +445,9 @@ class SemanticResolver:
 
         try:
             # Check if embeddings table exists and has data
-            check = conn.execute(f"""
-                SELECT COUNT(*) FROM {self.EMBEDDING_TABLE}
-            """).fetchone()
-
-            if check is None or check[0] == 0:
-                return {
-                    "status": "not_available",
-                    "message": "No embeddings found. Run 'esdc reload' to generate embeddings.",  # noqa: E501
-                    "results": [],
-                }
+            unavailable = self._embeddings_available()
+            if unavailable is not None:
+                return unavailable
 
             # Build WHERE clause from filters
             where_conditions = ["table_name = 'project_resources'"]

@@ -1,3 +1,4 @@
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -377,3 +378,81 @@ class TestTemperaturePassthrough:
                 {"provider_type": "fake", "model": "m"}
             )
         assert "temperature" not in captured_kwargs
+
+
+class TestOAuthRefreshExpiresAt:
+    """Verify refreshed OAuth tokens store an absolute expires_at."""
+
+    def test_oauth_refresh_sets_absolute_expires_at(self):
+        """expires_at must be now + expires_in, not the raw expires_in.
+
+        The raw expires_in value is an epoch timestamp in 1970 and would
+        always be treated as 'expired'.
+        """
+        from esdc.providers.openai import OpenAIProvider
+
+        config = ProviderConfig(
+            name="openai",
+            provider_type="openai",
+            model="gpt-4o",
+            base_url="",
+            api_key="",
+            auth_method="oauth",
+            oauth={"access_token": "old", "refresh_token": "r1", "expires_at": 1},
+        )
+        fresh = {"access_token": "new", "expires_in": 3600}
+
+        with (
+            patch("esdc.auth.refresh_access_token", return_value=dict(fresh)),
+            patch.object(
+                OpenAIProvider, "get_actual_context_length", return_value=8192
+            ),
+            patch("esdc.providers.openai.ChatOpenAI"),
+        ):
+            OpenAIProvider.create_llm(model="gpt-4o", config=config)
+
+        assert config.oauth["expires_at"] >= int(time.time()) + 3500
+
+    def test_oauth_refresh_sets_absolute_expires_at_in_test_connection(self):
+        """Same fix applies to the refresh path inside test_connection."""
+        from esdc.providers.openai import OpenAIProvider
+
+        config = ProviderConfig(
+            name="openai",
+            provider_type="openai",
+            model="gpt-4o",
+            base_url="",
+            api_key="",
+            auth_method="oauth",
+            oauth={"access_token": "old", "refresh_token": "r1", "expires_at": 1},
+        )
+        fresh = {"access_token": "new", "expires_in": 3600}
+
+        with (
+            patch("esdc.auth.refresh_access_token", return_value=dict(fresh)),
+            patch.object(OpenAIProvider, "list_models", return_value=["gpt-4o"]),
+            patch.object(OpenAIProvider, "create_llm") as mock_create_llm,
+        ):
+            mock_create_llm.return_value.invoke.return_value = None
+            OpenAIProvider.test_connection(config)
+
+        assert config.oauth["expires_at"] >= int(time.time()) + 3500
+
+
+class TestProviderFallbackChatModelMismatch:
+    """Verify ProviderFallbackChatModel rejects mismatched config lists."""
+
+    def test_fallback_model_rejects_mismatched_name_lists(self):
+        """A models/provider_names length mismatch must raise.
+
+        It must not silently truncate the fallback chain.
+        """
+        from esdc.providers import ProviderFallbackChatModel
+
+        model = ProviderFallbackChatModel(
+            models=[_FailingChatModel(), _FailingChatModel()],
+            provider_names=["a"],  # mismatch: 2 models, 1 name
+            model_names=["m1", "m2"],
+        )
+        with pytest.raises(ValueError):
+            model._generate([])

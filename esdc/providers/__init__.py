@@ -71,9 +71,15 @@ class ProviderFallbackChatModel(BaseChatModel):
         run_manager: Any | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        if not (len(self.models) == len(self.provider_names) == len(self.model_names)):
+            raise ValueError(
+                "ProviderFallbackChatModel misconfigured: "
+                f"{len(self.models)} models, {len(self.provider_names)} provider "
+                f"names, {len(self.model_names)} model names"
+            )
         last_error: Exception | None = None
         for model, provider_name, model_name in zip(
-            self.models, self.provider_names, self.model_names, strict=False
+            self.models, self.provider_names, self.model_names, strict=True
         ):
             try:
                 message = model.invoke(messages, stop=stop, **kwargs)

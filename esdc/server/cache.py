@@ -10,9 +10,9 @@ import json
 from typing import Any
 
 # JSON parsing cache
-# Key: (args_str_hash, args_str)
+# Key: args_str
 # Value: parsed dict
-_json_cache: dict[tuple[str, str], dict[str, Any]] = {}
+_json_cache: dict[str, dict[str, Any]] = {}
 
 # Cache statistics for JSON parsing cache
 _json_cache_hits: int = 0
@@ -80,7 +80,7 @@ def get_parsed_json(args_str: str) -> dict[str, Any]:
     if not args_str:
         return {}
 
-    cache_key = (_hash_json_args(args_str), args_str)
+    cache_key = args_str
 
     if cache_key in _json_cache:
         _json_cache_hits += 1

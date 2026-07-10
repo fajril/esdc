@@ -17,7 +17,6 @@ failing never aborts the batch.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
@@ -28,16 +27,16 @@ from typing import Any
 import fitz
 import ollama
 
+from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.configs import Config
 from esdc.corpus.chunker import chunk_markdown
 from esdc.corpus.extractor import extract_pdf
 from esdc.corpus.metadata import (
     METADATA_PROMPT_IMAGE,
     llm_extract,
-    load_canonical_names,
+    normalize_entity_fields,
     normalize_metadata,
     parse_llm_json,
-    resolve_entity,
 )
 from esdc.corpus.ocr import OllamaVisionOcr
 from esdc.corpus.sidecar import read_sidecar, sidecar_path, write_sidecar
@@ -178,6 +177,7 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
                 "project_name": meta_fields.get("project_name"),
                 "extras": meta_fields.get("extras"),
             }
+            meta = normalize_entity_fields(meta)
             write_sidecar(pdf, meta, result.markdown)
 
             if result.pages_ocr > 0:
@@ -203,11 +203,16 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
 
 def _apply_entity_resolution(
     meta: dict[str, Any],
-    canonical: dict[str, list[str]],
+    resolver: EntityResolver,
     report: CorpusReport,
     name: str,
 ) -> dict[str, Any | None]:
-    """Resolve wk_name/field_name/project_name in-place on `meta`; return raw values."""
+    """Resolve wk_name/field_name/project_name in-place on `meta`; return raw values.
+
+    Input can be a list of names (e.g. ["ARUNG", "NOWERA"]) or a single string.
+    Stores all matches with confidence >= 0.8.
+    """
+    min_confidence = 0.8
     raw_entities: dict[str, Any | None] = {}
     for key in ENTITY_FIELDS:
         raw = meta.get(key)
@@ -215,14 +220,40 @@ def _apply_entity_resolution(
         if raw is None:
             meta[key] = None
             continue
-        resolved, conf = resolve_entity(raw, canonical.get(key, []))
-        meta[key] = resolved
-        if conf == 0.0:
-            report.warnings.append(f"{name}: {key} '{raw}' unresolved")
-        elif conf < 1.0:
-            report.warnings.append(
-                f"{name}: {key} '{raw}' -> '{resolved}' (confidence {conf})"
-            )
+
+        # Normalize to list for uniform handling
+        raw_list = raw if isinstance(raw, list) else [raw]
+        all_resolved: list[str] = []
+        all_warnings: list[str] = []
+
+        for raw_name in raw_list:
+            if not raw_name:
+                continue
+            result = resolver.resolve(str(raw_name))
+            if result["status"] != "success" or not result["entities"]:
+                all_warnings.append(f"{key} '{raw_name}' unresolved")
+                continue
+            # Find matches for this specific field type with sufficient confidence
+            matches = [
+                e for e in result["entities"]
+                if e.get("entity_type") == key
+                and e.get("confidence", 0) >= min_confidence
+            ]
+            if matches:
+                for m in matches:
+                    if m["name"] not in all_resolved:
+                        all_resolved.append(m["name"])
+                    if m["confidence"] < 1.0:
+                        all_warnings.append(
+                            f"{key} '{raw_name}' -> '{m['name']}' "
+                            f"(confidence {m['confidence']})"
+                        )
+            else:
+                all_warnings.append(f"{key} '{raw_name}' unresolved")
+
+        meta[key] = all_resolved if all_resolved else None
+        for w in all_warnings:
+            report.warnings.append(f"{name}: {w}")
     return raw_entities
 
 
@@ -252,8 +283,9 @@ def run_commit(
     store = CorpusStore()
     any_processed = False
     try:
-        store.ensure_tables()  # also needed to reach the conn for canonical names
-        canonical = load_canonical_names(store._get_connection())
+        # also needed to reach the conn for canonical names
+        store.ensure_tables(validate_model=True)
+        resolver = EntityResolver(db=store._get_connection())
 
         for sc in sidecars:
             name = sc.name
@@ -271,8 +303,9 @@ def run_commit(
                 if value is not None:
                     meta[key] = value
             meta = normalize_metadata(meta)
+            meta = normalize_entity_fields(meta)
 
-            raw_entities = _apply_entity_resolution(meta, canonical, report, name)
+            raw_entities = _apply_entity_resolution(meta, resolver, report, name)
 
             file_hash = meta.get("file_hash")
             if not file_hash:
@@ -382,20 +415,18 @@ def run_status(paths: list[Path]) -> list[dict[str, str]]:
 def run_reembed() -> CorpusReport:
     """Rebuild chunk embeddings for every document with the current embedder.
 
-    ``CorpusStore.ensure_tables`` raises ValueError when the configured
-    embedding model no longer matches ``corpus_meta`` — that raise is
-    exactly the situation this command exists to fix, so it is expected
-    and suppressed here (its table-creation side effect still runs first,
-    so a fresh/empty store is initialized fine too). ``set_meta`` then
-    pins the new model/dim, recreating document_chunks if the dimension
-    changed, and every document's chunks are regenerated from its stored
-    markdown.
+    ``CorpusStore.ensure_tables`` (default ``validate_model=False``)
+    initializes a fresh store or, if tables already exist, just reads the
+    pinned model/dim from ``corpus_meta`` without raising on a mismatch —
+    that mismatch is exactly the situation this command exists to fix.
+    ``set_meta`` then re-pins the new model/dim, recreating
+    document_chunks if the dimension changed, and every document's chunks
+    are regenerated from its stored markdown.
     """
     report = CorpusReport()
     store = CorpusStore()
     try:
-        with contextlib.suppress(ValueError):
-            store.ensure_tables()
+        store.ensure_tables()
 
         new_model = store._embedder.model
         new_dim = len(store._embedder.generate_embedding("test"))

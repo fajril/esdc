@@ -4,7 +4,9 @@ import base64
 import hashlib
 from unittest.mock import patch
 
-from esdc.auth.oauth import generate_pkce_pair
+import pytest
+
+from esdc.auth.oauth import CallbackHandler, _record_callback, generate_pkce_pair
 
 
 def test_pkce_challenge_is_local_s256_of_verifier():
@@ -42,3 +44,70 @@ def test_token_requests_have_timeout():
         oauth.exchange_code_for_tokens("dummy-code", "dummy-verifier")
         _, kwargs = mock_post.call_args
         assert kwargs.get("timeout"), "exchange_code_for_tokens missing timeout"
+
+
+def test_record_callback_captures_code_and_state():
+    CallbackHandler.auth_code = None
+    CallbackHandler.state = None
+    CallbackHandler.error = None
+
+    _record_callback({"code": ["abc123"], "state": ["xyz789"]})
+    assert CallbackHandler.auth_code == "abc123"
+    assert CallbackHandler.state == "xyz789"
+
+
+def test_start_oauth_flow_rejects_state_mismatch(monkeypatch):
+    from esdc.auth import oauth
+
+    class _FakeServer:
+        def handle_request(self):
+            CallbackHandler.auth_code = "attacker-code"
+            CallbackHandler.state = "attacker-state"  # != generated state
+
+    monkeypatch.setattr(oauth, "start_callback_server", lambda: _FakeServer())
+    monkeypatch.setattr(oauth.webbrowser, "open", lambda url: True)
+
+    with pytest.raises(RuntimeError, match="state"):
+        oauth.start_oauth_flow()
+
+
+def test_error_page_escapes_html():
+    """Reflected error param must be HTML-escaped (XSS)."""
+    import html as html_mod
+
+    from esdc.auth.oauth import _render_error_page
+
+    page = _render_error_page("<script>alert(1)</script>")
+    assert "<script>" not in page
+    assert html_mod.escape("<script>alert(1)</script>") in page
+
+
+def test_tokens_do_not_contain_code_verifier(monkeypatch):
+    from esdc.auth import oauth
+
+    class _FakeServer:
+        expected_state: str | None = None
+
+        def handle_request(self):
+            CallbackHandler.auth_code = "good-code"
+            CallbackHandler.state = _FakeServer.expected_state
+
+    real_urlsafe = oauth.secrets.token_urlsafe
+
+    def capture_state(n=16):
+        val = real_urlsafe(n)
+        if n == 16:
+            _FakeServer.expected_state = val
+        return val
+
+    monkeypatch.setattr(oauth.secrets, "token_urlsafe", capture_state)
+    monkeypatch.setattr(oauth, "start_callback_server", lambda: _FakeServer())
+    monkeypatch.setattr(oauth.webbrowser, "open", lambda url: True)
+    monkeypatch.setattr(
+        oauth,
+        "exchange_code_for_tokens",
+        lambda code, verifier: {"access_token": "t", "expires_in": 3600},
+    )
+
+    tokens = oauth.start_oauth_flow()
+    assert "code_verifier" not in tokens

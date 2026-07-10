@@ -9,6 +9,23 @@ from esdc.corpus.extractor import ExtractionResult
 from esdc.corpus.sidecar import read_sidecar, sidecar_path, write_sidecar
 from esdc.corpus.store import CorpusStore
 
+
+class FakeEntityResolver:
+    """Stand-in for EntityResolver that returns no matches by default."""
+
+    def __init__(self, db=None, matches=None):
+        self._matches = matches or {}
+
+    def resolve(self, query):
+        # Return first match for any key that contains the query
+        for key, match in self._matches.items():
+            if key.lower() in query.lower():
+                return {
+                    "status": "success",
+                    "entities": [match],
+                }
+        return {"status": "failed", "entities": []}
+
 DEFAULT_CFG = {
     "chunk_size": 500,
     "chunk_overlap": 50,
@@ -121,6 +138,15 @@ def make_store(tmp_path: Path, embedder=None, db_name: str = "corpus.duckdb") ->
 
 def patch_store_factory(monkeypatch, store: CorpusStore) -> None:
     monkeypatch.setattr(pipeline, "CorpusStore", lambda *a, **kw: store)
+
+
+def patch_entity_resolver(monkeypatch, matches=None):
+    """Patch EntityResolver in pipeline to use FakeEntityResolver."""
+    monkeypatch.setattr(
+        pipeline,
+        "EntityResolver",
+        lambda db: FakeEntityResolver(db=db, matches=matches),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -314,7 +340,7 @@ def test_commit_pending_review_skipped_reviewed_ingested(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
-    monkeypatch.setattr(pipeline, "load_canonical_names", lambda conn: {})
+    patch_entity_resolver(monkeypatch)
 
     make_sidecar(tmp_path, "pending.pdf", reviewed=False, file_hash="aa" * 32)
     make_sidecar(tmp_path, "ready.pdf", reviewed=True, file_hash="bb" * 32)
@@ -331,7 +357,7 @@ def test_commit_dedupe_and_force(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
-    monkeypatch.setattr(pipeline, "load_canonical_names", lambda conn: {})
+    patch_entity_resolver(monkeypatch)
 
     make_sidecar(
         tmp_path,
@@ -359,7 +385,7 @@ def test_commit_cli_override_beats_frontmatter(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
-    monkeypatch.setattr(pipeline, "load_canonical_names", lambda conn: {})
+    patch_entity_resolver(monkeypatch)
 
     file_hash = "dd" * 32
     make_sidecar(tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, doc_type="mom")
@@ -375,13 +401,19 @@ def test_commit_entity_resolution(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
-    monkeypatch.setattr(
-        pipeline,
-        "load_canonical_names",
-        lambda conn: {
-            "wk_name": ["Rokan"],
-            "field_name": ["Duri"],
-            "project_name": ["POD Duri"],
+    patch_entity_resolver(
+        monkeypatch,
+        matches={
+            "Rokan": {
+                "entity_type": "wk_name",
+                "name": "Rokan",
+                "confidence": 1.0,
+            },
+            "Duri": {
+                "entity_type": "field_name",
+                "name": "Duri",
+                "confidence": 0.8,
+            },
         },
     )
 
@@ -403,7 +435,7 @@ def test_commit_entity_resolution(tmp_path, monkeypatch):
     assert any("project_name" in w and "unresolved" in w for w in report.warnings)
 
     doc = store.get_document(file_hash[:16])
-    assert doc["wk_name"] == "Rokan"
+    assert doc["wk_name"] == ["Rokan"]
     assert doc["project_name"] is None
     store.close()
 
@@ -412,7 +444,7 @@ def test_commit_dry_run_writes_nothing(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
-    monkeypatch.setattr(pipeline, "load_canonical_names", lambda conn: {})
+    patch_entity_resolver(monkeypatch)
 
     insert_calls = []
     orig_insert = store.insert_document
@@ -437,7 +469,7 @@ def test_commit_bad_sidecar_isolated(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
-    monkeypatch.setattr(pipeline, "load_canonical_names", lambda conn: {})
+    patch_entity_resolver(monkeypatch)
 
     bad = tmp_path / "bad.corpus.md"
     bad.write_text("no frontmatter at all")
@@ -553,7 +585,7 @@ def test_run_commit_fails_sidecar_missing_file_hash(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
-    monkeypatch.setattr(pipeline, "load_canonical_names", lambda conn: {})
+    patch_entity_resolver(monkeypatch)
 
     # Write a sidecar WITHOUT file_hash in its frontmatter
     pdf = tmp_path / "nohash.pdf"
