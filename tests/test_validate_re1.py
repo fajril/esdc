@@ -1025,11 +1025,13 @@ class TestRe1Registry:
         all_rules = get_all_rules()
         re1_count = len(get_rules_by_group("RE1"))
         re0_count = len(get_rules_by_group("RE0"))
+        re2_count = len(get_rules_by_group("RE2"))
+        re5_count = len(get_rules_by_group("RE5"))
         re9_count = len(get_rules_by_group("RE9"))
         assert re1_count == 32
         assert re0_count == 66
         assert re9_count == 1
-        assert len(all_rules) == re0_count + re1_count + re9_count
+        assert len(all_rules) == re0_count + re1_count + re2_count + re5_count + re9_count
 
 
 # ---------------------------------------------------------------------------

@@ -11,12 +11,14 @@ class TestWKEnrichment:
         entities = [
             {
                 "type": "Field",
+                "entity_type": "field_name",
                 "filter_column": "field_name",
                 "name": "Tambora",
                 "confidence": 0.9,
             },
             {
                 "type": "WorkingArea",
+                "entity_type": "wk_name",
                 "filter_column": "wk_name",
                 "name": "Mahakam",
                 "confidence": 1.0,
@@ -35,6 +37,7 @@ class TestWKEnrichment:
         entities = [
             {
                 "type": "Field",
+                "entity_type": "field_name",
                 "filter_column": "field_name",
                 "name": "Duri",
                 "confidence": 0.9,

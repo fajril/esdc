@@ -207,7 +207,7 @@ class TestBuildOnstreamBeforeReportYearSql:
     def test_year_extraction_and_comparison(self):
         sql = build_onstream_before_report_year_sql()
         assert "regexp_matches" in sql
-        assert ">= report_year" in sql
+        assert "> report_year" in sql
 
     def test_filters_empty_and_unparseable(self):
         sql = build_onstream_before_report_year_sql()
