@@ -393,7 +393,7 @@ def test_resolve_text_caller_main_without_provider_returns_none(monkeypatch):
 
 def test_resolve_text_caller_ollama_name(monkeypatch):
     sentinel = object()
-    monkeypatch.setattr(pipeline, "_text_llm_caller", lambda model: sentinel)
+    monkeypatch.setattr(pipeline, "_text_llm_caller", lambda model, host=None: sentinel)
     assert pipeline._resolve_text_caller("qwen3:8b") is sentinel
 
 
@@ -456,7 +456,7 @@ def test_extract_cleanup_applied_and_warned(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "_resolve_text_caller",
-        lambda spec: fake_caller if spec == "main" else None,
+        lambda spec, host=None: fake_caller if spec == "main" else None,
     )
     report, body = _extract_body(
         tmp_path,
@@ -487,7 +487,7 @@ def test_extract_cleanup_guard_rejection_warned(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "_resolve_text_caller",
-        lambda spec: bad_caller if spec == "main" else None,
+        lambda spec, host=None: bad_caller if spec == "main" else None,
     )
     report, body = _extract_body(
         tmp_path,
@@ -847,3 +847,34 @@ def test_commit_shows_progress_bar(tmp_path, monkeypatch):
     assert captured[0]["disable"] is None
     assert captured[0]["unit"] == "doc"
     store.close()
+
+
+def test_extract_passes_ollama_host_to_ocr_and_text_caller(tmp_path, monkeypatch):
+    cfg = dict(DEFAULT_CFG)
+    cfg["ollama_host"] = "http://gpu-box:11434"
+    cfg["metadata_model"] = "qwen3:8b"
+    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
+
+    ocr_kwargs = {}
+    monkeypatch.setattr(
+        pipeline,
+        "OllamaVisionOcr",
+        lambda *a, **kw: (ocr_kwargs.update(kw), FakeOcr(True))[1],
+    )
+    caller_hosts = []
+    monkeypatch.setattr(
+        pipeline,
+        "_text_llm_caller",
+        lambda model, host=None: caller_hosts.append(host) or (lambda p: "{}"),
+    )
+
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    pipeline.run_extract([pdf])
+    assert ocr_kwargs.get("host") == "http://gpu-box:11434"
+    assert caller_hosts == ["http://gpu-box:11434"]

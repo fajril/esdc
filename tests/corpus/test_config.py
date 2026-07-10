@@ -31,3 +31,11 @@ def test_corpus_keys_documented():
     assert "corpus.metadata_model" in KEY_DESCRIPTIONS
     assert "corpus.cleanup_model" in KEY_DESCRIPTIONS
     assert "corpus.min_image_area" in KEY_DESCRIPTIONS
+
+
+def test_corpus_ollama_host_default_and_documented(monkeypatch):
+    from esdc.configs import KEY_DESCRIPTIONS
+
+    monkeypatch.setattr(Config, "_load_config", classmethod(lambda cls: None))
+    assert Config.get_corpus_config()["ollama_host"] == ""
+    assert "corpus.ollama_host" in KEY_DESCRIPTIONS

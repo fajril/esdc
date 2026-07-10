@@ -86,9 +86,9 @@ def _collect_sidecars(paths: list[Path]) -> list[Path]:
     return sorted(found)
 
 
-def _text_llm_caller(model: str) -> Any:
+def _text_llm_caller(model: str, host: str | None = None) -> Any:
     """A prompt->text callable backed by a text-only Ollama chat model."""
-    client = ollama.Client()
+    client = ollama.Client(host=host)
 
     def call(prompt: str) -> str:
         response = client.chat(
@@ -101,18 +101,21 @@ def _text_llm_caller(model: str) -> Any:
     return call
 
 
-def _resolve_text_caller(model_spec: str | None) -> Any | None:
+def _resolve_text_caller(
+    model_spec: str | None, host: str | None = None
+) -> Any | None:
     """Turn a corpus model config string into a prompt->text callable.
 
     "" / None -> None (feature off). "main" -> the default chat provider
     (may be a cloud API — sends document text off-machine; user opt-in).
-    Anything else -> a local Ollama model. Returns None when "main" is
-    requested but no provider is configured or construction fails.
+    Anything else -> an Ollama model on `host` (default local daemon).
+    Returns None when "main" is requested but no provider is configured
+    or construction fails.
     """
     if not model_spec:
         return None
     if model_spec != "main":
-        return _text_llm_caller(model_spec)
+        return _text_llm_caller(model_spec, host)
 
     provider_config = Config.get_provider_config()
     if not provider_config:
@@ -169,17 +172,20 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
     cfg = Config.get_corpus_config()
     pdfs = _collect_pdfs(paths)
 
-    ocr = OllamaVisionOcr(cfg["ocr_model"], num_ctx=cfg.get("num_ctx", 16384))
+    ollama_host = cfg.get("ollama_host") or None
+    ocr = OllamaVisionOcr(
+        cfg["ocr_model"], num_ctx=cfg.get("num_ctx", 16384), host=ollama_host
+    )
     ocr_client = ocr if ocr.health_check() else None
 
-    metadata_caller = _resolve_text_caller(cfg.get("metadata_model"))
+    metadata_caller = _resolve_text_caller(cfg.get("metadata_model"), ollama_host)
     if cfg.get("metadata_model") and metadata_caller is None:
         report.warnings.append(
             f"metadata_model '{cfg['metadata_model']}' unavailable — "
             "falling back to image-based metadata prefill"
         )
 
-    cleanup_caller = _resolve_text_caller(cfg.get("cleanup_model"))
+    cleanup_caller = _resolve_text_caller(cfg.get("cleanup_model"), ollama_host)
     if cfg.get("cleanup_model") and cleanup_caller is None:
         report.warnings.append(
             f"cleanup_model '{cfg['cleanup_model']}' unavailable — "

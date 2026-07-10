@@ -44,3 +44,31 @@ def test_health_check_false():
             raise ConnectionError("ollama down")
 
     assert OllamaVisionOcr(model="m", client=Broken()).health_check() is False
+
+
+def test_remote_host_passed_to_client(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, host=None):
+            captured["host"] = host
+
+    import esdc.corpus.ocr as ocr_mod
+
+    monkeypatch.setattr(ocr_mod.ollama, "Client", FakeClient)
+    OllamaVisionOcr(model="glm-ocr", host="http://llm-engine.sardine-python.ts.net:11434")
+    assert captured["host"] == "http://llm-engine.sardine-python.ts.net:11434"
+
+
+def test_no_host_uses_default_client(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, host=None):
+            captured["host"] = host
+
+    import esdc.corpus.ocr as ocr_mod
+
+    monkeypatch.setattr(ocr_mod.ollama, "Client", FakeClient)
+    OllamaVisionOcr(model="glm-ocr")
+    assert captured["host"] is None

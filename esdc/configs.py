@@ -51,6 +51,10 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "name to override, or '' = off); guarded — original text kept if "
         "the model invents numbers or changes length grossly"
     ),
+    "corpus.ollama_host": (
+        "Ollama server URL for corpus OCR and Ollama-named corpus models "
+        "('' = local daemon, e.g. http://gpu-box:11434 for a remote server)"
+    ),
     "corpus.chunk_size": "Max characters per corpus chunk",
     "corpus.chunk_overlap": "Characters carried over between corpus chunks",
     "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
@@ -814,6 +818,9 @@ class Config:
         "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
         "min_chars_per_page": 50,  # text-layer chars below which a page counts as scanned  # noqa: E501
         "min_image_area": 0.05,  # embedded-image area (fraction of page) below which images are ignored  # noqa: E501
+        # ollama_host: Ollama server for corpus OCR + Ollama-named text
+        # models; "" = local daemon (http://127.0.0.1:11434)
+        "ollama_host": "",
     }
 
     @classmethod

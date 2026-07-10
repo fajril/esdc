@@ -30,9 +30,10 @@ class OllamaVisionOcr:
         model: str,
         client: ollama.Client | None = None,
         num_ctx: int = 16384,
+        host: str | None = None,
     ) -> None:
         self.model = model
-        self._client = client or ollama.Client()
+        self._client = client or ollama.Client(host=host)
         self._options = {"temperature": 0, "num_ctx": num_ctx}
 
     def query_image(self, png_bytes: bytes, prompt: str) -> str:
