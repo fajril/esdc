@@ -12,8 +12,8 @@ rejected.
 import re
 from collections.abc import Callable
 
-CLEANUP_PROMPT = """You are reformatting one page of an Indonesian oil & gas official document \
-that was auto-extracted from PDF to markdown. Fix ONLY formatting:
+CLEANUP_PROMPT = """You are reformatting one page of an Indonesian oil & gas \
+official document that was auto-extracted from PDF to markdown. Fix ONLY formatting:
 - correct heading levels (# only for real top-level sections)
 - merge lines that were hard-wrapped mid-sentence
 - fix tables: one line per row, remove stray <br> word-wraps inside cells
