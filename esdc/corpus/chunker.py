@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 
 HEADING_RE = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
-PAGE_MARKER_RE = re.compile(r"<!--\s*page\s+\d+:\s*\w+\s*-->\n?")
+PAGE_MARKER_RE = re.compile(r"<!--\s*page\s+\d+(?:\s+image\s+\d+)?:\s*\w+\s*-->\n?")
 
 
 @dataclass

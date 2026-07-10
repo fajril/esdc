@@ -85,3 +85,15 @@ def test_chunk_indexes_are_consecutive():
 def test_overlap_must_be_smaller_than_chunk_size():
     with pytest.raises(ValueError):
         chunk_markdown("# A\nbody", chunk_size=1000, overlap=1000)
+
+
+def test_image_ocr_markers_stripped():
+    md = (
+        "<!-- page 1: native -->\n# Judul\nteks asli\n\n"
+        "<!-- page 1 image 1: llm_ocr -->\n| A | B |\n|---|---|\n| 1 | 2 |"
+    )
+    chunks = chunk_markdown(md, chunk_size=500, overlap=50)
+    joined = " ".join(c.text for c in chunks)
+    assert "image 1" not in joined
+    assert "page 1" not in joined
+    assert "| 1 | 2 |" in joined
