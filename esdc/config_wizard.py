@@ -140,6 +140,36 @@ def _fetch_models(provider_type: str, **kwargs) -> list[str]:
     return [default_model] if default_model else []
 
 
+_CORPUS_MODEL_KEYS = (
+    "corpus.metadata_model",
+    "corpus.cleanup_model",
+    "corpus.ocr_model",
+)
+
+
+def _corpus_model_choices(key: str) -> list[questionary.Choice]:
+    """Selectable models for a corpus.* model key.
+
+    metadata/cleanup keys offer 'main' (default chat provider) and an
+    off/fallback empty value; ocr_model is vision-only so it offers
+    neither. Local Ollama models are appended when the daemon answers;
+    'custom…' always escapes to free-text entry.
+    """
+    choices: list[questionary.Choice] = []
+    if key == "corpus.metadata_model":
+        choices.append(questionary.Choice("main — default chat provider", value="main"))
+        choices.append(
+            questionary.Choice("(image-based prefill via ocr_model)", value="")
+        )
+    elif key == "corpus.cleanup_model":
+        choices.append(questionary.Choice("main — default chat provider", value="main"))
+        choices.append(questionary.Choice("(disabled)", value=""))
+    for model in _fetch_models("ollama"):
+        choices.append(questionary.Choice(f"{model} (ollama)", value=model))
+    choices.append(questionary.Choice("custom…", value="__custom__"))
+    return choices
+
+
 def _resolve_default_field(provider_type: str, field: str) -> str:
     """Return a sensible default value for a provider field."""
     provider_class = PROVIDER_CLASSES.get(provider_type)
@@ -220,7 +250,28 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
             return None
         return selected == "True"
 
-    # 2. Enum key?
+    # 2. Corpus model key? Offer main / local Ollama models / custom.
+    if key in _CORPUS_MODEL_KEYS:
+        choices = _corpus_model_choices(key)
+        default_choice = next(
+            (c for c in choices if c.value == str(current)), None
+        )
+        selected = questionary.select(
+            f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
+            f"[{_VALUE_COLOR}]{KEY_DESCRIPTIONS.get(key, '')}[/{_VALUE_COLOR}]",
+            choices=choices,
+            default=default_choice,
+            style=_WIZARD_STYLE,
+        ).ask()
+        if selected == "__custom__":
+            return questionary.text(
+                f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — model name:",
+                default=str(current),
+                style=_WIZARD_STYLE,
+            ).ask()
+        return selected
+
+    # 3. Enum key?
     if key in ENUM_CHOICES:
         choices = ENUM_CHOICES[key]
         default = str(current) if str(current) in choices else choices[0]
@@ -233,7 +284,7 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
         ).ask()
         return selected
 
-    # 3. Integer key?
+    # 4. Integer key?
     if key in Config.INT_KEYS:
         default_str = str(current)
         new_str = questionary.text(
@@ -244,7 +295,7 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
         ).ask()
         return int(new_str) if new_str is not None else None
 
-    # 4. Sensitive key?
+    # 5. Sensitive key?
     if any(s in key for s in SENSITIVE_KEYS):
         new = questionary.password(
             f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
@@ -253,7 +304,7 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
         ).ask()
         return new
 
-    # 5. Database / path key?
+    # 6. Database / path key?
     if key == "database_path":
         default = str(current)
         new = questionary.path(
@@ -265,7 +316,7 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
         ).ask()
         return new
 
-    # 6. Generic text key
+    # 7. Generic text key
     default = str(current)
     new = questionary.text(
         f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "

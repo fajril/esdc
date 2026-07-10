@@ -361,3 +361,48 @@ class TestGeneralConfigListsCorpusKeys:
         assert "corpus.metadata_model" in values
         assert "corpus.cleanup_model" in values
         assert "corpus.ocr_model" in values
+
+
+class TestCorpusModelPicker:
+    """Corpus model keys get a select of main/ollama/custom, not a text box."""
+
+    @patch("esdc.config_wizard._fetch_models", return_value=["glm-ocr", "qwen3:8b"])
+    def test_choices_metadata_model(self, mock_fetch):
+        from esdc.config_wizard import _corpus_model_choices
+
+        values = [c.value for c in _corpus_model_choices("corpus.metadata_model")]
+        assert values[0] == "main"
+        assert "" in values            # image-based prefill fallback
+        assert "glm-ocr" in values and "qwen3:8b" in values
+        assert "__custom__" in values
+
+    @patch("esdc.config_wizard._fetch_models", return_value=["glm-ocr"])
+    def test_choices_ocr_model_has_no_main(self, mock_fetch):
+        from esdc.config_wizard import _corpus_model_choices
+
+        values = [c.value for c in _corpus_model_choices("corpus.ocr_model")]
+        assert "main" not in values    # vision OCR can't route through chat provider
+        assert "glm-ocr" in values and "__custom__" in values
+
+    @patch("esdc.config_wizard._fetch_models", return_value=["qwen3:8b"])
+    @patch("esdc.config_wizard.questionary.select")
+    def test_select_main(self, mock_select, mock_fetch):
+        mock_select.return_value.ask.return_value = "main"
+        result = _prompt_for_config_value("corpus.metadata_model", "")
+        assert result == "main"
+
+    @patch("esdc.config_wizard._fetch_models", return_value=["qwen3:8b"])
+    @patch("esdc.config_wizard.questionary.text")
+    @patch("esdc.config_wizard.questionary.select")
+    def test_custom_falls_through_to_text(self, mock_select, mock_text, mock_fetch):
+        mock_select.return_value.ask.return_value = "__custom__"
+        mock_text.return_value.ask.return_value = "my-remote-model"
+        result = _prompt_for_config_value("corpus.cleanup_model", "main")
+        assert result == "my-remote-model"
+
+    @patch("esdc.config_wizard._fetch_models", return_value=[])
+    @patch("esdc.config_wizard.questionary.select")
+    def test_ollama_down_still_offers_main_and_custom(self, mock_select, mock_fetch):
+        mock_select.return_value.ask.return_value = "main"
+        result = _prompt_for_config_value("corpus.metadata_model", "main")
+        assert result == "main"
