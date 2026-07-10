@@ -99,19 +99,49 @@ def _text_llm_caller(model: str) -> Any:
     return call
 
 
+def _resolve_text_caller(model_spec: str | None) -> Any | None:
+    """Turn a corpus model config string into a prompt->text callable.
+
+    "" / None -> None (feature off). "main" -> the default chat provider
+    (may be a cloud API — sends document text off-machine; user opt-in).
+    Anything else -> a local Ollama model. Returns None when "main" is
+    requested but no provider is configured or construction fails.
+    """
+    if not model_spec:
+        return None
+    if model_spec != "main":
+        return _text_llm_caller(model_spec)
+
+    provider_config = Config.get_provider_config()
+    if not provider_config:
+        return None
+    try:
+        import esdc.providers as providers
+
+        llm = providers.create_llm_from_config(provider_config)
+    except Exception as e:
+        logger.warning("[Corpus] main-model caller unavailable: %s", e)
+        return None
+
+    def call(prompt: str) -> str:
+        return str(llm.invoke(prompt).content)
+
+    return call
+
+
 def _prefill_metadata(
     pdf: Path,
     markdown: str,
+    text_caller: Any | None,
     ocr_client: Any | None,
     cfg: dict[str, Any],
     report: CorpusReport,
     name: str,
 ) -> dict[str, Any]:
     """Best-effort metadata pre-fill. Never raises: failure is a warning."""
-    metadata_model = cfg.get("metadata_model")
     try:
-        if metadata_model:
-            return llm_extract(markdown, _text_llm_caller(metadata_model))
+        if text_caller is not None:
+            return llm_extract(markdown, text_caller)
         if ocr_client is not None:
             doc = fitz.open(str(pdf))
             try:
@@ -140,6 +170,13 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
     ocr = OllamaVisionOcr(cfg["ocr_model"], num_ctx=cfg.get("num_ctx", 16384))
     ocr_client = ocr if ocr.health_check() else None
 
+    metadata_caller = _resolve_text_caller(cfg.get("metadata_model"))
+    if cfg.get("metadata_model") and metadata_caller is None:
+        report.warnings.append(
+            f"metadata_model '{cfg['metadata_model']}' unavailable — "
+            "falling back to image-based metadata prefill"
+        )
+
     # (name, pages_ocr, page_count) collected so the final report can be
     # sorted by OCR ratio DESC once, instead of per-file.
     entries: list[tuple[str, int, int]] = []
@@ -160,7 +197,7 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
                 cfg["min_image_area"],
             )
             meta_fields = _prefill_metadata(
-                pdf, result.markdown, ocr_client, cfg, report, name
+                pdf, result.markdown, metadata_caller, ocr_client, cfg, report, name
             )
 
             meta = {

@@ -356,6 +356,79 @@ def test_extract_no_metadata_model_no_ocr_skips_with_warning(tmp_path, monkeypat
 
 
 # --------------------------------------------------------------------------
+# _resolve_text_caller
+# --------------------------------------------------------------------------
+
+
+class FakeLLM:
+    def invoke(self, prompt):
+        class R:
+            content = '{"doc_type": "mom"}'
+
+        return R()
+
+
+def test_resolve_text_caller_empty_returns_none():
+    assert pipeline._resolve_text_caller("") is None
+    assert pipeline._resolve_text_caller(None) is None
+
+
+def test_resolve_text_caller_main_uses_provider(monkeypatch):
+    import esdc.providers as providers
+
+    monkeypatch.setattr(
+        pipeline.Config, "get_provider_config", lambda: {"provider_type": "openai"}
+    )
+    monkeypatch.setattr(providers, "create_llm_from_config", lambda cfg: FakeLLM())
+
+    caller = pipeline._resolve_text_caller("main")
+    assert caller is not None
+    assert caller("extract metadata") == '{"doc_type": "mom"}'
+
+
+def test_resolve_text_caller_main_without_provider_returns_none(monkeypatch):
+    monkeypatch.setattr(pipeline.Config, "get_provider_config", lambda: None)
+    assert pipeline._resolve_text_caller("main") is None
+
+
+def test_resolve_text_caller_ollama_name(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(pipeline, "_text_llm_caller", lambda model: sentinel)
+    assert pipeline._resolve_text_caller("qwen3:8b") is sentinel
+
+
+def test_prefill_metadata_main_model(monkeypatch, tmp_path):
+    """metadata_model='main' routes prefill through the provider LLM."""
+    import esdc.providers as providers
+
+    monkeypatch.setattr(
+        pipeline.Config, "get_provider_config", lambda: {"provider_type": "openai"}
+    )
+    monkeypatch.setattr(providers, "create_llm_from_config", lambda cfg: FakeLLM())
+
+    cfg = dict(DEFAULT_CFG)
+    cfg["metadata_model"] = "main"
+    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
+    # patch_seams stubs llm_extract; restore the real one to prove the
+    # provider caller's JSON flows through parsing.
+    from esdc.corpus.metadata import llm_extract as real_llm_extract
+
+    monkeypatch.setattr(pipeline, "llm_extract", real_llm_extract)
+
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf])
+    assert report.failed == {}
+    meta, _body = read_sidecar(tmp_path / "surat.corpus.md")
+    assert meta["doc_type"] == "mom"
+
+
+# --------------------------------------------------------------------------
 # run_commit
 # --------------------------------------------------------------------------
 
