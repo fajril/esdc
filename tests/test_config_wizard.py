@@ -341,3 +341,23 @@ class TestConfigFlows:
 
         mock_flat.return_value = {}
         _show_config_flow()
+
+
+class TestGeneralConfigListsCorpusKeys:
+    """Corpus keys appear in the edit list even when absent from config.yaml."""
+
+    @patch("esdc.config_wizard._select_with_back", return_value="__back__")
+    @patch("esdc.config_wizard.Config.get_all_config_flat")
+    def test_corpus_defaults_merged(self, mock_flat, mock_select):
+        from esdc.config_wizard import _edit_general_config_flow
+
+        mock_flat.return_value = {"api_url": "http://x"}  # no corpus.* in file
+        _edit_general_config_flow()
+
+        choices = mock_select.call_args.kwargs.get("choices") or (
+            mock_select.call_args.args[1] if len(mock_select.call_args.args) > 1 else []
+        )
+        values = [getattr(c, "value", None) for c in choices]
+        assert "corpus.metadata_model" in values
+        assert "corpus.cleanup_model" in values
+        assert "corpus.ocr_model" in values

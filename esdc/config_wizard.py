@@ -762,6 +762,12 @@ def _edit_general_config_flow() -> None:
     """Edit general (non-provider) configuration."""
     while True:
         flat = Config.get_all_config_flat()
+
+        # Corpus settings live behind defaults; surface them even when the
+        # config file has no corpus section yet.
+        for k, v in Config.CORPUS_DEFAULTS.items():
+            flat.setdefault(f"corpus.{k}", v)
+
         if not flat:
             rich_print(f"[{_WARNING_COLOR}]No configuration found.[/{_WARNING_COLOR}]")
             break
