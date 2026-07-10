@@ -33,6 +33,7 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "logging.agent.level": "Log level for the agent component",
     "logging.chat.level": "Log level for the chat component",
     "semantic_search.embedding_batch_size": ("Number of embeddings per batch (10-500)"),
+    "embedding_host": "Ollama host URL for embeddings (default: localhost)",
     "corpus.ocr_model": "Ollama vision model used for OCR of scanned pages",
     "corpus.metadata_model": (
         "Optional text LLM for metadata extraction; empty uses ocr_model on page 1"
@@ -687,6 +688,25 @@ class Config:
         semantic_config = config.get("semantic_search", {})
         return semantic_config.get("embedding_batch_size", 100)
 
+    @classmethod
+    def get_embedding_host(cls) -> str | None:
+        """Get embedding service host URL from config.
+
+        Priority:
+        1. ESDC_EMBEDDING_HOST environment variable
+        2. config.yaml: embedding_host
+        3. None (uses localhost Ollama default)
+
+        Returns:
+            Host URL string or None for localhost default
+        """
+        env_host = os.environ.get("ESDC_EMBEDDING_HOST")
+        if env_host:
+            return env_host
+
+        config = cls._load_config() or {}
+        return config.get("embedding_host") or None
+
     CORPUS_DEFAULTS = {
         "chunk_size": 3000,  # max chars per chunk (~750 tokens)
         "chunk_overlap": 300,  # chars carried over between chunks
@@ -856,6 +876,7 @@ class Config:
             "semantic_search": {
                 "embedding_batch_size": 100,
             },
+            "embedding_host": None,
             "corpus": dict(cls.CORPUS_DEFAULTS),
         }
 

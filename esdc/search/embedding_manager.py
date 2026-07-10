@@ -52,6 +52,8 @@ class EmbeddingManager:
             batch_size = Config.get_embedding_batch_size()
         self.batch_size: int = max(1, int(batch_size))
 
+        if host is None:
+            host = Config.get_embedding_host()
         self.model: str = resolved_model
         self._client = ollama.Client(host=host) if host else ollama.Client()
 

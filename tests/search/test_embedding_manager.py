@@ -100,3 +100,33 @@ def test_generate_embeddings_batch_respects_batch_size():
 
         assert len(result) == 5
         assert calls == [2, 2, 1]
+
+
+def test_embedding_manager_reads_host_from_config():
+    """EmbeddingManager should read host from config when not passed explicitly."""
+    with (
+        patch("esdc.search.embedding_manager.ollama.Client") as MockClient,
+        patch("esdc.search.embedding_manager.Config.get_embedding_host") as mock_host,
+        patch("esdc.search.embedding_manager.Config._load_config") as mock_config,
+    ):
+        mock_host.return_value = "http://remote:11434"
+        mock_config.return_value = None
+
+        EmbeddingManager(model="test")
+
+        MockClient.assert_called_with(host="http://remote:11434")
+
+
+def test_embedding_manager_explicit_host_overrides_config():
+    """Explicit host param should override config."""
+    with (
+        patch("esdc.search.embedding_manager.ollama.Client") as MockClient,
+        patch("esdc.search.embedding_manager.Config.get_embedding_host") as mock_host,
+        patch("esdc.search.embedding_manager.Config._load_config") as mock_config,
+    ):
+        mock_host.return_value = "http://config-host:11434"
+        mock_config.return_value = None
+
+        EmbeddingManager(model="test", host="http://explicit:11434")
+
+        MockClient.assert_called_with(host="http://explicit:11434")
