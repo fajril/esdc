@@ -1,9 +1,14 @@
+import contextlib
+import logging
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 # Sensitive key suffixes to mask in the config UI.
 SENSITIVE_KEYS = frozenset({"api_key"})
@@ -634,6 +639,82 @@ class Config:
             config["providers"] = {}
         config["providers"][name] = config_data
         cls._save_config(config)
+
+    @classmethod
+    def persist_provider_oauth(cls, provider_name: str, oauth: dict[str, Any]) -> None:
+        """Persist refreshed OAuth tokens for one provider back to disk.
+
+        OAuth providers may rotate the refresh_token on every refresh. The
+        in-memory ``ProviderConfig.oauth`` dict is updated by the caller
+        immediately after a refresh, but that update is lost on process
+        restart unless it is also written to the config file. This method
+        performs that write.
+
+        Only the named provider's ``oauth`` section is modified; every other
+        key (including other providers) is left untouched. The config file
+        is read fresh from disk (bypassing the in-memory cache) and written
+        back atomically via a temp file + ``os.replace``, with permissions
+        restricted to the owner (0o600) since it may contain access and
+        refresh tokens.
+
+        If the provider is not present in the on-disk config (e.g. it was
+        configured purely via environment variables) or the config file does
+        not exist, this logs a warning and returns without error. Callers
+        should treat persistence failures as non-fatal: refreshing the token
+        in memory must still succeed even if the write to disk fails.
+
+        Args:
+            provider_name: Name of the provider to update (matches
+                ``ProviderConfig.name``).
+            oauth: The refreshed OAuth token dict to store for the provider.
+        """
+        config_file = cls.get_config_file()
+        if not config_file.exists():
+            logger.warning(
+                "Skipping OAuth token persistence for provider '%s': "
+                "config file %s does not exist",
+                provider_name,
+                config_file,
+            )
+            return
+
+        with open(config_file) as f:
+            config = yaml.safe_load(f) or {}
+
+        providers = config.get("providers")
+        if not isinstance(providers, dict) or provider_name not in providers:
+            logger.warning(
+                "Skipping OAuth token persistence: provider '%s' not found "
+                "in config file %s",
+                provider_name,
+                config_file,
+            )
+            return
+
+        provider_entry = providers[provider_name]
+        if not isinstance(provider_entry, dict):
+            provider_entry = {}
+            providers[provider_name] = provider_entry
+        provider_entry["oauth"] = oauth
+
+        config_dir = cls.get_config_dir()
+        fd, tmp_name = tempfile.mkstemp(
+            dir=config_dir, prefix=".config-", suffix=".yaml.tmp"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                yaml.dump(config, f, default_flow_style=False)
+            os.chmod(tmp_name, 0o600)
+            os.replace(tmp_name, config_file)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_name)
+            raise
+
+        # Invalidate rather than assign: _load_config applies
+        # _normalize_database_config() on load, which raw file content
+        # would bypass.
+        cls._config_cache = None
 
     @classmethod
     def get_verify_ssl(cls) -> bool:

@@ -359,3 +359,102 @@ providers:
             with open(config_file) as f:
                 config = yaml.safe_load(f)
             assert config["default_provider"] == "openai"
+
+
+class TestPersistProviderOauth:
+    """Tests for persist_provider_oauth()."""
+
+    def test_persist_provider_oauth_updates_matching_provider_only(self, tmp_path):
+        """Only the named provider's oauth section is updated on disk."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+providers:
+  openai:
+    provider_type: openai
+    model: gpt-4o
+    auth_method: oauth
+    oauth:
+      access_token: old-access
+      refresh_token: old-refresh
+      expires_at: 1
+  ollama:
+    provider_type: ollama
+    base_url: http://localhost:11434
+"""
+            )
+
+            new_oauth = {
+                "access_token": "new-access",
+                "refresh_token": "rotated-refresh",
+                "expires_at": 9999999999,
+            }
+            Config.persist_provider_oauth("openai", new_oauth)
+
+            with open(config_file) as f:
+                config = yaml.safe_load(f)
+
+            assert config["providers"]["openai"]["oauth"] == new_oauth
+            # Other provider fields/config are untouched.
+            assert config["providers"]["openai"]["model"] == "gpt-4o"
+            assert config["providers"]["ollama"] == {
+                "provider_type": "ollama",
+                "base_url": "http://localhost:11434",
+            }
+
+    def test_persist_provider_oauth_writes_file_with_0o600_permissions(
+        self, tmp_path
+    ):
+        """The rewritten config file must not be group/world readable."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+providers:
+  openai:
+    provider_type: openai
+    oauth:
+      access_token: old
+"""
+            )
+            config_file.chmod(0o644)
+
+            Config.persist_provider_oauth("openai", {"access_token": "new"})
+
+            mode = config_file.stat().st_mode & 0o777
+            assert mode == 0o600
+
+    def test_persist_provider_oauth_missing_provider_is_noop(self, tmp_path, caplog):
+        """Unknown provider (e.g. env-only config): log a warning, don't crash."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(
+                """
+providers:
+  openai:
+    provider_type: openai
+    oauth:
+      access_token: old
+"""
+            )
+            original_contents = config_file.read_text()
+
+            with caplog.at_level("WARNING"):
+                Config.persist_provider_oauth("does-not-exist", {"access_token": "x"})
+
+            assert config_file.read_text() == original_contents
+            assert any(
+                "does-not-exist" in record.message for record in caplog.records
+            )
+
+    def test_persist_provider_oauth_missing_config_file_is_noop(
+        self, tmp_path, caplog
+    ):
+        """No config file on disk (e.g. env-only setup): no crash, warn instead."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            with caplog.at_level("WARNING"):
+                Config.persist_provider_oauth("openai", {"access_token": "x"})
+
+            assert not (tmp_path / "config.yaml").exists()
+            assert any("openai" in record.message for record in caplog.records)

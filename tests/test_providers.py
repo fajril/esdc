@@ -439,6 +439,99 @@ class TestOAuthRefreshExpiresAt:
         assert config.oauth["expires_at"] >= int(time.time()) + 3500
 
 
+class TestOAuthRefreshPersistence:
+    """Verify refreshed OAuth tokens are written back to persistent storage.
+
+    A rotated refresh_token must not be kept in memory only.
+    """
+
+    def test_create_llm_persists_refreshed_oauth_tokens(self):
+        """create_llm's refresh path calls Config.persist_provider_oauth."""
+        from esdc.providers.openai import OpenAIProvider
+
+        config = ProviderConfig(
+            name="openai",
+            provider_type="openai",
+            model="gpt-4o",
+            base_url="",
+            api_key="",
+            auth_method="oauth",
+            oauth={"access_token": "old", "refresh_token": "r1", "expires_at": 1},
+        )
+        fresh = {"access_token": "new", "refresh_token": "rotated", "expires_in": 3600}
+
+        with (
+            patch("esdc.auth.refresh_access_token", return_value=dict(fresh)),
+            patch.object(
+                OpenAIProvider, "get_actual_context_length", return_value=8192
+            ),
+            patch("esdc.providers.openai.ChatOpenAI"),
+            patch("esdc.configs.Config.persist_provider_oauth") as mock_persist,
+        ):
+            OpenAIProvider.create_llm(model="gpt-4o", config=config)
+
+        mock_persist.assert_called_once_with("openai", config.oauth)
+        assert config.oauth["refresh_token"] == "rotated"
+
+    def test_test_connection_persists_refreshed_oauth_tokens(self):
+        """test_connection's refresh path calls Config.persist_provider_oauth."""
+        from esdc.providers.openai import OpenAIProvider
+
+        config = ProviderConfig(
+            name="openai",
+            provider_type="openai",
+            model="gpt-4o",
+            base_url="",
+            api_key="",
+            auth_method="oauth",
+            oauth={"access_token": "old", "refresh_token": "r1", "expires_at": 1},
+        )
+        fresh = {"access_token": "new", "refresh_token": "rotated", "expires_in": 3600}
+
+        with (
+            patch("esdc.auth.refresh_access_token", return_value=dict(fresh)),
+            patch.object(OpenAIProvider, "list_models", return_value=["gpt-4o"]),
+            patch.object(OpenAIProvider, "create_llm") as mock_create_llm,
+            patch("esdc.configs.Config.persist_provider_oauth") as mock_persist,
+        ):
+            mock_create_llm.return_value.invoke.return_value = None
+            OpenAIProvider.test_connection(config)
+
+        mock_persist.assert_called_once_with("openai", config.oauth)
+        assert config.oauth["refresh_token"] == "rotated"
+
+    def test_create_llm_survives_persistence_failure(self):
+        """A disk-persist failure must not break the LLM call."""
+        from esdc.providers.openai import OpenAIProvider
+
+        config = ProviderConfig(
+            name="openai",
+            provider_type="openai",
+            model="gpt-4o",
+            base_url="",
+            api_key="",
+            auth_method="oauth",
+            oauth={"access_token": "old", "refresh_token": "r1", "expires_at": 1},
+        )
+        fresh = {"access_token": "new", "expires_in": 3600}
+
+        with (
+            patch("esdc.auth.refresh_access_token", return_value=dict(fresh)),
+            patch.object(
+                OpenAIProvider, "get_actual_context_length", return_value=8192
+            ),
+            patch("esdc.providers.openai.ChatOpenAI"),
+            patch(
+                "esdc.configs.Config.persist_provider_oauth",
+                side_effect=OSError("disk full"),
+            ),
+        ):
+            llm = OpenAIProvider.create_llm(model="gpt-4o", config=config)
+
+        assert llm is not None
+        assert config.oauth["access_token"] == "new"
+
+
 class TestProviderFallbackChatModelMismatch:
     """Verify ProviderFallbackChatModel rejects mismatched config lists."""
 
