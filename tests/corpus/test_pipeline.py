@@ -777,3 +777,73 @@ def test_run_commit_fails_sidecar_missing_file_hash(tmp_path, monkeypatch):
     assert any("file_hash" in msg for msg in report.failed.values())
     assert not report.processed
     store.close()
+
+
+# --------------------------------------------------------------------------
+# progress bars
+# --------------------------------------------------------------------------
+
+
+class FakeTqdm:
+    """Iterable stand-in for tqdm that records its kwargs."""
+
+    def __init__(self, iterable, **kwargs):
+        self._iterable = iterable
+        self.kwargs = kwargs
+
+    def __iter__(self):
+        """Iterate the wrapped iterable, like tqdm does."""
+        return iter(self._iterable)
+
+    def set_postfix_str(self, s):
+        pass
+
+
+def test_extract_shows_progress_bar(tmp_path, monkeypatch):
+    captured = []
+
+    def fake_tqdm(iterable, **kwargs):
+        bar = FakeTqdm(iterable, **kwargs)
+        captured.append(kwargs)
+        return bar
+
+    monkeypatch.setattr(pipeline, "tqdm", fake_tqdm)
+
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf])
+    assert report.failed == {}
+    assert len(captured) == 1
+    # disable=None -> tqdm auto-disables on non-TTY (tests, cron, pipes)
+    assert captured[0]["disable"] is None
+    assert captured[0]["unit"] == "file"
+
+
+def test_commit_shows_progress_bar(tmp_path, monkeypatch):
+    captured = []
+
+    def fake_tqdm(iterable, **kwargs):
+        bar = FakeTqdm(iterable, **kwargs)
+        captured.append(kwargs)
+        return bar
+
+    monkeypatch.setattr(pipeline, "tqdm", fake_tqdm)
+
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    make_sidecar(tmp_path, "doc.pdf", reviewed=True, file_hash="dd" * 32)
+
+    report = pipeline.run_commit([tmp_path])
+    assert report.processed == ["doc.corpus.md"]
+    assert len(captured) == 1
+    assert captured[0]["disable"] is None
+    assert captured[0]["unit"] == "doc"
+    store.close()

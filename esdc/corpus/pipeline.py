@@ -26,6 +26,7 @@ from typing import Any
 
 import fitz
 import ollama
+from tqdm import tqdm
 
 from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.configs import Config
@@ -189,8 +190,11 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
     # sorted by OCR ratio DESC once, instead of per-file.
     entries: list[tuple[str, int, int]] = []
 
-    for pdf in pdfs:
+    # disable=None: bar shows on a TTY only; silent in tests/pipes/cron.
+    progress = tqdm(pdfs, desc="extract", unit="file", disable=None)
+    for pdf in progress:
         name = pdf.name
+        progress.set_postfix_str(name[:40])
         if sidecar_path(pdf).exists() and not force:
             report.skipped.append(f"{name} (sidecar exists)")
             continue
@@ -361,8 +365,11 @@ def run_commit(
         store.ensure_tables(validate_model=True)
         resolver = EntityResolver(db=store._get_connection())
 
-        for sc in sidecars:
+        # disable=None: bar shows on a TTY only; silent in tests/pipes/cron.
+        progress = tqdm(sidecars, desc="commit", unit="doc", disable=None)
+        for sc in progress:
             name = sc.name
+            progress.set_postfix_str(name[:40])
             try:
                 meta, body = read_sidecar(sc)
             except ValueError as e:
