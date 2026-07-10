@@ -50,6 +50,10 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "corpus.min_chars_per_page": (
         "Text-layer character threshold below which a page counts as scanned"
     ),
+    "corpus.min_image_area": (
+        "Minimum embedded-image size (fraction of page area) that gets OCR'd "
+        "on native-text pages; smaller images (logos, signatures) are ignored"
+    ),
 }
 
 
@@ -798,6 +802,7 @@ class Config:
         "ocr_dpi": 200,  # page render resolution; raise to 300 if OCR quality poor
         "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
         "min_chars_per_page": 50,  # text-layer chars below which a page counts as scanned  # noqa: E501
+        "min_image_area": 0.05,  # embedded-image area (fraction of page) below which images are ignored  # noqa: E501
     }
 
     @classmethod

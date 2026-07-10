@@ -11,6 +11,7 @@ def test_corpus_config_defaults(monkeypatch):
     assert cfg["ocr_dpi"] == 200
     assert cfg["num_ctx"] == 16384
     assert cfg["min_chars_per_page"] == 50
+    assert cfg["min_image_area"] == 0.05
 
 
 def test_corpus_config_from_yaml(monkeypatch):
@@ -27,3 +28,4 @@ def test_corpus_keys_documented():
 
     assert "corpus.ocr_model" in KEY_DESCRIPTIONS
     assert "corpus.metadata_model" in KEY_DESCRIPTIONS
+    assert "corpus.min_image_area" in KEY_DESCRIPTIONS
