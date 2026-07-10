@@ -30,6 +30,7 @@ import ollama
 from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.configs import Config
 from esdc.corpus.chunker import chunk_markdown
+from esdc.corpus.cleanup import cleanup_markdown
 from esdc.corpus.extractor import extract_pdf
 from esdc.corpus.metadata import (
     METADATA_PROMPT_IMAGE,
@@ -177,6 +178,13 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
             "falling back to image-based metadata prefill"
         )
 
+    cleanup_caller = _resolve_text_caller(cfg.get("cleanup_model"))
+    if cfg.get("cleanup_model") and cleanup_caller is None:
+        report.warnings.append(
+            f"cleanup_model '{cfg['cleanup_model']}' unavailable — "
+            "formatting cleanup skipped"
+        )
+
     # (name, pages_ocr, page_count) collected so the final report can be
     # sorted by OCR ratio DESC once, instead of per-file.
     entries: list[tuple[str, int, int]] = []
@@ -196,8 +204,23 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
                 cfg["ocr_dpi"],
                 cfg["min_image_area"],
             )
+            markdown = result.markdown
+            if cleanup_caller is not None:
+                markdown, n_cleaned, n_rejected = cleanup_markdown(
+                    markdown, cleanup_caller
+                )
+                if n_cleaned:
+                    report.warnings.append(
+                        f"{name}: {n_cleaned} page segment(s) reformatted by "
+                        "cleanup model — verify against the original PDF"
+                    )
+                if n_rejected:
+                    report.warnings.append(
+                        f"{name}: {n_rejected} segment(s) failed cleanup guard "
+                        "— original text kept"
+                    )
             meta_fields = _prefill_metadata(
-                pdf, result.markdown, metadata_caller, ocr_client, cfg, report, name
+                pdf, markdown, metadata_caller, ocr_client, cfg, report, name
             )
 
             meta = {
@@ -219,7 +242,7 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
                 "extras": meta_fields.get("extras"),
             }
             meta = normalize_entity_fields(meta)
-            write_sidecar(pdf, meta, result.markdown)
+            write_sidecar(pdf, meta, markdown)
 
             if result.pages_ocr > 0:
                 report.warnings.append(

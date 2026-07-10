@@ -429,6 +429,77 @@ def test_prefill_metadata_main_model(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------
+# run_extract cleanup wiring
+# --------------------------------------------------------------------------
+
+
+def _extract_body(tmp_path, monkeypatch, cfg_overrides, markdown):
+    cfg = dict(DEFAULT_CFG)
+    cfg.update(cfg_overrides)
+    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
+
+    pdf = make_pdf(tmp_path, "doc.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult(markdown, "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+    report = pipeline.run_extract([pdf])
+    _meta, body = read_sidecar(tmp_path / "doc.corpus.md")
+    return report, body
+
+
+def test_extract_cleanup_applied_and_warned(tmp_path, monkeypatch):
+    def fake_caller(prompt):
+        return "# Judul\nbaris rapi"
+
+    monkeypatch.setattr(
+        pipeline,
+        "_resolve_text_caller",
+        lambda spec: fake_caller if spec == "main" else None,
+    )
+    report, body = _extract_body(
+        tmp_path,
+        monkeypatch,
+        {"cleanup_model": "main", "metadata_model": ""},
+        "<!-- page 1: native -->\n# **Judul**\nbaris jelek",
+    )
+    assert "baris rapi" in body
+    assert "baris jelek" not in body
+    assert any("1 page segment(s) reformatted" in w for w in report.warnings)
+
+
+def test_extract_cleanup_off_by_default(tmp_path, monkeypatch):
+    report, body = _extract_body(
+        tmp_path,
+        monkeypatch,
+        {"cleanup_model": "", "metadata_model": ""},
+        "<!-- page 1: native -->\n# **Judul**\nbaris jelek",
+    )
+    assert "baris jelek" in body
+    assert not any("reformatted" in w for w in report.warnings)
+
+
+def test_extract_cleanup_guard_rejection_warned(tmp_path, monkeypatch):
+    def bad_caller(prompt):
+        return "angka palsu 12345"
+
+    monkeypatch.setattr(
+        pipeline,
+        "_resolve_text_caller",
+        lambda spec: bad_caller if spec == "main" else None,
+    )
+    report, body = _extract_body(
+        tmp_path,
+        monkeypatch,
+        {"cleanup_model": "main", "metadata_model": ""},
+        "<!-- page 1: native -->\n# **Judul**\nbaris asli tanpa angka",
+    )
+    assert "baris asli tanpa angka" in body  # original kept
+    assert any("failed cleanup guard" in w for w in report.warnings)
+
+
+# --------------------------------------------------------------------------
 # run_commit
 # --------------------------------------------------------------------------
 
