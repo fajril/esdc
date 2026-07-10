@@ -1,10 +1,12 @@
+import base64
+import hashlib
 import os
 import secrets
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 import rich
@@ -23,15 +25,13 @@ OAUTH_CONFIG = {
 
 
 def generate_pkce_pair() -> tuple[str, str]:
-    """Generate PKCE code verifier and challenge."""
+    """Generate PKCE code verifier and S256 challenge (RFC 7636)."""
     code_verifier = secrets.token_urlsafe(32)
-    response = requests.post(
-        "https://oauth.codex.io/hash",
-        data=code_verifier.encode(),
-        headers={"Content-Type": "text/plain"},
+    code_challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
     )
-    response.raise_for_status()
-    code_challenge = response.text
     return code_verifier, code_challenge
 
 
@@ -87,10 +87,10 @@ def get_authorization_url(code_verifier: str, code_challenge: str, state: str) -
         "redirect_uri": f"http://{CALLBACK_HOST}:{CALLBACK_PORT}/callback",
         "scope": OAUTH_CONFIG["scope"],
         "code_challenge": code_challenge,
-        "code_challenge_method": "plain",
+        "code_challenge_method": "S256",
         "state": state,
     }
-    query = "&".join(f"{k}={v}" for k, v in params.items())
+    query = urlencode(params)
     return f"{OAUTH_CONFIG['auth_url']}?{query}"
 
 
@@ -103,7 +103,7 @@ def exchange_code_for_tokens(code: str, code_verifier: str) -> dict[str, Any]:
         "redirect_uri": f"http://{CALLBACK_HOST}:{CALLBACK_PORT}/callback",
         "code_verifier": code_verifier,
     }
-    response = requests.post(OAUTH_CONFIG["token_url"], data=data)
+    response = requests.post(OAUTH_CONFIG["token_url"], data=data, timeout=30)
     response.raise_for_status()
     return response.json()
 
@@ -115,7 +115,7 @@ def refresh_access_token(refresh_token: str = "") -> dict[str, Any]:
         "client_id": OAUTH_CONFIG["client_id"],
         "refresh_token": refresh_token,
     }
-    response = requests.post(OAUTH_CONFIG["token_url"], data=data)
+    response = requests.post(OAUTH_CONFIG["token_url"], data=data, timeout=30)
     response.raise_for_status()
     return response.json()
 

@@ -352,7 +352,7 @@ def create_reasoning_chunk(
 async def generate_streaming_response(
     messages: list,
     model: str = "iris",
-    temperature: float = 0.7,
+    temperature: float | None = None,
     request_id: str | None = None,
     reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
@@ -464,6 +464,7 @@ async def generate_streaming_response(
             "reasoning_effort": reasoning_effort
             if reasoning_effort is not None
             else provider_config.get("reasoning_effort"),
+            "temperature": temperature,
             "fallback_configs": provider_config.get("fallback_configs"),
         }
 
@@ -615,7 +616,7 @@ async def generate_streaming_response(
 async def generate_response(
     messages: list,
     model: str = "iris",
-    temperature: float = 0.7,
+    temperature: float | None = None,
     use_native_format: bool = True,
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
@@ -712,6 +713,7 @@ async def generate_response(
             "reasoning_effort": reasoning_effort
             if reasoning_effort is not None
             else provider_config.get("reasoning_effort"),
+            "temperature": temperature,
             "fallback_configs": provider_config.get("fallback_configs"),
         }
 

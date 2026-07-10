@@ -75,3 +75,28 @@ def test_health_check_failure():
 
         manager = EmbeddingManager(model="qwen3-embedding:0.6b")
         assert manager.health_check() is False
+
+
+def test_generate_embeddings_batch_respects_batch_size():
+    """Test that generate_embeddings_batch chunks by batch_size."""
+    with patch("esdc.search.embedding_manager.ollama.Client") as MockClient:
+        calls: list[int] = []
+
+        class _FakeResponse:
+            def __init__(self, n):
+                self.embeddings = [[0.0] * 4 for _ in range(n)]
+
+        mock_client = Mock()
+
+        def fake_embed(model, input):
+            calls.append(len(input))
+            return _FakeResponse(len(input))
+
+        mock_client.embed.side_effect = fake_embed
+        MockClient.return_value = mock_client
+
+        manager = EmbeddingManager(model="test", batch_size=2)
+        result = manager.generate_embeddings_batch(["a", "b", "c", "d", "e"])
+
+        assert len(result) == 5
+        assert calls == [2, 2, 1]

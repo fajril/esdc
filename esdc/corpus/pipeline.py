@@ -275,7 +275,13 @@ def run_commit(
             raw_entities = _apply_entity_resolution(meta, canonical, report, name)
 
             file_hash = meta.get("file_hash")
-            exists = bool(file_hash) and store.document_exists(file_hash)
+            if not file_hash:
+                report.failed[name] = (
+                    "missing file_hash in sidecar frontmatter; "
+                    "re-run `esdc corpus extract` to regenerate it"
+                )
+                continue
+            exists = store.document_exists(file_hash)
             if exists and not force:
                 report.skipped.append(f"{name} (already committed)")
                 continue

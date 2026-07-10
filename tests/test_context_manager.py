@@ -1,6 +1,7 @@
 # tests/test_context_manager.py
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.graph.message import add_messages
 
 from esdc.chat.agent import AgentState
 from esdc.chat.context_manager import (
@@ -362,3 +363,53 @@ class TestLargeContext:
 
         # Verify the graph was built (agent is a compiled Runnable)
         assert agent is not None
+
+
+def _build_state_messages(n: int) -> list:
+    """Simulate LangGraph state: pass messages through the reducer so ids exist."""
+    msgs = []
+    for i in range(n):
+        msgs = add_messages(
+            msgs,
+            [
+                HumanMessage(content=f"question {i} " + "x" * 400),
+                AIMessage(content=f"answer {i} " + "y" * 400),
+            ],
+        )
+    return msgs
+
+
+def test_manage_context_node_removals_shrink_reducer_state():
+    """Compaction must survive the add_messages reducer, not just return fewer items."""
+    msgs = _build_state_messages(20)  # far over a tiny budget
+    state = {"messages": msgs, "system_prompt": "sys"}
+
+    result = manage_context_node(state, context_length=300)
+
+    # Apply the node output the way LangGraph does:
+    new_state = add_messages(msgs, result["messages"])
+    assert len(new_state) < len(msgs), (
+        "compaction was a no-op after the add_messages reducer; "
+        "node must emit RemoveMessage for dropped ids"
+    )
+
+
+def test_manage_context_node_removes_empty_ai_messages_from_state():
+    msgs = add_messages(
+        [],
+        [
+            HumanMessage(content="hi"),
+            AIMessage(content=""),  # death-spiral message
+            AIMessage(content="real answer"),
+        ],
+    )
+    state = {"messages": msgs, "system_prompt": ""}
+
+    result = manage_context_node(state, context_length=6000)
+    new_state = add_messages(msgs, result["messages"])
+
+    empty_left = [
+        m for m in new_state
+        if isinstance(m, AIMessage) and not m.content and not m.tool_calls
+    ]
+    assert not empty_left

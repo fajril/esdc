@@ -127,3 +127,17 @@ class TestDynamicToolBinding:
                 f"Tool name {tool_name} looks like a Python function name, "
                 f"not a LangChain decorator name"
             )
+
+
+def test_merge_allowed_tools_respects_classifier_restriction():
+    from esdc.chat.agent import _merge_allowed_tools
+
+    allowed = _merge_allowed_tools(
+        ["execute_sql", "get_schema"],
+        {"run_command"},  # conditionally-registered (e.g. OpenTerminal)
+    )
+    assert "execute_sql" in allowed
+    assert "run_command" in allowed
+    # The old bug unioned in ALL registered tools; a non-selected,
+    # non-conditional tool must NOT be allowed.
+    assert "semantic_search" not in allowed

@@ -22,7 +22,7 @@ class ChatCompletionRequest(BaseModel):
     model: str = Field(default="iris", description="Model ID to use")
     messages: list[Message] = Field(..., description="Conversation messages")
     stream: bool = Field(default=False, description="Whether to stream the response")
-    temperature: float | None = Field(default=0.7, ge=0, le=2)
+    temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1)
     top_p: float | None = Field(default=1, ge=0, le=1)
     frequency_penalty: float | None = Field(default=0, ge=-2, le=2)

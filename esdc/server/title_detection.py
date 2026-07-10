@@ -79,6 +79,7 @@ def extract_user_query(input_messages: str | list) -> str:
         text_after = text[user_start + 5 :]
 
         end_positions = []
+        text_after_lower = text_after.lower()
         for marker in (
             "\nassistant:",
             "\n<chat_history>",
@@ -88,7 +89,7 @@ def extract_user_query(input_messages: str | list) -> str:
             "\n\ntitle:",
             "\n\ntags:",
         ):
-            pos = text_after.lower().find(marker)
+            pos = text_after_lower.find(marker)
             if pos != -1:
                 end_positions.append(pos)
         if end_positions:

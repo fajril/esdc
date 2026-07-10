@@ -178,6 +178,19 @@ def _detect_context_length(llm: BaseChatModel) -> int:
     return model_context_length
 
 
+def _merge_allowed_tools(
+    classifier_tools: list[str],
+    conditional_tool_names: set[str],
+) -> list[str]:
+    """Classifier-selected tools plus conditionally-registered ones.
+
+    Conditionally-registered tools (OpenTerminal sandbox tools, external
+    passthrough tools) are not known to the classifier, so they must always
+    stay allowed. Everything else follows the classifier's restriction.
+    """
+    return sorted(set(classifier_tools) | conditional_tool_names)
+
+
 MAX_TOOL_RESULT_CHARS = 10000
 
 
@@ -444,6 +457,10 @@ def create_agent(
         tools = tools + external_tools
 
     _external_tool_names = external_tool_names or set()
+
+    conditional_tool_names: set[str] = set(_external_tool_names)
+    if openterminal_tools:
+        conditional_tool_names |= {t.name for t in openterminal_tools}
 
     all_tools: dict[str, Any] = {tool.name: tool for tool in tools}
 
@@ -766,7 +783,7 @@ def create_agent(
                     if len(observation_str) > MAX_TOOL_RESULT_CHARS:
                         observation = (
                             observation_str[:MAX_TOOL_RESULT_CHARS]
-                            + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
+                            + f"\n\n[Result truncated to first {MAX_TOOL_RESULT_CHARS} characters for context efficiency]"  # noqa: E501
                         )
                         logger.info(
                             "[TOOL] TOOL_NODE: %s result truncated from %d to %d chars",
@@ -849,15 +866,15 @@ def create_agent(
             # with only classifier-selected tools, dropping any tools that
             # were added by create_agent conditionally (like sandbox tools),
             # making the LLM unable to call them.
-            classifier_tool_set = set(allowed_tools)
-            preserved = set(all_tools.keys()) - classifier_tool_set
-            if preserved:
+            before = set(allowed_tools)
+            allowed_tools = _merge_allowed_tools(allowed_tools, conditional_tool_names)
+            added = set(allowed_tools) - before
+            if added:
                 logger.debug(
                     "[CLASSIFICATION] Preserving conditionally-registered "
                     "tools not in classifier output: %s",
-                    sorted(preserved),
+                    sorted(added),
                 )
-                allowed_tools = list(classifier_tool_set | preserved)
 
             strategy_msg = SystemMessage(content=strategy_text)
             logger.info(

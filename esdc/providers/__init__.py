@@ -159,6 +159,8 @@ def _create_single_llm_from_config(config: dict[str, Any]):
     }
     if provider_config.reasoning_effort is not None:
         llm_kwargs["reasoning_effort"] = provider_config.reasoning_effort
+    if config.get("temperature") is not None:
+        llm_kwargs["temperature"] = config["temperature"]
 
     llm = provider_class.create_llm(
         model=provider_config.model or None,

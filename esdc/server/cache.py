@@ -4,6 +4,7 @@ This module provides configurable caching strategies optimized for
 ESDC's message conversion hot paths.
 """
 
+import copy
 import hashlib
 import json
 from typing import Any
@@ -83,7 +84,7 @@ def get_parsed_json(args_str: str) -> dict[str, Any]:
 
     if cache_key in _json_cache:
         _json_cache_hits += 1
-        return _json_cache[cache_key]
+        return copy.deepcopy(_json_cache[cache_key])
 
     _json_cache_misses += 1
 
@@ -96,7 +97,7 @@ def get_parsed_json(args_str: str) -> dict[str, Any]:
         _json_cache.pop(next(iter(_json_cache)))
 
     _json_cache[cache_key] = parsed
-    return parsed
+    return copy.deepcopy(parsed)
 
 
 def clear_all_caches():

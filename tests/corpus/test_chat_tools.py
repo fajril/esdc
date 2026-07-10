@@ -70,9 +70,10 @@ LONG_DOC = {
 def tool_env(tmp_path: Path, monkeypatch):
     """Redirect CorpusStore defaults + tool cache to tmp resources.
 
-    Note: `import esdc.chat.tools as m` (attribute-chain form) breaks under
-    pytest because esdc/__init__ star-imports the `chat` CLI command
-    function, shadowing the subpackage attribute — use importlib instead.
+    Uses importlib.import_module for lazy-loading; the old star-import
+    shadowing of `esdc.chat` was fixed in __init__.py so direct imports
+    now work too, but importlib is fine here and keeps the fixture
+    self-contained.
     """
     import importlib
 
@@ -230,3 +231,34 @@ def test_classifier_sets_include_document_tools():
             assert read_document.name in tools
 
     assert seen_semantic, "no classification exposes semantic_search at all"
+
+
+def test_search_documents_reuses_embedder(tool_env, monkeypatch):
+    """EmbeddingManager should be reused across corpus tool calls."""
+    import esdc.chat.tools as tools_mod
+
+    instantiations = []
+
+    class _CountingEmbedder:
+        model = "fake"
+
+        def __init__(self):
+            instantiations.append(1)
+
+        def generate_embedding(self, text):
+            return [0.0] * 4
+
+        def generate_embeddings_batch(self, texts):
+            return [[0.0] * 4 for _ in texts]
+
+    monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
+    monkeypatch.setattr(
+        "esdc.search.embedding_manager.EmbeddingManager", _CountingEmbedder
+    )
+    # invalidate the tool cache so both calls hit the store
+    tools_mod.invalidate_tool_cache()
+
+    tools_mod.search_documents.invoke({"query": "query one"})
+    tools_mod.search_documents.invoke({"query": "query two"})
+
+    assert sum(instantiations) <= 1

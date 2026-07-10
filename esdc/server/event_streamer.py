@@ -31,6 +31,29 @@ logger = logging.getLogger("esdc.server.event_streamer")
 DEFAULT_RECURSION_LIMIT = 100
 
 
+def _coerce_content_to_str(content: Any) -> str:
+    """Normalize LLM chunk/message content to plain text.
+
+    Providers like Anthropic emit lists of content blocks
+    ([{"type": "text", "text": ...}, ...]) instead of a plain string.
+    Downstream consumers concatenate content with `+=`, so anything
+    non-string must be flattened here.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type", "text") == "text":
+                parts.append(block.get("text") or "")
+        return "".join(parts)
+    return str(content)
+
+
 async def astream_agent_events(
     agent,
     messages: list,
@@ -102,7 +125,7 @@ async def astream_agent_events(
 
                 content = ""
                 if hasattr(chunk, "content"):
-                    content = chunk.content
+                    content = _coerce_content_to_str(chunk.content)
                 elif isinstance(chunk, str):
                     content = chunk
                 elif chunk:
@@ -133,7 +156,7 @@ async def astream_agent_events(
                 has_chat_model_end = True
                 output = data.get("output")
                 if output and isinstance(output, AIMessage):
-                    content = output.content or ""
+                    content = _coerce_content_to_str(output.content)
 
                     # Append missing image markdowns for final messages (no tool_calls)
                     # This is a fallback when LLM forgets to include the image

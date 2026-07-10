@@ -304,3 +304,76 @@ class TestCreateLlmFromConfigFallback:
 
         call_kwargs = mock_cls.call_args[1]
         assert "config" not in call_kwargs
+
+
+class TestTemperaturePassthrough:
+    """Verify temperature flows from config to create_llm."""
+
+    def test_temperature_passed_when_set(self):
+        from unittest.mock import patch
+
+        from esdc.providers import _create_single_llm_from_config
+
+        captured_kwargs = {}
+
+        class _FakeProvider:
+            @classmethod
+            def create_llm(cls, model=None, base_url=None, api_key=None, **kwargs):
+                captured_kwargs.update(dict(kwargs, model=model))
+
+                class _FakeLLM:
+                    pass
+
+                return _FakeLLM()
+
+        with patch("esdc.providers.get_provider", return_value=_FakeProvider):
+            _create_single_llm_from_config(
+                {"provider_type": "fake", "model": "m", "temperature": 0.9}
+            )
+        assert captured_kwargs.get("temperature") == 0.9
+
+    def test_temperature_zero_is_honored(self):
+        from unittest.mock import patch
+
+        from esdc.providers import _create_single_llm_from_config
+
+        captured_kwargs = {}
+
+        class _FakeProvider:
+            @classmethod
+            def create_llm(cls, model=None, base_url=None, api_key=None, **kwargs):
+                captured_kwargs.update(dict(kwargs, model=model))
+
+                class _FakeLLM:
+                    pass
+
+                return _FakeLLM()
+
+        with patch("esdc.providers.get_provider", return_value=_FakeProvider):
+            _create_single_llm_from_config(
+                {"provider_type": "fake", "model": "m", "temperature": 0.0}
+            )
+        assert captured_kwargs.get("temperature") == 0.0
+
+    def test_temperature_omitted_when_absent(self):
+        from unittest.mock import patch
+
+        from esdc.providers import _create_single_llm_from_config
+
+        captured_kwargs = {}
+
+        class _FakeProvider:
+            @classmethod
+            def create_llm(cls, model=None, base_url=None, api_key=None, **kwargs):
+                captured_kwargs.update(dict(kwargs, model=model))
+
+                class _FakeLLM:
+                    pass
+
+                return _FakeLLM()
+
+        with patch("esdc.providers.get_provider", return_value=_FakeProvider):
+            _create_single_llm_from_config(
+                {"provider_type": "fake", "model": "m"}
+            )
+        assert "temperature" not in captured_kwargs

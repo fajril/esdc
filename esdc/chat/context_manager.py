@@ -10,6 +10,7 @@ from langchain_core.messages import (
     AIMessage,
     AnyMessage,
     HumanMessage,
+    RemoveMessage,
     SystemMessage,
     ToolMessage,
 )
@@ -273,15 +274,18 @@ def manage_context_node(
 
     # Strip empty assistant messages that cause death spiral
     filtered = []
+    removals: list[RemoveMessage] = []
     for m in messages:
         if isinstance(m, AIMessage) and not m.content and not m.tool_calls:
             logger.warning("[CONTEXT] Removing empty AIMessage from history")
+            if getattr(m, "id", None):
+                removals.append(RemoveMessage(id=m.id))
             continue
         filtered.append(m)
     messages = filtered
 
     if not messages:
-        return {"messages": [], "context_metadata": {"was_compacted": False}}
+        return {"messages": removals, "context_metadata": {"was_compacted": False}}
 
     manager = ContextManager(
         max_tokens=context_length,
@@ -296,7 +300,14 @@ def manage_context_node(
         messages, system_prompt=system_prompt
     )
 
+    # add_messages merges by id and never deletes, so emit RemoveMessage
+    # for every original state message that compaction dropped.
+    kept_ids = {m.id for m in managed_messages if getattr(m, "id", None)}
+    for m in messages:
+        if getattr(m, "id", None) and m.id not in kept_ids:
+            removals.append(RemoveMessage(id=m.id))
+
     return {
-        "messages": managed_messages,
+        "messages": removals + list(managed_messages),
         "context_metadata": metadata,
     }

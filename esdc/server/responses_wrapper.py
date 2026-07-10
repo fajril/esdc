@@ -385,7 +385,7 @@ async def generate_responses_stream(
     model: str = "iris",
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
-    temperature: float = 0.7,
+    temperature: float | None = None,
     reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate Responses API streaming events from LangGraph agent.
@@ -507,6 +507,7 @@ async def generate_responses_stream(
         "reasoning_effort": reasoning_effort
         if reasoning_effort is not None
         else provider_config.get("reasoning_effort"),
+        "temperature": temperature,
         "fallback_configs": provider_config.get("fallback_configs"),
     }
 
@@ -1127,11 +1128,6 @@ async def generate_responses_stream(
                 tool_call_id = event.get("tool_call_id", "")
 
                 item_id = generate_item_id("fco")
-                content_preview = (
-                    tool_result_content[:100]
-                    if len(tool_result_content) > 100
-                    else tool_result_content
-                )
 
                 logger.debug(
                     "[RESPONSES %s] Tool result: tool=%s, call_id=%s, content_len=%d",
@@ -1370,7 +1366,7 @@ async def generate_responses_sync(
     model: str = "iris",
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
-    temperature: float = 0.7,
+    temperature: float | None = None,
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Generate non-streaming Responses API response.
@@ -1479,6 +1475,7 @@ async def generate_responses_sync(
         "reasoning_effort": reasoning_effort
         if reasoning_effort is not None
         else provider_config.get("reasoning_effort"),
+        "temperature": temperature,
         "fallback_configs": provider_config.get("fallback_configs"),
     }
 

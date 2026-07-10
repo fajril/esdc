@@ -174,5 +174,18 @@ class TestCacheStats:
         assert get_cache_stats()["json_cache_size"] == 0
 
 
+def test_get_parsed_json_hit_is_isolated_from_caller_mutation():
+    clear_all_caches()
+    args = '{"a": 1, "nested": {"b": 2}}'
+
+    first = get_parsed_json(args)
+    first["a"] = 999
+    first["nested"]["b"] = 999
+
+    second = get_parsed_json(args)
+    assert second["a"] == 1
+    assert second["nested"]["b"] == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

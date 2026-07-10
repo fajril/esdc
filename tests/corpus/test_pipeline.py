@@ -547,3 +547,33 @@ def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkey
     updated_a = store2.get_document(doc_a["doc_id"])
     assert updated_a["embedding_model"] == "fake-embed-v2"
     store2.close()
+
+
+def test_run_commit_fails_sidecar_missing_file_hash(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    monkeypatch.setattr(pipeline, "load_canonical_names", lambda conn: {})
+
+    # Write a sidecar WITHOUT file_hash in its frontmatter
+    pdf = tmp_path / "nohash.pdf"
+    meta = {
+        "source_file": "nohash.pdf",
+        "page_count": 1,
+        "extraction_method": "native",
+        "reviewed": True,
+        "doc_type": "surat",
+        "doc_number": "1",
+        "doc_date": "2026-01-01",
+        "subject": "test",
+        "sender": "A",
+        "recipient": "B",
+        "doc_level": "wk",
+    }
+    write_sidecar(pdf, meta, "# Doc\ncontent here")
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert any("file_hash" in msg for msg in report.failed.values())
+    assert not report.processed
+    store.close()

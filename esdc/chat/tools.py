@@ -163,6 +163,25 @@ def _get_tool_cache() -> diskcache.Cache:
     return _tool_cache
 
 
+_corpus_embedder = None
+
+
+def _get_corpus_embedder():
+    """Lazily create and reuse one EmbeddingManager for corpus tools.
+
+    The embedder is a stateless HTTP client; recreating it per tool call
+    wasted setup time. The CorpusStore/DuckDB connection is deliberately
+    NOT cached (short-lived connections avoid file-lock conflicts with
+    the corpus CLI).
+    """
+    global _corpus_embedder
+    if _corpus_embedder is None:
+        from esdc.search.embedding_manager import EmbeddingManager
+
+        _corpus_embedder = EmbeddingManager()
+    return _corpus_embedder
+
+
 def _get_disk_cache_stats(
     cache: diskcache.Cache | None,
     cache_dir_name: str,
@@ -1835,7 +1854,7 @@ def search_documents(
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore()
+        store = CorpusStore(embedder=_get_corpus_embedder())
         result = store.search(
             query=query,
             limit=limit,
@@ -1903,7 +1922,7 @@ def read_document(
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore()
+        store = CorpusStore(embedder=_get_corpus_embedder())
         doc = store.get_document(doc_id)
         if doc is None:
             logger.debug("[DocRead] not_found | doc_id=%s", doc_id)
