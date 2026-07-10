@@ -41,7 +41,15 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "embedding_host": "Ollama host URL for embeddings (default: localhost)",
     "corpus.ocr_model": "Ollama vision model used for OCR of scanned pages",
     "corpus.metadata_model": (
-        "Optional text LLM for metadata extraction; empty uses ocr_model on page 1"
+        "Text LLM for metadata pre-fill at extract time ('' = use ocr_model "
+        "on the rendered first page, 'main' = default chat provider, else "
+        "an Ollama model name)"
+    ),
+    "corpus.cleanup_model": (
+        "Optional LLM for formatting cleanup of native-extracted pages at "
+        "extract time ('' = off, 'main' = default chat provider, else an "
+        "Ollama model name); guarded — original text kept if the model "
+        "invents numbers or changes length grossly"
     ),
     "corpus.chunk_size": "Max characters per corpus chunk",
     "corpus.chunk_overlap": "Characters carried over between corpus chunks",
@@ -799,6 +807,9 @@ class Config:
         # metadata_model: optional text LLM for metadata extraction;
         # "" = use ocr_model on the rendered first page (image-based extraction)
         "metadata_model": "",
+        # cleanup_model: optional text LLM that reformats native-extracted
+        # pages before review; "" = off, "main" = default chat provider
+        "cleanup_model": "",
         "ocr_dpi": 200,  # page render resolution; raise to 300 if OCR quality poor
         "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
         "min_chars_per_page": 50,  # text-layer chars below which a page counts as scanned  # noqa: E501
