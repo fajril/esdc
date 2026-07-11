@@ -5,33 +5,24 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-DOC_TYPES = ("surat", "mom", "ba", "other")
-DOC_LEVELS = ("wk", "field", "project", "unknown")
+from esdc.chat.domain_knowledge.doc_schema import enum_values, render_prompt_definitions
+
+DOC_TYPES = enum_values("doc_type")
+DOC_LEVELS = enum_values("doc_level")
 MAX_PROMPT_CHARS = 8000
 
-METADATA_PROMPT = """You extract metadata from Indonesian oil & gas official documents.
+_PROMPT_SKELETON = """You extract metadata from Indonesian oil & gas official documents.
 Given the markdown of a document, return ONLY a JSON object with these keys
 (use null when unknown, never guess):
-- doc_type: "surat" (official letter) | "mom" (minutes of meeting)
-  | "ba" (berita acara) | "other"
-- doc_number: the document/letter number exactly as written
-- doc_date: ISO date YYYY-MM-DD
-- subject: perihal or meeting title
-- sender: issuing organization or signatory org
-- recipient: addressed organization (letters only)
-- doc_level: "wk" | "field" | "project" | "unknown" — the scope this document is about
-- wk_name: list of working area (wilayah kerja) names mentioned
-  (e.g. ["Rokan", "Mahakam"])
-- field_name: list of field (lapangan) names mentioned (e.g. ["Duri", "Minas"])
-- project_name: list of project or POD names mentioned (e.g. ["POD Duri", "POD Minas"])
-- extras: object with doc_type-specific fields, e.g. for mom:
-  {{"peserta": [...], "keputusan": [...]}}
+{definitions}
 
 Document markdown:
 ---
-{markdown}
+{{markdown}}
 ---
 JSON:"""
+
+METADATA_PROMPT = _PROMPT_SKELETON.format(definitions=render_prompt_definitions())
 
 # Same schema, phrased for the image path (GLM-OCR on the first page).
 # Build it from the shared field list so the two prompts can't drift.

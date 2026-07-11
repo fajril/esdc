@@ -12,6 +12,9 @@ import diskcache
 import duckdb
 from langchain.tools import tool
 
+# First-party (no circular deps — doc_schema.py only imports yaml/stdlib)
+from esdc.chat.domain_knowledge.doc_schema import enum_values, render_tool_context
+
 logger = logging.getLogger("esdc.chat.tools")
 
 # Maximum rows to return to prevent context window overflow
@@ -1780,6 +1783,10 @@ def _search_remarks_via_fts(
         }
 
 
+_DOC_TYPE_VALUES = enum_values("doc_type")
+_DOC_SCHEMA_CONTEXT = render_tool_context()
+
+
 @tool("Document Search")
 def search_documents(
     query: Annotated[
@@ -1789,7 +1796,9 @@ def search_documents(
         "Example: 'persetujuan POD lapangan Duri 2025'.",
     ],
     limit: Annotated[int, "Maximum results (default 5)."] = 5,
-    doc_type: Annotated[str | None, "Filter: surat, mom, ba, other."] = None,
+    doc_type: Annotated[
+        str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."
+    ] = None,
     year: Annotated[int | None, "Filter by document year."] = None,
     wk_name: Annotated[str | None, "Filter by working area (ILIKE pattern)."] = None,
     field_name: Annotated[str | None, "Filter by field name (ILIKE pattern)."] = None,
@@ -1890,6 +1899,19 @@ def search_documents(
     finally:
         if store is not None:
             store.close()
+
+
+# search_documents is a langchain StructuredTool; the LLM-facing text used
+# for tool-calling is `.description` (captured from the function docstring
+# at decoration time), not `.__doc__` (which on the StructuredTool instance
+# resolves to the wrapper class's own docstring). Append the schema-derived
+# field guide the same way esdc/chat/openterminal.py's
+# `run_command.description = ...` does.
+search_documents.description = (
+    search_documents.description
+    + "\n\nDocument metadata schema:\n"
+    + _DOC_SCHEMA_CONTEXT
+)
 
 
 @tool("Document Reader")

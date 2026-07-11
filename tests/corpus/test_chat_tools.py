@@ -233,6 +233,24 @@ def test_classifier_sets_include_document_tools():
     assert seen_semantic, "no classification exposes semantic_search at all"
 
 
+def test_search_documents_description_carries_schema_context():
+    """Assert the schema-derived field guide is appended to `.description`.
+
+    search_documents is a langchain StructuredTool; the LLM-facing text is
+    `.description` (baked from the function docstring at decoration time),
+    not `.__doc__` (which on a StructuredTool instance is the wrapper
+    class's own docstring, not the wrapped function's) — see
+    esdc/chat/openterminal.py's `run_command.description = ...` for the
+    established pattern of appending to `.description` post-decoration.
+    """
+    from esdc.chat.tools import search_documents
+
+    desc = search_documents.description
+    assert "sender" in desc
+    assert "organization" in desc.lower()
+    assert "doc_level" in desc
+
+
 def test_search_documents_reuses_embedder(tool_env, monkeypatch):
     """EmbeddingManager should be reused across corpus tool calls."""
     import esdc.chat.tools as tools_mod

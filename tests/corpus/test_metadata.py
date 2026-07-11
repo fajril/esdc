@@ -1,4 +1,6 @@
 
+from esdc.chat.domain_knowledge import doc_schema
+from esdc.corpus import metadata
 from esdc.corpus.metadata import (
     METADATA_PROMPT,
     METADATA_PROMPT_IMAGE,
@@ -6,6 +8,46 @@ from esdc.corpus.metadata import (
     normalize_metadata,
     parse_llm_json,
 )
+
+# Pinned copy of the pre-refactor METADATA_PROMPT literal. Do not edit — this
+# is the byte-identity contract the doc_schema.yaml refactor must preserve.
+EXPECTED_METADATA_PROMPT = """You extract metadata from Indonesian oil & gas official documents.
+Given the markdown of a document, return ONLY a JSON object with these keys
+(use null when unknown, never guess):
+- doc_type: "surat" (official letter) | "mom" (minutes of meeting)
+  | "ba" (berita acara) | "other"
+- doc_number: the document/letter number exactly as written
+- doc_date: ISO date YYYY-MM-DD
+- subject: perihal or meeting title
+- sender: issuing organization or signatory org
+- recipient: addressed organization (letters only)
+- doc_level: "wk" | "field" | "project" | "unknown" — the scope this document is about
+- wk_name: list of working area (wilayah kerja) names mentioned
+  (e.g. ["Rokan", "Mahakam"])
+- field_name: list of field (lapangan) names mentioned (e.g. ["Duri", "Minas"])
+- project_name: list of project or POD names mentioned (e.g. ["POD Duri", "POD Minas"])
+- extras: object with doc_type-specific fields, e.g. for mom:
+  {{"peserta": [...], "keputusan": [...]}}
+
+Document markdown:
+---
+{markdown}
+---
+JSON:"""
+
+
+def test_metadata_prompt_is_byte_identical_to_legacy():
+    assert metadata.METADATA_PROMPT == EXPECTED_METADATA_PROMPT
+
+
+def test_vocab_tuples_derived_from_schema():
+    assert metadata.DOC_TYPES == ("surat", "mom", "ba", "other")
+    assert metadata.DOC_LEVELS == ("wk", "field", "project", "unknown")
+
+
+def test_prompt_contains_every_llm_field():
+    for name in doc_schema.llm_field_names():
+        assert f"- {name}:" in metadata.METADATA_PROMPT
 
 
 def test_parse_llm_json_strips_fences():

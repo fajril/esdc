@@ -1,0 +1,108 @@
+table_name: documents
+description: >-
+  Corpus of Indonesian oil & gas official documents (surat, MoM, berita acara)
+  ingested via `esdc corpus`, searchable by iris through search_documents.
+llm_fields: # order = order of definition lines in METADATA_PROMPT
+  - name: doc_type
+    type: string
+    enum: [surat, mom, ba, other]
+    prompt: |-
+      "surat" (official letter) | "mom" (minutes of meeting)
+        | "ba" (berita acara) | "other"
+    description: >-
+      Document category: surat (official letter), mom (minutes of meeting),
+      ba (berita acara / official report), other.
+    aliases: [jenis dokumen, tipe surat]
+  - name: doc_number
+    type: string
+    prompt: >-
+      the document/letter number exactly as written
+    description: >-
+      The document or letter reference number, transcribed exactly as written.
+    aliases: [nomor surat, nomor dokumen]
+  - name: doc_date
+    type: date
+    prompt: >-
+      ISO date YYYY-MM-DD
+    description: >-
+      The document's issue date, in ISO format (YYYY-MM-DD).
+    aliases: [tanggal surat, tanggal dokumen]
+  - name: subject
+    type: string
+    prompt: >-
+      perihal or meeting title
+    description: >-
+      The subject line (perihal) of a letter, or the title of a meeting.
+    aliases: [perihal, judul]
+  - name: sender
+    type: string
+    prompt: >-
+      issuing organization or signatory org
+    description: >-
+      Issuing or signing ORGANIZATION (e.g. SKK Migas, a KKKS) — not a person.
+    aliases: [pengirim, penerbit, dari]
+  - name: recipient
+    type: string
+    prompt: >-
+      addressed organization (letters only)
+    description: >-
+      The organization the document is addressed to (letters only).
+    aliases: [penerima, kepada]
+  - name: doc_level
+    type: string
+    enum: [wk, field, project, unknown]
+    prompt: >-
+      "wk" | "field" | "project" | "unknown" — the scope this document is about
+    description: >-
+      The scope this document is about: wk (working area / wilayah kerja),
+      field (lapangan), project, or unknown.
+    aliases: [tingkat dokumen, cakupan]
+  - name: wk_name
+    type: list[string]
+    prompt: |-
+      list of working area (wilayah kerja) names mentioned
+        (e.g. ["Rokan", "Mahakam"])
+    description: >-
+      List of working area (wilayah kerja) names mentioned in the document.
+    aliases: [wilayah kerja, nama WK]
+  - name: field_name
+    type: list[string]
+    prompt: >-
+      list of field (lapangan) names mentioned (e.g. ["Duri", "Minas"])
+    description: >-
+      List of field (lapangan) names mentioned in the document.
+    aliases: [lapangan, nama field]
+  - name: project_name
+    type: list[string]
+    prompt: >-
+      list of project or POD names mentioned (e.g. ["POD Duri", "POD Minas"])
+    description: >-
+      List of project or POD (Plan of Development) names mentioned in the document.
+    aliases: [nama proyek, nama POD]
+  - name: extras
+    type: object
+    prompt: |-
+      object with doc_type-specific fields, e.g. for mom:
+        {{"peserta": [...], "keputusan": [...]}}
+    description: >-
+      Additional doc_type-specific fields (e.g. participants and decisions for
+      a mom document). Stored as JSON in the metadata column.
+    aliases: [tambahan]
+housekeeping_fields: # set by the pipeline, not the LLM
+  - name: source_file
+    description: >-
+      Original file name the sidecar was extracted from. Stored in the
+      file_name column.
+  - name: file_hash
+    description: SHA-256 hash of the source file bytes; used as the dedup key.
+  - name: page_count
+    description: Number of pages in the source document.
+  - name: extraction_method
+    description: Extraction method used to obtain the document text (native or OCR).
+  - name: raw_entities
+    description: >-
+      Raw entity-resolution candidates captured before canonicalization,
+      stored as JSON.
+enums:
+  doc_level: [wk, field, project, unknown]
+  doc_type: [surat, mom, ba, other]
