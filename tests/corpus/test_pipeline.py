@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from pathlib import Path
 
 import fitz
@@ -1153,44 +1154,49 @@ def test_run_commit_fails_sidecar_missing_file_hash(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-class FakeProgress:
-    """Stand-in for rich.progress.Progress: records add_task/update/advance."""
+def test_progress_with_status_helper_builds_and_updates():
+    with pipeline._progress_with_status("extract", 2, "files") as p:
+        p.file("surat.pdf")
+        p.status("parsing PDF")
+        p.advance()
+        p.status("resolve entities")
+        p.advance()
+    # No assertion beyond "did not raise" + both tasks completed.
+    # (Rendering correctness is visual; this pins the contract/signature.)
 
-    def __init__(self, *columns, **kwargs):
-        self.console = kwargs.get("console")
-        self.total = None
-        self.descriptions = []
+
+class FakeProgressHandle:
+    """Records file()/status()/advance() calls for assertions."""
+
+    def __init__(self):
+        self.files = []
+        self.statuses = []
         self.advances = 0
 
-    def __enter__(self):
-        """Enter the fake context, like Progress does."""
-        return self
+    def file(self, name):
+        self.files.append(name)
 
-    def __exit__(self, *exc_info):
-        """Exit without suppressing exceptions, like Progress does."""
-        return False
+    def status(self, phase):
+        self.statuses.append(phase)
 
-    def add_task(self, description, total=None):
-        self.total = total
-        return 0
-
-    def update(self, task_id, description=None):
-        self.descriptions.append(description)
-
-    def advance(self, task_id):
+    def advance(self):
         self.advances += 1
+
+
+def fake_progress_with_status_factory(captured):
+    @contextmanager
+    def factory(verb, total, unit):
+        handle = FakeProgressHandle()
+        captured.update(verb=verb, total=total, unit=unit, handle=handle)
+        yield handle
+    return factory
 
 
 def test_extract_shows_progress_bar(tmp_path, monkeypatch):
     captured = {}
-
-    def fake_progress_factory(*columns, **kwargs):
-        bar = FakeProgress(*columns, **kwargs)
-        captured["progress"] = bar
-        return bar
-
-    monkeypatch.setattr(pipeline, "Progress", fake_progress_factory)
-
+    monkeypatch.setattr(
+        pipeline, "_progress_with_status", fake_progress_with_status_factory(captured)
+    )
     pdf = make_pdf(tmp_path, "surat.pdf")
 
     def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
@@ -1200,38 +1206,39 @@ def test_extract_shows_progress_bar(tmp_path, monkeypatch):
 
     report = pipeline.run_extract([pdf])
     assert report.failed == {}
-    bar = captured["progress"]
-    assert bar.total == 1  # one PDF -> total=1
-    assert bar.advances == 1
-    assert bar.descriptions == ["extract surat.pdf"]
-    # shared esdc console, consistent with every other CLI progress bar
-    assert bar.console is pipeline.console
+    assert captured["verb"] == "extract"
+    assert captured["total"] == 1
+    assert captured["unit"] == "files"
+    handle = captured["handle"]
+    assert handle.files == ["surat.pdf"]
+    assert handle.advances == 1
+    # phase-level status updates flowed through
+    assert "parsing PDF" in handle.statuses
+    assert "prefill metadata" in handle.statuses
+    assert "write sidecar" in handle.statuses
 
 
 def test_commit_shows_progress_bar(tmp_path, monkeypatch):
     captured = {}
-
-    def fake_progress_factory(*columns, **kwargs):
-        bar = FakeProgress(*columns, **kwargs)
-        captured["progress"] = bar
-        return bar
-
-    monkeypatch.setattr(pipeline, "Progress", fake_progress_factory)
-
+    monkeypatch.setattr(
+        pipeline, "_progress_with_status", fake_progress_with_status_factory(captured)
+    )
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
     patch_entity_resolver(monkeypatch)
-
     make_sidecar(tmp_path, "doc.pdf", reviewed=True, file_hash="dd" * 32)
 
     report = pipeline.run_commit([tmp_path])
     assert report.processed == ["doc.corpus.md"]
-    bar = captured["progress"]
-    assert bar.total == 1
-    assert bar.advances == 1
-    assert bar.descriptions == ["commit doc.corpus.md"]
-    assert bar.console is pipeline.console
+    assert captured["verb"] == "commit"
+    assert captured["unit"] == "docs"
+    assert captured["total"] == 1
+    handle = captured["handle"]
+    assert handle.files == ["doc.corpus.md"]
+    assert handle.advances == 1
+    assert "resolve entities" in handle.statuses
+    assert "embed + insert" in handle.statuses
     store.close()
 
 

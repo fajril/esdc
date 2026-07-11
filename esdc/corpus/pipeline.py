@@ -20,12 +20,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import fitz
 import ollama
+from rich.console import Group
+from rich.live import Live
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
 from esdc.chat.domain_knowledge.entity_registry import ENTITY_REGISTRY
@@ -204,6 +207,57 @@ def _apply_overrides(meta: dict[str, Any], overrides: dict[str, Any]) -> None:
             meta[key] = value
 
 
+class _ProgressHandle:
+    """Drives a two-line rich progress display: a bar plus a status line.
+
+    The bar's own task tracks file-count progress; the status line shows
+    the current file and phase (``surat.pdf · resolve entities``), updated
+    in place. Both lines share one Live so they refresh together.
+    """
+
+    def __init__(self, bar: Progress, bar_id: int, status: Progress, status_id: int):
+        self._bar = bar
+        self._bar_id = bar_id
+        self._status = status
+        self._status_id = status_id
+        self._file = ""
+
+    def file(self, name: str) -> None:
+        """Set the current file; clears any prior phase text."""
+        self._file = name[:40]
+        self._render()
+
+    def status(self, phase: str) -> None:
+        """Update the phase shown after the current file name."""
+        self._render(phase)
+
+    def advance(self) -> None:
+        self._bar.advance(self._bar_id)
+
+    def _render(self, phase: str = "") -> None:
+        text = self._file
+        if phase:
+            text = f"{text} · {phase}" if text else phase
+        self._status.update(self._status_id, description=text)
+
+
+@contextmanager
+def _progress_with_status(verb: str, total: int, unit: str):
+    """A file-count bar with a dim, in-place status line rendered below it."""
+    bar = Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(bar_width=36),
+        TextColumn(f"[green]{{task.completed}}/{{task.total}} {unit}"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    status = Progress(TextColumn("  [dim]{task.description}"), console=console)
+    bar_id = bar.add_task(verb, total=total)
+    status_id = status.add_task("")
+    with Live(Group(bar, status), console=console, refresh_per_second=10):
+        yield _ProgressHandle(bar, bar_id, status, status_id)
+
+
 def run_extract(
     paths: list[Path],
     level: str | None = None,
@@ -254,24 +308,18 @@ def run_extract(
         # sorted by OCR ratio DESC once, instead of per-file.
         entries: list[tuple[str, int, int]] = []
 
-        with Progress(
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=36),
-            TextColumn("[green]{task.completed}/{task.total} files"),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task_id = progress.add_task("extract", total=len(pdfs))
+        with _progress_with_status("extract", len(pdfs), "files") as p:
             for pdf in pdfs:
                 name = pdf.name
-                progress.update(task_id, description=f"extract {name[:40]}")
+                p.file(name)
                 if sidecar_path(pdf).exists() and not force:
                     report.skipped.append(f"{name} (sidecar exists)")
-                    progress.advance(task_id)
+                    p.advance()
                     continue
 
                 try:
                     file_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
+                    p.status("parsing PDF")
                     result = extract_pdf(
                         pdf,
                         ocr_client,
@@ -281,6 +329,7 @@ def run_extract(
                     )
                     markdown = result.markdown
                     if cleanup_caller is not None:
+                        p.status("cleanup formatting")
                         markdown, n_cleaned, n_rejected = cleanup_markdown(
                             markdown, cleanup_caller
                         )
@@ -294,6 +343,7 @@ def run_extract(
                                 f"{name}: {n_rejected} segment(s) failed cleanup guard "
                                 "— original text kept"
                             )
+                    p.status("prefill metadata")
                     meta_fields = _prefill_metadata(
                         pdf, markdown, metadata_caller, ocr_client, cfg, report, name
                     )
@@ -320,12 +370,14 @@ def run_extract(
                     meta = normalize_entity_fields(meta)
 
                     if resolver is not None:
+                        p.status("resolve entities")
                         raw_entities = _apply_entity_resolution(
                             meta, resolver, report, name
                         )
                         if any(v is not None for v in raw_entities.values()):
                             meta["raw_entities"] = raw_entities
 
+                    p.status("write sidecar")
                     write_sidecar(pdf, meta, markdown)
 
                     if result.pages_ocr > 0:
@@ -348,7 +400,7 @@ def run_extract(
                 except Exception as e:
                     report.failed[name] = str(e)
                 finally:
-                    progress.advance(task_id)
+                    p.advance()
 
         entries.sort(
             key=lambda e: (e[1] / e[2] if e[2] else 0.0),
@@ -457,19 +509,13 @@ def run_commit(
         store.ensure_tables(validate_model=True)
         resolver = EntityResolver(db=store._get_connection())
 
-        with Progress(
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=36),
-            TextColumn("[green]{task.completed}/{task.total} docs"),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task_id = progress.add_task("commit", total=len(sidecars))
+        with _progress_with_status("commit", len(sidecars), "docs") as p:
             for sc in sidecars:
                 name = sc.name
-                progress.update(task_id, description=f"commit {name[:40]}")
+                p.file(name)
                 try:
                     try:
+                        p.status("read sidecar")
                         meta, body = read_sidecar(sc)
                     except ValueError as e:
                         report.failed[name] = str(e)
@@ -497,12 +543,14 @@ def run_commit(
 
                     # Safety net for hand-edited sidecars: re-resolve even
                     # though extract already did this once.
+                    p.status("resolve entities")
                     resolver_raws = _apply_entity_resolution(
                         meta, resolver, report, name
                     )
                     sidecar_raws = meta.pop("raw_entities", None)
                     meta.pop("entity_warnings", None)
 
+                    p.status("chunk markdown")
                     chunks = chunk_markdown(
                         body, cfg["chunk_size"], cfg["chunk_overlap"]
                     )
@@ -538,13 +586,14 @@ def run_commit(
                         any_processed = True
                         continue
 
+                    p.status("embed + insert")
                     if exists and force:
                         store.delete_document(doc["doc_id"])
                     store.insert_document(doc, chunks)
                     report.processed.append(name)
                     any_processed = True
                 finally:
-                    progress.advance(task_id)
+                    p.advance()
 
         if any_processed and not dry_run:
             store.rebuild_indexes()
