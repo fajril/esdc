@@ -23,6 +23,36 @@ _CONFIDENCE_THRESHOLD = 0.7
 _YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 _PHRASE_WORD_PATTERN = re.compile(r"[a-zA-Z0-9\u00C0-\u024F][\w&./'-]*")
 
+# resolve_name() looks up bare entity strings (not NL queries), so it needs
+# its own fixed acceptance bar independent of _CONFIDENCE_THRESHOLD (which
+# tunes the chat NL path and is currently 0.7, not 0.8).
+_NAME_CONFIDENCE_THRESHOLD = 0.8
+
+# Indonesian/English domain-boilerplate words stripped only inside
+# resolve_name()'s normalization fallback. Deliberately NOT merged into the
+# global _STOP_WORDS/_ENTITY_HINTS below -- those drive entity-type hint
+# detection on the chat NL path and widening them would change that
+# behavior too (e.g. "field"/"project" are entity-type hints there).
+_NAME_NOISE_WORDS: frozenset[str] = frozenset(
+    {
+        "proyek",
+        "project",
+        "pengembangan",
+        "development",
+        "lapangan",
+        "field",
+        "wilayah",
+        "kerja",
+        "pod",
+    }
+)
+
+# Single-token segments resolve_name()'s greedy token segmentation never
+# tries to match on their own.
+_NAME_SEGMENT_SKIP_TOKENS: frozenset[str] = frozenset(
+    {"dan", "and", "&", "the", "of", "di"}
+)
+
 _UNCERTAINTY_MAP: dict[str, str] = {
     "1p": "1. Low Value",
     "proven": "1. Low Value",
@@ -178,6 +208,112 @@ class EntityResolver:
             else [],
             "confidence": best_confidence,
         }
+
+    def resolve_name(self, name: str, entity_type: str) -> list[dict[str, Any]]:
+        """Resolve a bare entity name against one registry spec.
+
+        Unlike `resolve()`, there is no NL parsing. Returns the FINAL
+        confident picks -- callers should not re-filter by confidence.
+        A raw name legitimately naming several DB rows (e.g. "Arung
+        Nowera" naming two separate fields) can come back with more than
+        one match. Fallback chain, each step short-circuiting on a hit:
+
+        1. Whole string as the search term -> single best match.
+        2. Domain-word-stripped phrase (drops hint/noise words like
+           "proyek"/"pengembangan"/"lapangan") -> single best match.
+        3. Greedy longest-first token segmentation of that phrase, so a
+           multi-entity raw name resolves to multiple canonical rows
+           without also emitting spurious sub-token matches for names
+           that already matched in full (no fan-out).
+
+        Every candidate match is word-boundary guarded (see
+        `_best_confident_match`) so a bare substring hit like "arung"
+        matching "GARUNG - BASE" is rejected.
+        """
+        if entity_type not in ENTITY_REGISTRY:
+            raise ValueError(f"unknown entity_type: {entity_type}")
+        spec = ENTITY_REGISTRY[entity_type]
+
+        name = (name or "").strip()
+        if not name:
+            return []
+
+        # 1. Whole string.
+        best = self._best_confident_match(spec, name)
+        if best is not None:
+            return [best]
+
+        # 2. Domain-word-stripped phrase.
+        phrase = self._normalize_candidate_phrase(name, remove_domain_keywords=True)
+        phrase = self._strip_name_noise_words(phrase)
+        if phrase and phrase.lower() != name.lower():
+            best = self._best_confident_match(spec, phrase)
+            if best is not None:
+                return [best]
+
+        # 3. Greedy longest-first token segmentation over the normalized
+        # phrase's tokens (so noise/stop words never become search terms).
+        tokens = phrase.split()
+        results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        pos = 0
+        while pos < len(tokens):
+            matched = False
+            for size in range(min(5, len(tokens) - pos), 0, -1):
+                term_tokens = tokens[pos : pos + size]
+                if size == 1 and term_tokens[0].lower() in _NAME_SEGMENT_SKIP_TOKENS:
+                    continue
+                term = " ".join(term_tokens)
+                best = self._best_confident_match(spec, term)
+                if best is not None:
+                    canonical = best["name"].strip().lower()
+                    if canonical not in seen:
+                        seen.add(canonical)
+                        results.append(best)
+                    pos += size
+                    matched = True
+                    break
+            if not matched:
+                pos += 1
+
+        return results
+
+    def _best_confident_match(
+        self, spec: EntitySpec, term: str
+    ) -> dict[str, Any] | None:
+        """Highest-confidence word-boundary-guarded match for `term`, or None."""
+        term = term.strip()
+        if not term:
+            return None
+        matches = self._query_entity_spec(spec, term, return_multiple=True)
+        confident = [
+            m
+            for m in matches
+            if m["confidence"] >= _NAME_CONFIDENCE_THRESHOLD
+            and self._name_boundary_match(term, m["name"])
+        ]
+        if not confident:
+            return None
+        return max(confident, key=lambda m: m["confidence"])
+
+    @staticmethod
+    def _name_boundary_match(term: str, entity_name: str) -> bool:
+        """True if `term` sits at word boundaries in `entity_name` (or is equal).
+
+        Kills bare-substring false positives ("arung" -> "GARUNG - BASE")
+        while keeping boundary-aligned prefix/substring hits ("arung" ->
+        "ARUNG - BASE").
+        """
+        if term.strip().lower() == entity_name.strip().lower():
+            return True
+        return bool(re.search(rf"\b{re.escape(term)}\b", entity_name, re.IGNORECASE))
+
+    @staticmethod
+    def _strip_name_noise_words(phrase: str) -> str:
+        if not phrase:
+            return phrase
+        words = [w for w in phrase.split() if w.lower() not in _NAME_NOISE_WORDS]
+        return " ".join(words)
 
     def _resolve_entities(
         self, query: str, return_multiple: bool

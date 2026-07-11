@@ -62,7 +62,7 @@ def normalize_metadata(parsed: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-_ENTITY_FIELDS = ("wk_name", "field_name", "project_name")
+ENTITY_FIELDS = ("wk_name", "field_name", "project_name")
 
 
 def normalize_entity_fields(meta: dict[str, Any]) -> dict[str, Any]:
@@ -74,7 +74,7 @@ def normalize_entity_fields(meta: dict[str, Any]) -> dict[str, Any]:
     - ["Rokan", "Mahakam"] → ["Rokan", "Mahakam"] (already a list)
     """
     out = dict(meta)
-    for key in _ENTITY_FIELDS:
+    for key in ENTITY_FIELDS:
         val = out.get(key)
         if val is None:
             continue

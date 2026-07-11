@@ -26,6 +26,16 @@ class FakeEntityResolver:
                 }
         return {"status": "failed", "entities": []}
 
+    def resolve_name(self, name, entity_type):
+        # Substring match against configured `matches`, filtered by type,
+        # sorted by confidence DESC — mirrors the real resolve_name contract.
+        hits = [
+            match
+            for key, match in self._matches.items()
+            if match.get("entity_type") == entity_type and key.lower() in name.lower()
+        ]
+        return sorted(hits, key=lambda m: m["confidence"], reverse=True)
+
 DEFAULT_CFG = {
     "chunk_size": 500,
     "chunk_overlap": 50,
@@ -79,14 +89,27 @@ class FakeEmbedder2:
 
 
 @pytest.fixture(autouse=True)
-def patch_seams(monkeypatch):
-    """Default seam patches every test starts from; tests override as needed."""
+def patch_seams(tmp_path, monkeypatch):
+    """Default seam patches every test starts from; tests override as needed.
+
+    CorpusStore defaults to a tmp_path-rooted DB with no lookup tables, so
+    ``_entity_resolver_or_none`` naturally resolves to "skip" (None) unless
+    a test opts into a real/fake resolver — this keeps run_extract tests
+    from ever touching the user's real ~/.esdc database.
+    """
     monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: dict(DEFAULT_CFG))
     monkeypatch.setattr(pipeline, "OllamaVisionOcr", lambda *a, **kw: FakeOcr(True))
     monkeypatch.setattr(
         pipeline,
         "llm_extract",
         lambda markdown, caller: {"doc_type": "surat", "doc_level": "wk"},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "CorpusStore",
+        lambda *a, **kw: CorpusStore(
+            db_path=tmp_path / "_default.duckdb", embedder=FakeEmbedder()
+        ),
     )
 
 
@@ -500,6 +523,188 @@ def test_extract_cleanup_guard_rejection_warned(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# _apply_entity_resolution
+# --------------------------------------------------------------------------
+
+
+def test_apply_entity_resolution_none_stays_none_without_warning():
+    report = pipeline.CorpusReport()
+    meta = {"wk_name": None, "field_name": None, "project_name": None}
+    resolver = FakeEntityResolver()
+
+    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+
+    assert meta["wk_name"] is None
+    assert meta["field_name"] is None
+    assert meta["project_name"] is None
+    assert report.warnings == []
+    assert "entity_warnings" not in meta
+
+
+def test_apply_entity_resolution_unresolved_name_kept_with_warning():
+    report = pipeline.CorpusReport()
+    meta = {"wk_name": ["Nowhere Area"], "field_name": None, "project_name": None}
+    resolver = FakeEntityResolver()  # no matches configured -> everything unresolved
+
+    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+
+    assert meta["wk_name"] == ["Nowhere Area"]  # kept, not dropped to None
+    assert any(
+        "wk_name 'Nowhere Area' unresolved — kept as-is, verify manually" in w
+        for w in report.warnings
+    )
+    assert meta["entity_warnings"] == [
+        "wk_name 'Nowhere Area' unresolved — kept as-is, verify manually"
+    ]
+
+
+def test_apply_entity_resolution_multiple_matches_all_kept():
+    """resolver.resolve_name returns FINAL picks -- one raw name can legitimately
+    map to several canonical rows (e.g. "Arung Nowera" -> two separate fields),
+    so _apply_entity_resolution no longer collapses to a single best match.
+    """
+    report = pipeline.CorpusReport()
+    meta = {"wk_name": ["Rokan"], "field_name": None, "project_name": None}
+
+    class MultiMatchResolver:
+        def resolve_name(self, name, entity_type):
+            return [
+                {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 0.85},
+                {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0},
+            ]
+
+    pipeline._apply_entity_resolution(meta, MultiMatchResolver(), report, "doc.pdf")
+
+    assert meta["wk_name"] == ["WK Rokan", "Rokan"]  # every match kept, in order
+    assert any(
+        "wk_name 'Rokan' -> 'WK Rokan' (confidence 0.85)" in w for w in report.warnings
+    )
+    # the confidence==1.0 match doesn't get its own warning
+    assert not any("-> 'Rokan'" in w for w in report.warnings)
+
+
+def test_apply_entity_resolution_stale_warnings_cleared_on_clean_rerun():
+    """A sidecar with leftover entity_warnings from a prior (buggy/unresolved)
+    run must have them cleared once re-resolution comes back clean.
+    """
+    report = pipeline.CorpusReport()
+    meta = {
+        "wk_name": ["South Sumatera"],
+        "field_name": None,
+        "project_name": None,
+        "entity_warnings": ["field_name 'Arung Nowera' unresolved — stale"],
+    }
+    resolver = FakeEntityResolver(
+        matches={
+            "South Sumatera": {
+                "entity_type": "wk_name",
+                "name": "South Sumatera",
+                "confidence": 1.0,
+            }
+        }
+    )
+
+    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+
+    assert "entity_warnings" not in meta
+
+
+def test_apply_entity_resolution_no_warnings_key_absent():
+    report = pipeline.CorpusReport()
+    meta = {"wk_name": ["Rokan"], "field_name": None, "project_name": None}
+    resolver = FakeEntityResolver(
+        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}}
+    )
+
+    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+
+    assert "entity_warnings" not in meta
+    assert report.warnings == []
+
+
+# --------------------------------------------------------------------------
+# run_extract entity resolution
+# --------------------------------------------------------------------------
+
+
+def test_extract_resolves_entities_with_canonical_names_and_raw_entities(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {
+            "doc_type": "surat",
+            "doc_level": "wk",
+            "wk_name": "Rokann",
+        },
+    )
+    fake_resolver = FakeEntityResolver(
+        matches={"Rokann": {"entity_type": "wk_name", "name": "Rokan", "confidence": 0.9}}
+    )
+    monkeypatch.setattr(
+        pipeline, "_entity_resolver_or_none", lambda store, report: fake_resolver
+    )
+
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf])
+    assert report.failed == {}
+
+    meta, _body = read_sidecar(tmp_path / "surat.corpus.md")
+    assert meta["wk_name"] == ["Rokan"]
+    assert meta["raw_entities"]["wk_name"] == ["Rokann"]
+    assert any("confidence" in w for w in report.warnings)
+
+
+def test_extract_no_resolver_keeps_raw_names_with_skip_warning(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {
+            "doc_type": "surat",
+            "doc_level": "wk",
+            "wk_name": "Rokan",
+        },
+    )
+    monkeypatch.setattr(
+        pipeline, "_entity_resolver_or_none", lambda store, report: None
+    )
+
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    pipeline.run_extract([pdf])
+    meta, _body = read_sidecar(tmp_path / "surat.corpus.md")
+    assert meta["wk_name"] == ["Rokan"]  # raw name kept as-is
+    assert "raw_entities" not in meta
+
+
+def test_extract_entity_resolver_or_none_skips_when_tables_missing(tmp_path, monkeypatch):
+    """No lookup tables in the (fresh, empty) test DB -> resolution skipped once."""
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf])
+    skip_warnings = [w for w in report.warnings if "entity resolution skipped" in w]
+    assert len(skip_warnings) == 1
+    assert "esdc fetch" in skip_warnings[0]
+
+
+# --------------------------------------------------------------------------
 # run_commit
 # --------------------------------------------------------------------------
 
@@ -604,7 +809,76 @@ def test_commit_entity_resolution(tmp_path, monkeypatch):
 
     doc = store.get_document(file_hash[:16])
     assert doc["wk_name"] == ["Rokan"]
-    assert doc["project_name"] is None
+    # Unresolved names are kept as-is for manual review, never dropped.
+    assert doc["project_name"] == ["Unknown Project XYZ"]
+    store.close()
+
+
+def test_commit_entity_warnings_and_raw_entities_dont_leak_into_doc_columns(
+    tmp_path, monkeypatch
+):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)  # no matches -> everything unresolved
+
+    file_hash = "12" * 32
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name="Some Area",
+        raw_entities={"wk_name": ["Some Area"], "field_name": None, "project_name": None},
+    )
+
+    pipeline.run_commit([tmp_path])
+
+    doc = store.get_document(file_hash[:16])
+    assert "entity_warnings" not in doc
+    assert "entity_warnings" not in (doc.get("metadata") or {})
+    # sidecar-authored raw_entities is preferred over the commit-time resolve.
+    assert doc["raw_entities"] == {
+        "wk_name": ["Some Area"],
+        "field_name": None,
+        "project_name": None,
+    }
+    store.close()
+
+
+def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch):
+    """Skip-on-already-committed must short-circuit before resolution runs.
+
+    Re-commits of already-ingested docs should never re-invoke the resolver.
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+
+    class CountingResolver:
+        def __init__(self):
+            self.calls = 0
+
+        def resolve_name(self, name, entity_type):
+            self.calls += 1
+            return []
+
+    counting_resolver = CountingResolver()
+    monkeypatch.setattr(pipeline, "EntityResolver", lambda db: counting_resolver)
+
+    file_hash = "13" * 32
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokan"
+    )
+
+    report1 = pipeline.run_commit([tmp_path])
+    assert report1.processed == ["doc.corpus.md"]
+    calls_after_first = counting_resolver.calls
+    assert calls_after_first > 0
+
+    report2 = pipeline.run_commit([tmp_path])
+    assert report2.skipped == ["doc.corpus.md (already committed)"]
+    assert counting_resolver.calls == calls_after_first  # unchanged: not re-invoked
     store.close()
 
 

@@ -28,6 +28,7 @@ import fitz
 import ollama
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
+from esdc.chat.domain_knowledge.entity_registry import ENTITY_REGISTRY
 from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.configs import Config
 from esdc.console import console
@@ -35,6 +36,7 @@ from esdc.corpus.chunker import chunk_markdown
 from esdc.corpus.cleanup import cleanup_markdown
 from esdc.corpus.extractor import extract_pdf
 from esdc.corpus.metadata import (
+    ENTITY_FIELDS,
     METADATA_PROMPT_IMAGE,
     llm_extract,
     normalize_entity_fields,
@@ -46,9 +48,6 @@ from esdc.corpus.sidecar import read_sidecar, sidecar_path, write_sidecar
 from esdc.corpus.store import CorpusStore
 
 logger = logging.getLogger(__name__)
-
-# documents columns that go through canonical-entity resolution in run_commit.
-ENTITY_FIELDS = ("wk_name", "field_name", "project_name")
 
 
 @dataclass
@@ -167,6 +166,37 @@ def _prefill_metadata(
         return {}
 
 
+def _entity_resolver_or_none(
+    store: CorpusStore, report: CorpusReport
+) -> EntityResolver | None:
+    """Build an EntityResolver if the canonical lookup tables exist, else None.
+
+    Never raises: any failure (missing tables, no DB yet, connection error)
+    is reported as a single warning and resolution is skipped for the run.
+    """
+    lookup_tables = {
+        ENTITY_REGISTRY[key].lookup_table
+        for key in ("wk_name", "field_name", "project_name")
+    }
+    try:
+        conn = store._get_connection()
+        placeholders = ", ".join("?" for _ in lookup_tables)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            f"WHERE table_name IN ({placeholders})",
+            list(lookup_tables),
+        ).fetchone()
+        if row is None or row[0] < len(lookup_tables):
+            raise RuntimeError("lookup tables missing")
+        return EntityResolver(db=conn)
+    except Exception:
+        report.warnings.append(
+            "entity resolution skipped — canonical tables missing; "
+            "run `esdc fetch` first"
+        )
+        return None
+
+
 def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
     """Parse PDFs to reviewable ``.corpus.md`` sidecars (extract/commit step 1)."""
     report = CorpusReport()
@@ -193,104 +223,119 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
             "formatting cleanup skipped"
         )
 
-    # (name, pages_ocr, page_count) collected so the final report can be
-    # sorted by OCR ratio DESC once, instead of per-file.
-    entries: list[tuple[str, int, int]] = []
+    store = CorpusStore()
+    try:
+        resolver = _entity_resolver_or_none(store, report)
 
-    with Progress(
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(bar_width=36),
-        TextColumn("[green]{task.completed}/{task.total} files"),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        task_id = progress.add_task("extract", total=len(pdfs))
-        for pdf in pdfs:
-            name = pdf.name
-            progress.update(task_id, description=f"extract {name[:40]}")
-            if sidecar_path(pdf).exists() and not force:
-                report.skipped.append(f"{name} (sidecar exists)")
-                progress.advance(task_id)
-                continue
+        # (name, pages_ocr, page_count) collected so the final report can be
+        # sorted by OCR ratio DESC once, instead of per-file.
+        entries: list[tuple[str, int, int]] = []
 
-            try:
-                file_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
-                result = extract_pdf(
-                    pdf,
-                    ocr_client,
-                    cfg["min_chars_per_page"],
-                    cfg["ocr_dpi"],
-                    cfg["min_image_area"],
-                )
-                markdown = result.markdown
-                if cleanup_caller is not None:
-                    markdown, n_cleaned, n_rejected = cleanup_markdown(
-                        markdown, cleanup_caller
+        with Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=36),
+            TextColumn("[green]{task.completed}/{task.total} files"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("extract", total=len(pdfs))
+            for pdf in pdfs:
+                name = pdf.name
+                progress.update(task_id, description=f"extract {name[:40]}")
+                if sidecar_path(pdf).exists() and not force:
+                    report.skipped.append(f"{name} (sidecar exists)")
+                    progress.advance(task_id)
+                    continue
+
+                try:
+                    file_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
+                    result = extract_pdf(
+                        pdf,
+                        ocr_client,
+                        cfg["min_chars_per_page"],
+                        cfg["ocr_dpi"],
+                        cfg["min_image_area"],
                     )
-                    if n_cleaned:
-                        report.warnings.append(
-                            f"{name}: {n_cleaned} page segment(s) reformatted by "
-                            "cleanup model — verify against the original PDF"
+                    markdown = result.markdown
+                    if cleanup_caller is not None:
+                        markdown, n_cleaned, n_rejected = cleanup_markdown(
+                            markdown, cleanup_caller
                         )
-                    if n_rejected:
-                        report.warnings.append(
-                            f"{name}: {n_rejected} segment(s) failed cleanup guard "
-                            "— original text kept"
+                        if n_cleaned:
+                            report.warnings.append(
+                                f"{name}: {n_cleaned} page segment(s) reformatted by "
+                                "cleanup model — verify against the original PDF"
+                            )
+                        if n_rejected:
+                            report.warnings.append(
+                                f"{name}: {n_rejected} segment(s) failed cleanup guard "
+                                "— original text kept"
+                            )
+                    meta_fields = _prefill_metadata(
+                        pdf, markdown, metadata_caller, ocr_client, cfg, report, name
+                    )
+
+                    meta = {
+                        "source_file": name,
+                        "file_hash": file_hash,
+                        "page_count": result.page_count,
+                        "extraction_method": result.method,
+                        "reviewed": False,
+                        "doc_type": meta_fields.get("doc_type"),
+                        "doc_number": meta_fields.get("doc_number"),
+                        "doc_date": meta_fields.get("doc_date"),
+                        "subject": meta_fields.get("subject"),
+                        "sender": meta_fields.get("sender"),
+                        "recipient": meta_fields.get("recipient"),
+                        "doc_level": meta_fields.get("doc_level"),
+                        "wk_name": meta_fields.get("wk_name"),
+                        "field_name": meta_fields.get("field_name"),
+                        "project_name": meta_fields.get("project_name"),
+                        "extras": meta_fields.get("extras"),
+                    }
+                    meta = normalize_entity_fields(meta)
+
+                    if resolver is not None:
+                        raw_entities = _apply_entity_resolution(
+                            meta, resolver, report, name
                         )
-                meta_fields = _prefill_metadata(
-                    pdf, markdown, metadata_caller, ocr_client, cfg, report, name
-                )
+                        if any(v is not None for v in raw_entities.values()):
+                            meta["raw_entities"] = raw_entities
 
-                meta = {
-                    "source_file": name,
-                    "file_hash": file_hash,
-                    "page_count": result.page_count,
-                    "extraction_method": result.method,
-                    "reviewed": False,
-                    "doc_type": meta_fields.get("doc_type"),
-                    "doc_number": meta_fields.get("doc_number"),
-                    "doc_date": meta_fields.get("doc_date"),
-                    "subject": meta_fields.get("subject"),
-                    "sender": meta_fields.get("sender"),
-                    "recipient": meta_fields.get("recipient"),
-                    "doc_level": meta_fields.get("doc_level"),
-                    "wk_name": meta_fields.get("wk_name"),
-                    "field_name": meta_fields.get("field_name"),
-                    "project_name": meta_fields.get("project_name"),
-                    "extras": meta_fields.get("extras"),
-                }
-                meta = normalize_entity_fields(meta)
-                write_sidecar(pdf, meta, markdown)
+                    write_sidecar(pdf, meta, markdown)
 
-                if result.pages_ocr > 0:
-                    report.warnings.append(
-                        f"{name}: {result.pages_ocr}/{result.page_count} pages "
-                        "from OCR — review carefully"
-                    )
-                if result.images_ocr > 0:
-                    report.warnings.append(
-                        f"{name}: {result.images_ocr} embedded image(s) OCR'd "
-                        "— review the appended table/chart text carefully"
-                    )
-                if result.images_skipped > 0:
-                    report.warnings.append(
-                        f"{name}: {result.images_skipped} embedded image(s) skipped "
-                        "(no OCR model) — table/chart content may be missing"
-                    )
-                entries.append((name, result.pages_ocr, result.page_count))
-            except Exception as e:
-                report.failed[name] = str(e)
-            finally:
-                progress.advance(task_id)
+                    if result.pages_ocr > 0:
+                        report.warnings.append(
+                            f"{name}: {result.pages_ocr}/{result.page_count} pages "
+                            "from OCR — review carefully"
+                        )
+                    if result.images_ocr > 0:
+                        report.warnings.append(
+                            f"{name}: {result.images_ocr} embedded image(s) OCR'd "
+                            "— review the appended table/chart text carefully"
+                        )
+                    if result.images_skipped > 0:
+                        report.warnings.append(
+                            f"{name}: {result.images_skipped} embedded image(s) "
+                            "skipped (no OCR model) — table/chart content may be "
+                            "missing"
+                        )
+                    entries.append((name, result.pages_ocr, result.page_count))
+                except Exception as e:
+                    report.failed[name] = str(e)
+                finally:
+                    progress.advance(task_id)
 
-    entries.sort(
-        key=lambda e: (e[1] / e[2] if e[2] else 0.0),
-        reverse=True,
-    )
-    for name, pages_ocr, _page_count in entries:
-        report.processed.append(
-            name if pages_ocr > 0 else f"{name} [native — minimal review]"
+        entries.sort(
+            key=lambda e: (e[1] / e[2] if e[2] else 0.0),
+            reverse=True,
         )
+        for name, pages_ocr, _page_count in entries:
+            report.processed.append(
+                name if pages_ocr > 0 else f"{name} [native — minimal review]"
+            )
+    finally:
+        store.close()
 
     return report
 
@@ -304,10 +349,18 @@ def _apply_entity_resolution(
     """Resolve wk_name/field_name/project_name in-place on `meta`; return raw values.
 
     Input can be a list of names (e.g. ["ARUNG", "NOWERA"]) or a single string.
-    Stores all matches with confidence >= 0.8.
+    `resolver.resolve_name` now returns the final confident picks for a raw
+    name -- possibly more than one, since one raw string can legitimately
+    name several real entities (e.g. "Arung Nowera" naming two separate
+    fields). Names that don't resolve are kept as-is in `meta[key]` — never
+    dropped — so a reviewer can still find and fix them; `meta[key]` ends up
+    holding every resolved (or raw, if unresolved) name, deduped.
+    `meta["entity_warnings"]` collects the human-readable reasons why, and is
+    cleared entirely on a clean re-run so a stale warning from a prior
+    resolution never lingers after the sidecar is fixed.
     """
-    min_confidence = 0.8
     raw_entities: dict[str, Any | None] = {}
+    all_warnings: list[str] = []
     for key in ENTITY_FIELDS:
         raw = meta.get(key)
         raw_entities[key] = raw
@@ -317,37 +370,36 @@ def _apply_entity_resolution(
 
         # Normalize to list for uniform handling
         raw_list = raw if isinstance(raw, list) else [raw]
-        all_resolved: list[str] = []
-        all_warnings: list[str] = []
+        resolved: list[str] = []
 
         for raw_name in raw_list:
             if not raw_name:
                 continue
-            result = resolver.resolve(str(raw_name))
-            if result["status"] != "success" or not result["entities"]:
-                all_warnings.append(f"{key} '{raw_name}' unresolved")
+            matches = resolver.resolve_name(str(raw_name), key)
+            if not matches:
+                if raw_name not in resolved:
+                    resolved.append(raw_name)
+                all_warnings.append(
+                    f"{key} '{raw_name}' unresolved — kept as-is, verify manually"
+                )
                 continue
-            # Find matches for this specific field type with sufficient confidence
-            matches = [
-                e for e in result["entities"]
-                if e.get("entity_type") == key
-                and e.get("confidence", 0) >= min_confidence
-            ]
-            if matches:
-                for m in matches:
-                    if m["name"] not in all_resolved:
-                        all_resolved.append(m["name"])
-                    if m["confidence"] < 1.0:
-                        all_warnings.append(
-                            f"{key} '{raw_name}' -> '{m['name']}' "
-                            f"(confidence {m['confidence']})"
-                        )
-            else:
-                all_warnings.append(f"{key} '{raw_name}' unresolved")
+            for m in matches:
+                if m["name"] not in resolved:
+                    resolved.append(m["name"])
+                if m["confidence"] < 1.0:
+                    all_warnings.append(
+                        f"{key} '{raw_name}' -> '{m['name']}' "
+                        f"(confidence {m['confidence']})"
+                    )
 
-        meta[key] = all_resolved if all_resolved else None
+        meta[key] = resolved if resolved else None
+
+    if all_warnings:
+        meta["entity_warnings"] = all_warnings
         for w in all_warnings:
             report.warnings.append(f"{name}: {w}")
+    else:
+        meta.pop("entity_warnings", None)
     return raw_entities
 
 
@@ -409,10 +461,6 @@ def run_commit(
                     meta = normalize_metadata(meta)
                     meta = normalize_entity_fields(meta)
 
-                    raw_entities = _apply_entity_resolution(
-                        meta, resolver, report, name
-                    )
-
                     file_hash = meta.get("file_hash")
                     if not file_hash:
                         report.failed[name] = (
@@ -424,6 +472,14 @@ def run_commit(
                     if exists and not force:
                         report.skipped.append(f"{name} (already committed)")
                         continue
+
+                    # Safety net for hand-edited sidecars: re-resolve even
+                    # though extract already did this once.
+                    resolver_raws = _apply_entity_resolution(
+                        meta, resolver, report, name
+                    )
+                    sidecar_raws = meta.pop("raw_entities", None)
+                    meta.pop("entity_warnings", None)
 
                     chunks = chunk_markdown(
                         body, cfg["chunk_size"], cfg["chunk_overlap"]
@@ -447,7 +503,7 @@ def run_commit(
                         "wk_name": meta.get("wk_name"),
                         "field_name": meta.get("field_name"),
                         "project_name": meta.get("project_name"),
-                        "raw_entities": json.dumps(raw_entities),
+                        "raw_entities": json.dumps(sidecar_raws or resolver_raws),
                         "metadata": json.dumps(meta.get("extras") or {}),
                         "markdown": body,
                         "extraction_method": meta.get("extraction_method"),

@@ -300,6 +300,178 @@ class TestEntityResolver:
         assert result["suggested_table"] == "field_resources"
 
 
+class TestResolveName:
+    """resolve_name(): a targeted, no-NL-parsing lookup against one spec.
+
+    Returns FINAL confident picks (>= 0.8, word-boundary guarded) -- callers
+    no longer re-filter by confidence.
+    """
+
+    def test_whole_string_wins_first_single_best_only(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        """An exact whole-string hit short-circuits the fallback chain and
+        returns only the single best match -- not every row that happens to
+        contain the term (no fan-out from the whole-string step).
+        """
+        resolver = EntityResolver(db=mock_db)
+        matches = resolver.resolve_name("Duri", "field_name")
+        assert len(matches) == 1
+        assert matches[0]["name"] == "Duri"
+        assert matches[0]["confidence"] == 1.0
+
+    def test_unknown_entity_type_raises(self, mock_db: duckdb.DuckDBPyConnection):
+        resolver = EntityResolver(db=mock_db)
+        with pytest.raises(ValueError):
+            resolver.resolve_name("Duri", "not_a_real_entity_type")
+
+    def test_domain_word_stripping_resolves_via_normalized_phrase(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        """Unlike resolve(), there's no NL keyword-candidate extraction, but
+        the fallback chain's step 2 does strip domain boilerplate words
+        (including resolve_name-local noise words like "kerja") so a phrase
+        that doesn't match verbatim can still resolve via its stripped form.
+        """
+        resolver = EntityResolver(db=mock_db)
+        matches = resolver.resolve_name("wilayah kerja Rokan", "wk_name")
+        assert len(matches) == 1
+        assert matches[0]["name"] == "WK Rokan"
+        # The literal stored value still matches directly (whole-string step).
+        assert resolver.resolve_name("WK Rokan", "wk_name")[0]["name"] == "WK Rokan"
+
+    def test_empty_name_returns_empty(self, mock_db: duckdb.DuckDBPyConnection):
+        resolver = EntityResolver(db=mock_db)
+        assert resolver.resolve_name("", "field_name") == []
+        assert resolver.resolve_name("   ", "field_name") == []
+
+
+@pytest.fixture
+def multi_entity_db() -> duckdb.DuckDBPyConnection:
+    """DB fixture mirroring the real-world Arung/Nowera/Garung/Duri cases."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE project_resources (
+            uuid TEXT,
+            report_year INTEGER,
+            field_id TEXT,
+            field_name TEXT,
+            wk_id TEXT,
+            wk_name TEXT,
+            operator_name TEXT,
+            project_name TEXT,
+            project_class TEXT,
+            project_stage TEXT,
+            uncert_level TEXT,
+            project_remarks TEXT,
+            vol_remarks TEXT
+        )
+    """)
+    rows = [
+        ("ARUNG", "ARUNG - BASE", "South Sumatera"),
+        ("NOWERA", "NOWERA - BASE", "South Sumatera"),
+        ("GARUNG", "GARUNG - BASE", "Garung"),
+        ("PEMARUNG", "PEMARUNG BASE", "Garung"),
+        ("DURI", "Duri Phase 1", "WK Rokan"),
+        ("DURI UTARA", "Duri Utara Phase 1", "WK Rokan"),
+    ]
+    conn.executemany(
+        "INSERT INTO project_resources VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                f"u-{field_name}",
+                2024,
+                field_name,
+                field_name,
+                wk_name,
+                wk_name,
+                "Operator",
+                project_name,
+                "1. Reserves & GRR",
+                "1. Exploitation",
+                "2. Middle Value",
+                "",
+                "",
+            )
+            for field_name, project_name, wk_name in rows
+        ],
+    )
+    return conn
+
+
+class TestResolveNameFallbackChain:
+    """The full whole-string -> normalized-phrase -> segmentation chain."""
+
+    def test_splits_multi_entity_string(
+        self, multi_entity_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=multi_entity_db)
+        matches = resolver.resolve_name("Arung Nowera", "field_name")
+        names = sorted(m["name"] for m in matches)
+        assert names == ["ARUNG", "NOWERA"]
+
+    def test_strips_indonesian_domain_words_then_splits(
+        self, multi_entity_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=multi_entity_db)
+        matches = resolver.resolve_name(
+            "Proyek Pengembangan Lapangan Arung Nowera", "project_name"
+        )
+        names = sorted(m["name"] for m in matches)
+        assert names == ["ARUNG - BASE", "NOWERA - BASE"]
+
+    def test_boundary_guard_rejects_non_boundary_substring(
+        self, multi_entity_db: duckdb.DuckDBPyConnection
+    ):
+        """"arung" must not match GARUNG/PEMARUNG (no word-boundary containment)
+        even though a bare ILIKE substring test would clear the 0.8 threshold.
+        """
+        resolver = EntityResolver(db=multi_entity_db)
+        matches = resolver.resolve_name("arung", "field_name")
+        names = [m["name"] for m in matches]
+        assert "GARUNG" not in names
+        assert "PEMARUNG" not in names
+        assert names == ["ARUNG"]
+
+    def test_boundary_guard_rejects_non_boundary_substring_in_project_name(
+        self, multi_entity_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=multi_entity_db)
+        matches = resolver.resolve_name("arung", "project_name")
+        names = [m["name"] for m in matches]
+        assert "GARUNG - BASE" not in names
+        assert "PEMARUNG BASE" not in names
+        assert names == ["ARUNG - BASE"]
+
+    def test_no_fan_out_when_full_phrase_matches(
+        self, multi_entity_db: duckdb.DuckDBPyConnection
+    ):
+        """"Duri Utara" must resolve only to "DURI UTARA", not also "DURI" --
+        the whole-string step wins before segmentation could split it.
+        """
+        resolver = EntityResolver(db=multi_entity_db)
+        matches = resolver.resolve_name("Duri Utara", "field_name")
+        assert [m["name"] for m in matches] == ["DURI UTARA"]
+
+    def test_stopword_token_skipped_in_segmentation(
+        self, multi_entity_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=multi_entity_db)
+        matches = resolver.resolve_name("Arung dan Nowera", "field_name")
+        names = sorted(m["name"] for m in matches)
+        assert names == ["ARUNG", "NOWERA"]
+
+    def test_whole_string_still_wins_first_for_exact_name(
+        self, multi_entity_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=multi_entity_db)
+        matches = resolver.resolve_name("ARUNG - BASE", "project_name")
+        assert len(matches) == 1
+        assert matches[0]["name"] == "ARUNG - BASE"
+        assert matches[0]["confidence"] == 1.0
+
+
 class TestEntityResolverTool:
     @patch("esdc.chat.tools.get_db_connection")
     def test_tool_success(self, mock_get_db, mock_db: duckdb.DuckDBPyConnection):
