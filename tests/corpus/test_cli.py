@@ -27,6 +27,42 @@ def test_commit_invalid_doc_type_exits_1(tmp_path):
     assert "Error: --doc-type must be one of" in result.output
 
 
+def test_extract_invalid_level_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--level", "galaxy"]
+    )
+    assert result.exit_code == 1
+    assert "Error: --level must be one of wk, field, project." in result.output
+
+
+def test_extract_invalid_doc_type_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--doc-type", "invoice"]
+    )
+    assert result.exit_code == 1
+    assert "Error: --doc-type must be one of" in result.output
+
+
+def test_extract_passes_overrides_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_extract(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_extract", fake_run_extract)
+
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--wk-name", "Rokan", "--level", "wk"]
+    )
+    assert result.exit_code == 0
+    assert captured["wk_name"] == "Rokan"
+    assert captured["level"] == "wk"
+
+
 def test_clear_without_yes_exits_1_with_counts(monkeypatch):
     class FakeStore:
         def counts(self):

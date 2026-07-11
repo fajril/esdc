@@ -1918,6 +1918,19 @@ def _print_corpus_report(report) -> None:
         raise typer.Exit(1)
 
 
+def _validate_corpus_overrides(level: str | None, doc_type: str | None) -> None:
+    from esdc.corpus.metadata import DOC_TYPES
+
+    if level is not None and level not in ("wk", "field", "project"):
+        typer.echo("Error: --level must be one of wk, field, project.", err=True)
+        raise typer.Exit(1)
+    if doc_type is not None and doc_type not in DOC_TYPES:
+        typer.echo(
+            f"Error: --doc-type must be one of {', '.join(DOC_TYPES)}.", err=True
+        )
+        raise typer.Exit(1)
+
+
 def _open_corpus_store():
     """Open a CorpusStore with tables ensured, or exit 1 with a clear error."""
     from esdc.corpus.store import CorpusStore
@@ -1938,6 +1951,22 @@ def extract(
         list[Path],
         typer.Argument(exists=True, help="PDF file(s) or folder(s) to extract."),
     ],
+    level: Annotated[
+        str | None,
+        typer.Option("--level", help="Override doc_level: wk, field, project."),
+    ] = None,
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Override doc_type.")
+    ] = None,
+    wk_name: Annotated[
+        str | None, typer.Option("--wk-name", help="Override wk_name.")
+    ] = None,
+    field_name: Annotated[
+        str | None, typer.Option("--field-name", help="Override field_name.")
+    ] = None,
+    project_name: Annotated[
+        str | None, typer.Option("--project-name", help="Override project_name.")
+    ] = None,
     force: Annotated[
         bool,
         typer.Option("--force", help="Re-extract even if a sidecar already exists."),
@@ -1946,7 +1975,17 @@ def extract(
     """Parse PDFs to reviewable .corpus.md sidecar files (step 1 of 2)."""
     from esdc.corpus.pipeline import run_extract
 
-    report = run_extract(paths, force=force)
+    _validate_corpus_overrides(level, doc_type)
+
+    report = run_extract(
+        paths,
+        level=level,
+        doc_type=doc_type,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+        force=force,
+    )
     _print_corpus_report(report)
     if report.processed:
         typer.echo("Review the .corpus.md files, then run: esdc corpus commit <folder>")
@@ -1982,17 +2021,9 @@ def commit(
     ] = False,
 ) -> None:
     """Ingest reviewed .corpus.md sidecars into the searchable corpus (step 2 of 2)."""
-    from esdc.corpus.metadata import DOC_TYPES
     from esdc.corpus.pipeline import run_commit
 
-    if level is not None and level not in ("wk", "field", "project"):
-        typer.echo("Error: --level must be one of wk, field, project.", err=True)
-        raise typer.Exit(1)
-    if doc_type is not None and doc_type not in DOC_TYPES:
-        typer.echo(
-            f"Error: --doc-type must be one of {', '.join(DOC_TYPES)}.", err=True
-        )
-        raise typer.Exit(1)
+    _validate_corpus_overrides(level, doc_type)
 
     try:
         report = run_commit(

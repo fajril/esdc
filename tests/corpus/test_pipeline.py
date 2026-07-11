@@ -705,6 +705,101 @@ def test_extract_entity_resolver_or_none_skips_when_tables_missing(tmp_path, mon
 
 
 # --------------------------------------------------------------------------
+# run_extract CLI overrides
+# --------------------------------------------------------------------------
+
+
+def test_extract_cli_override_beats_prefill(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {
+            "doc_type": "surat",
+            "doc_level": "unknown",
+            "wk_name": "LLM WK",
+            "subject": "LLM Subject",
+        },
+    )
+
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract(
+        [pdf], wk_name="Rokan", level="wk", project_name="POD Duri"
+    )
+    assert report.failed == {}
+
+    meta, _body = read_sidecar(tmp_path / "surat.corpus.md")
+    assert meta["wk_name"] == ["Rokan"]
+    assert meta["doc_level"] == "wk"
+    assert meta["project_name"] == ["POD Duri"]
+    # non-overridden field keeps the LLM-prefilled value
+    assert meta["subject"] == "LLM Subject"
+
+
+def test_extract_override_none_keeps_prefill(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {
+            "doc_type": "surat",
+            "doc_level": "wk",
+            "wk_name": "LLM WK",
+        },
+    )
+
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf])
+    assert report.failed == {}
+
+    meta, _body = read_sidecar(tmp_path / "surat.corpus.md")
+    assert meta["wk_name"] == ["LLM WK"]
+    assert meta["doc_level"] == "wk"
+    assert meta["doc_type"] == "surat"
+
+
+def test_extract_override_goes_through_entity_resolution(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {"doc_type": "surat", "doc_level": "wk"},
+    )
+    fake_resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 0.9}
+        }
+    )
+    monkeypatch.setattr(
+        pipeline, "_entity_resolver_or_none", lambda store, report: fake_resolver
+    )
+
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf], wk_name="Rokan")
+    assert report.failed == {}
+
+    meta, _body = read_sidecar(tmp_path / "surat.corpus.md")
+    assert meta["wk_name"] == ["Rokan"]
+    assert meta["raw_entities"]["wk_name"] == ["Rokan"]
+    assert any("confidence" in w for w in report.warnings)
+
+
+# --------------------------------------------------------------------------
 # run_commit
 # --------------------------------------------------------------------------
 

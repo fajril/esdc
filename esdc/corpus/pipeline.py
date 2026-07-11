@@ -197,11 +197,34 @@ def _entity_resolver_or_none(
         return None
 
 
-def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
+def _apply_overrides(meta: dict[str, Any], overrides: dict[str, Any]) -> None:
+    """Apply non-None CLI override values onto metadata in place."""
+    for key, value in overrides.items():
+        if value is not None:
+            meta[key] = value
+
+
+def run_extract(
+    paths: list[Path],
+    level: str | None = None,
+    doc_type: str | None = None,
+    wk_name: str | None = None,
+    field_name: str | None = None,
+    project_name: str | None = None,
+    force: bool = False,
+) -> CorpusReport:
     """Parse PDFs to reviewable ``.corpus.md`` sidecars (extract/commit step 1)."""
     report = CorpusReport()
     cfg = Config.get_corpus_config()
     pdfs = _collect_pdfs(paths)
+
+    overrides = {
+        "doc_level": level,
+        "doc_type": doc_type,
+        "wk_name": wk_name,
+        "field_name": field_name,
+        "project_name": project_name,
+    }
 
     ollama_host = cfg.get("ollama_host") or None
     ocr = OllamaVisionOcr(
@@ -293,6 +316,7 @@ def run_extract(paths: list[Path], force: bool = False) -> CorpusReport:
                         "project_name": meta_fields.get("project_name"),
                         "extras": meta_fields.get("extras"),
                     }
+                    _apply_overrides(meta, overrides)
                     meta = normalize_entity_fields(meta)
 
                     if resolver is not None:
@@ -455,9 +479,7 @@ def run_commit(
                         report.skipped.append(f"{name} (pending review)")
                         continue
 
-                    for key, value in overrides.items():
-                        if value is not None:
-                            meta[key] = value
+                    _apply_overrides(meta, overrides)
                     meta = normalize_metadata(meta)
                     meta = normalize_entity_fields(meta)
 
