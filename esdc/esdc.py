@@ -2013,6 +2013,13 @@ def commit(
     project_name: Annotated[
         str | None, typer.Option("--project-name", help="Override project_name.")
     ] = None,
+    skip_review: Annotated[
+        bool,
+        typer.Option(
+            "--skip-review",
+            help="Ingest sidecars still pending review; marks reviewed on success.",
+        ),
+    ] = False,
     force: Annotated[
         bool, typer.Option("--force", help="Re-ingest even if already committed.")
     ] = False,
@@ -2033,6 +2040,7 @@ def commit(
             wk_name=wk_name,
             field_name=field_name,
             project_name=project_name,
+            skip_review=skip_review,
             force=force,
             dry_run=dry_run,
         )

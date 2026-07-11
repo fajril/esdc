@@ -12,11 +12,14 @@ def sidecar_path(pdf_path: Path) -> Path:
     return pdf_path.with_suffix(".corpus.md")
 
 
-def write_sidecar(pdf_path: Path, meta: dict[str, Any], body: str) -> Path:
-    path = sidecar_path(pdf_path)
+def write_sidecar_file(path: Path, meta: dict[str, Any], body: str) -> Path:
     front = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
     path.write_text(f"{DELIMITER}\n{front}\n{DELIMITER}\n{body}\n", encoding="utf-8")
     return path
+
+
+def write_sidecar(pdf_path: Path, meta: dict[str, Any], body: str) -> Path:
+    return write_sidecar_file(sidecar_path(pdf_path), meta, body)
 
 
 def read_sidecar(path: Path) -> tuple[dict[str, Any], str]:

@@ -822,6 +822,67 @@ def test_commit_pending_review_skipped_reviewed_ingested(tmp_path, monkeypatch):
     store.close()
 
 
+def test_commit_skip_review_ingests_pending_and_writes_back(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    sc = make_sidecar(tmp_path, "pending.pdf", reviewed=False, file_hash="aa" * 32,
+                      subject="orig subject")
+
+    report = pipeline.run_commit([tmp_path], skip_review=True)
+
+    assert report.processed == ["pending.corpus.md"]
+    assert report.skipped == []
+    assert any("ingested without review" in w for w in report.warnings)
+    meta, body = read_sidecar(sc)
+    assert meta["reviewed"] is True          # flipped
+    assert meta["subject"] == "orig subject" # everything else untouched
+    store.close()
+
+
+def test_commit_skip_review_dry_run_no_write_back(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    sc = make_sidecar(tmp_path, "pending.pdf", reviewed=False, file_hash="aa" * 32,
+                      subject="orig subject")
+
+    report = pipeline.run_commit([tmp_path], skip_review=True, dry_run=True)
+    assert report.processed == ["pending.corpus.md"]
+    meta, _ = read_sidecar(sc)
+    assert meta["reviewed"] is False         # dry run never touches the file
+    store.close()
+
+
+def test_commit_skip_review_reviewed_sidecar_not_rewritten(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    sc = make_sidecar(tmp_path, "ready.pdf", reviewed=True, file_hash="bb" * 32)
+
+    mtime_before = sc.stat().st_mtime_ns
+    report = pipeline.run_commit([tmp_path], skip_review=True)
+    assert report.processed == ["ready.corpus.md"]
+    assert not any("ingested without review" in w for w in report.warnings)
+    assert sc.stat().st_mtime_ns == mtime_before  # file untouched
+    store.close()
+
+
+def test_commit_without_skip_review_still_skips_pending(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    make_sidecar(tmp_path, "pending.pdf", reviewed=False, file_hash="aa" * 32)
+
+    report = pipeline.run_commit([tmp_path])
+    assert report.skipped == ["pending.corpus.md (pending review)"]
+    store.close()
+
+
 def test_commit_dedupe_and_force(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()

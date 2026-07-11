@@ -47,7 +47,12 @@ from esdc.corpus.metadata import (
     parse_llm_json,
 )
 from esdc.corpus.ocr import OllamaVisionOcr
-from esdc.corpus.sidecar import read_sidecar, sidecar_path, write_sidecar
+from esdc.corpus.sidecar import (
+    read_sidecar,
+    sidecar_path,
+    write_sidecar,
+    write_sidecar_file,
+)
 from esdc.corpus.store import CorpusStore
 
 logger = logging.getLogger(__name__)
@@ -486,6 +491,7 @@ def run_commit(
     wk_name: str | None = None,
     field_name: str | None = None,
     project_name: str | None = None,
+    skip_review: bool = False,
     force: bool = False,
     dry_run: bool = False,
 ) -> CorpusReport:
@@ -521,7 +527,9 @@ def run_commit(
                         report.failed[name] = str(e)
                         continue
 
-                    if meta.get("reviewed") is not True:
+                    raw_meta = dict(meta)
+                    pending = meta.get("reviewed") is not True
+                    if pending and not skip_review:
                         report.skipped.append(f"{name} (pending review)")
                         continue
 
@@ -590,6 +598,12 @@ def run_commit(
                     if exists and force:
                         store.delete_document(doc["doc_id"])
                     store.insert_document(doc, chunks)
+                    if pending:
+                        raw_meta["reviewed"] = True
+                        write_sidecar_file(sc, raw_meta, body)
+                        report.warnings.append(
+                            f"{name}: ingested without review (--skip-review)"
+                        )
                     report.processed.append(name)
                     any_processed = True
                 finally:

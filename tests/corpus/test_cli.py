@@ -63,6 +63,21 @@ def test_extract_passes_overrides_to_pipeline(tmp_path, monkeypatch):
     assert captured["level"] == "wk"
 
 
+def test_commit_passes_skip_review_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_commit(paths, **kwargs):
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_commit", fake_run_commit)
+    result = runner.invoke(app, ["corpus", "commit", str(tmp_path), "--skip-review"])
+    assert result.exit_code == 0
+    assert captured["skip_review"] is True
+
+
 def test_clear_without_yes_exits_1_with_counts(monkeypatch):
     class FakeStore:
         def counts(self):

@@ -2,11 +2,24 @@ from pathlib import Path
 
 import pytest
 
-from esdc.corpus.sidecar import read_sidecar, sidecar_path, write_sidecar
+from esdc.corpus.sidecar import (
+    read_sidecar,
+    sidecar_path,
+    write_sidecar,
+    write_sidecar_file,
+)
 
 
 def test_sidecar_path():
     assert sidecar_path(Path("/x/surat.pdf")) == Path("/x/surat.corpus.md")
+
+
+def test_write_sidecar_file_writes_to_exact_path(tmp_path):
+    sc = tmp_path / "doc.corpus.md"
+    write_sidecar_file(sc, {"file_hash": "aa", "reviewed": True}, "# Body")
+    meta, body = read_sidecar(sc)
+    assert meta["reviewed"] is True
+    assert "# Body" in body
 
 
 def test_roundtrip(tmp_path: Path):
