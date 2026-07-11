@@ -74,3 +74,27 @@ def test_code_fence_stripped():
 def test_prompt_forbids_rewording():
     assert "Do NOT reword" in CLEANUP_PROMPT
     assert "EXACTLY" in CLEANUP_PROMPT
+
+
+def test_native_docx_and_native_md_segments_are_cleanable():
+    doc = (
+        "<!-- page 1: native_docx -->\n"
+        "baris yang ter-\npotong dari docx\n\n"
+        "<!-- page 1: native_md -->\n"
+        "baris yang ter-\npotong dari md\n"
+    )
+    prompts = []
+
+    def caller(prompt: str) -> str:
+        prompts.append(prompt)
+        if "docx" in prompt:
+            return "baris yang terpotong dari docx"
+        return "baris yang terpotong dari md"
+
+    cleaned, n_cleaned, n_rejected = cleanup_markdown(doc, caller)
+    assert len(prompts) == 2
+    assert n_cleaned == 2 and n_rejected == 0
+    assert "baris yang terpotong dari docx" in cleaned
+    assert "baris yang terpotong dari md" in cleaned
+    assert "<!-- page 1: native_docx -->" in cleaned
+    assert "<!-- page 1: native_md -->" in cleaned

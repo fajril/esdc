@@ -37,7 +37,12 @@ from esdc.configs import Config
 from esdc.console import console
 from esdc.corpus.chunker import chunk_markdown
 from esdc.corpus.cleanup import cleanup_markdown
-from esdc.corpus.extractor import extract_pdf
+from esdc.corpus.extractor import (
+    SUPPORTED_EXTENSIONS,
+    extract_docx,
+    extract_markdown,
+    extract_pdf,
+)
 from esdc.corpus.metadata import (
     ENTITY_FIELDS,
     METADATA_PROMPT_IMAGE,
@@ -70,15 +75,25 @@ class CorpusReport:
     embedding_model: str = ""
 
 
-def _collect_pdfs(paths: list[Path]) -> list[Path]:
-    """Resolve a mix of PDF files and directories into a sorted, deduped list."""
+def _collect_sources(paths: list[Path]) -> list[Path]:
+    """Resolve a mix of source files/dirs into a sorted, deduped list.
+
+    Collects every ``SUPPORTED_EXTENSIONS`` file (``.pdf``, ``.docx``,
+    ``.md``). ``.md`` files that are our own sidecars (``*.corpus.md``)
+    are never collected as sources.
+    """
     found: set[Path] = set()
     for p in paths:
         if p.is_file():
-            if p.suffix.lower() == ".pdf":
+            suffix = p.suffix.lower()
+            if suffix in SUPPORTED_EXTENSIONS and not p.name.endswith(".corpus.md"):
                 found.add(p)
         elif p.is_dir():
-            found.update(p.rglob("*.pdf"))
+            for ext in SUPPORTED_EXTENSIONS:
+                for match in p.rglob(f"*{ext}"):
+                    if match.name.endswith(".corpus.md"):
+                        continue
+                    found.add(match)
     return sorted(found)
 
 
@@ -151,11 +166,15 @@ def _prefill_metadata(
     report: CorpusReport,
     name: str,
 ) -> dict[str, Any]:
-    """Best-effort metadata pre-fill. Never raises: failure is a warning."""
+    """Best-effort metadata pre-fill. Never raises: failure is a warning.
+
+    The image fallback renders the source's first page, so it only applies
+    to PDFs; non-PDF sources without a text model skip pre-fill entirely.
+    """
     try:
         if text_caller is not None:
             return llm_extract(markdown, text_caller)
-        if ocr_client is not None:
+        if ocr_client is not None and pdf.suffix.lower() == ".pdf":
             doc = fitz.open(str(pdf))
             try:
                 pix = doc[0].get_pixmap(dpi=cfg.get("ocr_dpi", 200))
@@ -165,8 +184,8 @@ def _prefill_metadata(
             raw = ocr_client.query_image(png_bytes, METADATA_PROMPT_IMAGE)
             return normalize_metadata(parse_llm_json(raw))
         report.warnings.append(
-            f"{name}: no metadata model configured and OCR unavailable "
-            "— metadata pre-fill skipped"
+            f"{name}: no metadata model configured and first-page image "
+            "fallback unavailable — metadata pre-fill skipped"
         )
         return {}
     except Exception as e:
@@ -272,10 +291,26 @@ def run_extract(
     project_name: str | None = None,
     force: bool = False,
 ) -> CorpusReport:
-    """Parse PDFs to reviewable ``.corpus.md`` sidecars (extract/commit step 1)."""
+    """Parse sources (PDF/docx/md) to reviewable ``.corpus.md`` sidecars.
+
+    (extract/commit step 1)
+    """
     report = CorpusReport()
     cfg = Config.get_corpus_config()
-    pdfs = _collect_pdfs(paths)
+    sources = _collect_sources(paths)
+
+    # Collision guard: distinct sources that would write to the same
+    # sidecar path (e.g. report.pdf + report.docx -> report.corpus.md).
+    # The first (in sorted order) wins; the rest fail with a clear message
+    # instead of silently overwriting each other's sidecar.
+    by_sidecar: dict[Path, list[Path]] = {}
+    for src in sources:
+        by_sidecar.setdefault(sidecar_path(src), []).append(src)
+    sources = []
+    for group in by_sidecar.values():
+        sources.append(group[0])
+        for dup in group[1:]:
+            report.failed[dup.name] = f"sidecar path collision with {group[0].name}"
 
     overrides = {
         "doc_level": level,
@@ -313,25 +348,33 @@ def run_extract(
         # sorted by OCR ratio DESC once, instead of per-file.
         entries: list[tuple[str, int, int]] = []
 
-        with _progress_with_status("extract", len(pdfs), "files") as p:
-            for pdf in pdfs:
-                name = pdf.name
+        with _progress_with_status("extract", len(sources), "files") as p:
+            for src in sources:
+                name = src.name
                 p.file(name)
-                if sidecar_path(pdf).exists() and not force:
+                if sidecar_path(src).exists() and not force:
                     report.skipped.append(f"{name} (sidecar exists)")
                     p.advance()
                     continue
 
                 try:
-                    file_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
-                    p.status("parsing PDF")
-                    result = extract_pdf(
-                        pdf,
-                        ocr_client,
-                        cfg["min_chars_per_page"],
-                        cfg["ocr_dpi"],
-                        cfg["min_image_area"],
-                    )
+                    file_hash = hashlib.sha256(src.read_bytes()).hexdigest()
+                    suffix = src.suffix.lower()
+                    if suffix == ".pdf":
+                        p.status("parsing PDF")
+                        result = extract_pdf(
+                            src,
+                            ocr_client,
+                            cfg["min_chars_per_page"],
+                            cfg["ocr_dpi"],
+                            cfg["min_image_area"],
+                        )
+                    elif suffix == ".docx":
+                        p.status("parsing docx")
+                        result = extract_docx(src)
+                    else:
+                        p.status("reading markdown")
+                        result = extract_markdown(src)
                     markdown = result.markdown
                     if cleanup_caller is not None:
                         p.status("cleanup formatting")
@@ -350,7 +393,7 @@ def run_extract(
                             )
                     p.status("prefill metadata")
                     meta_fields = _prefill_metadata(
-                        pdf, markdown, metadata_caller, ocr_client, cfg, report, name
+                        src, markdown, metadata_caller, ocr_client, cfg, report, name
                     )
 
                     meta = {
@@ -383,7 +426,7 @@ def run_extract(
                             meta["raw_entities"] = raw_entities
 
                     p.status("write sidecar")
-                    write_sidecar(pdf, meta, markdown)
+                    write_sidecar(src, meta, markdown)
 
                     if result.pages_ocr > 0:
                         report.warnings.append(
@@ -618,9 +661,9 @@ def run_commit(
 
 
 def run_status(paths: list[Path]) -> list[dict[str, str]]:
-    """Report each sidecar/PDF's place in the extract -> review -> commit flow."""
+    """Report each sidecar/source's place in the extract -> review -> commit flow."""
     sidecars = _collect_sidecars(paths)
-    pdfs = _collect_pdfs(paths)
+    sources = _collect_sources(paths)
     sidecar_set = set(sidecars)
 
     results: list[dict[str, str]] = []
@@ -656,9 +699,9 @@ def run_status(paths: list[Path]) -> list[dict[str, str]]:
             for idx, _file_hash in pending:
                 results[idx]["state"] = "unknown (db error)"
 
-    for pdf in pdfs:
-        if sidecar_path(pdf) not in sidecar_set:
-            results.append({"file": pdf.name, "state": "not extracted"})
+    for src in sources:
+        if sidecar_path(src) not in sidecar_set:
+            results.append({"file": src.name, "state": "not extracted"})
 
     return results
 

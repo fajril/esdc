@@ -174,6 +174,91 @@ def patch_entity_resolver(monkeypatch, matches=None):
     )
 
 
+def make_docx(tmp_path: Path, name: str = "doc.docx") -> Path:
+    """A minimal real .docx source (heading + paragraph)."""
+    from docx import Document
+
+    d = Document()
+    d.add_heading("Judul", level=1)
+    d.add_paragraph("isi dokumen penting")
+    path = tmp_path / name
+    d.save(path)
+    return path
+
+
+# --------------------------------------------------------------------------
+# _collect_sources
+# --------------------------------------------------------------------------
+
+
+def test_collect_sources_all_formats_excludes_sidecars(tmp_path):
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
+    make_docx(tmp_path, "b.docx")
+    (tmp_path / "c.md").write_text("# hi", encoding="utf-8")
+    (tmp_path / "c.corpus.md").write_text("sidecar content", encoding="utf-8")
+    (tmp_path / "d.txt").write_text("nope", encoding="utf-8")
+
+    got = pipeline._collect_sources([tmp_path])
+    names = {p.name for p in got}
+
+    assert names == {"a.pdf", "b.docx", "c.md"}
+    assert "c.corpus.md" not in names
+    assert "d.txt" not in names
+
+
+def test_collect_sources_collision_second_source_fails(tmp_path, monkeypatch):
+    (tmp_path / "report.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "report.docx").write_bytes(b"PK fake docx bytes")
+
+    def fake_extract_pdf(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("pdf body", "native", 1, 1, 0)
+
+    def fake_extract_docx(path):
+        return ExtractionResult("docx body", "native_docx", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract_pdf)
+    monkeypatch.setattr(pipeline, "extract_docx", fake_extract_docx)
+
+    report = pipeline.run_extract([tmp_path])
+
+    assert len(report.processed) == 1
+    assert len(report.failed) == 1
+    failed_name, failed_msg = next(iter(report.failed.items()))
+    assert failed_name in ("report.pdf", "report.docx")
+    assert "sidecar path collision" in failed_msg
+    # only one sidecar written, for the winner
+    assert (tmp_path / "report.corpus.md").exists()
+
+
+def test_extract_md_source_end_to_end(tmp_path, monkeypatch):
+    src = tmp_path / "notes.md"
+    src.write_text("# Judul\n\nisi dokumen penting", encoding="utf-8")
+
+    report = pipeline.run_extract([src])
+    assert report.failed == {}
+
+    sidecar = tmp_path / "notes.corpus.md"
+    assert sidecar.exists()
+    meta, body = read_sidecar(sidecar)
+    assert meta["extraction_method"] == "native_md"
+    assert "isi dokumen penting" in body
+    assert report.processed == ["notes.md [native — minimal review]"]
+
+
+def test_extract_docx_source_end_to_end(tmp_path, monkeypatch):
+    src = make_docx(tmp_path, "report.docx")
+
+    report = pipeline.run_extract([src])
+    assert report.failed == {}
+
+    sidecar = tmp_path / "report.corpus.md"
+    assert sidecar.exists()
+    meta, body = read_sidecar(sidecar)
+    assert meta["extraction_method"] == "native_docx"
+    assert "isi dokumen penting" in body
+    assert report.processed == ["report.docx [native — minimal review]"]
+
+
 # --------------------------------------------------------------------------
 # run_extract
 # --------------------------------------------------------------------------

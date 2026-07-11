@@ -14,8 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+import docx
 import fitz
 import pymupdf4llm
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 logger = logging.getLogger(__name__)
 
@@ -135,3 +138,104 @@ def extract_pdf(
         images_ocr=images_ocr,
         images_skipped=images_skipped,
     )
+
+
+def _escape_cell(text: str) -> str:
+    return text.replace("|", "\\|").strip()
+
+
+def _table_to_markdown(table: Table) -> str:
+    """Convert a docx Table to a markdown table; first row is the header.
+
+    Merged cells: python-docx repeats the merged text across every grid
+    cell it spans, so those repeats are emitted as-is (documented
+    limitation — no attempt to detect/collapse spans).
+    """
+    rows = [[_escape_cell(cell.text) for cell in row.cells] for row in table.rows]
+    if not rows:
+        return ""
+    header = "| " + " | ".join(rows[0]) + " |"
+    sep = "| " + " | ".join("---" for _ in rows[0]) + " |"
+    lines = [header, sep]
+    for row in rows[1:]:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
+def extract_docx(path: Path) -> ExtractionResult:
+    """Extract a .docx source to markdown, walking the document in order.
+
+    Headings become '#'-prefixed lines (level from the 'Heading N' style),
+    plain paragraphs pass through verbatim, and tables become markdown
+    tables (see `_table_to_markdown`). Embedded images are not OCR'd in
+    v1 — they are only counted in `images_skipped`.
+    """
+    document = docx.Document(str(path))
+    parts: list[str] = []
+    for block in document.iter_inner_content():
+        if isinstance(block, Paragraph):
+            text = block.text.strip()
+            if not text:
+                continue
+            style = (block.style.name or "") if block.style else ""
+            if style.startswith("Heading"):
+                level_str = style.removeprefix("Heading").strip()
+                level = int(level_str) if level_str.isdigit() else 1
+                parts.append(f"{'#' * level} {text}")
+            else:
+                parts.append(text)
+        elif isinstance(block, Table):
+            table_md = _table_to_markdown(block)
+            if table_md:
+                parts.append(table_md)
+
+    images_skipped = len(document.inline_shapes)
+
+    if not parts:
+        raise ValueError(f"{path.name}: no extractable content")
+
+    return ExtractionResult(
+        markdown="<!-- page 1: native_docx -->\n" + "\n\n".join(parts),
+        method="native_docx",
+        page_count=1,
+        pages_native=1,
+        pages_ocr=0,
+        images_skipped=images_skipped,
+    )
+
+
+def extract_markdown(path: Path) -> ExtractionResult:
+    """Read a markdown source verbatim (frontmatter, if any, is kept as content)."""
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"{path.name}: no extractable content")
+    return ExtractionResult(
+        markdown=f"<!-- page 1: native_md -->\n{text}",
+        method="native_md",
+        page_count=1,
+        pages_native=1,
+        pages_ocr=0,
+    )
+
+
+SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".md")
+
+
+def extract_document(
+    path: Path,
+    ocr_client: OcrClient | None,
+    min_chars_per_page: int = 50,
+    ocr_dpi: int = 200,
+    min_image_area: float = 0.05,
+) -> ExtractionResult:
+    """Route a source file to its format converter (see SUPPORTED_EXTENSIONS)."""
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return extract_pdf(
+            path, ocr_client, min_chars_per_page, ocr_dpi, min_image_area
+        )
+    if suffix == ".docx":
+        return extract_docx(path)
+    if suffix == ".md":
+        return extract_markdown(path)
+    raise ValueError(f"{path.name}: unsupported format '{suffix}'")

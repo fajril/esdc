@@ -1949,7 +1949,9 @@ def _open_corpus_store():
 def extract(
     paths: Annotated[
         list[Path],
-        typer.Argument(exists=True, help="PDF file(s) or folder(s) to extract."),
+        typer.Argument(
+            exists=True, help="Source file(s) (.pdf, .docx, .md) or folder(s)."
+        ),
     ],
     level: Annotated[
         str | None,
@@ -1972,7 +1974,7 @@ def extract(
         typer.Option("--force", help="Re-extract even if a sidecar already exists."),
     ] = False,
 ) -> None:
-    """Parse PDFs to reviewable .corpus.md sidecar files (step 1 of 2)."""
+    """Parse .pdf/.docx/.md sources to reviewable .corpus.md sidecars (step 1 of 2)."""
     from esdc.corpus.pipeline import run_extract
 
     _validate_corpus_overrides(level, doc_type)

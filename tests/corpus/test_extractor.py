@@ -3,7 +3,15 @@ from pathlib import Path
 import fitz  # PyMuPDF, pulled in by pymupdf4llm
 import pytest
 
-from esdc.corpus.extractor import ExtractionResult, extract_pdf
+from esdc.corpus import extractor
+from esdc.corpus.extractor import (
+    SUPPORTED_EXTENSIONS,
+    ExtractionResult,
+    extract_document,
+    extract_docx,
+    extract_markdown,
+    extract_pdf,
+)
 
 
 @pytest.fixture
@@ -151,3 +159,167 @@ def test_big_image_without_ocr_client_skipped_not_fatal(image_table_pdf):
     assert result.method == "native"
     assert "<!-- page 1 image" not in result.markdown
     assert "Halaman digital" in result.markdown
+
+
+# --------------------------------------------------------------------------
+# extract_markdown
+# --------------------------------------------------------------------------
+
+
+def test_extract_markdown_verbatim(tmp_path):
+    src = tmp_path / "notes.md"
+    src.write_text("# Judul\n\nisi dokumen", encoding="utf-8")
+    r = extract_markdown(src)
+    assert r.markdown.startswith("<!-- page 1: native_md -->")
+    assert "# Judul" in r.markdown and "isi dokumen" in r.markdown
+    assert (r.method, r.page_count, r.pages_native, r.pages_ocr) == (
+        "native_md",
+        1,
+        1,
+        0,
+    )
+
+
+def test_extract_markdown_empty_raises(tmp_path):
+    src = tmp_path / "empty.md"
+    src.write_text("   \n", encoding="utf-8")
+    with pytest.raises(ValueError, match="no extractable"):
+        extract_markdown(src)
+
+
+# --------------------------------------------------------------------------
+# extract_docx
+# --------------------------------------------------------------------------
+
+
+def _tiny_png_bytes() -> bytes:
+    """A tiny (4x4) real PNG, generated via fitz so no extra image dep is needed."""
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 4, 4), False)
+    pix.clear_with(200)
+    return pix.tobytes("png")
+
+
+def make_docx(
+    tmp_path: Path,
+    name: str = "doc.docx",
+    *,
+    headings: tuple[str, ...] = (),
+    paragraphs: tuple[str, ...] = (),
+    table: list[list[str]] | None = None,
+    image: bool = False,
+) -> Path:
+    from io import BytesIO
+
+    from docx import Document
+
+    d = Document()
+    for h in headings:
+        d.add_heading(h, level=1)
+    for p in paragraphs:
+        d.add_paragraph(p)
+    if table:
+        t = d.add_table(rows=len(table), cols=len(table[0]))
+        for i, row in enumerate(table):
+            for j, cell in enumerate(row):
+                t.cell(i, j).text = cell
+    if image:
+        d.add_picture(BytesIO(_tiny_png_bytes()))
+    path = tmp_path / name
+    d.save(path)
+    return path
+
+
+def test_extract_docx_headings_paragraphs_in_order(tmp_path):
+    path = make_docx(
+        tmp_path,
+        headings=("Judul",),
+        paragraphs=("paragraf pertama", "paragraf kedua"),
+    )
+    r = extract_docx(path)
+    assert "<!-- page 1: native_docx -->" in r.markdown
+    assert r.method == "native_docx"
+    assert (r.page_count, r.pages_native, r.pages_ocr) == (1, 1, 0)
+    idx_heading = r.markdown.index("# Judul")
+    idx_p1 = r.markdown.index("paragraf pertama")
+    idx_p2 = r.markdown.index("paragraf kedua")
+    assert idx_heading < idx_p1 < idx_p2
+
+
+def test_extract_docx_table_to_markdown_table(tmp_path):
+    path = make_docx(
+        tmp_path,
+        table=[["Nama", "Jabatan"], ["Andi", "Kepala"], ["A|B", "C"]],
+    )
+    r = extract_docx(path)
+    assert "| Nama | Jabatan |" in r.markdown
+    assert "| --- | --- |" in r.markdown
+    assert "| Andi | Kepala |" in r.markdown
+    assert "| A\\|B | C |" in r.markdown
+
+
+def test_extract_docx_image_counted_skipped(tmp_path):
+    path = make_docx(tmp_path, paragraphs=("teks",), image=True)
+    r = extract_docx(path)
+    assert r.images_skipped == 1
+    assert r.images_ocr == 0
+
+
+def test_extract_docx_empty_raises(tmp_path):
+    from docx import Document
+
+    d = Document()
+    path = tmp_path / "empty.docx"
+    d.save(path)
+    with pytest.raises(ValueError, match="no extractable"):
+        extract_docx(path)
+
+
+# --------------------------------------------------------------------------
+# extract_document dispatcher
+# --------------------------------------------------------------------------
+
+
+def test_supported_extensions_contains_pdf_docx_md():
+    assert SUPPORTED_EXTENSIONS == (".pdf", ".docx", ".md")
+
+
+def test_extract_document_routes_pdf(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        extractor, "extract_pdf", lambda path, ocr_client, a, b, c: calls.append(
+            ("pdf", path, ocr_client)
+        )
+    )
+    path = tmp_path / "doc.pdf"
+    path.write_bytes(b"%PDF-1.4")
+    extract_document(path, ocr_client="sentinel-ocr")
+    assert calls == [("pdf", path, "sentinel-ocr")]
+
+
+def test_extract_document_routes_docx(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        extractor, "extract_docx", lambda path: calls.append(("docx", path))
+    )
+    path = tmp_path / "doc.docx"
+    path.write_bytes(b"PK")
+    extract_document(path, ocr_client=None)
+    assert calls == [("docx", path)]
+
+
+def test_extract_document_routes_markdown(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        extractor, "extract_markdown", lambda path: calls.append(("md", path))
+    )
+    path = tmp_path / "notes.md"
+    path.write_text("hi")
+    extract_document(path, ocr_client=None)
+    assert calls == [("md", path)]
+
+
+def test_extract_document_unsupported_extension_raises(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("hi")
+    with pytest.raises(ValueError, match="unsupported format"):
+        extract_document(path, ocr_client=None)
