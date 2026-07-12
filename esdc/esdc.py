@@ -2393,6 +2393,72 @@ def corpus_status(
         typer.echo(f"  {state}: {n}")
 
 
+@corpus_app.command(name="meta")
+def corpus_meta(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(exists=True, help="Sidecar .corpus.md file(s) or folder(s)."),
+    ],
+    level: Annotated[
+        str | None,
+        typer.Option("--level", help="Set doc_level: wk, field, project."),
+    ] = None,
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Set doc_type.")
+    ] = None,
+    wk_name: Annotated[
+        str | None, typer.Option("--wk-name", help="Set wk_name.")
+    ] = None,
+    field_name: Annotated[
+        str | None, typer.Option("--field-name", help="Set field_name.")
+    ] = None,
+    project_name: Annotated[
+        str | None, typer.Option("--project-name", help="Set project_name.")
+    ] = None,
+    reviewed: Annotated[
+        bool | None,
+        typer.Option("--reviewed/--no-reviewed", help="Set the reviewed flag."),
+    ] = None,
+) -> None:
+    """Show or bulk-set .corpus.md frontmatter metadata.
+
+    Without flags: print a metadata table. With flags: write the values
+    into each sidecar's frontmatter (re-running entity resolution).
+    """
+    from esdc.corpus.pipeline import run_meta, run_meta_show
+
+    _validate_corpus_overrides(level, doc_type)
+
+    values = (level, doc_type, wk_name, field_name, project_name, reviewed)
+    if all(v is None for v in values):
+        rows = run_meta_show(paths)
+        table = [
+            (
+                r["file"],
+                r.get("error") or r.get("doc_type"),
+                r.get("doc_date"),
+                r.get("doc_level"),
+                _entity_display(r),
+                r.get("reviewed"),
+            )
+            for r in rows
+        ]
+        headers = ["file", "doc_type", "doc_date", "doc_level", "entity", "reviewed"]
+        rich.print(tabulate(table, headers=headers, tablefmt="psql"))
+        return
+
+    report = run_meta(
+        paths,
+        level=level,
+        doc_type=doc_type,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+        reviewed=reviewed,
+    )
+    _print_corpus_report(report)
+
+
 def _entity_display(d: dict) -> str:
     """Join first non-empty entity field for display."""
     for key in ("wk_name", "field_name", "project_name"):

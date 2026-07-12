@@ -110,6 +110,73 @@ def test_commit_model_mismatch_prints_clean_error(tmp_path, monkeypatch):
     assert "Traceback" not in result.output
 
 
+def test_meta_invalid_level_exits_1(tmp_path):
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--level", "bogus"])
+    assert result.exit_code == 1
+    assert "Error: --level must be one of wk, field, project." in result.output
+
+
+def test_meta_invalid_doc_type_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "meta", str(tmp_path), "--doc-type", "bogus"]
+    )
+    assert result.exit_code == 1
+    assert "Error: --doc-type must be one of" in result.output
+
+
+def test_meta_passes_overrides_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_meta(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_meta", fake_run_meta)
+
+    result = runner.invoke(
+        app,
+        ["corpus", "meta", str(tmp_path), "--wk-name", "Rokan", "--reviewed"],
+    )
+    assert result.exit_code == 0
+    assert captured["wk_name"] == "Rokan"
+    assert captured["reviewed"] is True
+
+
+def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def fake_run_meta_show(paths):
+        return [
+            {
+                "file": "a.corpus.md",
+                "doc_type": "psc",
+                "doc_date": "2024-01-01",
+                "doc_level": "wk",
+                "wk_name": ["Rokan"],
+                "field_name": None,
+                "project_name": None,
+                "reviewed": False,
+            }
+        ]
+
+    called = {"run_meta": False}
+
+    def fake_run_meta(paths, **kwargs):
+        called["run_meta"] = True
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_meta_show", fake_run_meta_show)
+    monkeypatch.setattr(pipeline, "run_meta", fake_run_meta)
+
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path)])
+    assert result.exit_code == 0
+    assert called["run_meta"] is False
+    assert "a.corpus.md" in result.output
+
+
 def test_entity_display_handles_legacy_plain_string():
     from esdc.esdc import _entity_display
 
