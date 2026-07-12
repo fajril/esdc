@@ -2231,15 +2231,51 @@ def _print_corpus_report(report) -> None:
         raise typer.Exit(1)
 
 
-def _validate_corpus_overrides(level: str | None, doc_type: str | None) -> None:
-    from esdc.corpus.metadata import DOC_TYPES
+def _validate_corpus_overrides(
+    level: str | None,
+    doc_type: str | None,
+    topic: str | None = None,
+    wk_name: str | None = None,
+    field_name: str | None = None,
+    project_name: str | None = None,
+) -> None:
+    from esdc.corpus.metadata import DOC_LEVELS, DOC_TOPICS, DOC_TYPES, doc_level_rule
 
-    if level is not None and level not in ("wk", "field", "project"):
-        typer.echo("Error: --level must be one of wk, field, project.", err=True)
+    allowed_levels = tuple(lv for lv in DOC_LEVELS if lv != "unknown")
+    if level is not None and level not in allowed_levels:
+        typer.echo(
+            f"Error: --level must be one of {', '.join(allowed_levels)}.", err=True
+        )
         raise typer.Exit(1)
     if doc_type is not None and doc_type not in DOC_TYPES:
         typer.echo(
             f"Error: --doc-type must be one of {', '.join(DOC_TYPES)}.", err=True
+        )
+        raise typer.Exit(1)
+    if topic is not None and topic not in DOC_TOPICS:
+        typer.echo(
+            f"Error: --topic must be one of {', '.join(DOC_TOPICS)}.", err=True
+        )
+        raise typer.Exit(1)
+
+    rule = doc_level_rule(doc_type, [topic] if topic is not None else None)
+    implied_level = rule[2] if rule is not None else None
+
+    entity_given = any(v is not None for v in (wk_name, field_name, project_name))
+    effective_level = level or implied_level
+    if effective_level == "regulation" and entity_given:
+        typer.echo(
+            "Error: regulation documents cannot have wk/field/project entities.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if level is not None and implied_level is not None and level != implied_level:
+        kind, key, _ = rule
+        typer.echo(
+            f"Error: --level {level} conflicts with the {kind} '{key}' rule "
+            f"(implies {implied_level}).",
+            err=True,
         )
         raise typer.Exit(1)
 
@@ -2268,10 +2304,16 @@ def extract(
     ],
     level: Annotated[
         str | None,
-        typer.Option("--level", help="Override doc_level: wk, field, project."),
+        typer.Option(
+            "--level", help="Override doc_level: wk, field, project, regulation."
+        ),
     ] = None,
     doc_type: Annotated[
         str | None, typer.Option("--doc-type", help="Override doc_type.")
+    ] = None,
+    topic: Annotated[
+        str | None,
+        typer.Option("--topic", help="Set doc_topic (single value)."),
     ] = None,
     wk_name: Annotated[
         str | None, typer.Option("--wk-name", help="Override wk_name.")
@@ -2290,13 +2332,14 @@ def extract(
     """Parse .pdf/.docx/.md sources to reviewable .corpus.md sidecars (step 1 of 2)."""
     from esdc.corpus.pipeline import run_extract
 
-    _validate_corpus_overrides(level, doc_type)
+    _validate_corpus_overrides(level, doc_type, topic, wk_name, field_name, project_name)
 
     try:
         report = run_extract(
             paths,
             level=level,
             doc_type=doc_type,
+            topic=topic,
             wk_name=wk_name,
             field_name=field_name,
             project_name=project_name,
@@ -2382,10 +2425,16 @@ def corpus_meta(
     ],
     level: Annotated[
         str | None,
-        typer.Option("--level", help="Set doc_level: wk, field, project."),
+        typer.Option(
+            "--level", help="Set doc_level: wk, field, project, regulation."
+        ),
     ] = None,
     doc_type: Annotated[
         str | None, typer.Option("--doc-type", help="Set doc_type.")
+    ] = None,
+    topic: Annotated[
+        str | None,
+        typer.Option("--topic", help="Set doc_topic (single value)."),
     ] = None,
     wk_name: Annotated[
         str | None, typer.Option("--wk-name", help="Set wk_name.")
@@ -2408,15 +2457,16 @@ def corpus_meta(
     """
     from esdc.corpus.pipeline import run_meta, run_meta_show
 
-    _validate_corpus_overrides(level, doc_type)
+    _validate_corpus_overrides(level, doc_type, topic, wk_name, field_name, project_name)
 
-    values = (level, doc_type, wk_name, field_name, project_name, reviewed)
+    values = (level, doc_type, topic, wk_name, field_name, project_name, reviewed)
     if all(v is None for v in values):
         rows = run_meta_show(paths)
         table = [
             (
                 r["file"],
                 r.get("doc_type"),
+                _topic_display(r.get("doc_topic")),
                 r.get("doc_date"),
                 r.get("doc_level"),
                 _entity_display(r),
@@ -2426,7 +2476,8 @@ def corpus_meta(
             for r in rows
         ]
         headers = [
-            "file", "doc_type", "doc_date", "doc_level", "entity", "reviewed", "note",
+            "file", "doc_type", "topic", "doc_date", "doc_level", "entity",
+            "reviewed", "note",
         ]
         rich.print(tabulate(table, headers=headers, tablefmt="psql"))
         return
@@ -2436,6 +2487,7 @@ def corpus_meta(
             paths,
             level=level,
             doc_type=doc_type,
+            topic=topic,
             wk_name=wk_name,
             field_name=field_name,
             project_name=project_name,
@@ -2445,6 +2497,15 @@ def corpus_meta(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
     _print_corpus_report(report)
+
+
+def _topic_display(topic: Any) -> str:
+    """Join a doc_topic list for table display; blank for None/empty."""
+    if not topic:
+        return ""
+    if isinstance(topic, list):
+        return ", ".join(str(t) for t in topic)
+    return str(topic)
 
 
 def _entity_display(d: dict) -> str:

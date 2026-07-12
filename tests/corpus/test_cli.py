@@ -26,7 +26,10 @@ def test_extract_invalid_level_exits_1(tmp_path):
         app, ["corpus", "extract", str(tmp_path), "--level", "galaxy"]
     )
     assert result.exit_code == 1
-    assert "Error: --level must be one of wk, field, project." in result.output
+    assert (
+        "Error: --level must be one of wk, field, project, regulation."
+        in result.output
+    )
 
 
 def test_extract_invalid_doc_type_exits_1(tmp_path):
@@ -35,6 +38,115 @@ def test_extract_invalid_doc_type_exits_1(tmp_path):
     )
     assert result.exit_code == 1
     assert "Error: --doc-type must be one of" in result.output
+
+
+def test_extract_invalid_topic_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--topic", "bogus"]
+    )
+    assert result.exit_code == 1
+    assert "Error: --topic must be one of" in result.output
+
+
+def test_extract_passes_topic_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_extract(paths, **kwargs):
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_extract", fake_run_extract)
+
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--topic", "wpnb"]
+    )
+    assert result.exit_code == 0
+    assert captured["topic"] == "wpnb"
+
+
+def test_extract_level_regulation_with_entity_flag_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "corpus",
+            "extract",
+            str(tmp_path),
+            "--level",
+            "regulation",
+            "--wk-name",
+            "Rokan",
+        ],
+    )
+    assert result.exit_code == 1
+    assert (
+        "regulation documents cannot have wk/field/project entities"
+        in result.output
+    )
+
+
+def test_extract_doc_type_implies_regulation_with_entity_flag_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "corpus",
+            "extract",
+            str(tmp_path),
+            "--doc-type",
+            "uu",
+            "--field-name",
+            "Duri",
+        ],
+    )
+    assert result.exit_code == 1
+    assert (
+        "regulation documents cannot have wk/field/project entities"
+        in result.output
+    )
+
+
+def test_extract_explicit_level_conflicts_with_doc_type_rule_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        ["corpus", "extract", str(tmp_path), "--level", "wk", "--doc-type", "uu"],
+    )
+    assert result.exit_code == 1
+    assert "conflicts" in result.output
+    assert "doc_type 'uu' rule" in result.output
+
+
+def test_extract_explicit_level_conflicts_with_topic_rule_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        ["corpus", "extract", str(tmp_path), "--level", "wk", "--topic", "pod"],
+    )
+    assert result.exit_code == 1
+    assert "conflicts" in result.output
+    assert "doc_topic 'pod' rule" in result.output
+
+
+def test_extract_level_matches_doc_type_rule_no_conflict(tmp_path, monkeypatch):
+    """Explicit --level equal to the implied rule's level is not a conflict."""
+    import esdc.corpus.pipeline as pipeline
+
+    monkeypatch.setattr(
+        pipeline, "run_extract", lambda paths, **kwargs: pipeline.CorpusReport()
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "corpus",
+            "extract",
+            str(tmp_path),
+            "--level",
+            "regulation",
+            "--doc-type",
+            "uu",
+        ],
+    )
+    assert result.exit_code == 0
 
 
 def test_extract_passes_overrides_to_pipeline(tmp_path, monkeypatch):
@@ -107,7 +219,10 @@ def test_commit_model_mismatch_prints_clean_error(tmp_path, monkeypatch):
 def test_meta_invalid_level_exits_1(tmp_path):
     result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--level", "bogus"])
     assert result.exit_code == 1
-    assert "Error: --level must be one of wk, field, project." in result.output
+    assert (
+        "Error: --level must be one of wk, field, project, regulation."
+        in result.output
+    )
 
 
 def test_meta_invalid_doc_type_exits_1(tmp_path):
@@ -116,6 +231,57 @@ def test_meta_invalid_doc_type_exits_1(tmp_path):
     )
     assert result.exit_code == 1
     assert "Error: --doc-type must be one of" in result.output
+
+
+def test_meta_invalid_topic_exits_1(tmp_path):
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--topic", "bogus"])
+    assert result.exit_code == 1
+    assert "Error: --topic must be one of" in result.output
+
+
+def test_meta_topic_passes_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_meta(paths, **kwargs):
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_meta", fake_run_meta)
+
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--topic", "wpnb"])
+    assert result.exit_code == 0
+    assert captured["topic"] == "wpnb"
+
+
+def test_meta_level_regulation_with_entity_flag_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "corpus",
+            "meta",
+            str(tmp_path),
+            "--level",
+            "regulation",
+            "--project-name",
+            "POD Duri",
+        ],
+    )
+    assert result.exit_code == 1
+    assert (
+        "regulation documents cannot have wk/field/project entities"
+        in result.output
+    )
+
+
+def test_meta_explicit_level_conflicts_with_topic_rule_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "meta", str(tmp_path), "--level", "field", "--topic", "afe"]
+    )
+    assert result.exit_code == 1
+    assert "conflicts" in result.output
+    assert "doc_topic 'afe' rule" in result.output
 
 
 def test_meta_passes_overrides_to_pipeline(tmp_path, monkeypatch):
@@ -146,7 +312,8 @@ def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
         return [
             {
                 "file": "a.corpus.md",
-                "doc_type": "psc",
+                "doc_type": "contract",
+                "doc_topic": ["wpnb"],
                 "doc_date": "2024-01-01",
                 "doc_level": "wk",
                 "wk_name": ["Rokan"],
@@ -170,6 +337,7 @@ def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert called["run_meta"] is False
     assert "a.corpus.md" in result.output
+    assert "topic" in result.output
     # An unreadable sidecar's error lands in its own trailing `note`
     # column — never under doc_type.
     assert "note" in result.output
@@ -182,7 +350,8 @@ def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
     good_line = next(
         line for line in result.output.splitlines() if "a.corpus.md" in line
     )
-    assert "psc" in good_line
+    assert "contract" in good_line
+    assert "wpnb" in good_line
     assert "missing YAML frontmatter" not in good_line
 
 
