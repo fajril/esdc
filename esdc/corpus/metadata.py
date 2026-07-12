@@ -55,10 +55,16 @@ def normalize_metadata(parsed: dict[str, Any]) -> dict[str, Any]:
     """
     out = dict(parsed)
     raw_type = out.get("doc_type")
+    # Vocab codes are acronyms (UU, PSC, ...) the LLM often capitalizes —
+    # compare lowercase so casing never demotes a valid type to "others".
+    if isinstance(raw_type, str):
+        raw_type = raw_type.lower()
     raw_type = legacy_doc_type_map().get(raw_type, raw_type)
     out["doc_type"] = raw_type if raw_type in DOC_TYPES else "others"
-    if out.get("doc_level") not in DOC_LEVELS:
-        out["doc_level"] = "unknown"
+    raw_level = out.get("doc_level")
+    if isinstance(raw_level, str):
+        raw_level = raw_level.lower()
+    out["doc_level"] = raw_level if raw_level in DOC_LEVELS else "unknown"
     return out
 
 

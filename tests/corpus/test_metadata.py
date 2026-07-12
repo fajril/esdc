@@ -118,6 +118,18 @@ def test_normalize_metadata_clamps_unknown_to_others():
     assert normalize_metadata({"doc_type": "invoice"})["doc_type"] == "others"
 
 
+def test_normalize_metadata_is_case_insensitive():
+    assert normalize_metadata({"doc_type": "UU"})["doc_type"] == "uu"
+    assert normalize_metadata({"doc_type": "Psc"})["doc_type"] == "psc"
+    assert normalize_metadata({"doc_type": "Surat"})["doc_type"] == "letter"
+    assert normalize_metadata({"doc_level": "WK"})["doc_level"] == "wk"
+
+
+def test_normalize_metadata_non_string_doc_type_clamped():
+    assert normalize_metadata({"doc_type": 3})["doc_type"] == "others"
+    assert normalize_metadata({"doc_level": ["wk"]})["doc_level"] == "unknown"
+
+
 def test_llm_extract_uses_caller():
     result = llm_extract("# Surat\nisi", lambda prompt: '{"doc_type": "letter"}')
     assert result["doc_type"] == "letter"
