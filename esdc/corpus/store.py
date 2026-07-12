@@ -50,7 +50,7 @@ def _parse_json_fields(doc: dict[str, Any], keys: tuple[str, ...]) -> dict[str, 
 _EXACT_FILTER_COLUMNS = ("doc_type", "doc_level")
 # Columns on `documents` that store JSON arrays; filtered via case-insensitive
 # substring match over each array element (json_each + ILIKE).
-_JSON_ARRAY_FILTER_COLUMNS = ("wk_name", "field_name", "project_name")
+_JSON_ARRAY_FILTER_COLUMNS = ("wk_name", "field_name", "project_name", "doc_topic")
 
 
 class CorpusStore:
@@ -154,6 +154,7 @@ class CorpusStore:
                 file_path VARCHAR NOT NULL,
                 file_hash VARCHAR NOT NULL UNIQUE,
                 doc_type VARCHAR,
+                doc_topic JSON,
                 doc_number VARCHAR,
                 doc_date DATE,
                 subject TEXT,
@@ -172,6 +173,10 @@ class CorpusStore:
                 ingested_at TIMESTAMP DEFAULT current_timestamp
             )
         """)
+        # documents predating the doc_topic split (Task 4) won't have this
+        # column — CREATE TABLE IF NOT EXISTS above is a no-op for them, so
+        # add it explicitly. Idempotent: a no-op once the column exists.
+        conn.execute(f"ALTER TABLE {self.DOC_TABLE} ADD COLUMN IF NOT EXISTS doc_topic JSON")
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.CHUNK_TABLE} (
                 chunk_id VARCHAR PRIMARY KEY,
@@ -250,6 +255,7 @@ class CorpusStore:
         conn = self._get_connection()
         doc_indexes = [
             ("idx_doc_doc_type", "doc_type"),
+            ("idx_doc_doc_topic", "doc_topic"),
             ("idx_doc_doc_level", "doc_level"),
             ("idx_doc_wk_name", "wk_name"),
             ("idx_doc_field_name", "field_name"),
@@ -292,12 +298,12 @@ class CorpusStore:
             conn.execute(
                 f"""
                 INSERT INTO {self.DOC_TABLE} (
-                    doc_id, file_name, file_path, file_hash, doc_type,
+                    doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
                     doc_number, doc_date, subject, sender, recipient,
                     doc_level, wk_name, field_name, project_name,
                     raw_entities, metadata, markdown, extraction_method,
                     embedding_model, page_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     doc["doc_id"],
@@ -305,6 +311,7 @@ class CorpusStore:
                     doc["file_path"],
                     doc["file_hash"],
                     doc.get("doc_type"),
+                    _to_json(doc.get("doc_topic")),
                     doc.get("doc_number"),
                     doc.get("doc_date"),
                     doc.get("subject"),
@@ -366,28 +373,28 @@ class CorpusStore:
         conn = self._get_connection()
         rows = conn.execute(f"""
             SELECT
-                d.doc_id, d.file_name, d.doc_type, d.doc_date, d.subject,
-                d.doc_level, d.wk_name, d.field_name, d.project_name,
+                d.doc_id, d.file_name, d.doc_type, d.doc_topic, d.doc_date,
+                d.subject, d.doc_level, d.wk_name, d.field_name, d.project_name,
                 d.extraction_method, d.page_count, d.ingested_at,
                 COUNT(c.chunk_id) AS n_chunks
             FROM {self.DOC_TABLE} d
             LEFT JOIN {self.CHUNK_TABLE} c ON c.doc_id = d.doc_id
             GROUP BY
-                d.doc_id, d.file_name, d.doc_type, d.doc_date, d.subject,
-                d.doc_level, d.wk_name, d.field_name, d.project_name,
+                d.doc_id, d.file_name, d.doc_type, d.doc_topic, d.doc_date,
+                d.subject, d.doc_level, d.wk_name, d.field_name, d.project_name,
                 d.extraction_method, d.page_count, d.ingested_at
             ORDER BY d.ingested_at DESC
         """).fetchall()
 
         columns = [
-            "doc_id", "file_name", "doc_type", "doc_date", "subject",
+            "doc_id", "file_name", "doc_type", "doc_topic", "doc_date", "subject",
             "doc_level", "wk_name", "field_name", "project_name",
             "extraction_method", "page_count", "ingested_at", "n_chunks",
         ]
         docs = []
         for row in rows:
             doc = dict(zip(columns, row, strict=True))
-            _parse_json_fields(doc, ("wk_name", "field_name", "project_name"))
+            _parse_json_fields(doc, ("doc_topic", "wk_name", "field_name", "project_name"))
             docs.append(doc)
         return docs
 
@@ -761,7 +768,7 @@ class CorpusStore:
         conn = self._get_connection()
         row = conn.execute(
             f"""
-            SELECT doc_id, file_name, file_path, file_hash, doc_type,
+            SELECT doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
                    doc_number, doc_date, subject, sender, recipient,
                    doc_level, wk_name, field_name, project_name,
                    raw_entities, metadata, markdown, extraction_method,
@@ -775,7 +782,7 @@ class CorpusStore:
             return None
 
         columns = [
-            "doc_id", "file_name", "file_path", "file_hash", "doc_type",
+            "doc_id", "file_name", "file_path", "file_hash", "doc_type", "doc_topic",
             "doc_number", "doc_date", "subject", "sender", "recipient",
             "doc_level", "wk_name", "field_name", "project_name",
             "raw_entities", "metadata", "markdown", "extraction_method",
@@ -783,7 +790,15 @@ class CorpusStore:
         ]
         doc = dict(zip(columns, row, strict=True))
         _parse_json_fields(
-            doc, ("wk_name", "field_name", "project_name", "raw_entities", "metadata")
+            doc,
+            (
+                "doc_topic",
+                "wk_name",
+                "field_name",
+                "project_name",
+                "raw_entities",
+                "metadata",
+            ),
         )
         return doc
 

@@ -52,7 +52,7 @@ def store(tmp_path: Path):
 
 DOC = {
     "doc_id": "abc123", "file_name": "s.pdf", "file_path": "/x/s.pdf",
-    "file_hash": "ab" * 32, "doc_type": "surat",
+    "file_hash": "ab" * 32, "doc_type": "surat", "doc_topic": None,
     "doc_number": "SRT-1", "doc_date": "2026-01-05", "subject": "Persetujuan",
     "sender": "SKK", "recipient": "KKKS", "doc_level": "field",
     "wk_name": "Rokan", "field_name": "Duri", "project_name": None,
@@ -266,5 +266,106 @@ def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
         result = store.search("drilling")
         assert result["status"] == "success"
         assert result["results"][0]["wk_name"] == ["Rokan"]
+    finally:
+        store.close()
+
+
+def test_insert_and_get_doc_topic_round_trip(store):
+    doc = dict(DOC)
+    doc["doc_topic"] = ["psc", "wpnb"]
+    store.insert_document(doc, [Chunk(0, None, "isi")])
+    got = store.get_document(doc["doc_id"])
+    assert got["doc_topic"] == ["psc", "wpnb"]
+
+
+def test_list_documents_includes_doc_topic(store):
+    doc = dict(DOC)
+    doc["doc_topic"] = ["pod_i"]
+    store.insert_document(doc, [Chunk(0, None, "isi")])
+    docs = store.list_documents()
+    assert docs[0]["doc_topic"] == ["pod_i"]
+
+
+def test_build_filter_clause_doc_topic_case_insensitive_substring(tmp_path: Path):
+    store = CorpusStore(db_path=tmp_path / "c3.duckdb", embedder=FakeEmbedder())
+    try:
+        store.ensure_tables()
+        doc1 = _doc_variant("d1", "d1.pdf")
+        doc1["doc_topic"] = ["psc"]
+        store.insert_document(doc1, [Chunk(0, None, "isi d1")])
+        doc2 = _doc_variant("d2", "d2.pdf")
+        doc2["doc_topic"] = ["wpnb"]
+        store.insert_document(doc2, [Chunk(0, None, "isi d2")])
+
+        clause, params = store._build_filter_clause({"doc_topic": "psc"}, "d")
+        rows = store._get_connection().execute(
+            f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params
+        ).fetchall()
+        assert [r[0] for r in rows] == ["d1"]
+    finally:
+        store.close()
+
+
+def test_search_filter_by_doc_topic_returns_matching_doc_only(tmp_path: Path):
+    store = CorpusStore(db_path=tmp_path / "c4.duckdb", embedder=FakeEmbedder())
+    try:
+        store.ensure_tables()
+        doc1 = _doc_variant("d1", "d1.pdf")
+        doc1["doc_topic"] = ["psc"]
+        store.insert_document(doc1, [Chunk(0, None, "persetujuan kontrak PSC")])
+        doc2 = _doc_variant("d2", "d2.pdf")
+        doc2["doc_topic"] = ["wpnb"]
+        store.insert_document(doc2, [Chunk(0, None, "pengajuan WPNB")])
+        store.rebuild_indexes()
+
+        result = store.search(
+            "persetujuan", limit=5, filters={"doc_topic": "psc"}
+        )
+        assert result["status"] == "success"
+        assert {r["doc_id"] for r in result["results"]} == {"d1"}
+    finally:
+        store.close()
+
+
+def test_ensure_tables_adds_doc_topic_column_to_legacy_documents_table(
+    tmp_path: Path,
+):
+    """ensure_tables must not crash on a documents table predating doc_topic,
+    and must add the column so json_each-based filters work afterward."""
+    db = tmp_path / "legacy_topic.duckdb"
+
+    conn = duckdb.connect(str(db))
+    conn.execute(
+        """
+        CREATE TABLE documents (
+            doc_id VARCHAR PRIMARY KEY, file_name VARCHAR, file_path VARCHAR,
+            file_hash VARCHAR, doc_type VARCHAR, doc_number VARCHAR,
+            doc_date DATE, subject VARCHAR, sender VARCHAR, recipient VARCHAR,
+            doc_level VARCHAR, wk_name JSON, field_name JSON,
+            project_name JSON, raw_entities JSON, metadata JSON,
+            markdown TEXT NOT NULL, extraction_method VARCHAR,
+            embedding_model VARCHAR, page_count INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_path, file_hash, "
+        "markdown, extraction_method) "
+        "VALUES ('abc', 'a.pdf', '/a.pdf', 'h1', 'body', 'text')"
+    )
+    conn.close()
+
+    store = CorpusStore(db_path=db, embedder=FakeEmbedder())
+    try:
+        store.ensure_tables()  # must not crash
+        row = store._get_connection().execute(
+            "SELECT doc_topic FROM documents WHERE doc_id = 'abc'"
+        ).fetchone()
+        assert row[0] is None
+        # json_each-based filter must not raise on the new column either.
+        store._get_connection().execute(
+            "SELECT count(*) FROM documents WHERE doc_topic IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM json_each(doc_topic))"
+        ).fetchone()
     finally:
         store.close()
