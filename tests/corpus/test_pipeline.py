@@ -1576,6 +1576,125 @@ def test_meta_warns_on_legacy_remap_and_level_rule(tmp_path, monkeypatch):
     )
 
 
+# --------------------------------------------------------------------------
+# run_meta --regenerate
+# --------------------------------------------------------------------------
+
+
+def test_meta_regenerate_refills_fields_and_resets_reviewed(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {
+            "doc_type": "mom",
+            "doc_topic": ["monitoring_pod"],
+            "doc_number": "99",
+            "doc_date": "2026-02-02",
+            "subject": "New Subject",
+            "sender": "New Sender",
+            "recipient": "New Recipient",
+            "doc_level": "wk",
+            "wk_name": ["Rokan"],
+            "field_name": None,
+            "project_name": None,
+            "extras": {"peserta": ["A"]},
+        },
+    )
+    _patch_rokan_resolver(monkeypatch)
+    sc = make_sidecar(
+        tmp_path,
+        "a.pdf",
+        reviewed=True,
+        file_hash="a1" * 32,
+        doc_type="letter",
+        subject="Old Subject",
+    )
+
+    report = pipeline.run_meta([tmp_path], regenerate=True)
+
+    meta, body = read_sidecar(sc)
+    assert meta["doc_type"] == "mom"
+    assert meta["subject"] == "New Subject"
+    assert meta["doc_topic"] == ["monitoring_pod"]
+    assert meta["doc_number"] == "99"
+    assert meta["extras"] == {"peserta": ["A"]}
+    assert meta["reviewed"] is False
+    assert "isi dokumen penting" in body
+    assert report.processed == ["a.corpus.md"]
+
+
+def test_meta_regenerate_explicit_flag_beats_regenerated_value(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {"doc_type": "mom", "doc_level": "wk"},
+    )
+    sc = make_sidecar(
+        tmp_path, "a.pdf", reviewed=True, file_hash="a2" * 32, doc_type="letter"
+    )
+
+    report = pipeline.run_meta([tmp_path], regenerate=True, doc_type="ba")
+
+    meta, _body = read_sidecar(sc)
+    assert meta["doc_type"] == "ba"
+    assert report.processed == ["a.corpus.md"]
+
+
+def test_meta_regenerate_explicit_reviewed_true_preserved(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline, "llm_extract", lambda markdown, caller: {"doc_type": "mom"}
+    )
+    sc = make_sidecar(tmp_path, "a.pdf", reviewed=True, file_hash="a3" * 32)
+
+    report = pipeline.run_meta([tmp_path], regenerate=True, reviewed=True)
+
+    meta, _body = read_sidecar(sc)
+    assert meta["reviewed"] is True
+    assert report.processed == ["a.corpus.md"]
+
+
+def test_meta_regenerate_no_model_raises_before_touching_files(tmp_path, monkeypatch):
+    cfg = dict(DEFAULT_CFG)
+    cfg["metadata_model"] = ""
+    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
+
+    sc = make_sidecar(tmp_path, "a.pdf", reviewed=True, file_hash="a4" * 32)
+    before = sc.read_bytes()
+
+    with pytest.raises(
+        ValueError, match="--regenerate requires a reachable metadata_model"
+    ):
+        pipeline.run_meta([tmp_path], regenerate=True)
+
+    assert sc.read_bytes() == before
+
+
+def test_meta_regenerate_preserves_body_and_housekeeping_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {"doc_type": "mom", "doc_number": "X"},
+    )
+    sc = make_sidecar(
+        tmp_path,
+        "a.pdf",
+        reviewed=True,
+        file_hash="a5" * 32,
+        body="# Title\nverbatim body text",
+        page_count=7,
+    )
+
+    report = pipeline.run_meta([tmp_path], regenerate=True)
+
+    meta, body = read_sidecar(sc)
+    assert meta["file_hash"] == "a5" * 32
+    assert meta["source_file"] == "a.pdf"
+    assert meta["page_count"] == 7
+    assert meta["extraction_method"] == "native"
+    assert "verbatim body text" in body
+    assert report.processed == ["a.corpus.md"]
+
+
 def test_meta_reviewed_flag_explicit(tmp_path, monkeypatch):
     sc = make_sidecar(tmp_path, "a.pdf", reviewed=False, file_hash="bb" * 32)
 

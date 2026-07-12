@@ -880,6 +880,23 @@ def run_status(paths: list[Path]) -> list[dict[str, str]]:
     return results
 
 
+# LLM-owned fields --regenerate replaces wholesale, before overrides/rules run.
+_REGENERATE_FIELDS = (
+    "doc_type",
+    "doc_topic",
+    "doc_number",
+    "doc_date",
+    "subject",
+    "sender",
+    "recipient",
+    "doc_level",
+    "wk_name",
+    "field_name",
+    "project_name",
+    "extras",
+)
+
+
 def run_meta(
     paths: list[Path],
     level: str | None = None,
@@ -889,6 +906,7 @@ def run_meta(
     field_name: str | None = None,
     project_name: str | None = None,
     reviewed: bool | None = None,
+    regenerate: bool = False,
 ) -> CorpusReport:
     """Bulk-edit ``.corpus.md`` sidecar frontmatter in place.
 
@@ -896,6 +914,12 @@ def run_meta(
     which never reached the file). Re-runs entity resolution as a safety net
     and warns when the sidecar is already committed, since the store copy
     only updates on ``commit --force``.
+
+    ``regenerate=True`` re-runs the LLM metadata analysis on each sidecar's
+    existing markdown body (no re-parse/OCR) and replaces the LLM-owned
+    fields with the fresh result before overrides/rules apply — explicit
+    flags in the same invocation still win. Requires a reachable
+    ``metadata_model``; raises before touching any file otherwise.
     """
     report = CorpusReport()
     sidecars = _collect_sidecars(paths)
@@ -912,6 +936,17 @@ def run_meta(
         "field_name": field_name,
         "project_name": project_name,
     }
+
+    regen_caller = None
+    if regenerate:
+        cfg = Config.get_corpus_config()
+        ollama_host = cfg.get("ollama_host") or None
+        regen_caller = _resolve_text_caller(cfg.get("metadata_model"), ollama_host)
+        if regen_caller is None:
+            raise ValueError(
+                "--regenerate requires a reachable metadata_model "
+                "(set corpus.metadata_model in config)"
+            )
 
     store: CorpusStore | None = None
     resolver = None
@@ -941,9 +976,16 @@ def run_meta(
                     report.failed[name] = str(e)
                     continue
 
+                if regenerate:
+                    regen_fields = llm_extract(body, regen_caller)
+                    for key in _REGENERATE_FIELDS:
+                        meta[key] = regen_fields.get(key)
+
                 _apply_overrides(meta, overrides)
                 if reviewed is not None:
                     meta["reviewed"] = reviewed
+                elif regenerate:
+                    meta["reviewed"] = False
 
                 pre_rule_meta = dict(meta)
                 meta = _apply_meta_rules(meta)

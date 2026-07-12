@@ -355,6 +355,47 @@ def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
     assert "missing YAML frontmatter" not in good_line
 
 
+def test_meta_regenerate_alone_is_valid_invocation(tmp_path, monkeypatch):
+    """--regenerate alone (no other flags) must call run_meta, not show-mode."""
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+    called = {"run_meta_show": False}
+
+    def fake_run_meta(paths, **kwargs):
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    def fake_run_meta_show(paths):
+        called["run_meta_show"] = True
+        return []
+
+    monkeypatch.setattr(pipeline, "run_meta", fake_run_meta)
+    monkeypatch.setattr(pipeline, "run_meta_show", fake_run_meta_show)
+
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--regenerate"])
+    assert result.exit_code == 0
+    assert called["run_meta_show"] is False
+    assert captured["regenerate"] is True
+
+
+def test_meta_regenerate_value_error_exits_1(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def raise_no_model(*args, **kwargs):
+        raise ValueError(
+            "--regenerate requires a reachable metadata_model "
+            "(set corpus.metadata_model in config)"
+        )
+
+    monkeypatch.setattr(pipeline, "run_meta", raise_no_model)
+
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--regenerate"])
+    assert result.exit_code == 1
+    assert "Error: --regenerate requires a reachable metadata_model" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_meta_unknown_entity_prints_clean_error(tmp_path, monkeypatch):
     import esdc.corpus.pipeline as pipeline
 

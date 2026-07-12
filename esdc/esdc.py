@@ -2449,6 +2449,17 @@ def corpus_meta(
         bool | None,
         typer.Option("--reviewed/--no-reviewed", help="Set the reviewed flag."),
     ] = None,
+    regenerate: Annotated[
+        bool,
+        typer.Option(
+            "--regenerate",
+            help=(
+                "Re-run LLM metadata analysis on each sidecar's existing body "
+                "(requires a reachable metadata_model); resets reviewed to "
+                "false unless --reviewed/--no-reviewed is also passed."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Show or bulk-set .corpus.md frontmatter metadata.
 
@@ -2460,7 +2471,7 @@ def corpus_meta(
     _validate_corpus_overrides(level, doc_type, topic, wk_name, field_name, project_name)
 
     values = (level, doc_type, topic, wk_name, field_name, project_name, reviewed)
-    if all(v is None for v in values):
+    if not regenerate and all(v is None for v in values):
         rows = run_meta_show(paths)
         table = [
             (
@@ -2492,8 +2503,10 @@ def corpus_meta(
             field_name=field_name,
             project_name=project_name,
             reviewed=reviewed,
+            regenerate=regenerate,
         )
-    except ValueError as e:  # e.g. --wk-name value not in canonical tables
+    except ValueError as e:  # e.g. --wk-name value not in canonical tables, or
+        # --regenerate with no reachable metadata_model
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
     _print_corpus_report(report)
