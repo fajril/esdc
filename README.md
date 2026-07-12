@@ -322,7 +322,11 @@ Ingestion is two steps with a human review gate in between — nothing reaches t
    ```
    Every page is wrapped in a `<!-- page N: native -->` or `<!-- page N: llm_ocr -->` marker.
 
-2. **Review** — open the `.corpus.md` file in an editor, check the `llm_ocr` pages against the source PDF, correct the prefilled frontmatter (doc_type, dates, entities, etc.), then flip `reviewed: false` to `reviewed: true`. Sidecars still marked `reviewed: false` are skipped on commit.
+2. **Review** — open the `.corpus.md` file in an editor, check the `llm_ocr` pages against the source PDF, correct the prefilled frontmatter (doc_type, dates, entities, etc.), then flip `reviewed: false` to `reviewed: true`. Sidecars still marked `reviewed: false` are skipped on commit. Metadata can also be bulk-edited across many sidecars at once instead of hand-editing each file:
+   ```bash
+   esdc corpus meta path/to/folder/ --wk-name "Rokan"   # bulk-set, persists to frontmatter
+   esdc corpus meta path/to/folder/                     # no flags: show current metadata
+   ```
 
 3. **Commit** — ingest reviewed sidecars into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed):
    ```bash
@@ -334,6 +338,7 @@ Ingestion is two steps with a human review gate in between — nothing reaches t
 
 ```bash
 esdc corpus status path/to/folder/   # where each PDF/sidecar sits in extract -> review -> commit
+esdc corpus meta path/to/folder/     # show sidecar metadata; add flags (--wk-name ...) to bulk-set
 esdc corpus list                     # documents committed to the corpus
 esdc corpus remove <doc_id>...       # remove document(s) (files on disk untouched)
 esdc corpus clear --yes              # delete the entire corpus
