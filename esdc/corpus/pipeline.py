@@ -753,6 +753,30 @@ def run_status(paths: list[Path]) -> list[dict[str, str]]:
     return results
 
 
+def run_meta_show(paths: list[Path]) -> list[dict[str, Any]]:
+    """Read-only metadata listing for ``.corpus.md`` sidecars."""
+    rows: list[dict[str, Any]] = []
+    for sc in _collect_sidecars(paths):
+        try:
+            meta, _body = read_sidecar(sc)
+        except ValueError as e:
+            rows.append({"file": sc.name, "error": str(e)})
+            continue
+        rows.append(
+            {
+                "file": sc.name,
+                "doc_type": meta.get("doc_type"),
+                "doc_date": meta.get("doc_date"),
+                "doc_level": meta.get("doc_level"),
+                "wk_name": meta.get("wk_name"),
+                "field_name": meta.get("field_name"),
+                "project_name": meta.get("project_name"),
+                "reviewed": meta.get("reviewed"),
+            }
+        )
+    return rows
+
+
 def run_reembed() -> CorpusReport:
     """Rebuild chunk embeddings for every document with the current embedder.
 

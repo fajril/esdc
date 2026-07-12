@@ -1262,6 +1262,52 @@ def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# run_meta_show
+# --------------------------------------------------------------------------
+
+
+def test_meta_show_lists_frontmatter(tmp_path):
+    from esdc.corpus.pipeline import run_meta_show
+    from esdc.corpus.sidecar import write_sidecar_file
+
+    sc = tmp_path / "a.corpus.md"
+    write_sidecar_file(
+        sc,
+        {
+            "source_file": "a.pdf",
+            "file_hash": "abc",
+            "reviewed": False,
+            "doc_type": "psc",
+            "doc_date": "2024-01-01",
+            "doc_level": "wk",
+            "wk_name": ["Rokan"],
+            "field_name": None,
+            "project_name": None,
+        },
+        "body",
+    )
+    rows = run_meta_show([tmp_path])
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["file"] == "a.corpus.md"
+    assert r["doc_type"] == "psc"
+    assert r["doc_level"] == "wk"
+    assert r["wk_name"] == ["Rokan"]
+    assert r["reviewed"] is False
+
+
+def test_meta_show_bad_sidecar_reports_error(tmp_path):
+    from esdc.corpus.pipeline import run_meta_show
+
+    sc = tmp_path / "bad.corpus.md"
+    sc.write_text("no frontmatter here")
+    rows = run_meta_show([tmp_path])
+    assert len(rows) == 1
+    assert rows[0]["file"] == "bad.corpus.md"
+    assert "error" in rows[0]
+
+
+# --------------------------------------------------------------------------
 # run_status
 # --------------------------------------------------------------------------
 
