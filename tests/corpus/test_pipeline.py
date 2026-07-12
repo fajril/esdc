@@ -310,6 +310,45 @@ def test_extract_writes_sidecar_for_new_pdf(tmp_path, monkeypatch):
     assert "isi dokumen" in body
 
 
+def test_extract_doc_topic_flows_through_prefill(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "llm_extract",
+        lambda markdown, caller: {
+            "doc_type": "book",
+            "doc_topic": ["pod"],
+            "doc_level": "field",
+        },
+    )
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf])
+    assert report.failed == {}
+
+    meta, _body = read_sidecar(tmp_path / "surat.corpus.md")
+    assert meta["doc_topic"] == ["pod"]
+
+
+def test_extract_topic_override_normalized_to_list(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    report = pipeline.run_extract([pdf], topic="wpnb")
+    assert report.failed == {}
+
+    meta, _body = read_sidecar(tmp_path / "surat.corpus.md")
+    assert meta["doc_topic"] == ["wpnb"]
+
+
 def test_extract_skips_existing_sidecar(tmp_path, monkeypatch):
     pdf = make_pdf(tmp_path, "surat.pdf")
     write_sidecar(
@@ -1314,6 +1353,104 @@ def test_commit_no_demotion_warning_for_legacy_case_or_null(tmp_path, monkeypatc
     store.close()
 
 
+def test_commit_legacy_psc_stored_as_contract_topic_psc_with_warnings(
+    tmp_path, monkeypatch
+):
+    """A legacy doc_type: psc sidecar commits as contract + topic psc + level
+    wk (the doc_topic 'psc' rule), with remap + level-rule warnings."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    captured = {}
+    real_insert = store.insert_document
+
+    def capture_insert(doc, chunks):
+        captured.update(doc)
+        return real_insert(doc, chunks)
+
+    monkeypatch.setattr(store, "insert_document", capture_insert)
+
+    make_sidecar(
+        tmp_path,
+        "psc.pdf",
+        reviewed=True,
+        file_hash="cc" * 32,
+        doc_type="psc",
+        doc_level="field",
+    )
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert report.processed == ["psc.corpus.md"]
+    assert captured["doc_type"] == "contract"
+    assert captured["doc_topic"] == ["psc"]
+    assert captured["doc_level"] == "wk"
+    assert any(
+        "doc_type 'psc' remapped to 'contract' + topic 'psc'" in w
+        for w in report.warnings
+    )
+    assert any(
+        "doc_level 'field' overridden to 'wk' (doc_topic 'psc' rule)" in w
+        for w in report.warnings
+    )
+    store.close()
+
+
+def test_commit_regulation_rule_strips_entities_and_warns(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    make_sidecar(
+        tmp_path,
+        "uu.pdf",
+        reviewed=True,
+        file_hash="dd" * 32,
+        doc_type="uu",
+        doc_level="wk",
+        wk_name=["Rokan"],
+    )
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert report.processed == ["uu.corpus.md"]
+    assert any(
+        "doc_level 'wk' overridden to 'regulation' (doc_type 'uu' rule)" in w
+        for w in report.warnings
+    )
+    assert any(
+        "regulation" in w and "wk_name" in w for w in report.warnings
+    )
+    store.close()
+
+
+def test_commit_no_rule_warning_when_level_already_matches(tmp_path, monkeypatch):
+    """A rule that fires but doesn't change anything must not warn."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    make_sidecar(
+        tmp_path,
+        "uu.pdf",
+        reviewed=True,
+        file_hash="ee" * 32,
+        doc_type="uu",
+        doc_level="regulation",
+    )
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert report.processed == ["uu.corpus.md"]
+    assert not any("overridden to" in w for w in report.warnings)
+    assert not any("cleared" in w for w in report.warnings)
+    store.close()
+
+
 def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
     """An exception raised after read_sidecar succeeds (e.g. store.insert_document choking on an unparseable hand-edited doc_date) must not abort the batch -- it's recorded as a per-file failure and the rest of the batch still commits."""
     store = make_store(tmp_path)
@@ -1366,6 +1503,77 @@ def test_meta_sets_fields_and_persists(tmp_path, monkeypatch):
     assert meta["reviewed"] is False  # unchanged
     assert "isi dokumen penting" in body  # body preserved verbatim
     assert report.processed == ["a.corpus.md"]
+
+
+def test_meta_topic_override_writes_topic_and_level(tmp_path, monkeypatch):
+    """--topic wpnb writes doc_topic: [wpnb] + the doc_topic 'wpnb' rule's
+    implied level (wk) to frontmatter, without inventing a doc_type."""
+    sc = make_sidecar(
+        tmp_path,
+        "a.pdf",
+        reviewed=False,
+        file_hash="fa" * 32,
+        doc_type=None,
+        doc_topic=None,
+        doc_level=None,
+    )
+
+    report = pipeline.run_meta([tmp_path], topic="wpnb")
+
+    meta, _body = read_sidecar(sc)
+    assert meta["doc_topic"] == ["wpnb"]
+    assert meta["doc_level"] == "wk"
+    assert meta["doc_type"] is None
+    assert report.processed == ["a.corpus.md"]
+
+
+def test_meta_untouched_doc_type_not_silently_set_to_others(tmp_path, monkeypatch):
+    """Guard: bulk-editing an unrelated field must never invent doc_type."""
+    _patch_rokan_resolver(monkeypatch)
+    sc = make_sidecar(
+        tmp_path,
+        "a.pdf",
+        reviewed=False,
+        file_hash="fb" * 32,
+        doc_type=None,
+        wk_name=None,
+    )
+
+    report = pipeline.run_meta([tmp_path], wk_name="Rokan")
+
+    meta, _body = read_sidecar(sc)
+    assert meta["doc_type"] is None
+    assert meta["wk_name"] == ["Rokan"]
+    assert report.processed == ["a.corpus.md"]
+
+
+def test_meta_warns_on_legacy_remap_and_level_rule(tmp_path, monkeypatch):
+    """Touching a sidecar (even for an unrelated field) self-heals a stale
+    legacy doc_type and warns about both the remap and the level rule."""
+    sc = make_sidecar(
+        tmp_path,
+        "a.pdf",
+        reviewed=False,
+        file_hash="fc" * 32,
+        doc_type="psc",
+        doc_level="field",
+        doc_topic=None,
+    )
+
+    report = pipeline.run_meta([tmp_path], reviewed=True)
+
+    meta, _body = read_sidecar(sc)
+    assert meta["doc_type"] == "contract"
+    assert meta["doc_topic"] == ["psc"]
+    assert meta["doc_level"] == "wk"
+    assert any(
+        "doc_type 'psc' remapped to 'contract' + topic 'psc'" in w
+        for w in report.warnings
+    )
+    assert any(
+        "doc_level 'field' overridden to 'wk' (doc_topic 'psc' rule)" in w
+        for w in report.warnings
+    )
 
 
 def test_meta_reviewed_flag_explicit(tmp_path, monkeypatch):
@@ -1510,6 +1718,7 @@ def test_meta_show_lists_frontmatter(tmp_path):
             "file_hash": "abc",
             "reviewed": False,
             "doc_type": "psc",
+            "doc_topic": ["psc"],
             "doc_date": "2024-01-01",
             "doc_level": "wk",
             "wk_name": ["Rokan"],
@@ -1523,6 +1732,7 @@ def test_meta_show_lists_frontmatter(tmp_path):
     r = rows[0]
     assert r["file"] == "a.corpus.md"
     assert r["doc_type"] == "psc"
+    assert r["doc_topic"] == ["psc"]
     assert r["doc_level"] == "wk"
     assert r["wk_name"] == ["Rokan"]
     assert r["reviewed"] is False

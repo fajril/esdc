@@ -31,7 +31,7 @@ from rich.console import Group
 from rich.live import Live
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
-from esdc.chat.domain_knowledge.doc_schema import legacy_doc_type_map
+from esdc.chat.domain_knowledge.doc_schema import legacy_doc_type_map, legacy_topic_seed
 from esdc.chat.domain_knowledge.entity_registry import ENTITY_REGISTRY
 from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.configs import Config
@@ -47,10 +47,15 @@ from esdc.corpus.extractor import (
 from esdc.corpus.metadata import (
     ENTITY_FIELDS,
     METADATA_PROMPT_IMAGE,
+    apply_doc_level_rules,
+    doc_level_rule,
     llm_extract,
     normalize_entity_fields,
     normalize_metadata,
+    normalize_topic,
     parse_llm_json,
+    remap_legacy_doc_type,
+    seed_topic_from_legacy,
 )
 from esdc.corpus.ocr import OllamaVisionOcr
 from esdc.corpus.sidecar import (
@@ -306,6 +311,77 @@ def _warn_vocab_demotions(
             )
 
 
+def _warn_rule_effects(
+    pre_rule_meta: dict[str, Any],
+    meta: dict[str, Any],
+    report: CorpusReport,
+    name: str,
+) -> None:
+    """Surface deterministic doc_level_rule effects normalize_metadata (or
+    the meta-command's surgical equivalent) applies silently.
+
+    ``pre_rule_meta`` is the metadata as it stood right before the legacy
+    doc_type remap/rule stage ran; ``meta`` is the final, rule-applied
+    result. Three effects are surfaced: a legacy doc_type remap (+ topic
+    seed), a rule that changed doc_level, and a "regulation" rule clearing
+    wk_name/field_name/project_name.
+    """
+    raw_type = pre_rule_meta.get("doc_type")
+    canon_raw_type = raw_type.lower() if isinstance(raw_type, str) else raw_type
+    if canon_raw_type in legacy_doc_type_map():
+        seeded = legacy_topic_seed().get(canon_raw_type)
+        suffix = f" + topic '{seeded}'" if seeded else ""
+        report.warnings.append(
+            f"{name}: doc_type '{raw_type}' remapped to "
+            f"'{meta.get('doc_type')}'{suffix}"
+        )
+
+    rule = doc_level_rule(meta.get("doc_type"), meta.get("doc_topic"))
+    if rule is not None:
+        kind, key, level = rule
+        raw_level = pre_rule_meta.get("doc_level")
+        canon_raw_level = raw_level.lower() if isinstance(raw_level, str) else raw_level
+        if canon_raw_level != level:
+            report.warnings.append(
+                f"{name}: doc_level '{raw_level}' overridden to '{level}' "
+                f"({kind} '{key}' rule)"
+            )
+        if level == "regulation":
+            stripped = [
+                key for key in ENTITY_FIELDS if pre_rule_meta.get(key) not in (None, [])
+            ]
+            if stripped:
+                report.warnings.append(
+                    f"{name}: doc_level 'regulation' — cleared {', '.join(stripped)}"
+                )
+
+
+def _apply_meta_rules(meta: dict[str, Any]) -> dict[str, Any]:
+    """Canonicalize + apply doc_level rules the way ``esdc corpus meta`` should.
+
+    Unlike ``normalize_metadata`` (the full commit-time clamp), this never
+    invents a value for a field the sidecar/override didn't touch: a
+    missing doc_type stays missing, an untouched doc_level stays whatever
+    it was, and an unrecognized (non-legacy) doc_type is left alone rather
+    than demoted to "others" — that clamp only makes sense at commit, the
+    last gate before the searchable corpus. A legacy doc_type alias already
+    present is still remapped (+ seeds its doc_topic) and the deterministic
+    doc_level rules still apply, since both are meant to self-heal a
+    sidecar the moment ``meta`` touches it.
+    """
+    out = dict(meta)
+    raw_type = out.get("doc_type")
+    seeded_topic = seed_topic_from_legacy(raw_type)
+    out["doc_type"] = remap_legacy_doc_type(raw_type)
+
+    raw_topic = out.get("doc_topic")
+    if raw_topic is None and seeded_topic is not None:
+        raw_topic = [seeded_topic]
+    out["doc_topic"] = normalize_topic(raw_topic)
+
+    return apply_doc_level_rules(out)
+
+
 class _ProgressHandle:
     """Drives a two-line rich progress display: a bar plus a status line.
 
@@ -361,6 +437,7 @@ def run_extract(
     paths: list[Path],
     level: str | None = None,
     doc_type: str | None = None,
+    topic: str | None = None,
     wk_name: str | None = None,
     field_name: str | None = None,
     project_name: str | None = None,
@@ -390,6 +467,7 @@ def run_extract(
     overrides = {
         "doc_level": level,
         "doc_type": doc_type,
+        "doc_topic": topic,
         "wk_name": wk_name,
         "field_name": field_name,
         "project_name": project_name,
@@ -479,6 +557,7 @@ def run_extract(
                         "extraction_method": result.method,
                         "reviewed": False,
                         "doc_type": meta_fields.get("doc_type"),
+                        "doc_topic": meta_fields.get("doc_topic"),
                         "doc_number": meta_fields.get("doc_number"),
                         "doc_date": meta_fields.get("doc_date"),
                         "subject": meta_fields.get("subject"),
@@ -491,6 +570,10 @@ def run_extract(
                         "extras": meta_fields.get("extras"),
                     }
                     _apply_overrides(meta, overrides)
+                    # A --topic override is a single string; normalize it to
+                    # the list form doc_topic is stored as.
+                    if overrides.get("doc_topic") is not None:
+                        meta["doc_topic"] = normalize_topic(overrides["doc_topic"])
                     meta = normalize_entity_fields(meta)
 
                     if resolver is not None:
@@ -652,8 +735,10 @@ def run_commit(
 
                     raw_type = meta.get("doc_type")
                     raw_level = meta.get("doc_level")
+                    pre_rule_meta = dict(meta)
                     meta = normalize_metadata(meta)
                     _warn_vocab_demotions(raw_type, raw_level, meta, report, name)
+                    _warn_rule_effects(pre_rule_meta, meta, report, name)
                     meta = normalize_entity_fields(meta)
 
                     file_hash = meta.get("file_hash")
@@ -691,6 +776,7 @@ def run_commit(
                         "file_path": str(sc),
                         "file_hash": file_hash,
                         "doc_type": meta.get("doc_type"),
+                        "doc_topic": meta.get("doc_topic"),
                         "doc_number": meta.get("doc_number"),
                         "doc_date": meta.get("doc_date"),
                         "subject": meta.get("subject"),
@@ -798,6 +884,7 @@ def run_meta(
     paths: list[Path],
     level: str | None = None,
     doc_type: str | None = None,
+    topic: str | None = None,
     wk_name: str | None = None,
     field_name: str | None = None,
     project_name: str | None = None,
@@ -820,6 +907,7 @@ def run_meta(
     overrides = {
         "doc_level": level,
         "doc_type": doc_type,
+        "doc_topic": topic,
         "wk_name": wk_name,
         "field_name": field_name,
         "project_name": project_name,
@@ -856,6 +944,10 @@ def run_meta(
                 _apply_overrides(meta, overrides)
                 if reviewed is not None:
                     meta["reviewed"] = reviewed
+
+                pre_rule_meta = dict(meta)
+                meta = _apply_meta_rules(meta)
+                _warn_rule_effects(pre_rule_meta, meta, report, name)
                 meta = normalize_entity_fields(meta)
 
                 if resolver is not None:
@@ -906,6 +998,7 @@ def run_meta_show(paths: list[Path]) -> list[dict[str, Any]]:
             {
                 "file": sc.name,
                 "doc_type": meta.get("doc_type"),
+                "doc_topic": meta.get("doc_topic"),
                 "doc_date": meta.get("doc_date"),
                 "doc_level": meta.get("doc_level"),
                 "wk_name": meta.get("wk_name"),
