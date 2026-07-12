@@ -2416,15 +2416,18 @@ def corpus_meta(
         table = [
             (
                 r["file"],
-                r.get("error") or r.get("doc_type"),
+                r.get("doc_type"),
                 r.get("doc_date"),
                 r.get("doc_level"),
                 _entity_display(r),
                 r.get("reviewed"),
+                r.get("error") or "",
             )
             for r in rows
         ]
-        headers = ["file", "doc_type", "doc_date", "doc_level", "entity", "reviewed"]
+        headers = [
+            "file", "doc_type", "doc_date", "doc_level", "entity", "reviewed", "note",
+        ]
         rich.print(tabulate(table, headers=headers, tablefmt="psql"))
         return
 

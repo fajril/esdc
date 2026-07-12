@@ -1463,6 +1463,22 @@ def test_meta_valid_entity_override_proceeds(tmp_path, monkeypatch):
     assert meta["wk_name"] == ["Rokan"]
 
 
+def test_meta_no_sidecars_skips_store_and_validation(tmp_path, monkeypatch):
+    """Nothing to mutate -> early return before opening the store or
+    validating overrides (even bogus ones)."""
+
+    def exploding_store(*a, **kw):
+        raise AssertionError("store must not be opened when there are no sidecars")
+
+    monkeypatch.setattr(pipeline, "CorpusStore", exploding_store)
+
+    report = pipeline.run_meta([tmp_path], wk_name="Totally Bogus")
+
+    assert report.processed == []
+    assert report.failed == {}
+    assert report.warnings == []
+
+
 def test_meta_entity_override_db_unavailable_raises(tmp_path, monkeypatch):
     def broken_store(*a, **kw):
         raise RuntimeError("db locked")

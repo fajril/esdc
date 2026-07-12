@@ -153,7 +153,8 @@ def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
                 "field_name": None,
                 "project_name": None,
                 "reviewed": False,
-            }
+            },
+            {"file": "bad.corpus.md", "error": "missing YAML frontmatter"},
         ]
 
     called = {"run_meta": False}
@@ -169,6 +170,20 @@ def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert called["run_meta"] is False
     assert "a.corpus.md" in result.output
+    # An unreadable sidecar's error lands in its own trailing `note`
+    # column — never under doc_type.
+    assert "note" in result.output
+    assert "missing YAML frontmatter" in result.output
+    bad_line = next(
+        line for line in result.output.splitlines() if "bad.corpus.md" in line
+    )
+    bad_cells = [c.strip() for c in bad_line.split("|")]
+    assert bad_cells[2] == ""  # doc_type cell stays clean for error rows
+    good_line = next(
+        line for line in result.output.splitlines() if "a.corpus.md" in line
+    )
+    assert "psc" in good_line
+    assert "missing YAML frontmatter" not in good_line
 
 
 def test_meta_unknown_entity_prints_clean_error(tmp_path, monkeypatch):

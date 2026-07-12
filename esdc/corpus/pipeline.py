@@ -812,6 +812,10 @@ def run_meta(
     """
     report = CorpusReport()
     sidecars = _collect_sidecars(paths)
+    if not sidecars:
+        # Nothing to mutate — skip the store open (and override validation)
+        # entirely rather than paying for a DB connection to do no work.
+        return report
 
     overrides = {
         "doc_level": level,
