@@ -311,6 +311,14 @@ ollama pull glm-ocr
 | `num_ctx` | `16384` | Ollama context window; `glm-ocr` fails on page images below this |
 | `min_chars_per_page` | `50` | Text-layer character threshold below which a page counts as scanned |
 
+### doc_type vs doc_topic, and doc_level rules
+
+`doc_type` is a document's **form** (uu, permen, letter, mom, ba, contract, book, ...); `doc_topic` is what business object it's **about** (pod, pofd, wpnb, psc, gsa, ...) — a POD approval book has `doc_type: book` and `doc_topic: [pod]`. `doc_level` gains a `regulation` value alongside `wk`/`field`/`project`/`unknown` for national/ministerial instruments not tied to any wk/field/project.
+
+`doc_level` is partly automatic: a regulatory `doc_type` (uu, perpu, mk, pp, permen, kepmen, ptk, sop) always forces `doc_level: regulation` and clears any wk_name/field_name/project_name; certain `doc_topic` values (e.g. `pod`, `pofd`, `afe` -> `project`; `wpnb`, `psc` -> `wk`) set the level when every topic on the document implies the same one. These rules apply at `commit` and at `meta` (a stale sidecar self-heals — and warns — the moment `meta` touches it), and reject contradictory flags up front (e.g. `--level regulation` with an entity flag, or an explicit `--level` that conflicts with what `--doc-type`/`--topic` implies).
+
+Legacy `doc_type` values `psc`/`gsa`/`pod` are remapped automatically (`psc`/`gsa` -> `doc_type: contract`, `pod` -> `doc_type: book`, seeding the corresponding `doc_topic`). **Already-committed documents keep their old values until recommitted with `commit --force`** — there's no automatic store migration.
+
 ### Workflow
 
 Ingestion is two steps with a human review gate in between — nothing reaches the searchable corpus unreviewed:
@@ -319,14 +327,18 @@ Ingestion is two steps with a human review gate in between — nothing reaches t
    ```bash
    esdc corpus extract path/to/document.pdf
    esdc corpus extract path/to/folder/          # batch: pdf + docx + md
+   esdc corpus extract path/to/document.pdf --topic pofd   # set doc_topic (single value)
    ```
    Every page is wrapped in a `<!-- page N: native -->` or `<!-- page N: llm_ocr -->` marker.
 
-2. **Review** — open the `.corpus.md` file in an editor, check the `llm_ocr` pages against the source PDF, correct the prefilled frontmatter (doc_type, dates, entities, etc.), then flip `reviewed: false` to `reviewed: true`. Sidecars still marked `reviewed: false` are skipped on commit. Metadata can also be bulk-edited across many sidecars at once instead of hand-editing each file:
+2. **Review** — open the `.corpus.md` file in an editor, check the `llm_ocr` pages against the source PDF, correct the prefilled frontmatter (doc_type, doc_topic, dates, entities, etc.), then flip `reviewed: false` to `reviewed: true`. Sidecars still marked `reviewed: false` are skipped on commit. Metadata can also be bulk-edited across many sidecars at once instead of hand-editing each file:
    ```bash
    esdc corpus meta path/to/folder/ --wk-name "Rokan"   # bulk-set, persists to frontmatter
+   esdc corpus meta path/to/folder/ --topic wpnb        # set doc_topic (single value)
    esdc corpus meta path/to/folder/                     # no flags: show current metadata
+   esdc corpus meta path/to/folder/ --regenerate        # re-run LLM metadata analysis on the existing body
    ```
+   `--regenerate` re-runs metadata extraction over each sidecar's already-extracted markdown (no re-parse/OCR) using `corpus.metadata_model` — useful after improving the prompt or model. It requires a reachable `metadata_model`, replaces the LLM-owned fields (doc_type, doc_topic, dates, entities, ...), resets `reviewed: false` unless `--reviewed`/`--no-reviewed` is also passed, and any explicit flag in the same invocation wins over the regenerated value.
 
 3. **Commit** — ingest reviewed sidecars into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed):
    ```bash
@@ -338,7 +350,7 @@ Ingestion is two steps with a human review gate in between — nothing reaches t
 
 ```bash
 esdc corpus status path/to/folder/   # where each PDF/sidecar sits in extract -> review -> commit
-esdc corpus meta path/to/folder/     # show sidecar metadata; add flags (--wk-name ...) to bulk-set
+esdc corpus meta path/to/folder/     # show sidecar metadata (incl. topic column); add flags to bulk-set
 esdc corpus list                     # documents committed to the corpus
 esdc corpus remove <doc_id>...       # remove document(s) (files on disk untouched)
 esdc corpus clear --yes              # delete the entire corpus
