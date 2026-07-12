@@ -6,23 +6,41 @@ description: >-
 llm_fields: # order = order of definition lines in METADATA_PROMPT
   - name: doc_type
     type: string
-    enum: [uu, perpu, mk, pp, permen, kepmen, letter, mom, ba, note, psc, gsa, pod, ptk, sop, others]
+    enum: [uu, perpu, mk, pp, permen, kepmen, ptk, sop, letter, mom, ba, note, contract, book, others]
     prompt: |-
       one of "uu" (undang-undang) | "perpu" (peraturan pengganti UU) | "mk"
         (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "permen"
-        (peraturan menteri) | "kepmen" (keputusan menteri) | "letter" (official
-        letter: persetujuan/edaran/umum) | "mom" (minutes of meeting) | "ba"
-        (berita acara) | "note" (non-binding note) | "psc" (production sharing
-        contract) | "gsa" (gas sales agreement) | "pod" (POD approval book) |
-        "ptk" (pedoman tata kerja SKK Migas) | "sop" (standard operating
-        procedure) | "others"
+        (peraturan menteri) | "kepmen" (keputusan menteri) | "ptk" (pedoman
+        tata kerja SKK Migas) | "sop" (standard operating procedure) |
+        "letter" (official letter: persetujuan/edaran/umum) | "mom" (minutes
+        of meeting) | "ba" (berita acara) | "note" (non-binding note) |
+        "contract" (binding commercial contract, e.g. PSC/GSA) | "book"
+        (bound proposal/approval book, e.g. POD/WP&B) | "others"
     description: >-
-      Document category: regulatory instruments (uu, perpu, mk, pp, permen,
-      kepmen, ptk, sop — high to low legal force), letter (official letter),
-      mom (minutes of meeting), ba (berita acara), note (non-binding note),
-      psc (production sharing contract), gsa (gas sales agreement), pod (POD
-      approval book), or others.
+      Document category (FORM, not topic): regulatory instruments (uu, perpu,
+      mk, pp, permen, kepmen, ptk, sop — high to low legal force), letter
+      (official letter), mom (minutes of meeting), ba (berita acara), note
+      (non-binding note), contract (binding commercial contract, e.g. PSC or
+      GSA), book (bound proposal/approval book, e.g. POD or WP&B submission),
+      or others.
     aliases: [jenis dokumen, tipe surat]
+  - name: doc_topic
+    type: list[string]
+    enum: [pod_i, pod, pofd, opl, opll, wpnb, afe, psc, gsa, monitoring_pod, others]
+    prompt: |-
+      list of business object(s) this document concerns: "pod_i" (POD I,
+        first/ministerial POD) | "pod" (POD) | "pofd" (POFD) | "opl" (OPL) |
+        "opll" (OPLL, optimasi pengembangan lapangan-lapangan) | "wpnb"
+        (WP&B) | "afe" (AFE) | "psc" (production sharing contract) | "gsa"
+        (gas sales agreement) | "monitoring_pod" (monitoring POD) | "others"
+        — usually exactly one value
+    description: >-
+      Business object(s) (TOPIC, not form) the document concerns: POD I
+      (first POD, ministerial), POD, POFD, OPL, OPLL (optimasi pengembangan
+      lapangan-lapangan), WP&B, AFE, PSC (production sharing contract), GSA
+      (gas sales agreement), monitoring POD, or others. Usually exactly one
+      value, but multi-topic documents are supported.
+    aliases: [topik dokumen, objek bisnis]
   - name: doc_number
     type: string
     prompt: >-
@@ -60,12 +78,14 @@ llm_fields: # order = order of definition lines in METADATA_PROMPT
     aliases: [penerima, kepada]
   - name: doc_level
     type: string
-    enum: [wk, field, project, unknown]
+    enum: [wk, field, project, regulation, unknown]
     prompt: >-
-      "wk" | "field" | "project" | "unknown" — the scope this document is about
+      "wk" | "field" | "project" | "regulation" | "unknown" — the scope this
+      document is about
     description: >-
       The scope this document is about: wk (working area / wilayah kerja),
-      field (lapangan), project, or unknown.
+      field (lapangan), project, regulation (national/ministerial regulatory
+      instrument — not tied to any wk/field/project), or unknown.
     aliases: [tingkat dokumen, cakupan]
   - name: wk_name
     type: list[string]
@@ -134,6 +154,14 @@ doc_types: # authoritative glossary, one entry per doc_type enum value
   - name: kepmen
     title: Keputusan Menteri
     description: Keputusan menteri (kepmen) — kebijakan yang diambil Menteri.
+  - name: ptk
+    title: Pedoman Tata Kerja
+    description: >-
+      Pedoman tata kerja (PTK) — pedoman resmi SKK Migas sebagai acuan
+      pelaksanaan kegiatan usaha hulu migas.
+  - name: sop
+    title: Standard Operating Procedure
+    description: Standard operating procedure (SOP) — aturan proses bisnis internal institusi.
   - name: letter
     title: Surat Resmi
     description: >-
@@ -150,27 +178,16 @@ doc_types: # authoritative glossary, one entry per doc_type enum value
   - name: note
     title: Catatan
     description: Catatan tidak mengikat, cenderung informatif.
-  - name: psc
-    title: Production Sharing Contract
+  - name: contract
+    title: Kontrak Komersial
     description: >-
-      Production sharing contract (PSC) — kontrak yang melandasi kegiatan
-      usaha hulu migas antara kontraktor dan SKK Migas.
-  - name: gsa
-    title: Gas Sales Agreement
-    description: Gas sales agreement (GSA) — perjanjian jual beli gas.
-  - name: pod
-    title: Persetujuan POD
+      Kontrak komersial yang mengikat, misalnya production sharing contract
+      (PSC) atau gas sales agreement (GSA).
+  - name: book
+    title: Buku Proposal/Persetujuan
     description: >-
-      Buku persetujuan POD, memuat informasi teknis pelaksanaan plan of
-      development.
-  - name: ptk
-    title: Pedoman Tata Kerja
-    description: >-
-      Pedoman tata kerja (PTK) — pedoman resmi SKK Migas sebagai acuan
-      pelaksanaan kegiatan usaha hulu migas.
-  - name: sop
-    title: Standard Operating Procedure
-    description: Standard operating procedure (SOP) — aturan proses bisnis internal institusi.
+      Buku proposal atau persetujuan yang mengikat, misalnya buku persetujuan
+      POD atau pengajuan WP&B.
   - name: others
     title: Lainnya
     description: Jenis dokumen di luar tipe lain.
@@ -184,6 +201,33 @@ doc_type_hierarchy: # regulatory force, high to low; ties share a level
 legacy_doc_type_map:
   surat: letter
   other: others
+  psc: contract
+  gsa: contract
+  pod: book
+legacy_topic_seed: # legacy doc_type value -> doc_topic seeded alongside the remap above
+  psc: psc
+  gsa: gsa
+  pod: pod
+doc_level_rules: # doc_type rule takes precedence over doc_topic rule
+  doc_type:
+    uu: regulation
+    perpu: regulation
+    mk: regulation
+    pp: regulation
+    permen: regulation
+    kepmen: regulation
+    ptk: regulation
+    sop: regulation
+  doc_topic:
+    pod_i: project
+    pod: project
+    pofd: project
+    opl: project
+    opll: project
+    afe: project
+    wpnb: wk
+    psc: wk
 enums:
-  doc_level: [wk, field, project, unknown]
-  doc_type: [uu, perpu, mk, pp, permen, kepmen, letter, mom, ba, note, psc, gsa, pod, ptk, sop, others]
+  doc_level: [wk, field, project, regulation, unknown]
+  doc_type: [uu, perpu, mk, pp, permen, kepmen, ptk, sop, letter, mom, ba, note, contract, book, others]
+  doc_topic: [pod_i, pod, pofd, opl, opll, wpnb, afe, psc, gsa, monitoring_pod, others]

@@ -58,6 +58,26 @@ def legacy_doc_type_map() -> dict[str, str]:
     return dict(load_doc_schema().get("legacy_doc_type_map", {}))
 
 
+def legacy_topic_seed() -> dict[str, str]:
+    """Mapping of retired doc_type values to the doc_topic they seed.
+
+    Paired with ``legacy_doc_type_map()``: a legacy value like ``"psc"``
+    maps to doc_type ``"contract"`` (via ``legacy_doc_type_map``) AND
+    seeds doc_topic ``"psc"`` (via this accessor).
+    """
+    return dict(load_doc_schema().get("legacy_topic_seed", {}))
+
+
+def doc_level_rules() -> dict[str, dict[str, str]]:
+    """Deterministic doc_level rules, keyed by ``"doc_type"``/``"doc_topic"``.
+
+    Each sub-map is ``{value: implied_doc_level}``. The doc_type rule takes
+    precedence over the doc_topic rule (enforced by the caller).
+    """
+    rules = load_doc_schema().get("doc_level_rules", {})
+    return {key: dict(sub) for key, sub in rules.items()}
+
+
 def render_prompt_definitions() -> str:
     """Render the ``- field: definition`` lines used in METADATA_PROMPT.
 

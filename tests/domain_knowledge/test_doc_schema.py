@@ -16,10 +16,11 @@ class FakeEmbedder:
         return [self.generate_embedding(t) for t in texts]
 
 
-def test_llm_field_names_returns_eleven_fields_in_order():
+def test_llm_field_names_returns_twelve_fields_in_order():
     names = doc_schema.llm_field_names()
     assert names == (
         "doc_type",
+        "doc_topic",
         "doc_number",
         "doc_date",
         "subject",
@@ -40,15 +41,28 @@ DOC_TYPE_ENUM = (
     "pp",
     "permen",
     "kepmen",
+    "ptk",
+    "sop",
     "letter",
     "mom",
     "ba",
     "note",
+    "contract",
+    "book",
+    "others",
+)
+
+DOC_TOPIC_ENUM = (
+    "pod_i",
+    "pod",
+    "pofd",
+    "opl",
+    "opll",
+    "wpnb",
+    "afe",
     "psc",
     "gsa",
-    "pod",
-    "ptk",
-    "sop",
+    "monitoring_pod",
     "others",
 )
 
@@ -89,9 +103,69 @@ def test_doc_type_hierarchy_order_high_to_low():
 
 def test_legacy_doc_type_map_values_are_valid_enum_members():
     legacy_map = doc_schema.legacy_doc_type_map()
-    assert legacy_map == {"surat": "letter", "other": "others"}
+    assert legacy_map == {
+        "surat": "letter",
+        "other": "others",
+        "psc": "contract",
+        "gsa": "contract",
+        "pod": "book",
+    }
     for value in legacy_map.values():
         assert value in DOC_TYPE_ENUM
+
+
+def test_legacy_topic_seed():
+    assert doc_schema.legacy_topic_seed() == {
+        "psc": "psc",
+        "gsa": "gsa",
+        "pod": "pod",
+    }
+    topics = set(doc_schema.enum_values("doc_topic"))
+    for value in doc_schema.legacy_topic_seed().values():
+        assert value in topics
+
+
+def test_enum_values_doc_topic():
+    assert doc_schema.enum_values("doc_topic") == DOC_TOPIC_ENUM
+
+
+def test_doc_level_rules_exact_mapping():
+    assert doc_schema.doc_level_rules() == {
+        "doc_type": {
+            "uu": "regulation",
+            "perpu": "regulation",
+            "mk": "regulation",
+            "pp": "regulation",
+            "permen": "regulation",
+            "kepmen": "regulation",
+            "ptk": "regulation",
+            "sop": "regulation",
+        },
+        "doc_topic": {
+            "pod_i": "project",
+            "pod": "project",
+            "pofd": "project",
+            "opl": "project",
+            "opll": "project",
+            "afe": "project",
+            "wpnb": "wk",
+            "psc": "wk",
+        },
+    }
+
+
+def test_doc_level_rules_keys_and_values_are_valid_enum_members():
+    """Consistency guard against future vocab drift."""
+    rules = doc_schema.doc_level_rules()
+    doc_types = set(doc_schema.enum_values("doc_type"))
+    doc_topics = set(doc_schema.enum_values("doc_topic"))
+    doc_levels = set(doc_schema.enum_values("doc_level"))
+    for doc_type, doc_level in rules["doc_type"].items():
+        assert doc_type in doc_types
+        assert doc_level in doc_levels
+    for doc_topic, doc_level in rules["doc_topic"].items():
+        assert doc_topic in doc_topics
+        assert doc_level in doc_levels
 
 
 def test_render_tool_context_mentions_hierarchy_and_ptk():
@@ -109,7 +183,13 @@ def test_doc_types_glossary_names_match_enum_both_ways():
 
 
 def test_enum_values_doc_level():
-    assert doc_schema.enum_values("doc_level") == ("wk", "field", "project", "unknown")
+    assert doc_schema.enum_values("doc_level") == (
+        "wk",
+        "field",
+        "project",
+        "regulation",
+        "unknown",
+    )
 
 
 def test_render_prompt_definitions_starts_with_doc_type():
