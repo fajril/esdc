@@ -9,25 +9,32 @@ from esdc.corpus.metadata import (
     parse_llm_json,
 )
 
-# Pinned copy of the pre-refactor METADATA_PROMPT literal. Do not edit — this
-# is the byte-identity contract the doc_schema.yaml refactor must preserve.
+# Pinned copy of the current METADATA_PROMPT literal (post doc_topic split).
+# Do not edit casually — this is the byte-identity contract the
+# doc_schema.yaml -> METADATA_PROMPT render must preserve.
 EXPECTED_METADATA_PROMPT = """You extract metadata from Indonesian oil & gas official documents.
 Given the markdown of a document, return ONLY a JSON object with these keys
 (use null when unknown, never guess):
 - doc_type: one of "uu" (undang-undang) | "perpu" (peraturan pengganti UU) | "mk"
   (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "permen"
-  (peraturan menteri) | "kepmen" (keputusan menteri) | "letter" (official
-  letter: persetujuan/edaran/umum) | "mom" (minutes of meeting) | "ba"
-  (berita acara) | "note" (non-binding note) | "psc" (production sharing
-  contract) | "gsa" (gas sales agreement) | "pod" (POD approval book) |
-  "ptk" (pedoman tata kerja SKK Migas) | "sop" (standard operating
-  procedure) | "others"
+  (peraturan menteri) | "kepmen" (keputusan menteri) | "ptk" (pedoman
+  tata kerja SKK Migas) | "sop" (standard operating procedure) |
+  "letter" (official letter: persetujuan/edaran/umum) | "mom" (minutes
+  of meeting) | "ba" (berita acara) | "note" (non-binding note) |
+  "contract" (binding commercial contract, e.g. PSC/GSA) | "book"
+  (bound proposal/approval book, e.g. POD/WP&B) | "others"
+- doc_topic: list of business object(s) this document concerns: "pod_i" (POD I,
+  first/ministerial POD) | "pod" (POD) | "pofd" (POFD) | "opl" (OPL) |
+  "opll" (OPLL, optimasi pengembangan lapangan-lapangan) | "wpnb"
+  (WP&B) | "afe" (AFE) | "psc" (production sharing contract) | "gsa"
+  (gas sales agreement) | "monitoring_pod" (monitoring POD) | "others"
+  — usually exactly one value
 - doc_number: the document/letter number exactly as written
 - doc_date: ISO date YYYY-MM-DD
 - subject: perihal or meeting title
 - sender: issuing organization or signatory org
 - recipient: addressed organization (letters only)
-- doc_level: "wk" | "field" | "project" | "unknown" — the scope this document is about
+- doc_level: "wk" | "field" | "project" | "regulation" | "unknown" — the scope this document is about
 - wk_name: list of working area (wilayah kerja) names mentioned
   (e.g. ["Rokan", "Mahakam"])
 - field_name: list of field (lapangan) names mentioned (e.g. ["Duri", "Minas"])
@@ -54,18 +61,30 @@ def test_vocab_tuples_derived_from_schema():
         "pp",
         "permen",
         "kepmen",
+        "ptk",
+        "sop",
         "letter",
         "mom",
         "ba",
         "note",
-        "psc",
-        "gsa",
-        "pod",
-        "ptk",
-        "sop",
+        "contract",
+        "book",
         "others",
     )
-    assert metadata.DOC_LEVELS == ("wk", "field", "project", "unknown")
+    assert metadata.DOC_LEVELS == ("wk", "field", "project", "regulation", "unknown")
+    assert metadata.DOC_TOPICS == (
+        "pod_i",
+        "pod",
+        "pofd",
+        "opl",
+        "opll",
+        "wpnb",
+        "afe",
+        "psc",
+        "gsa",
+        "monitoring_pod",
+        "others",
+    )
 
 
 def test_doc_types_new_vocab():
@@ -76,15 +95,14 @@ def test_doc_types_new_vocab():
         "pp",
         "permen",
         "kepmen",
+        "ptk",
+        "sop",
         "letter",
         "mom",
         "ba",
         "note",
-        "psc",
-        "gsa",
-        "pod",
-        "ptk",
-        "sop",
+        "contract",
+        "book",
         "others",
     )
 
@@ -120,7 +138,7 @@ def test_normalize_metadata_clamps_unknown_to_others():
 
 def test_normalize_metadata_is_case_insensitive():
     assert normalize_metadata({"doc_type": "UU"})["doc_type"] == "uu"
-    assert normalize_metadata({"doc_type": "Psc"})["doc_type"] == "psc"
+    assert normalize_metadata({"doc_type": "Psc"})["doc_type"] == "contract"
     assert normalize_metadata({"doc_type": "Surat"})["doc_type"] == "letter"
     assert normalize_metadata({"doc_level": "WK"})["doc_level"] == "wk"
 
@@ -155,3 +173,111 @@ def test_parse_llm_json_trailing_chatter_no_closing_brace():
     # not changing the regex).
     raw = 'here you go {"a": 1} thanks'
     assert parse_llm_json(raw) == {"a": 1}
+
+
+# --------------------------------------------------------------------------
+# legacy doc_type -> doc_type + doc_topic seeding
+# --------------------------------------------------------------------------
+
+
+def test_normalize_metadata_seeds_topic_from_legacy_psc():
+    out = normalize_metadata({"doc_type": "psc"})
+    assert out["doc_type"] == "contract"
+    assert out["doc_topic"] == ["psc"]
+
+
+def test_normalize_metadata_seeds_topic_from_legacy_gsa():
+    out = normalize_metadata({"doc_type": "gsa"})
+    assert out["doc_type"] == "contract"
+    assert out["doc_topic"] == ["gsa"]
+
+
+def test_normalize_metadata_seeds_topic_from_legacy_pod():
+    out = normalize_metadata({"doc_type": "pod"})
+    assert out["doc_type"] == "book"
+    assert out["doc_topic"] == ["pod"]
+
+
+def test_normalize_metadata_legacy_seed_does_not_clobber_existing_topic():
+    out = normalize_metadata({"doc_type": "pod", "doc_topic": ["pod_i"]})
+    assert out["doc_type"] == "book"
+    assert out["doc_topic"] == ["pod_i"]
+
+
+# --------------------------------------------------------------------------
+# doc_topic normalization
+# --------------------------------------------------------------------------
+
+
+def test_normalize_metadata_topic_scalar_wrapped_in_list():
+    assert normalize_metadata({"doc_topic": "wpnb"})["doc_topic"] == ["wpnb"]
+
+
+def test_normalize_metadata_topic_invalid_entry_clamped_to_others():
+    assert normalize_metadata({"doc_topic": "bogus"})["doc_topic"] == ["others"]
+    assert normalize_metadata({"doc_topic": ["wpnb", "bogus"]})["doc_topic"] == [
+        "wpnb",
+        "others",
+    ]
+
+
+def test_normalize_metadata_topic_deduped():
+    assert normalize_metadata({"doc_topic": ["wpnb", "wpnb", "afe"]})["doc_topic"] == [
+        "wpnb",
+        "afe",
+    ]
+
+
+def test_normalize_metadata_topic_none_stays_none():
+    assert normalize_metadata({"doc_topic": None})["doc_topic"] is None
+    assert normalize_metadata({})["doc_topic"] is None
+
+
+# --------------------------------------------------------------------------
+# deterministic doc_level rules
+# --------------------------------------------------------------------------
+
+
+def test_normalize_metadata_doc_type_rule_sets_regulation_and_strips_entities():
+    out = normalize_metadata(
+        {
+            "doc_type": "uu",
+            "doc_level": "wk",
+            "wk_name": ["Rokan"],
+            "field_name": ["Duri"],
+            "project_name": ["POD Duri"],
+        }
+    )
+    assert out["doc_level"] == "regulation"
+    assert out["wk_name"] is None
+    assert out["field_name"] is None
+    assert out["project_name"] is None
+
+
+def test_normalize_metadata_topic_rule_single_implied_level_applies():
+    out = normalize_metadata({"doc_topic": ["pod"], "doc_level": "field"})
+    assert out["doc_level"] == "project"
+
+
+def test_normalize_metadata_topic_rule_conflicting_implied_level_unchanged():
+    out = normalize_metadata({"doc_topic": ["pod", "wpnb"], "doc_level": "field"})
+    assert out["doc_level"] == "field"
+
+
+def test_normalize_metadata_topic_rule_multiple_topics_same_implied_level_applies():
+    out = normalize_metadata({"doc_topic": ["pod", "afe"], "doc_level": "field"})
+    assert out["doc_level"] == "project"
+
+
+def test_normalize_metadata_doc_type_rule_beats_topic_rule():
+    out = normalize_metadata({"doc_type": "uu", "doc_topic": ["pod"]})
+    assert out["doc_level"] == "regulation"
+
+
+def test_normalize_metadata_no_rule_types_and_topics_untouched():
+    out = normalize_metadata(
+        {"doc_type": "letter", "doc_topic": ["gsa"], "doc_level": "wk"}
+    )
+    assert out["doc_type"] == "letter"
+    assert out["doc_topic"] == ["gsa"]
+    assert out["doc_level"] == "wk"
