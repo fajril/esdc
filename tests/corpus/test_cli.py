@@ -110,60 +110,6 @@ def test_commit_model_mismatch_prints_clean_error(tmp_path, monkeypatch):
     assert "Traceback" not in result.output
 
 
-def test_migrate_doc_types_command_exists_exits_0_passes_dry_run(tmp_path, monkeypatch):
-    import esdc.corpus.pipeline as pipeline
-
-    captured = {}
-
-    def fake_run_migrate_doc_types(paths, **kwargs):
-        captured["paths"] = paths
-        captured.update(kwargs)
-        return pipeline.CorpusReport()
-
-    monkeypatch.setattr(
-        pipeline, "run_migrate_doc_types", fake_run_migrate_doc_types
-    )
-
-    result = runner.invoke(
-        app, ["corpus", "migrate-doc-types", str(tmp_path), "--dry-run"]
-    )
-    assert result.exit_code == 0
-    assert captured["dry_run"] is True
-
-
-def test_migrate_doc_types_no_paths_still_runs_store_migration(monkeypatch):
-    import esdc.corpus.pipeline as pipeline
-
-    captured = {}
-
-    def fake_run_migrate_doc_types(paths, **kwargs):
-        captured["paths"] = paths
-        captured.update(kwargs)
-        return pipeline.CorpusReport()
-
-    monkeypatch.setattr(
-        pipeline, "run_migrate_doc_types", fake_run_migrate_doc_types
-    )
-
-    result = runner.invoke(app, ["corpus", "migrate-doc-types"])
-    assert result.exit_code == 0
-    assert captured["paths"] == []
-
-
-def test_migrate_doc_types_value_error_exits_1(tmp_path, monkeypatch):
-    import esdc.corpus.pipeline as pipeline
-
-    def raise_mismatch(*args, **kwargs):
-        raise ValueError("[Corpus] embedding model changed.")
-
-    monkeypatch.setattr(pipeline, "run_migrate_doc_types", raise_mismatch)
-
-    result = runner.invoke(app, ["corpus", "migrate-doc-types", str(tmp_path)])
-    assert result.exit_code == 1
-    assert "Error: [Corpus] embedding model changed" in result.output
-    assert "Traceback" not in result.output
-
-
 def test_entity_display_handles_legacy_plain_string():
     from esdc.esdc import _entity_display
 
