@@ -278,6 +278,49 @@ class EntityResolver:
 
         return results
 
+    def suggest_names(
+        self, name: str, entity_type: str, limit: int = 5
+    ) -> list[str]:
+        """Closest canonical names for an unresolvable raw name (fuzzy, ranked).
+
+        resolve_name's ILIKE lookup finds nothing for a typo ("Rokann"),
+        so this ranks the whole lookup column by Jaro-Winkler similarity
+        instead — giving callers copy-paste candidates for their warnings.
+        Similarity below 0.7 is dropped so garbage input yields [] rather
+        than random names.
+        """
+        if entity_type not in ENTITY_REGISTRY:
+            raise ValueError(f"unknown entity_type: {entity_type}")
+        spec = ENTITY_REGISTRY[entity_type]
+
+        name = (name or "").strip()
+        if not name:
+            return []
+
+        sql = f"""
+            SELECT entity_name FROM (
+                SELECT DISTINCT
+                    {spec.name_column} AS entity_name,
+                    jaro_winkler_similarity(
+                        lower(trim({spec.name_column})), lower(trim(?))
+                    ) AS sim
+                FROM {spec.lookup_table}
+                WHERE {spec.name_column} IS NOT NULL
+            ) candidates
+            WHERE sim >= 0.7
+            ORDER BY sim DESC, length(trim(entity_name)), lower(trim(entity_name))
+            LIMIT {limit}
+        """
+        try:
+            result = self.db.execute(sql, [name]).fetchall()
+        except Exception:
+            logger.debug(
+                "[KG] suggest_names_failed | type=%s term=%s", spec.label, name
+            )
+            return []
+
+        return [str(row[0]) for row in result if row[0]]
+
     def _best_confident_match(
         self, spec: EntitySpec, term: str
     ) -> dict[str, Any] | None:

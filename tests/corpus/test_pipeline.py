@@ -14,8 +14,9 @@ from esdc.corpus.store import CorpusStore
 class FakeEntityResolver:
     """Stand-in for EntityResolver that returns no matches by default."""
 
-    def __init__(self, db=None, matches=None):
+    def __init__(self, db=None, matches=None, suggestions=None):
         self._matches = matches or {}
+        self._suggestions = suggestions or {}
 
     def resolve(self, query):
         # Return first match for any key that contains the query
@@ -36,6 +37,10 @@ class FakeEntityResolver:
             if match.get("entity_type") == entity_type and key.lower() in name.lower()
         ]
         return sorted(hits, key=lambda m: m["confidence"], reverse=True)
+
+    def suggest_names(self, name, entity_type, limit=5):
+        # Configured per raw name: {"Rokann": ["ROKAN", "ROKAN HILIR"]}.
+        return list(self._suggestions.get(name, []))[:limit]
 
 DEFAULT_CFG = {
     "chunk_size": 500,
@@ -165,12 +170,12 @@ def patch_store_factory(monkeypatch, store: CorpusStore) -> None:
     monkeypatch.setattr(pipeline, "CorpusStore", lambda *a, **kw: store)
 
 
-def patch_entity_resolver(monkeypatch, matches=None):
+def patch_entity_resolver(monkeypatch, matches=None, suggestions=None):
     """Patch EntityResolver in pipeline to use FakeEntityResolver."""
     monkeypatch.setattr(
         pipeline,
         "EntityResolver",
-        lambda db: FakeEntityResolver(db=db, matches=matches),
+        lambda db: FakeEntityResolver(db=db, matches=matches, suggestions=suggestions),
     )
 
 
@@ -657,6 +662,37 @@ def test_apply_entity_resolution_unresolved_name_kept_with_warning():
     ]
 
 
+def test_apply_entity_resolution_unresolved_warning_includes_suggestions():
+    report = pipeline.CorpusReport()
+    meta = {"wk_name": ["Rokann"], "field_name": None, "project_name": None}
+    resolver = FakeEntityResolver(
+        suggestions={"Rokann": ["ROKAN", "ROKAN HILIR"]}
+    )
+
+    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+
+    assert meta["wk_name"] == ["Rokann"]  # still kept as-is
+    assert any(
+        "wk_name 'Rokann' unresolved — kept as-is; "
+        "closest matches: 'ROKAN', 'ROKAN HILIR'" in w
+        for w in report.warnings
+    )
+
+
+def test_apply_entity_resolution_no_suggestions_keeps_old_message():
+    report = pipeline.CorpusReport()
+    meta = {"wk_name": ["Nowhere Area"], "field_name": None, "project_name": None}
+    resolver = FakeEntityResolver()  # no matches, no suggestions
+
+    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+
+    assert any(
+        "wk_name 'Nowhere Area' unresolved — kept as-is, verify manually" in w
+        for w in report.warnings
+    )
+    assert not any("closest matches" in w for w in report.warnings)
+
+
 def test_apply_entity_resolution_multiple_matches_all_kept():
     """resolver.resolve_name returns FINAL picks -- one raw name can legitimately map to several canonical rows (e.g. "Arung Nowera" -> two separate fields), so _apply_entity_resolution no longer collapses to a single best match."""
     report = pipeline.CorpusReport()
@@ -1095,6 +1131,9 @@ def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch)
 
         def resolve_name(self, name, entity_type):
             self.calls += 1
+            return []
+
+        def suggest_names(self, name, entity_type, limit=5):
             return []
 
     counting_resolver = CountingResolver()

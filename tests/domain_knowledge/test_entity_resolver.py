@@ -339,6 +339,45 @@ class TestResolveName:
         assert resolver.resolve_name("   ", "field_name") == []
 
 
+class TestSuggestNames:
+    """suggest_names(): fuzzy-ranked canonical candidates for unresolvable names.
+
+    resolve_name's ILIKE lookup finds nothing for a typo like "Durri", so
+    this is the copy-paste escape hatch surfaced in unresolved warnings.
+    """
+
+    def test_typo_returns_fuzzy_ranked_names(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        resolver = EntityResolver(db=mock_db)
+        names = resolver.suggest_names("Durri", "field_name")
+        assert names[0] == "Duri"  # highest similarity first
+        assert "Abadi" not in names  # below the 0.7 similarity floor
+
+    def test_typo_against_wk_name(self, mock_db: duckdb.DuckDBPyConnection):
+        resolver = EntityResolver(db=mock_db)
+        assert resolver.suggest_names("Rokann", "wk_name") == ["WK Rokan"]
+
+    def test_garbage_returns_empty(self, mock_db: duckdb.DuckDBPyConnection):
+        resolver = EntityResolver(db=mock_db)
+        assert resolver.suggest_names("zzzzqqq", "field_name") == []
+
+    def test_blank_returns_empty(self, mock_db: duckdb.DuckDBPyConnection):
+        resolver = EntityResolver(db=mock_db)
+        assert resolver.suggest_names("", "field_name") == []
+        assert resolver.suggest_names("   ", "field_name") == []
+
+    def test_unknown_entity_type_raises(self, mock_db: duckdb.DuckDBPyConnection):
+        resolver = EntityResolver(db=mock_db)
+        with pytest.raises(ValueError):
+            resolver.suggest_names("Duri", "not_a_real_entity_type")
+
+    def test_limit_respected(self, mock_db: duckdb.DuckDBPyConnection):
+        resolver = EntityResolver(db=mock_db)
+        names = resolver.suggest_names("Durri", "field_name", limit=1)
+        assert names == ["Duri"]
+
+
 @pytest.fixture
 def multi_entity_db() -> duckdb.DuckDBPyConnection:
     """DB fixture mirroring the real-world Arung/Nowera/Garung/Duri cases."""

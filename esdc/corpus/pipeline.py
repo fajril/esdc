@@ -535,9 +535,20 @@ def _apply_entity_resolution(
             if not matches:
                 if raw_name not in resolved:
                     resolved.append(raw_name)
-                all_warnings.append(
-                    f"{key} '{raw_name}' unresolved — kept as-is, verify manually"
-                )
+                # Give the reviewer something to copy-paste: the closest
+                # canonical names, fuzzy-ranked (a typo like "Rokann"
+                # matches nothing via resolve_name's substring lookup).
+                suggestions = resolver.suggest_names(str(raw_name), key)
+                if suggestions:
+                    listed = ", ".join(f"'{s}'" for s in suggestions)
+                    all_warnings.append(
+                        f"{key} '{raw_name}' unresolved — kept as-is; "
+                        f"closest matches: {listed}"
+                    )
+                else:
+                    all_warnings.append(
+                        f"{key} '{raw_name}' unresolved — kept as-is, verify manually"
+                    )
                 continue
             for m in matches:
                 if m["name"] not in resolved:
