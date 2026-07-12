@@ -1262,6 +1262,80 @@ def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# run_meta
+# --------------------------------------------------------------------------
+
+
+def test_meta_sets_fields_and_persists(tmp_path, monkeypatch):
+    sc = make_sidecar(
+        tmp_path, "a.pdf", reviewed=False, file_hash="aa" * 32, wk_name=None
+    )
+
+    report = pipeline.run_meta([tmp_path], wk_name="Rokan", level="wk")
+
+    meta, body = read_sidecar(sc)
+    assert meta["wk_name"] == ["Rokan"]  # normalized to list
+    assert meta["doc_level"] == "wk"
+    assert meta["reviewed"] is False  # unchanged
+    assert "isi dokumen penting" in body  # body preserved verbatim
+    assert report.processed == ["a.corpus.md"]
+
+
+def test_meta_reviewed_flag_explicit(tmp_path, monkeypatch):
+    sc = make_sidecar(tmp_path, "a.pdf", reviewed=False, file_hash="bb" * 32)
+
+    pipeline.run_meta([tmp_path], reviewed=True)
+
+    meta, _body = read_sidecar(sc)
+    assert meta["reviewed"] is True
+
+
+def test_meta_bad_sidecar_fails_isolated(tmp_path, monkeypatch):
+    make_sidecar(tmp_path, "good.pdf", reviewed=False, file_hash="cc" * 32)
+    bad = tmp_path / "bad.corpus.md"
+    bad.write_text("no frontmatter at all")
+
+    report = pipeline.run_meta([tmp_path], wk_name="Rokan")
+
+    assert "bad.corpus.md" in report.failed
+    assert report.processed == ["good.corpus.md"]
+
+
+def test_meta_warns_when_already_committed(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    monkeypatch.setattr(store, "document_exists", lambda file_hash: True)
+
+    make_sidecar(tmp_path, "doc.pdf", reviewed=True, file_hash="dd" * 32)
+
+    report = pipeline.run_meta([tmp_path], wk_name="Rokan")
+
+    assert any(
+        "already committed" in w and "--force" in w for w in report.warnings
+    )
+    store.close()
+
+
+def test_meta_db_unavailable_still_writes(tmp_path, monkeypatch):
+    def broken_store(*a, **kw):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(pipeline, "CorpusStore", broken_store)
+
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=False, file_hash="ee" * 32, wk_name=None
+    )
+
+    report = pipeline.run_meta([tmp_path], wk_name="Rokan")
+
+    db_warnings = [w for w in report.warnings if "DB unavailable" in w]
+    assert len(db_warnings) == 1
+    meta, _body = read_sidecar(sc)
+    assert meta["wk_name"] == ["Rokan"]
+
+
+# --------------------------------------------------------------------------
 # run_meta_show
 # --------------------------------------------------------------------------
 

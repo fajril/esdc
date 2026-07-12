@@ -753,6 +753,97 @@ def run_status(paths: list[Path]) -> list[dict[str, str]]:
     return results
 
 
+def run_meta(
+    paths: list[Path],
+    level: str | None = None,
+    doc_type: str | None = None,
+    wk_name: str | None = None,
+    field_name: str | None = None,
+    project_name: str | None = None,
+    reviewed: bool | None = None,
+) -> CorpusReport:
+    """Bulk-edit ``.corpus.md`` sidecar frontmatter in place.
+
+    Persists overrides to the sidecar (unlike the old commit-time overrides,
+    which never reached the file). Re-runs entity resolution as a safety net
+    and warns when the sidecar is already committed, since the store copy
+    only updates on ``commit --force``.
+    """
+    report = CorpusReport()
+    sidecars = _collect_sidecars(paths)
+
+    overrides = {
+        "doc_level": level,
+        "doc_type": doc_type,
+        "wk_name": wk_name,
+        "field_name": field_name,
+        "project_name": project_name,
+    }
+
+    store: CorpusStore | None = None
+    resolver = None
+    try:
+        try:
+            store = CorpusStore()
+            store.ensure_tables()
+            resolver = _entity_resolver_or_none(store, report)
+        except Exception as e:
+            logger.warning("[Corpus] meta DB unavailable: %s", e)
+            report.warnings.append(
+                "corpus DB unavailable — committed-status check and entity "
+                "resolution skipped"
+            )
+            store = None
+
+        for sc in sidecars:
+            name = sc.name
+            try:
+                try:
+                    meta, body = read_sidecar(sc)
+                except ValueError as e:
+                    report.failed[name] = str(e)
+                    continue
+
+                _apply_overrides(meta, overrides)
+                if reviewed is not None:
+                    meta["reviewed"] = reviewed
+                meta = normalize_entity_fields(meta)
+
+                if resolver is not None:
+                    existing_raws = meta.get("raw_entities") or {}
+                    resolved_raws = _apply_entity_resolution(
+                        meta, resolver, report, name
+                    )
+                    # Overridden fields get the user-supplied value as their
+                    # new raw; untouched fields keep their original raw.
+                    for key in ("wk_name", "field_name", "project_name"):
+                        if overrides[key] is not None:
+                            existing_raws[key] = overrides[key]
+                        elif key not in existing_raws:
+                            existing_raws[key] = resolved_raws.get(key)
+                    if any(v is not None for v in existing_raws.values()):
+                        meta["raw_entities"] = existing_raws
+
+                file_hash = meta.get("file_hash")
+                if store is not None and file_hash:
+                    if store.document_exists(file_hash):
+                        report.warnings.append(
+                            f"{name}: already committed — run "
+                            "`esdc corpus commit --force` to apply the new "
+                            "metadata to the corpus"
+                        )
+
+                write_sidecar_file(sc, meta, body)
+                report.processed.append(name)
+            except Exception as e:
+                report.failed[name] = str(e)
+    finally:
+        if store is not None:
+            store.close()
+
+    return report
+
+
 def run_meta_show(paths: list[Path]) -> list[dict[str, Any]]:
     """Read-only metadata listing for ``.corpus.md`` sidecars."""
     rows: list[dict[str, Any]] = []
