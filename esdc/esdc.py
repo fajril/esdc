@@ -1366,17 +1366,16 @@ def _humanize_bytes(n: int) -> str:
     return f"{n / (1024 ** 3):.1f} GB"
 
 
-@app.command(name="status")
-def status(
-    verify: Annotated[
-        bool,
-        typer.Option(
-            "--verify",
-            help="Run functional verification on indexes (slower).",
-        ),
-    ] = False,
-) -> None:
-    """Show database location, configuration, and index status."""
+def _status_fetch_report() -> bool:
+    """Print DB location/env vars, tables + per-year rows, last updated.
+
+    Returns:
+        True if the database file exists and could be read (report
+        printed in full); False if a short "Database exists: No" or
+        error message was printed instead and callers should stop
+        further status reporting (mirrors the pre-split monolith, which
+        returned immediately in both cases).
+    """
     db_dir = Config.get_db_dir()
     db_file = Config.get_db_file()
 
@@ -1393,13 +1392,12 @@ def status(
             "[yellow]Database exists: No[/yellow] "
             "(run '[cyan]esdc fetch --save[/cyan]' to create)"
         )
-        return
+        return False
 
     rich.print("[green]Database exists: Yes[/green]")
 
     try:
         from esdc.dbmanager import (
-            check_indexes,
             check_table_stats,
             get_duckdb_connection,
             get_last_updated,
@@ -1407,14 +1405,13 @@ def status(
 
         conn = get_duckdb_connection(db_file)
         try:
-            status = check_indexes(conn)
             table_stats = check_table_stats(conn)
             last_updated = get_last_updated(conn)
         finally:
             conn.close()
     except Exception as e:
         rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
-        return
+        return False
 
     if last_updated:
         rich.print(f"[bold]Last updated:[/bold] {last_updated}")
@@ -1435,6 +1432,37 @@ def status(
         rich.print(f"  {icon} {ts['table']} ({ts['total']:,} rows):")
         for year, count in ts["years"]:
             rich.print(f"      {year}: {count:,} rows")
+
+    return True
+
+
+def _status_index_report(verify: bool) -> None:
+    """Print FTS, B-tree, and embeddings/HNSW index status.
+
+    Args:
+        verify: When True, additionally runs functional verification on
+            the indexes (slower) and prints a Verification section.
+    """
+    from esdc.dbmanager import check_indexes, get_duckdb_connection
+
+    db_file = Config.get_db_file()
+
+    if not db_file.exists():
+        rich.print(
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
+        )
+        return
+
+    try:
+        conn = get_duckdb_connection(db_file)
+        try:
+            status = check_indexes(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
+        return
 
     rich.print()
     rich.print("[bold]FTS Indexes:[/bold]")
@@ -1462,45 +1490,6 @@ def status(
         rich.print()
     hnsw_icon = "[green]✅[/green]" if emb["hnsw_exists"] else "[red]❌[/red]"
     rich.print(f"  {hnsw_icon} HNSW index idx_hnsw_embeddings")
-
-    # Cache diagnostics
-    rich.print()
-    rich.print("[bold]Cache:[/bold]")
-    cache_dir = Config.get_cache_dir()
-    rich.print(f"  Directory: {cache_dir}")
-
-    try:
-        from esdc.chat.tools import get_sql_cache_stats, get_tool_cache_stats
-        from esdc.dbmanager import get_last_cache_invalidation
-        from esdc.server.cache import get_cache_stats
-
-        sql_stats = get_sql_cache_stats()
-        tool_stats = get_tool_cache_stats()
-        json_stats = get_cache_stats()
-
-        _print_cache_subsection("SQL Results Cache", sql_stats)
-        _print_cache_subsection("Tool Results Cache", tool_stats)
-
-        # JSON cache
-        rich.print()
-        rich.print("  [bold]JSON Parsing Cache (RAM):[/bold]")
-        rich.print(
-            f"      Entries: {json_stats['json_cache_size']} /"
-            f" {json_stats['json_cache_max']}"
-        )
-        _print_hit_rate(
-            json_stats.get("json_cache_hits", 0),
-            json_stats.get("json_cache_misses", 0),
-        )
-        rich.print("      Note: In-memory only, resets on restart")
-
-        # Last invalidated
-        last_invalidated = get_last_cache_invalidation()
-        if last_invalidated:
-            rich.print()
-            rich.print(f"  [bold]Last cache invalidated:[/bold] {last_invalidated}")
-    except Exception as e:
-        rich.print(f"[yellow]  Could not check cache: {e}[/yellow]")
 
     if not verify:
         return
@@ -1545,6 +1534,325 @@ def status(
             icon = "[yellow]⚠[/yellow]"
             detail = "not verified (compound index)"
         rich.print(f"  {icon} {bt['name']}: {detail}")
+
+
+def _status_cache_report() -> None:
+    """Print SQL/tool/JSON cache diagnostics and last invalidation time."""
+    rich.print()
+    rich.print("[bold]Cache:[/bold]")
+    cache_dir = Config.get_cache_dir()
+    rich.print(f"  Directory: {cache_dir}")
+
+    try:
+        from esdc.chat.tools import get_sql_cache_stats, get_tool_cache_stats
+        from esdc.dbmanager import get_last_cache_invalidation
+        from esdc.server.cache import get_cache_stats
+
+        sql_stats = get_sql_cache_stats()
+        tool_stats = get_tool_cache_stats()
+        json_stats = get_cache_stats()
+
+        _print_cache_subsection("SQL Results Cache", sql_stats)
+        _print_cache_subsection("Tool Results Cache", tool_stats)
+
+        # JSON cache
+        rich.print()
+        rich.print("  [bold]JSON Parsing Cache (RAM):[/bold]")
+        rich.print(
+            f"      Entries: {json_stats['json_cache_size']} /"
+            f" {json_stats['json_cache_max']}"
+        )
+        _print_hit_rate(
+            json_stats.get("json_cache_hits", 0),
+            json_stats.get("json_cache_misses", 0),
+        )
+        rich.print("      Note: In-memory only, resets on restart")
+
+        # Last invalidated
+        last_invalidated = get_last_cache_invalidation()
+        if last_invalidated:
+            rich.print()
+            rich.print(f"  [bold]Last cache invalidated:[/bold] {last_invalidated}")
+    except Exception as e:
+        rich.print(f"[yellow]  Could not check cache: {e}[/yellow]")
+
+
+_CORPUS_TABLES = ("documents", "document_chunks", "corpus_meta")
+
+
+def _status_corpus_report() -> None:
+    """Print the corpus store section.
+
+    Doc/chunk counts, doc_type breakdown, pinned embedding model/dim,
+    and chunks FTS + HNSW index status.
+
+    Read-only and never instantiates CorpusStore (that would drag in the
+    embedder / require Ollama to be running). Connects directly via
+    get_duckdb_connection and guards every query with an
+    information_schema check, mirroring how dbmanager.check_indexes
+    inspects duckdb_indexes().
+    """
+    from esdc.dbmanager import get_duckdb_connection
+
+    db_file = Config.get_db_file()
+
+    if not db_file.exists():
+        rich.print(
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
+        )
+        return
+
+    try:
+        conn = get_duckdb_connection(db_file)
+        try:
+            existing_tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'main'"
+                ).fetchall()
+            }
+
+            if not set(_CORPUS_TABLES) <= existing_tables:
+                rich.print("[bold]Corpus:[/bold]")
+                rich.print(
+                    "  [yellow]not initialized[/yellow] "
+                    "(run '[cyan]esdc corpus commit[/cyan]')"
+                )
+                return
+
+            doc_count = (
+                conn.execute("SELECT COUNT(*) FROM documents").fetchone() or (0,)
+            )[0]
+            chunk_count = (
+                conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()
+                or (0,)
+            )[0]
+            doc_type_rows = conn.execute(
+                "SELECT COALESCE(doc_type, 'unknown'), COUNT(*) FROM documents "
+                "GROUP BY 1 ORDER BY 1"
+            ).fetchall()
+            meta_row = conn.execute(
+                "SELECT embedding_model, dim FROM corpus_meta LIMIT 1"
+            ).fetchone()
+
+            fts_schemas = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT schema_name FROM information_schema.schemata "
+                    "WHERE schema_name LIKE 'fts_main_%'"
+                ).fetchall()
+            }
+            fts_exists = "fts_main_document_chunks" in fts_schemas
+
+            existing_indexes = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT index_name FROM duckdb_indexes()"
+                ).fetchall()
+            }
+            hnsw_exists = "idx_hnsw_chunks" in existing_indexes
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]Could not check corpus: {e}[/yellow]")
+        return
+
+    rich.print("[bold]Corpus:[/bold]")
+    rich.print(f"  {doc_count:,} documents, {chunk_count:,} chunks")
+    if meta_row:
+        rich.print(f"  Embedding model: {meta_row[0]} (dim={meta_row[1]})")
+    else:
+        rich.print("  [yellow]Embedding model: unknown (corpus_meta empty)[/yellow]")
+
+    rich.print()
+    rich.print("  [bold]Document types:[/bold]")
+    for doc_type, count in doc_type_rows:
+        rich.print(f"      {doc_type}: {count:,}")
+
+    rich.print()
+    fts_icon = "[green]✅[/green]" if fts_exists else "[red]❌[/red]"
+    rich.print(f"  {fts_icon} FTS document_chunks")
+    hnsw_icon = "[green]✅[/green]" if hnsw_exists else "[red]❌[/red]"
+    rich.print(f"  {hnsw_icon} HNSW index idx_hnsw_chunks")
+
+
+def _summary_line_fetch(conn: Any) -> str:
+    """Compact 'Database:'/'Tables:' lines for the bare `esdc status` summary."""
+    from esdc.dbmanager import check_table_stats, get_last_updated
+
+    db_file = Config.get_db_file()
+    last_updated = get_last_updated(conn)
+    updated_suffix = f" (last updated {last_updated})" if last_updated else ""
+    table_stats = check_table_stats(conn)
+    loaded = sum(1 for ts in table_stats if ts["years"])
+    total = len(table_stats)
+    return (
+        f"[bold]Database:[/bold] {db_file} [green]✅[/green]{updated_suffix}\n"
+        f"[bold]Tables:[/bold]   {loaded}/{total} loaded"
+    )
+
+
+def _summary_line_index(conn: Any) -> str:
+    """Compact 'Indexes:' line for the bare `esdc status` summary."""
+    from esdc.dbmanager import check_indexes
+
+    idx = check_indexes(conn)
+    fts_missing = sum(1 for f in idx["fts_indexes"] if not f["exists"])
+    btree_missing = sum(1 for b in idx["btree_indexes"] if not b["exists"])
+    hnsw_ok = idx["embeddings"]["hnsw_exists"]
+
+    fts_part = (
+        "FTS [green]✅[/green]"
+        if fts_missing == 0
+        else f"FTS [red]❌[/red] ({fts_missing} missing)"
+    )
+    btree_part = (
+        "B-tree [green]✅[/green]"
+        if btree_missing == 0
+        else f"B-tree [red]❌[/red] ({btree_missing} missing)"
+    )
+    hnsw_part = "HNSW [green]✅[/green]" if hnsw_ok else "HNSW [red]❌[/red]"
+    return f"[bold]Indexes:[/bold]  {fts_part}  {btree_part}  {hnsw_part}"
+
+
+def _summary_line_corpus(conn: Any) -> str:
+    """Compact 'Corpus:' line for the bare `esdc status` summary."""
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+    if not set(_CORPUS_TABLES) <= existing_tables:
+        return (
+            "[bold]Corpus:[/bold]   [yellow]not initialized[/yellow] "
+            "(run [cyan]esdc corpus commit[/cyan])"
+        )
+
+    doc_count = (conn.execute("SELECT COUNT(*) FROM documents").fetchone() or (0,))[0]
+    chunk_count = (
+        conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone() or (0,)
+    )[0]
+    meta_row = conn.execute(
+        "SELECT embedding_model, dim FROM corpus_meta LIMIT 1"
+    ).fetchone()
+    model = meta_row[0] if meta_row else "unknown"
+    return (
+        f"[bold]Corpus:[/bold]   {doc_count:,} documents, "
+        f"{chunk_count:,} chunks ({model})"
+    )
+
+
+def _hit_rate_str(hits: int, misses: int) -> str:
+    """Compact hit-rate fragment; '–' for RAM-only stats with no activity."""
+    total = hits + misses
+    if total == 0:
+        return "–"
+    return f"{hits / total:.0%} hit"
+
+
+def _summary_line_cache() -> str:
+    """Compact 'Cache:' line for the bare `esdc status` summary."""
+    from esdc.chat.tools import get_sql_cache_stats, get_tool_cache_stats
+
+    sql_stats = get_sql_cache_stats()
+    tool_stats = get_tool_cache_stats()
+    sql_rate = _hit_rate_str(sql_stats.get("hits", 0), sql_stats.get("misses", 0))
+    tool_rate = _hit_rate_str(tool_stats.get("hits", 0), tool_stats.get("misses", 0))
+    return f"[bold]Cache:[/bold]    SQL {sql_rate} · Tool {tool_rate}"
+
+
+status_app = typer.Typer(no_args_is_help=False)
+app.add_typer(
+    status_app,
+    name="status",
+    help="Show database location, configuration, and index status.",
+)
+
+
+@status_app.callback(invoke_without_command=True)
+def status_main(ctx: typer.Context) -> None:
+    """Show a compact one-glance summary of all domains.
+
+    Detail: esdc status fetch|index|corpus|cache.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    db_file = Config.get_db_file()
+    if not db_file.exists():
+        rich.print(
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
+        )
+        return
+
+    from esdc.dbmanager import get_duckdb_connection
+
+    try:
+        conn = get_duckdb_connection(db_file)
+    except Exception as e:
+        rich.print(f"[yellow]Could not open database: {e}[/yellow]")
+        return
+
+    summary_fns = (_summary_line_fetch, _summary_line_index, _summary_line_corpus)
+    try:
+        for summary_fn in summary_fns:
+            try:
+                rich.print(summary_fn(conn))
+            except Exception as e:
+                rich.print(f"[yellow]could not check: {e}[/yellow]")
+    finally:
+        conn.close()
+
+    try:
+        rich.print(_summary_line_cache())
+    except Exception as e:
+        rich.print(f"[yellow]could not check cache: {e}[/yellow]")
+
+    rich.print()
+    rich.print("Detail: esdc status fetch|index|corpus|cache")
+
+
+@status_app.command(name="fetch")
+def status_fetch_cmd() -> None:
+    """DB location/env vars, tables + per-year rows, last updated."""
+    _status_fetch_report()
+
+
+@status_app.command(name="index")
+def status_index_cmd(
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help="Run functional verification on indexes (slower).",
+        ),
+    ] = False,
+) -> None:
+    """FTS, B-tree, and embeddings + HNSW index status."""
+    _status_index_report(verify)
+
+
+@status_app.command(name="corpus")
+def status_corpus_cmd() -> None:
+    """Corpus store summary.
+
+    Doc/chunk counts, doc_type breakdown, pinned embedding model/dim,
+    chunks FTS + HNSW status.
+
+    Per-file pipeline state: esdc corpus status <paths>.
+    """
+    _status_corpus_report()
+
+
+@status_app.command(name="cache")
+def status_cache_cmd() -> None:
+    """SQL/tool/JSON cache stats, last invalidated."""
+    _status_cache_report()
 
 
 @app.command(name="eureka")
@@ -2064,7 +2372,10 @@ def corpus_status(
         typer.Argument(exists=True, help="PDF/sidecar file(s) or folder(s) to check."),
     ],
 ) -> None:
-    """Show each PDF/sidecar's place in the extract -> review -> commit pipeline."""
+    """Show each PDF/sidecar's place in the extract -> review -> commit pipeline.
+
+    Store-level summary: esdc status corpus.
+    """
     from esdc.corpus.pipeline import run_status
 
     rows = run_status(paths)
