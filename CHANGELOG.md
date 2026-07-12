@@ -9,12 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`esdc corpus` document ingestion pipeline** — parse official PDFs (POD approvals, MoM minutes, BA documents) into a searchable local corpus for IRIS document search
-  - Two-phase, human-reviewed workflow: `esdc corpus extract` parses PDFs to reviewable `.corpus.md` sidecars with LLM-prefilled metadata and per-page `native`/`llm_ocr` markers; `esdc corpus commit` ingests only sidecars marked `reviewed: true` into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed). Nothing reaches the searchable corpus without passing through this review gate.
-  - Per-page tiered extraction: native text layer used when present, `glm-ocr` (Ollama vision model, zai-org/GLM-OCR) OCRs scanned/image-only pages
+- **`esdc corpus` document ingestion pipeline** — parse official documents (POD approvals, MoM minutes, BA documents, regulations, contracts) into a searchable local corpus for IRIS document search
+  - Two-phase, human-reviewed workflow: `esdc corpus extract` parses sources to reviewable `.corpus.md` sidecars with LLM-prefilled metadata and per-page `native`/`llm_ocr` markers; `esdc corpus commit` ingests only sidecars marked `reviewed: true` into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed). Nothing reaches the searchable corpus without passing through this review gate.
+  - Source formats: `.pdf`, `.docx` (python-docx: headings, markdown tables, document-order walk), and `.md` (verbatim); sidecar-path collisions between same-named sources fail explicitly
+  - Per-page tiered PDF extraction: native text layer used when present, `glm-ocr` (Ollama vision model, zai-org/GLM-OCR) OCRs scanned/image-only pages and significant embedded images (tables/charts saved as pictures)
+  - Optional cleanup model pass (`corpus.cleanup_model`) reformats messy OCR segments with digit-invention and length guards; original text kept when the guard rejects
+  - Standardized 16-type `doc_type` vocabulary (uu, perpu, mk, pp, permen, kepmen, letter, mom, ba, note, psc, gsa, pod, ptk, sop, others) with regulatory hierarchy, single-sourced in `doc_schema.yaml` — the extraction prompt, CLI validation, and iris tool context all derive from it; legacy values (`surat`, `other`) auto-migrate at commit; casing is normalized
+  - Entity resolution to canonical WK/field/project names at extract and commit, with unresolved names kept as-is and per-file warnings
+  - CLI metadata overrides on `extract` and `commit` (`--level`, `--doc-type`, `--wk-name`, `--field-name`, `--project-name`); `commit --skip-review` ingests pending sidecars and writes `reviewed: true` back on success (with audit warnings)
+  - Two-line progress display: file-count bar plus an in-place status line showing the current file and phase
   - Management commands: `esdc corpus status`, `list`, `remove`, `clear`, `reembed`
-  - New iris chat tools `search_documents` and `read_document` for querying the corpus from chat
-  - Configurable via `corpus.*` in `~/.esdc/config.yaml` (chunk size/overlap, OCR model, DPI, context window, native-text threshold)
+  - New iris chat tools `search_documents` and `read_document` for querying the corpus from chat; tool descriptions carry the schema glossary and hierarchy
+  - Configurable via `corpus.*` in `~/.esdc/config.yaml` (chunk size/overlap, OCR model, DPI, context window, native-text threshold, `metadata_model`/`cleanup_model` incl. `main` provider routing, `ollama_host` for remote OCR/embedding)
 - **Auto-reindex after `esdc fetch`** — FTS and B-tree indexes are rebuilt automatically after data loading, ensuring ILIKE queries return correct results for newly-fetched data
   - Default behavior: reindex is ON after every fetch (both full-replace and per-year append modes)
   - Use `--no-reindex` flag on `esdc fetch` to skip reindexing if desired
@@ -22,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FTS zero-row fallback** — when an FTS-rewritten query returns 0 rows, the system automatically retries with the original ILIKE query, ensuring results are never lost due to FTS stemming/stopword issues
 - **FTS index without stemmer/stopwords** — FTS indexes are now created with `stemmer=''` and `stopwords=''` so that short keywords like "Duri" are matched exactly without being filtered by English stemming rules
 - **Reachability matrix in `knowledge_traversal`** — when `topic` is `transition` or `level`, the tool now auto-appends a compact reachability matrix (Level → Allowed Targets) covering all 18 levels (E0-E8, X0-X6, A1, A2), with the queried entity highlighted. Prevents LLM reasoning errors like claiming E3 can transition to E4. Opt-out via `include_reachability=False`.
+- **OAuth authentication and OpenAI provider support** — device-flow OAuth with local S256 PKCE (no external hash service), HTML-escaped callback error page, refreshed tokens persisted atomically to config with `0o600` permissions, and an `expires_at` calculation fix
+- **CI workflow** — GitHub Actions running `ruff check esdc/ tests/` and the pytest suite on every push/PR
 
 ### Added
 

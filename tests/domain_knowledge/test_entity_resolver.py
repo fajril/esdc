@@ -310,10 +310,7 @@ class TestResolveName:
     def test_whole_string_wins_first_single_best_only(
         self, mock_db: duckdb.DuckDBPyConnection
     ):
-        """An exact whole-string hit short-circuits the fallback chain and
-        returns only the single best match -- not every row that happens to
-        contain the term (no fan-out from the whole-string step).
-        """
+        """An exact whole-string hit short-circuits the fallback chain and returns only the single best match -- not every row that happens to contain the term (no fan-out from the whole-string step)."""
         resolver = EntityResolver(db=mock_db)
         matches = resolver.resolve_name("Duri", "field_name")
         assert len(matches) == 1
@@ -328,11 +325,7 @@ class TestResolveName:
     def test_domain_word_stripping_resolves_via_normalized_phrase(
         self, mock_db: duckdb.DuckDBPyConnection
     ):
-        """Unlike resolve(), there's no NL keyword-candidate extraction, but
-        the fallback chain's step 2 does strip domain boilerplate words
-        (including resolve_name-local noise words like "kerja") so a phrase
-        that doesn't match verbatim can still resolve via its stripped form.
-        """
+        """Unlike resolve(), there's no NL keyword-candidate extraction, but the fallback chain's step 2 does strip domain boilerplate words (including resolve_name-local noise words like "kerja") so a phrase that doesn't match verbatim can still resolve via its stripped form."""
         resolver = EntityResolver(db=mock_db)
         matches = resolver.resolve_name("wilayah kerja Rokan", "wk_name")
         assert len(matches) == 1
@@ -424,9 +417,7 @@ class TestResolveNameFallbackChain:
     def test_boundary_guard_rejects_non_boundary_substring(
         self, multi_entity_db: duckdb.DuckDBPyConnection
     ):
-        """"arung" must not match GARUNG/PEMARUNG (no word-boundary containment)
-        even though a bare ILIKE substring test would clear the 0.8 threshold.
-        """
+        """"arung" must not match GARUNG/PEMARUNG (no word-boundary containment) even though a bare ILIKE substring test would clear the 0.8 threshold."""
         resolver = EntityResolver(db=multi_entity_db)
         matches = resolver.resolve_name("arung", "field_name")
         names = [m["name"] for m in matches]
@@ -447,9 +438,7 @@ class TestResolveNameFallbackChain:
     def test_no_fan_out_when_full_phrase_matches(
         self, multi_entity_db: duckdb.DuckDBPyConnection
     ):
-        """"Duri Utara" must resolve only to "DURI UTARA", not also "DURI" --
-        the whole-string step wins before segmentation could split it.
-        """
+        """"Duri Utara" must resolve only to "DURI UTARA", not also "DURI" -- the whole-string step wins before segmentation could split it."""
         resolver = EntityResolver(db=multi_entity_db)
         matches = resolver.resolve_name("Duri Utara", "field_name")
         assert [m["name"] for m in matches] == ["DURI UTARA"]

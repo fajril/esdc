@@ -206,6 +206,19 @@ def test_collect_sources_all_formats_excludes_sidecars(tmp_path):
     assert "d.txt" not in names
 
 
+def test_collect_sources_dir_scan_case_insensitive_extensions(tmp_path):
+    """Dir scans must not silently drop uppercase-extension files -- file args already lowercase the suffix before matching, but rglob(f"*{ext}") is case-sensitive so REPORT.PDF in a folder was invisible."""
+    (tmp_path / "REPORT.PDF").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "Notes.MD").write_text("# hi", encoding="utf-8")
+    (tmp_path / "X.CORPUS.MD").write_text("sidecar content", encoding="utf-8")
+
+    got = pipeline._collect_sources([tmp_path])
+    names = {p.name for p in got}
+
+    assert names == {"REPORT.PDF", "Notes.MD"}
+    assert "X.CORPUS.MD" not in names
+
+
 def test_collect_sources_collision_second_source_fails(tmp_path, monkeypatch):
     (tmp_path / "report.pdf").write_bytes(b"%PDF-1.4 fake")
     (tmp_path / "report.docx").write_bytes(b"PK fake docx bytes")
@@ -645,10 +658,7 @@ def test_apply_entity_resolution_unresolved_name_kept_with_warning():
 
 
 def test_apply_entity_resolution_multiple_matches_all_kept():
-    """resolver.resolve_name returns FINAL picks -- one raw name can legitimately
-    map to several canonical rows (e.g. "Arung Nowera" -> two separate fields),
-    so _apply_entity_resolution no longer collapses to a single best match.
-    """
+    """resolver.resolve_name returns FINAL picks -- one raw name can legitimately map to several canonical rows (e.g. "Arung Nowera" -> two separate fields), so _apply_entity_resolution no longer collapses to a single best match."""
     report = pipeline.CorpusReport()
     meta = {"wk_name": ["Rokan"], "field_name": None, "project_name": None}
 
@@ -670,9 +680,7 @@ def test_apply_entity_resolution_multiple_matches_all_kept():
 
 
 def test_apply_entity_resolution_stale_warnings_cleared_on_clean_rerun():
-    """A sidecar with leftover entity_warnings from a prior (buggy/unresolved)
-    run must have them cleared once re-resolution comes back clean.
-    """
+    """A sidecar with leftover entity_warnings from a prior (buggy/unresolved) run must have them cleared once re-resolution comes back clean."""
     report = pipeline.CorpusReport()
     meta = {
         "wk_name": ["South Sumatera"],
@@ -1167,6 +1175,92 @@ def test_commit_bad_sidecar_isolated(tmp_path, monkeypatch):
     store.close()
 
 
+def test_commit_warns_on_vocab_demotion(tmp_path, monkeypatch):
+    """A reviewer typo (doc_type 'leter') must not be swallowed silently.
+
+    normalize_metadata clamps it to 'others'/'unknown'; the commit run must
+    surface that demotion as a per-file warning.
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    make_sidecar(
+        tmp_path,
+        "typo.pdf",
+        reviewed=True,
+        file_hash="77" * 32,
+        doc_type="leter",
+        doc_level="galaxie",
+    )
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert report.processed == ["typo.corpus.md"]
+    assert any(
+        "doc_type 'leter' not in vocab — stored as 'others'" in w
+        for w in report.warnings
+    )
+    assert any(
+        "doc_level 'galaxie' not in vocab — stored as 'unknown'" in w
+        for w in report.warnings
+    )
+    store.close()
+
+
+def test_commit_no_demotion_warning_for_legacy_case_or_null(tmp_path, monkeypatch):
+    """Legacy aliases, case variants, and null values are not demotions."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    make_sidecar(
+        tmp_path, "legacy.pdf", reviewed=True, file_hash="88" * 32, doc_type="Surat"
+    )
+    make_sidecar(
+        tmp_path, "caps.pdf", reviewed=True, file_hash="99" * 32, doc_type="UU"
+    )
+    make_sidecar(
+        tmp_path,
+        "nulls.pdf",
+        reviewed=True,
+        file_hash="ab" * 32,
+        doc_type=None,
+        doc_level=None,
+    )
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert len(report.processed) == 3
+    assert not any("not in vocab" in w for w in report.warnings)
+    store.close()
+
+
+def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
+    """An exception raised after read_sidecar succeeds (e.g. store.insert_document choking on an unparseable hand-edited doc_date) must not abort the batch -- it's recorded as a per-file failure and the rest of the batch still commits."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    make_sidecar(
+        tmp_path,
+        "bad.pdf",
+        reviewed=True,
+        file_hash="55" * 32,
+        doc_date="31 Februari dua ribu",
+    )
+    make_sidecar(tmp_path, "good.pdf", reviewed=True, file_hash="66" * 32)
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert "bad.corpus.md" in report.failed
+    assert report.processed == ["good.corpus.md"]
+    store.close()
+
+
 # --------------------------------------------------------------------------
 # run_status
 # --------------------------------------------------------------------------
@@ -1201,6 +1295,37 @@ def test_status_all_states(tmp_path, monkeypatch):
     assert results["pending.corpus.md"] == "pending review"
     assert results["ready.corpus.md"] == "ready to commit"
     assert results["done.corpus.md"] == "committed"
+    store.close()
+
+
+def test_status_file_arg_finds_sidecar_by_source_path(tmp_path, monkeypatch):
+    """Passing the source file directly (not the dir, not the .corpus.md) must still find its sidecar via sidecar_path(src) -- previously only directory globbing discovered sidecars, so a file-arg status check on `doc.pdf` wrongly reported "not extracted" even with `doc.corpus.md` right next to it."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+
+    pdf = make_pdf(tmp_path, "ready.pdf")
+    make_sidecar(tmp_path, "ready.pdf", reviewed=True, file_hash="77" * 32)
+
+    results = {r["file"]: r["state"] for r in pipeline.run_status([pdf])}
+
+    assert results["ready.corpus.md"] == "ready to commit"
+    assert "ready.pdf" not in results
+    store.close()
+
+
+def test_status_dir_arg_unchanged_no_duplicate_entries(tmp_path, monkeypatch):
+    """The file-arg sidecar-discovery fix must not create duplicate entries when a directory (which already globs its sidecars) is passed instead."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+
+    make_sidecar(tmp_path, "ready.pdf", reviewed=True, file_hash="88" * 32)
+
+    results = pipeline.run_status([tmp_path])
+    names = [r["file"] for r in results]
+
+    assert names.count("ready.corpus.md") == 1
     store.close()
 
 

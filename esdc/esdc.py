@@ -1903,7 +1903,12 @@ def _save_violations(results: list[ValidationResult], fmt: str) -> None:
 
 
 def _print_corpus_report(report) -> None:
-    """Print a processed/skipped/failed summary + warnings; exit 1 on total failure."""
+    """Print a processed/skipped/failed summary + warnings; exit 1 on total failure.
+
+    Partial failure exits 0 by design: batch progress is preserved and each
+    failure is listed per file, so scripts that need stricter semantics should
+    parse the FAILED lines rather than rely on the exit code.
+    """
     rows = [
         ("processed", len(report.processed)),
         ("skipped", len(report.skipped)),

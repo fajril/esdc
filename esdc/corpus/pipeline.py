@@ -31,6 +31,7 @@ from rich.console import Group
 from rich.live import Live
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
+from esdc.chat.domain_knowledge.doc_schema import legacy_doc_type_map
 from esdc.chat.domain_knowledge.entity_registry import ENTITY_REGISTRY
 from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.configs import Config
@@ -86,13 +87,17 @@ def _collect_sources(paths: list[Path]) -> list[Path]:
     for p in paths:
         if p.is_file():
             suffix = p.suffix.lower()
-            if suffix in SUPPORTED_EXTENSIONS and not p.name.endswith(".corpus.md"):
+            if suffix in SUPPORTED_EXTENSIONS and not p.name.lower().endswith(
+                ".corpus.md"
+            ):
                 found.add(p)
         elif p.is_dir():
-            for ext in SUPPORTED_EXTENSIONS:
-                for match in p.rglob(f"*{ext}"):
-                    if match.name.endswith(".corpus.md"):
-                        continue
+            for match in p.rglob("*"):
+                if (
+                    match.is_file()
+                    and match.suffix.lower() in SUPPORTED_EXTENSIONS
+                    and not match.name.lower().endswith(".corpus.md")
+                ):
                     found.add(match)
     return sorted(found)
 
@@ -229,6 +234,33 @@ def _apply_overrides(meta: dict[str, Any], overrides: dict[str, Any]) -> None:
     for key, value in overrides.items():
         if value is not None:
             meta[key] = value
+
+
+def _warn_vocab_demotions(
+    raw_type: Any,
+    raw_level: Any,
+    meta: dict[str, Any],
+    report: CorpusReport,
+    name: str,
+) -> None:
+    """Surface out-of-vocab values that normalize_metadata clamps silently.
+
+    Legacy aliases and case variants are legitimate normalizations, not
+    demotions — only values that had no canonical form get a warning.
+    """
+    if raw_type is not None and meta.get("doc_type") == "others":
+        canon = raw_type.lower() if isinstance(raw_type, str) else raw_type
+        canon = legacy_doc_type_map().get(canon, canon)
+        if canon != "others":
+            report.warnings.append(
+                f"{name}: doc_type '{raw_type}' not in vocab — stored as 'others'"
+            )
+    if raw_level is not None and meta.get("doc_level") == "unknown":
+        canon = raw_level.lower() if isinstance(raw_level, str) else raw_level
+        if canon != "unknown":
+            report.warnings.append(
+                f"{name}: doc_level '{raw_level}' not in vocab — stored as 'unknown'"
+            )
 
 
 class _ProgressHandle:
@@ -577,7 +609,10 @@ def run_commit(
                         continue
 
                     _apply_overrides(meta, overrides)
+                    raw_type = meta.get("doc_type")
+                    raw_level = meta.get("doc_level")
                     meta = normalize_metadata(meta)
+                    _warn_vocab_demotions(raw_type, raw_level, meta, report, name)
                     meta = normalize_entity_fields(meta)
 
                     file_hash = meta.get("file_hash")
@@ -649,6 +684,8 @@ def run_commit(
                         )
                     report.processed.append(name)
                     any_processed = True
+                except Exception as e:
+                    report.failed[name] = str(e)
                 finally:
                     p.advance()
 
@@ -665,6 +702,16 @@ def run_status(paths: list[Path]) -> list[dict[str, str]]:
     sidecars = _collect_sidecars(paths)
     sources = _collect_sources(paths)
     sidecar_set = set(sidecars)
+
+    # A file-arg source (e.g. `doc.pdf`) never matches the .corpus.md glob
+    # above, so its sidecar would otherwise go undetected even though it
+    # sits right next to it on disk. Add it explicitly, deduped, keeping
+    # deterministic order (globbed sidecars first, then source-derived ones).
+    for src in sources:
+        candidate = sidecar_path(src)
+        if candidate not in sidecar_set and candidate.exists():
+            sidecars.append(candidate)
+            sidecar_set.add(candidate)
 
     results: list[dict[str, str]] = []
     # (result index, file_hash) for sidecars needing a DB existence check.

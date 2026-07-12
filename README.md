@@ -315,10 +315,10 @@ ollama pull glm-ocr
 
 Ingestion is two steps with a human review gate in between — nothing reaches the searchable corpus unreviewed:
 
-1. **Extract** — parse PDFs into reviewable `.corpus.md` sidecar files next to the source, with LLM-prefilled (unreviewed) metadata:
+1. **Extract** — parse sources (`.pdf`, `.docx`, `.md`) into reviewable `.corpus.md` sidecar files next to the source, with LLM-prefilled (unreviewed) metadata:
    ```bash
    esdc corpus extract path/to/document.pdf
-   esdc corpus extract path/to/folder/          # batch
+   esdc corpus extract path/to/folder/          # batch: pdf + docx + md
    ```
    Every page is wrapped in a `<!-- page N: native -->` or `<!-- page N: llm_ocr -->` marker.
 

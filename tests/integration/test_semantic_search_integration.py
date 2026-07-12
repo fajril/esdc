@@ -1,14 +1,21 @@
 """Integration tests for semantic search with real Ollama."""
 
+import os
+
 import pytest
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(
+    not os.environ.get("ESDC_RUN_INTEGRATION"),
+    reason="writes embeddings into the real ~/.esdc DB — "
+    "set ESDC_RUN_INTEGRATION=1 to opt in",
+)
 @pytest.mark.skipif(not pytest.importorskip("ollama"), reason="Ollama not installed")
 def test_end_to_end_semantic_search():
     """End-to-end test with actual Ollama and database.
 
-    Requires:
+    Requires (opt-in via ESDC_RUN_INTEGRATION=1):
     - Ollama running with qwen3-embedding:0.6b model
     - ESDC database with project_remarks data
     """
