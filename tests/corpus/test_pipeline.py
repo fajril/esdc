@@ -1004,22 +1004,6 @@ def test_commit_dedupe_and_force(tmp_path, monkeypatch):
     store.close()
 
 
-def test_commit_cli_override_beats_frontmatter(tmp_path, monkeypatch):
-    store = make_store(tmp_path)
-    store.ensure_tables()
-    patch_store_factory(monkeypatch, store)
-    patch_entity_resolver(monkeypatch)
-
-    file_hash = "dd" * 32
-    make_sidecar(tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, doc_type="mom")
-
-    pipeline.run_commit([tmp_path], doc_type="letter")
-
-    doc = store.get_document(file_hash[:16])
-    assert doc["doc_type"] == "letter"
-    store.close()
-
-
 def test_commit_entity_resolution(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()

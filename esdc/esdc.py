@@ -2312,22 +2312,6 @@ def commit(
         list[Path],
         typer.Argument(exists=True, help="Sidecar .corpus.md file(s) or folder(s)."),
     ],
-    level: Annotated[
-        str | None,
-        typer.Option("--level", help="Override doc_level: wk, field, project."),
-    ] = None,
-    doc_type: Annotated[
-        str | None, typer.Option("--doc-type", help="Override doc_type.")
-    ] = None,
-    wk_name: Annotated[
-        str | None, typer.Option("--wk-name", help="Override wk_name.")
-    ] = None,
-    field_name: Annotated[
-        str | None, typer.Option("--field-name", help="Override field_name.")
-    ] = None,
-    project_name: Annotated[
-        str | None, typer.Option("--project-name", help="Override project_name.")
-    ] = None,
     skip_review: Annotated[
         bool,
         typer.Option(
@@ -2345,16 +2329,9 @@ def commit(
     """Ingest reviewed .corpus.md sidecars into the searchable corpus (step 2 of 2)."""
     from esdc.corpus.pipeline import run_commit
 
-    _validate_corpus_overrides(level, doc_type)
-
     try:
         report = run_commit(
             paths,
-            level=level,
-            doc_type=doc_type,
-            wk_name=wk_name,
-            field_name=field_name,
-            project_name=project_name,
             skip_review=skip_review,
             force=force,
             dry_run=dry_run,

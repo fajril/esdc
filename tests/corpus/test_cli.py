@@ -13,18 +13,12 @@ from esdc.esdc import app
 runner = CliRunner()
 
 
-def test_commit_invalid_level_exits_1(tmp_path):
-    result = runner.invoke(app, ["corpus", "commit", str(tmp_path), "--level", "galaxy"])
-    assert result.exit_code == 1
-    assert "Error: --level must be one of wk, field, project." in result.output
-
-
-def test_commit_invalid_doc_type_exits_1(tmp_path):
+def test_commit_rejects_override_flags(tmp_path):
     result = runner.invoke(
-        app, ["corpus", "commit", str(tmp_path), "--doc-type", "invoice"]
+        app, ["corpus", "commit", str(tmp_path), "--wk-name", "Rokan"]
     )
-    assert result.exit_code == 1
-    assert "Error: --doc-type must be one of" in result.output
+    assert result.exit_code == 2
+    assert "no such option" in result.output.lower()
 
 
 def test_extract_invalid_level_exits_1(tmp_path):

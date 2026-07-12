@@ -561,11 +561,6 @@ def _apply_entity_resolution(
 
 def run_commit(
     paths: list[Path],
-    level: str | None = None,
-    doc_type: str | None = None,
-    wk_name: str | None = None,
-    field_name: str | None = None,
-    project_name: str | None = None,
     skip_review: bool = False,
     force: bool = False,
     dry_run: bool = False,
@@ -574,14 +569,6 @@ def run_commit(
     report = CorpusReport()
     cfg = Config.get_corpus_config()
     sidecars = _collect_sidecars(paths)
-
-    overrides = {
-        "doc_level": level,
-        "doc_type": doc_type,
-        "wk_name": wk_name,
-        "field_name": field_name,
-        "project_name": project_name,
-    }
 
     store = CorpusStore()
     any_processed = False
@@ -608,7 +595,6 @@ def run_commit(
                         report.skipped.append(f"{name} (pending review)")
                         continue
 
-                    _apply_overrides(meta, overrides)
                     raw_type = meta.get("doc_type")
                     raw_level = meta.get("doc_level")
                     meta = normalize_metadata(meta)
