@@ -71,3 +71,37 @@ def test_body_with_horizontal_rule_survives_roundtrip(tmp_path: Path):
 
     _, loaded_body = read_sidecar(path)
     assert loaded_body.strip() == body
+
+
+def test_read_write_roundtrip_idempotent(tmp_path: Path):
+    """Repeated read->write cycles must not grow the file with blank lines.
+
+    run_meta makes rewrites a normal workflow, so each cycle re-feeding
+    read_sidecar's body into write_sidecar_file has to produce byte-identical
+    output instead of accumulating one leading + one trailing newline.
+    """
+    sc = tmp_path / "doc.corpus.md"
+    write_sidecar_file(sc, {"file_hash": "aa" * 32, "reviewed": False}, "hello body")
+    baseline = sc.read_bytes()
+
+    for _ in range(3):
+        meta, body = read_sidecar(sc)
+        write_sidecar_file(sc, meta, body)
+        assert sc.read_bytes() == baseline
+
+    _, final_body = read_sidecar(sc)
+    assert final_body.strip() == "hello body"
+
+
+def test_roundtrip_preserves_internal_blank_lines_and_dashes(tmp_path: Path):
+    sc = tmp_path / "doc.corpus.md"
+    body = "# Judul\n\n\nparagraf pertama\n\n---\nparagraf setelah garis"
+    write_sidecar_file(sc, {"file_hash": "bb" * 32}, body)
+
+    for _ in range(3):
+        meta, loaded_body = read_sidecar(sc)
+        assert loaded_body.strip("\n") == body
+        write_sidecar_file(sc, meta, loaded_body)
+
+    _, final_body = read_sidecar(sc)
+    assert final_body.strip("\n") == body

@@ -14,6 +14,10 @@ def sidecar_path(pdf_path: Path) -> Path:
 
 def write_sidecar_file(path: Path, meta: dict[str, Any], body: str) -> Path:
     front = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
+    # read_sidecar returns the body with a leading newline (from splitting on
+    # the frontmatter delimiter); strip outer newlines so read->write cycles
+    # are idempotent instead of accumulating blank lines around the body.
+    body = body.strip("\n")
     path.write_text(f"{DELIMITER}\n{front}\n{DELIMITER}\n{body}\n", encoding="utf-8")
     return path
 
