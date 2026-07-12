@@ -850,6 +850,21 @@ def test_extract_cli_override_beats_prefill(tmp_path, monkeypatch):
             "subject": "LLM Subject",
         },
     )
+    # Entity overrides are now validated against the DB, so the fake
+    # resolver must know the canonical names being passed.
+    fake_resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0},
+            "POD Duri": {
+                "entity_type": "project_name",
+                "name": "POD Duri",
+                "confidence": 1.0,
+            },
+        }
+    )
+    monkeypatch.setattr(
+        pipeline, "_entity_resolver_or_none", lambda store, report: fake_resolver
+    )
 
     pdf = make_pdf(tmp_path, "surat.pdf")
 
@@ -869,6 +884,44 @@ def test_extract_cli_override_beats_prefill(tmp_path, monkeypatch):
     assert meta["project_name"] == ["POD Duri"]
     # non-overridden field keeps the LLM-prefilled value
     assert meta["subject"] == "LLM Subject"
+
+
+def test_extract_unknown_entity_override_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "_entity_resolver_or_none",
+        lambda store, report: FakeEntityResolver(),  # no matches, no suggestions
+    )
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    with pytest.raises(
+        ValueError, match="not found in database and no close matches"
+    ):
+        pipeline.run_extract([pdf], wk_name="Bogus")
+
+    assert not (tmp_path / "surat.corpus.md").exists()
+
+
+def test_extract_entity_override_without_resolver_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline, "_entity_resolver_or_none", lambda store, report: None
+    )
+    pdf = make_pdf(tmp_path, "surat.pdf")
+
+    def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
+        return ExtractionResult("# Surat\nisi", "native", 1, 1, 0)
+
+    monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
+
+    with pytest.raises(ValueError, match="corpus DB unavailable"):
+        pipeline.run_extract([pdf], wk_name="Rokan")
+
+    assert not (tmp_path / "surat.corpus.md").exists()
 
 
 def test_extract_override_none_keeps_prefill(tmp_path, monkeypatch):
@@ -1289,7 +1342,18 @@ def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
+def _patch_rokan_resolver(monkeypatch):
+    """Fake resolver knowing 'Rokan' — entity overrides are DB-validated now."""
+    fake = FakeEntityResolver(
+        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}}
+    )
+    monkeypatch.setattr(
+        pipeline, "_entity_resolver_or_none", lambda store, report: fake
+    )
+
+
 def test_meta_sets_fields_and_persists(tmp_path, monkeypatch):
+    _patch_rokan_resolver(monkeypatch)
     sc = make_sidecar(
         tmp_path, "a.pdf", reviewed=False, file_hash="aa" * 32, wk_name=None
     )
@@ -1314,6 +1378,7 @@ def test_meta_reviewed_flag_explicit(tmp_path, monkeypatch):
 
 
 def test_meta_bad_sidecar_fails_isolated(tmp_path, monkeypatch):
+    _patch_rokan_resolver(monkeypatch)
     make_sidecar(tmp_path, "good.pdf", reviewed=False, file_hash="cc" * 32)
     bad = tmp_path / "bad.corpus.md"
     bad.write_text("no frontmatter at all")
@@ -1325,6 +1390,7 @@ def test_meta_bad_sidecar_fails_isolated(tmp_path, monkeypatch):
 
 
 def test_meta_warns_when_already_committed(tmp_path, monkeypatch):
+    _patch_rokan_resolver(monkeypatch)
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
@@ -1341,21 +1407,74 @@ def test_meta_warns_when_already_committed(tmp_path, monkeypatch):
 
 
 def test_meta_db_unavailable_still_writes(tmp_path, monkeypatch):
+    """Non-entity overrides don't need the DB — a locked store degrades to a warning."""
+
     def broken_store(*a, **kw):
         raise RuntimeError("db locked")
 
     monkeypatch.setattr(pipeline, "CorpusStore", broken_store)
 
     sc = make_sidecar(
-        tmp_path, "doc.pdf", reviewed=False, file_hash="ee" * 32, wk_name=None
+        tmp_path, "doc.pdf", reviewed=False, file_hash="ee" * 32, doc_level="unknown"
     )
 
-    report = pipeline.run_meta([tmp_path], wk_name="Rokan")
+    report = pipeline.run_meta([tmp_path], level="wk")
 
     db_warnings = [w for w in report.warnings if "DB unavailable" in w]
     assert len(db_warnings) == 1
     meta, _body = read_sidecar(sc)
+    assert meta["doc_level"] == "wk"
+
+
+def test_meta_unknown_entity_override_rejected_before_write(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "_entity_resolver_or_none",
+        lambda store, report: FakeEntityResolver(
+            suggestions={"Rokann": ["ROKAN", "ROKAN HILIR"]}
+        ),
+    )
+    sc = make_sidecar(tmp_path, "a.pdf", reviewed=False, file_hash="aa" * 32)
+    before = sc.read_bytes()
+
+    with pytest.raises(ValueError) as excinfo:
+        pipeline.run_meta([tmp_path], wk_name="Rokann")
+
+    assert "--wk-name 'Rokann' not found in database" in str(excinfo.value)
+    assert "closest matches: 'ROKAN', 'ROKAN HILIR'" in str(excinfo.value)
+    assert sc.read_bytes() == before  # nothing touched
+
+
+def test_meta_valid_entity_override_proceeds(tmp_path, monkeypatch):
+    fake = FakeEntityResolver(
+        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}}
+    )
+    monkeypatch.setattr(
+        pipeline, "_entity_resolver_or_none", lambda store, report: fake
+    )
+    sc = make_sidecar(
+        tmp_path, "a.pdf", reviewed=False, file_hash="bb" * 32, wk_name=None
+    )
+
+    report = pipeline.run_meta([tmp_path], wk_name="Rokan")
+
+    assert report.processed == ["a.corpus.md"]
+    meta, _body = read_sidecar(sc)
     assert meta["wk_name"] == ["Rokan"]
+
+
+def test_meta_entity_override_db_unavailable_raises(tmp_path, monkeypatch):
+    def broken_store(*a, **kw):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(pipeline, "CorpusStore", broken_store)
+    sc = make_sidecar(tmp_path, "a.pdf", reviewed=False, file_hash="cc" * 32)
+    before = sc.read_bytes()
+
+    with pytest.raises(ValueError, match="corpus DB unavailable"):
+        pipeline.run_meta([tmp_path], wk_name="Rokan")
+
+    assert sc.read_bytes() == before
 
 
 # --------------------------------------------------------------------------

@@ -2292,15 +2292,19 @@ def extract(
 
     _validate_corpus_overrides(level, doc_type)
 
-    report = run_extract(
-        paths,
-        level=level,
-        doc_type=doc_type,
-        wk_name=wk_name,
-        field_name=field_name,
-        project_name=project_name,
-        force=force,
-    )
+    try:
+        report = run_extract(
+            paths,
+            level=level,
+            doc_type=doc_type,
+            wk_name=wk_name,
+            field_name=field_name,
+            project_name=project_name,
+            force=force,
+        )
+    except ValueError as e:  # e.g. --wk-name value not in canonical tables
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     _print_corpus_report(report)
     if report.processed:
         typer.echo("Review the .corpus.md files, then run: esdc corpus commit <folder>")
@@ -2424,15 +2428,19 @@ def corpus_meta(
         rich.print(tabulate(table, headers=headers, tablefmt="psql"))
         return
 
-    report = run_meta(
-        paths,
-        level=level,
-        doc_type=doc_type,
-        wk_name=wk_name,
-        field_name=field_name,
-        project_name=project_name,
-        reviewed=reviewed,
-    )
+    try:
+        report = run_meta(
+            paths,
+            level=level,
+            doc_type=doc_type,
+            wk_name=wk_name,
+            field_name=field_name,
+            project_name=project_name,
+            reviewed=reviewed,
+        )
+    except ValueError as e:  # e.g. --wk-name value not in canonical tables
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     _print_corpus_report(report)
 
 

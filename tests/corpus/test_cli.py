@@ -171,6 +171,42 @@ def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
     assert "a.corpus.md" in result.output
 
 
+def test_meta_unknown_entity_prints_clean_error(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def raise_not_found(*args, **kwargs):
+        raise ValueError(
+            "--wk-name 'Bogus' not found in database and no close matches"
+        )
+
+    monkeypatch.setattr(pipeline, "run_meta", raise_not_found)
+
+    result = runner.invoke(
+        app, ["corpus", "meta", str(tmp_path), "--wk-name", "Bogus"]
+    )
+    assert result.exit_code == 1
+    assert "not found in database" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_extract_unknown_entity_prints_clean_error(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def raise_not_found(*args, **kwargs):
+        raise ValueError(
+            "--wk-name 'Bogus' not found in database and no close matches"
+        )
+
+    monkeypatch.setattr(pipeline, "run_extract", raise_not_found)
+
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--wk-name", "Bogus"]
+    )
+    assert result.exit_code == 1
+    assert "not found in database" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_entity_display_handles_legacy_plain_string():
     from esdc.esdc import _entity_display
 

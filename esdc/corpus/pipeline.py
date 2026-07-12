@@ -236,6 +236,49 @@ def _apply_overrides(meta: dict[str, Any], overrides: dict[str, Any]) -> None:
             meta[key] = value
 
 
+_ENTITY_OVERRIDE_FLAGS = {
+    "wk_name": "--wk-name",
+    "field_name": "--field-name",
+    "project_name": "--project-name",
+}
+
+
+def _validate_entity_overrides(
+    resolver: EntityResolver | None,
+    overrides: dict[str, Any],
+) -> None:
+    """Reject CLI entity overrides that don't resolve against canonical tables.
+
+    Raises ValueError before any sidecar is touched. Only explicit CLI
+    values are validated strictly — LLM-prefilled/frontmatter values stay
+    warn-only so unreviewed data never jams the pipeline.
+    """
+    given = {
+        key: overrides[key]
+        for key in _ENTITY_OVERRIDE_FLAGS
+        if overrides.get(key) is not None
+    }
+    if not given:
+        return
+    if resolver is None:
+        raise ValueError(
+            "cannot validate --wk-name/--field-name/--project-name against "
+            "the database — corpus DB unavailable (run `esdc fetch`, or "
+            "close other esdc instances holding the DB lock)"
+        )
+    for key, value in given.items():
+        if resolver.resolve_name(str(value), key):
+            continue
+        flag = _ENTITY_OVERRIDE_FLAGS[key]
+        suggestions = resolver.suggest_names(str(value), key)
+        if suggestions:
+            listed = ", ".join(f"'{s}'" for s in suggestions)
+            raise ValueError(
+                f"{flag} '{value}' not found in database; closest matches: {listed}"
+            )
+        raise ValueError(f"{flag} '{value}' not found in database and no close matches")
+
+
 def _warn_vocab_demotions(
     raw_type: Any,
     raw_level: Any,
@@ -375,6 +418,7 @@ def run_extract(
     store = CorpusStore()
     try:
         resolver = _entity_resolver_or_none(store, report)
+        _validate_entity_overrides(resolver, overrides)
 
         # (name, pages_ocr, page_count) collected so the final report can be
         # sorted by OCR ratio DESC once, instead of per-file.
@@ -791,6 +835,10 @@ def run_meta(
                 "resolution skipped"
             )
             store = None
+
+        # Explicit CLI entity values must exist in the canonical tables;
+        # fail fast before any sidecar is rewritten.
+        _validate_entity_overrides(resolver, overrides)
 
         for sc in sidecars:
             name = sc.name
