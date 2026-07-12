@@ -42,6 +42,22 @@ def enum_values(name: str) -> tuple[str, ...]:
     return tuple(load_doc_schema().get("enums", {}).get(name, []))
 
 
+def doc_type_glossary() -> tuple[dict[str, Any], ...]:
+    """The authoritative ``doc_types`` glossary, one entry per enum value."""
+    return tuple(load_doc_schema().get("doc_types", []))
+
+
+def doc_type_hierarchy() -> tuple[tuple[str, ...], ...]:
+    """Regulatory force levels for doc_type, high to low; ties share a level."""
+    levels = load_doc_schema().get("doc_type_hierarchy", [])
+    return tuple(tuple(level) for level in levels)
+
+
+def legacy_doc_type_map() -> dict[str, str]:
+    """Mapping of retired doc_type values to their new-vocab replacement."""
+    return dict(load_doc_schema().get("legacy_doc_type_map", {}))
+
+
 def render_prompt_definitions() -> str:
     """Render the ``- field: definition`` lines used in METADATA_PROMPT.
 
@@ -56,7 +72,8 @@ def render_tool_context() -> str:
     """Render a compact, human/iris-readable field guide.
 
     One ``- field: description`` line per field (LLM + housekeeping), plus
-    enum values. Used verbatim in the search_documents tool description.
+    enum values, the doc_type glossary, and the regulatory hierarchy. Used
+    verbatim in the search_documents tool description.
     """
     schema = load_doc_schema()
     lines = ["Fields:"]
@@ -69,4 +86,18 @@ def render_tool_context() -> str:
         lines.append("Enums:")
         for enum_name, values in enums.items():
             lines.append(f"- {enum_name}: {', '.join(values)}")
+
+    glossary = doc_type_glossary()
+    if glossary:
+        lines.append("doc_type glossary:")
+        for entry in glossary:
+            lines.append(
+                f"- {entry['name']} ({entry['title']}): {entry['description']}"
+            )
+
+    hierarchy = doc_type_hierarchy()
+    if hierarchy:
+        hierarchy_str = " > ".join("/".join(level) for level in hierarchy)
+        lines.append(f"Regulatory hierarchy (high to low): {hierarchy_str}")
+
     return "\n".join(lines)

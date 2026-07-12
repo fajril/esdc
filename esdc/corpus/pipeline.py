@@ -31,6 +31,7 @@ from rich.console import Group
 from rich.live import Live
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
+from esdc.chat.domain_knowledge.doc_schema import legacy_doc_type_map
 from esdc.chat.domain_knowledge.entity_registry import ENTITY_REGISTRY
 from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.configs import Config
@@ -747,5 +748,68 @@ def run_reembed() -> CorpusReport:
         store.rebuild_indexes()
     finally:
         store.close()
+
+    return report
+
+
+def run_migrate_doc_types(paths: list[Path], dry_run: bool = False) -> CorpusReport:
+    """Migrate legacy doc_type values to the current vocab.
+
+    (``surat`` -> ``letter``, ``other`` -> ``others``.)
+
+    Always migrates the ``documents`` table in the CorpusStore: for each
+    (old, new) pair in ``legacy_doc_type_map()``, rows with the old value are
+    updated to the new one; per-type counts are reported in
+    ``CorpusReport.warnings``.
+
+    If ``paths`` is non-empty, also rewrites the ``doc_type`` key (only that
+    key) of every ``.corpus.md`` sidecar under those paths whose doc_type is
+    a legacy value — other frontmatter keys (including ``reviewed``) are left
+    untouched. Sidecars whose doc_type isn't a legacy value are counted in
+    ``report.skipped``; unreadable sidecars are isolated into ``report.failed``.
+
+    ``dry_run=True`` reports what would change without writing anything (store:
+    a SELECT count instead of an UPDATE; sidecars: read but never rewritten).
+    """
+    report = CorpusReport()
+    legacy_map = legacy_doc_type_map()
+
+    store = CorpusStore()
+    try:
+        store.ensure_tables()
+        conn = store._get_connection()
+        for old, new in legacy_map.items():
+            row = conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE doc_type = ?", [old]
+            ).fetchone()
+            count = row[0] if row else 0
+            if not count:
+                continue
+            if not dry_run:
+                conn.execute(
+                    "UPDATE documents SET doc_type = ? WHERE doc_type = ?", [new, old]
+                )
+            report.warnings.append(f"store: {count} document(s) {old} -> {new}")
+    finally:
+        store.close()
+
+    for sc in _collect_sidecars(paths):
+        name = sc.name
+        try:
+            meta, body = read_sidecar(sc)
+        except ValueError as e:
+            report.failed[name] = str(e)
+            continue
+
+        old_type = meta.get("doc_type")
+        if old_type not in legacy_map:
+            report.skipped.append(name)
+            continue
+
+        if not dry_run:
+            new_meta = dict(meta)
+            new_meta["doc_type"] = legacy_map[old_type]
+            write_sidecar_file(sc, new_meta, body)
+        report.processed.append(name)
 
     return report

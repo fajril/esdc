@@ -14,8 +14,14 @@ from esdc.corpus.metadata import (
 EXPECTED_METADATA_PROMPT = """You extract metadata from Indonesian oil & gas official documents.
 Given the markdown of a document, return ONLY a JSON object with these keys
 (use null when unknown, never guess):
-- doc_type: "surat" (official letter) | "mom" (minutes of meeting)
-  | "ba" (berita acara) | "other"
+- doc_type: one of "uu" (undang-undang) | "perpu" (peraturan pengganti UU) | "mk"
+  (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "permen"
+  (peraturan menteri) | "kepmen" (keputusan menteri) | "letter" (official
+  letter: persetujuan/edaran/umum) | "mom" (minutes of meeting) | "ba"
+  (berita acara) | "note" (non-binding note) | "psc" (production sharing
+  contract) | "gsa" (gas sales agreement) | "pod" (POD approval book) |
+  "ptk" (pedoman tata kerja SKK Migas) | "sop" (standard operating
+  procedure) | "others"
 - doc_number: the document/letter number exactly as written
 - doc_date: ISO date YYYY-MM-DD
 - subject: perihal or meeting title
@@ -41,8 +47,46 @@ def test_metadata_prompt_is_byte_identical_to_legacy():
 
 
 def test_vocab_tuples_derived_from_schema():
-    assert metadata.DOC_TYPES == ("surat", "mom", "ba", "other")
+    assert metadata.DOC_TYPES == (
+        "uu",
+        "perpu",
+        "mk",
+        "pp",
+        "permen",
+        "kepmen",
+        "letter",
+        "mom",
+        "ba",
+        "note",
+        "psc",
+        "gsa",
+        "pod",
+        "ptk",
+        "sop",
+        "others",
+    )
     assert metadata.DOC_LEVELS == ("wk", "field", "project", "unknown")
+
+
+def test_doc_types_new_vocab():
+    assert metadata.DOC_TYPES == (
+        "uu",
+        "perpu",
+        "mk",
+        "pp",
+        "permen",
+        "kepmen",
+        "letter",
+        "mom",
+        "ba",
+        "note",
+        "psc",
+        "gsa",
+        "pod",
+        "ptk",
+        "sop",
+        "others",
+    )
 
 
 def test_prompt_contains_every_llm_field():
@@ -61,13 +105,22 @@ def test_parse_llm_json_invalid_returns_empty():
 
 def test_normalize_clamps_vocabulary():
     out = normalize_metadata({"doc_type": "invoice", "doc_level": "galaxy"})
-    assert out["doc_type"] == "other"
+    assert out["doc_type"] == "others"
     assert out["doc_level"] == "unknown"
 
 
+def test_normalize_metadata_maps_legacy_doc_types():
+    assert normalize_metadata({"doc_type": "surat"})["doc_type"] == "letter"
+    assert normalize_metadata({"doc_type": "other"})["doc_type"] == "others"
+
+
+def test_normalize_metadata_clamps_unknown_to_others():
+    assert normalize_metadata({"doc_type": "invoice"})["doc_type"] == "others"
+
+
 def test_llm_extract_uses_caller():
-    result = llm_extract("# Surat\nisi", lambda prompt: '{"doc_type": "surat"}')
-    assert result["doc_type"] == "surat"
+    result = llm_extract("# Surat\nisi", lambda prompt: '{"doc_type": "letter"}')
+    assert result["doc_type"] == "letter"
     assert result["doc_level"] == "unknown"  # normalized default
 
 

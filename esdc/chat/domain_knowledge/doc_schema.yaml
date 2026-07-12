@@ -1,17 +1,27 @@
 table_name: documents
 description: >-
-  Corpus of Indonesian oil & gas official documents (surat, MoM, berita acara)
-  ingested via `esdc corpus`, searchable by iris through search_documents.
+  Corpus of Indonesian oil & gas official documents (regulatory instruments,
+  letters, MoM, berita acara, contracts, and more) ingested via `esdc corpus`,
+  searchable by iris through search_documents.
 llm_fields: # order = order of definition lines in METADATA_PROMPT
   - name: doc_type
     type: string
-    enum: [surat, mom, ba, other]
+    enum: [uu, perpu, mk, pp, permen, kepmen, letter, mom, ba, note, psc, gsa, pod, ptk, sop, others]
     prompt: |-
-      "surat" (official letter) | "mom" (minutes of meeting)
-        | "ba" (berita acara) | "other"
+      one of "uu" (undang-undang) | "perpu" (peraturan pengganti UU) | "mk"
+        (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "permen"
+        (peraturan menteri) | "kepmen" (keputusan menteri) | "letter" (official
+        letter: persetujuan/edaran/umum) | "mom" (minutes of meeting) | "ba"
+        (berita acara) | "note" (non-binding note) | "psc" (production sharing
+        contract) | "gsa" (gas sales agreement) | "pod" (POD approval book) |
+        "ptk" (pedoman tata kerja SKK Migas) | "sop" (standard operating
+        procedure) | "others"
     description: >-
-      Document category: surat (official letter), mom (minutes of meeting),
-      ba (berita acara / official report), other.
+      Document category: regulatory instruments (uu, perpu, mk, pp, permen,
+      kepmen, ptk, sop — high to low legal force), letter (official letter),
+      mom (minutes of meeting), ba (berita acara), note (non-binding note),
+      psc (production sharing contract), gsa (gas sales agreement), pod (POD
+      approval book), or others.
     aliases: [jenis dokumen, tipe surat]
   - name: doc_number
     type: string
@@ -103,6 +113,77 @@ housekeeping_fields: # set by the pipeline, not the LLM
     description: >-
       Raw entity-resolution candidates captured before canonicalization,
       stored as JSON.
+doc_types: # authoritative glossary, one entry per doc_type enum value
+  - name: uu
+    title: Undang-Undang
+    description: Undang-undang (UU) — produk hukum tertinggi hasil legislasi.
+  - name: perpu
+    title: Peraturan Pemerintah Pengganti Undang-Undang
+    description: >-
+      Peraturan pemerintah pengganti undang-undang (Perpu), diterbitkan dalam
+      kondisi mendesak dan setara UU.
+  - name: mk
+    title: Putusan Mahkamah Konstitusi
+    description: Putusan Mahkamah Konstitusi (MK), setara UU dalam kekuatan hukum.
+  - name: pp
+    title: Peraturan Pemerintah
+    description: Peraturan pemerintah (PP) — aturan pelaksana di bawah UU.
+  - name: permen
+    title: Peraturan Menteri
+    description: Peraturan menteri (permen) — peraturan yang diterbitkan Menteri.
+  - name: kepmen
+    title: Keputusan Menteri
+    description: Keputusan menteri (kepmen) — kebijakan yang diambil Menteri.
+  - name: letter
+    title: Surat Resmi
+    description: >-
+      Surat resmi yang diterbitkan lembaga: surat persetujuan, surat edaran,
+      atau surat umum.
+  - name: mom
+    title: Minutes of Meeting
+    description: >-
+      Minutes of meeting (MoM) — kesepakatan rapat yang dituangkan dalam
+      dokumen.
+  - name: ba
+    title: Berita Acara
+    description: Berita acara (BA).
+  - name: note
+    title: Catatan
+    description: Catatan tidak mengikat, cenderung informatif.
+  - name: psc
+    title: Production Sharing Contract
+    description: >-
+      Production sharing contract (PSC) — kontrak yang melandasi kegiatan
+      usaha hulu migas antara kontraktor dan SKK Migas.
+  - name: gsa
+    title: Gas Sales Agreement
+    description: Gas sales agreement (GSA) — perjanjian jual beli gas.
+  - name: pod
+    title: Persetujuan POD
+    description: >-
+      Buku persetujuan POD, memuat informasi teknis pelaksanaan plan of
+      development.
+  - name: ptk
+    title: Pedoman Tata Kerja
+    description: >-
+      Pedoman tata kerja (PTK) — pedoman resmi SKK Migas sebagai acuan
+      pelaksanaan kegiatan usaha hulu migas.
+  - name: sop
+    title: Standard Operating Procedure
+    description: Standard operating procedure (SOP) — aturan proses bisnis internal institusi.
+  - name: others
+    title: Lainnya
+    description: Jenis dokumen di luar tipe lain.
+doc_type_hierarchy: # regulatory force, high to low; ties share a level
+  - [uu, perpu, mk]
+  - [pp]
+  - [permen]
+  - [kepmen]
+  - [ptk]
+  - [sop]
+legacy_doc_type_map:
+  surat: letter
+  other: others
 enums:
   doc_level: [wk, field, project, unknown]
-  doc_type: [surat, mom, ba, other]
+  doc_type: [uu, perpu, mk, pp, permen, kepmen, letter, mom, ba, note, psc, gsa, pod, ptk, sop, others]

@@ -2181,5 +2181,35 @@ def reembed() -> None:
     )
 
 
+@corpus_app.command(name="migrate-doc-types")
+def migrate_doc_types(
+    paths: Annotated[
+        list[Path] | None,
+        typer.Argument(
+            exists=True,
+            help="Sidecar .corpus.md file(s) or folder(s) to also migrate. "
+            "Optional — the corpus store is always migrated.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report what would change without writing."),
+    ] = False,
+) -> None:
+    """Migrate legacy doc_type values (surat->letter, other->others).
+
+    Always migrates the corpus store. If PATHS are given, also rewrites the
+    doc_type of matching sidecar (.corpus.md) frontmatter.
+    """
+    from esdc.corpus.pipeline import run_migrate_doc_types
+
+    try:
+        report = run_migrate_doc_types(paths or [], dry_run=dry_run)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+    _print_corpus_report(report)
+
+
 if __name__ == "__main__":
     app()

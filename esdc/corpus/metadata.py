@@ -5,7 +5,11 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from esdc.chat.domain_knowledge.doc_schema import enum_values, render_prompt_definitions
+from esdc.chat.domain_knowledge.doc_schema import (
+    enum_values,
+    legacy_doc_type_map,
+    render_prompt_definitions,
+)
 
 DOC_TYPES = enum_values("doc_type")
 DOC_LEVELS = enum_values("doc_level")
@@ -44,10 +48,15 @@ def parse_llm_json(raw: str) -> dict[str, Any]:
 
 
 def normalize_metadata(parsed: dict[str, Any]) -> dict[str, Any]:
-    """Clamp LLM output to the allowed vocabulary."""
+    """Clamp LLM output to the allowed vocabulary.
+
+    Legacy doc_type values (e.g. "surat", "other") are mapped to their
+    new-vocab replacement before the allowed-vocabulary clamp runs.
+    """
     out = dict(parsed)
-    if out.get("doc_type") not in DOC_TYPES:
-        out["doc_type"] = "other"
+    raw_type = out.get("doc_type")
+    raw_type = legacy_doc_type_map().get(raw_type, raw_type)
+    out["doc_type"] = raw_type if raw_type in DOC_TYPES else "others"
     if out.get("doc_level") not in DOC_LEVELS:
         out["doc_level"] = "unknown"
     return out
