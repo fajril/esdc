@@ -28,7 +28,7 @@ class FakeEntityResolver:
                 }
         return {"status": "failed", "entities": []}
 
-    def resolve_name(self, name, entity_type):
+    def resolve_name(self, name, entity_type, parent_filter=None):
         # Substring match against configured `matches`, filtered by type,
         # sorted by confidence DESC — mirrors the real resolve_name contract.
         hits = [
@@ -36,6 +36,14 @@ class FakeEntityResolver:
             for key, match in self._matches.items()
             if match.get("entity_type") == entity_type and key.lower() in name.lower()
         ]
+        if parent_filter:
+            # Simulate DB hierarchy: match must declare the same parent
+            # values (e.g. a field's "wk_name" column) as the filter.
+            hits = [
+                m
+                for m in hits
+                if all(m.get(col) == val for col, val in parent_filter.items())
+            ]
         return sorted(hits, key=lambda m: m["confidence"], reverse=True)
 
     def suggest_names(self, name, entity_type, limit=5):
@@ -794,7 +802,7 @@ def test_apply_entity_resolution_multiple_matches_all_kept():
     meta = {"wk_name": ["Rokan"], "field_name": None, "project_name": None}
 
     class MultiMatchResolver:
-        def resolve_name(self, name, entity_type):
+        def resolve_name(self, name, entity_type, parent_filter=None):
             return [
                 {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 0.85},
                 {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0},
@@ -845,6 +853,65 @@ def test_apply_entity_resolution_no_warnings_key_absent():
 
     assert "entity_warnings" not in meta
     assert report.warnings == []
+
+
+def test_apply_entity_resolution_hierarchical_drops_mismatch():
+    """Field not belonging to resolved wk is DROPPED (None) with warning."""
+    report = pipeline.CorpusReport()
+    # Duri lives under WK Widuri in the fake hierarchy, not WK Rokan
+    resolver = FakeEntityResolver(matches={
+        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
+                 "wk_name": "WK Widuri"},
+    })
+    meta = {"wk_name": "WK Rokan", "field_name": "Duri"}
+    pipeline._apply_entity_resolution(meta, resolver, report, "test.md")
+    assert meta["field_name"] is None
+    assert any("does not belong to" in w for w in report.warnings)
+
+
+def test_apply_entity_resolution_hierarchical_no_warning_when_valid():
+    """When hierarchy is valid, value kept, no warning emitted."""
+    report = pipeline.CorpusReport()
+    resolver = FakeEntityResolver(matches={
+        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
+                 "wk_name": "WK Rokan"},
+    })
+    meta = {"wk_name": "WK Rokan", "field_name": "Duri"}
+    pipeline._apply_entity_resolution(meta, resolver, report, "test.md")
+    assert meta["field_name"] == ["Duri"]
+    # No hierarchy warning (entity_warnings may exist for other reasons)
+    assert not any("does not belong to" in w for w in report.warnings)
+
+
+def test_apply_entity_resolution_unknown_name_still_kept():
+    """Unknown name (matches nothing anywhere) keeps existing kept-as-is behavior."""
+    report = pipeline.CorpusReport()
+    resolver = FakeEntityResolver(matches={
+        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+    })
+    meta = {"wk_name": "WK Rokan", "field_name": "Totally Unknown"}
+    pipeline._apply_entity_resolution(meta, resolver, report, "test.md")
+    # Unknown != proven mismatch: kept for reviewer, warned as unresolved
+    assert meta["field_name"] == ["Totally Unknown"]
+    assert any("unresolved" in w for w in report.warnings)
+
+
+def test_apply_entity_resolution_mixed_list_drops_only_mismatch():
+    """List value: valid names kept, cross-hierarchy names dropped."""
+    report = pipeline.CorpusReport()
+    resolver = FakeEntityResolver(matches={
+        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
+                 "wk_name": "WK Rokan"},
+        "Bekasap": {"entity_type": "field_name", "name": "Bekasap", "confidence": 1.0,
+                    "wk_name": "WK Widuri"},
+    })
+    meta = {"wk_name": "WK Rokan", "field_name": ["Duri", "Bekasap"]}
+    pipeline._apply_entity_resolution(meta, resolver, report, "test.md")
+    assert meta["field_name"] == ["Duri"]
+    assert any("does not belong to" in w for w in report.warnings)
 
 
 # --------------------------------------------------------------------------
@@ -946,7 +1013,9 @@ def test_extract_cli_override_beats_prefill(tmp_path, monkeypatch):
         },
     )
     # Entity overrides are now validated against the DB, so the fake
-    # resolver must know the canonical names being passed.
+    # resolver must know the canonical names being passed. Declare the
+    # project's wk_name parent so hierarchical resolution doesn't treat
+    # it as a cross-hierarchy mismatch once wk_name="Rokan" resolves.
     fake_resolver = FakeEntityResolver(
         matches={
             "Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0},
@@ -954,6 +1023,7 @@ def test_extract_cli_override_beats_prefill(tmp_path, monkeypatch):
                 "entity_type": "project_name",
                 "name": "POD Duri",
                 "confidence": 1.0,
+                "wk_name": "Rokan",
             },
         }
     )
@@ -1200,10 +1270,13 @@ def test_commit_entity_resolution(tmp_path, monkeypatch):
                 "name": "Rokan",
                 "confidence": 1.0,
             },
+            # Declares wk_name="Rokan" so it's a valid child of the
+            # resolved wk, not a cross-hierarchy mismatch.
             "Duri": {
                 "entity_type": "field_name",
                 "name": "Duri",
                 "confidence": 0.8,
+                "wk_name": "Rokan",
             },
         },
     )
@@ -1277,7 +1350,7 @@ def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch)
         def __init__(self):
             self.calls = 0
 
-        def resolve_name(self, name, entity_type):
+        def resolve_name(self, name, entity_type, parent_filter=None):
             self.calls += 1
             return []
 

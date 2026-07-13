@@ -656,15 +656,38 @@ def _apply_entity_resolution(
     `resolver.resolve_name` now returns the final confident picks for a raw
     name -- possibly more than one, since one raw string can legitimately
     name several real entities (e.g. "Arung Nowera" naming two separate
-    fields). Names that don't resolve are kept as-is in `meta[key]` — never
-    dropped — so a reviewer can still find and fix them; `meta[key]` ends up
-    holding every resolved (or raw, if unresolved) name, deduped.
-    `meta["entity_warnings"]` collects the human-readable reasons why, and is
-    cleared entirely on a clean re-run so a stale warning from a prior
-    resolution never lingers after the sidecar is fixed.
+    fields). Resolution is hierarchy-aware: once a level resolves to a
+    single unambiguous canonical name, that name is passed as
+    `parent_filter` when resolving the next level (``wk_name`` ->
+    ``field_name`` -> ``project_name``, per ``ENTITY_FIELDS``), since
+    ``project_resources`` is denormalized (wk/field/project on the same
+    row).
+
+    Two failure modes for a raw name that doesn't resolve under its parent:
+    - **Wrong hierarchy**: the name resolves to something when the parent
+      filter is dropped (i.e. it names a real entity, just under a
+      different wk/field). This is a proven cross-hierarchy mismatch, so
+      the value is DROPPED (not kept) and a warning names what it matched
+      and which parent it violated — the sidecar must never hold an
+      invalid wk -> field -> project combination.
+    - **Unknown name**: the name doesn't resolve even without the parent
+      filter. This is unproven — it might just be a typo or an entity
+      missing from the DB — so it's kept as-is in `meta[key]` for a
+      reviewer to fix, exactly as before.
+
+    `meta[key]` ends up holding every resolved (or kept-as-is-unknown) name,
+    deduped. `meta["entity_warnings"]` collects the human-readable reasons
+    why, and is cleared entirely on a clean re-run so a stale warning from a
+    prior resolution never lingers after the sidecar is fixed.
     """
     raw_entities: dict[str, Any | None] = {}
     all_warnings: list[str] = []
+    # Canonical names resolved so far, keyed by ENTITY_FIELDS level — used
+    # as parent_filter for the next level. Only an actual, unambiguous
+    # resolver match is added here; a kept-as-is raw (unresolved) name must
+    # never constrain a child level's resolution.
+    resolved_context: dict[str, str] = {}
+
     for key in ENTITY_FIELDS:
         raw = meta.get(key)
         raw_entities[key] = raw
@@ -675,11 +698,37 @@ def _apply_entity_resolution(
         # Normalize to list for uniform handling
         raw_list = raw if isinstance(raw, list) else [raw]
         resolved: list[str] = []
+        matched_names: set[str] = set()  # subset of `resolved` from real matches
 
         for raw_name in raw_list:
             if not raw_name:
                 continue
-            matches = resolver.resolve_name(str(raw_name), key)
+            parent_filter = resolved_context or None
+            matches = resolver.resolve_name(
+                str(raw_name), key, parent_filter=parent_filter
+            )
+
+            if not matches and parent_filter:
+                # Diagnose: does the name exist under a DIFFERENT parent
+                # (wrong hierarchy) or nowhere at all (unknown)? A
+                # wrong-hierarchy name is DROPPED — the sidecar must never
+                # hold an invalid wk -> field -> project combination.
+                # Unknown names fall through to the kept-as-is handling
+                # below, unchanged from before.
+                diagnosis = resolver.resolve_name(
+                    str(raw_name), key, parent_filter=None
+                )
+                if diagnosis:
+                    parent_desc = ", ".join(
+                        f"{k}='{v}'" for k, v in parent_filter.items()
+                    )
+                    matched = ", ".join(f"'{m['name']}'" for m in diagnosis)
+                    all_warnings.append(
+                        f"{key} '{raw_name}' matches {matched} but does not "
+                        f"belong to {parent_desc} — dropped, verify hierarchy"
+                    )
+                    continue
+
             if not matches:
                 if raw_name not in resolved:
                     resolved.append(raw_name)
@@ -701,6 +750,7 @@ def _apply_entity_resolution(
             for m in matches:
                 if m["name"] not in resolved:
                     resolved.append(m["name"])
+                matched_names.add(m["name"])
                 if m["confidence"] < 1.0:
                     all_warnings.append(
                         f"{key} '{raw_name}' -> '{m['name']}' "
@@ -708,6 +758,19 @@ def _apply_entity_resolution(
                     )
 
         meta[key] = resolved if resolved else None
+
+        # Only an unambiguous single resolution can safely constrain child
+        # levels, and only when it came from an actual resolver match (a
+        # kept-as-is raw/unknown name must not filter child resolution).
+        if resolved and len(resolved) == 1 and resolved[0] in matched_names:
+            resolved_context[key] = resolved[0]
+        elif resolved and len(resolved) > 1:
+            logger.debug(
+                "entity hierarchy: %s resolved to %d names, "
+                "skipping parent_filter for child levels",
+                key,
+                len(resolved),
+            )
 
     if all_warnings:
         meta["entity_warnings"] = all_warnings
