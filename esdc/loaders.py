@@ -931,7 +931,7 @@ def load_pod_workbook_to_duckdb(excel_path: Path | str) -> tuple[LoadResult, ...
     db_path = Config.get_db_file()
     _ensure_duckdb_database(db_path)
     Config.get_db_dir().mkdir(parents=True, exist_ok=True)
-    conn = get_duckdb_connection(db_path)
+    conn = get_duckdb_connection(db_path, read_only=False)
     results: list[LoadResult] = []
     try:
         conn.execute("BEGIN")
@@ -1145,7 +1145,7 @@ def load_excel_to_duckdb(
     _ensure_duckdb_database(db_path)
     Config.get_db_dir().mkdir(parents=True, exist_ok=True)
 
-    conn = get_duckdb_connection(db_path)
+    conn = get_duckdb_connection(db_path, read_only=False)
     link_warnings: tuple[LinkValidationWarning, ...] = ()
     row_count = len(df)
     try:

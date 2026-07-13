@@ -298,7 +298,7 @@ def summarize_resources(
     model_name = str(provider_config.get("model") or "")
     base_url = str(provider_config.get("base_url") or "")
 
-    conn = get_duckdb_connection(db_path)
+    conn = get_duckdb_connection(db_path, read_only=False)
     result = SummaryRunResult()
     live_tokens = {"actual": 0, "display": 0}
     try:

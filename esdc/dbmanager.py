@@ -15,9 +15,17 @@ from esdc.selection import TableName
 
 
 def get_duckdb_connection(
-    db_path: str | Path, read_only: bool = False
+    db_path: str | Path, read_only: bool = True
 ) -> duckdb.DuckDBPyConnection:
     """Open a DuckDB connection with the VSS extension loaded.
+
+    Read-only by default: DuckDB allows many concurrent read-only
+    processes but a read-write connection demands an exclusive lock on
+    the file, blocking everything else (`esdc serve` vs `esdc status`).
+    Write paths must opt in explicitly with ``read_only=False``; a write
+    attempt on a read-only connection fails loudly instead of silently
+    holding the exclusive lock. Note: ``read_only=True`` cannot create a
+    missing database file.
 
     The VSS extension must be loaded before any operation on a database
     that contains HNSW indexes, including CHECKPOINT and WAL replay.
@@ -260,7 +268,7 @@ def reindex_fts() -> None:
 
     console.print("[bold]Rebuilding search indexes...[/bold]")
     logging.info("Rebuilding FTS indexes on %s", db_path)
-    conn = get_duckdb_connection(db_path)
+    conn = get_duckdb_connection(db_path, read_only=False)
     try:
         with console.status(_step("dropping HNSW index")):
             conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
@@ -352,7 +360,7 @@ def load_data_to_db(
     _ensure_duckdb_database(Config.get_db_file())
     if not Config.get_db_dir().exists():
         Config.get_db_dir().mkdir(parents=True, exist_ok=True)
-    conn = get_duckdb_connection(Config.get_db_file())
+    conn = get_duckdb_connection(Config.get_db_file(), read_only=False)
 
     with console.status(_status("preparing")) as status:
         try:

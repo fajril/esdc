@@ -881,7 +881,7 @@ def _append_to_table(
         )
 
     with console.status(_status("preparing")) as status:
-        conn = get_duckdb_connection(db_path)
+        conn = get_duckdb_connection(db_path, read_only=False)
         try:
             # Ensure table exists; only create if missing
             status.update(_status("creating schema"))

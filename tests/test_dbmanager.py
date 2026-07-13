@@ -373,3 +373,58 @@ class TestGetLastUpdated:
         assert second is not None
         assert second >= first
         conn.close()
+
+
+class TestGetDuckdbConnectionReadOnlyDefault:
+    """get_duckdb_connection(): read-only by default, writers must opt in.
+
+    DuckDB allows many concurrent read-only processes but a read-write
+    connection takes an exclusive file lock (`esdc serve` vs `esdc status`
+    conflict), so the safe default is read-only.
+    """
+
+    def test_default_connection_rejects_writes(self, tmp_path):
+        from esdc.dbmanager import get_duckdb_connection
+
+        db_file = tmp_path / "ro.db"
+        seed = duckdb.connect(str(db_file))
+        seed.execute("CREATE TABLE t (x INTEGER)")
+        seed.close()
+
+        conn = get_duckdb_connection(db_file)
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM t").fetchone() == (0,)
+            with pytest.raises(duckdb.Error, match="read-only"):
+                conn.execute("INSERT INTO t VALUES (1)")
+        finally:
+            conn.close()
+
+    def test_explicit_read_write_allows_writes(self, tmp_path):
+        from esdc.dbmanager import get_duckdb_connection
+
+        db_file = tmp_path / "rw.db"
+        conn = get_duckdb_connection(db_file, read_only=False)
+        try:
+            conn.execute("CREATE TABLE t (x INTEGER)")
+            conn.execute("INSERT INTO t VALUES (1)")
+            assert conn.execute("SELECT COUNT(*) FROM t").fetchone() == (1,)
+        finally:
+            conn.close()
+
+    def test_read_only_coexists_with_second_reader(self, tmp_path):
+        """Two read-only connections may hold the same file simultaneously."""
+        from esdc.dbmanager import get_duckdb_connection
+
+        db_file = tmp_path / "multi.db"
+        seed = duckdb.connect(str(db_file))
+        seed.execute("CREATE TABLE t (x INTEGER)")
+        seed.close()
+
+        first = get_duckdb_connection(db_file)
+        second = get_duckdb_connection(db_file)
+        try:
+            assert first.execute("SELECT COUNT(*) FROM t").fetchone() == (0,)
+            assert second.execute("SELECT COUNT(*) FROM t").fetchone() == (0,)
+        finally:
+            first.close()
+            second.close()
