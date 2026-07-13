@@ -176,7 +176,9 @@ class CorpusStore:
         # documents predating the doc_topic split (Task 4) won't have this
         # column — CREATE TABLE IF NOT EXISTS above is a no-op for them, so
         # add it explicitly. Idempotent: a no-op once the column exists.
-        conn.execute(f"ALTER TABLE {self.DOC_TABLE} ADD COLUMN IF NOT EXISTS doc_topic JSON")
+        conn.execute(
+            f"ALTER TABLE {self.DOC_TABLE} ADD COLUMN IF NOT EXISTS doc_topic JSON"
+        )
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.CHUNK_TABLE} (
                 chunk_id VARCHAR PRIMARY KEY,
@@ -394,7 +396,9 @@ class CorpusStore:
         docs = []
         for row in rows:
             doc = dict(zip(columns, row, strict=True))
-            _parse_json_fields(doc, ("doc_topic", "wk_name", "field_name", "project_name"))
+            _parse_json_fields(
+                doc, ("doc_topic", "wk_name", "field_name", "project_name")
+            )
             docs.append(doc)
         return docs
 

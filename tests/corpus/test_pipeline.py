@@ -1536,8 +1536,10 @@ def test_commit_no_demotion_warning_for_legacy_case_or_null(tmp_path, monkeypatc
 def test_commit_legacy_psc_stored_as_contract_topic_psc_with_warnings(
     tmp_path, monkeypatch
 ):
-    """A legacy doc_type: psc sidecar commits as contract + topic psc + level
-    wk (the doc_topic 'psc' rule), with remap + level-rule warnings."""
+    """Legacy psc commits as contract with topic psc + level wk.
+
+    Covers remap + level-rule warnings.
+    """
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
@@ -1686,8 +1688,7 @@ def test_meta_sets_fields_and_persists(tmp_path, monkeypatch):
 
 
 def test_meta_topic_override_writes_topic_and_level(tmp_path, monkeypatch):
-    """--topic wpnb writes doc_topic: [wpnb] + the doc_topic 'wpnb' rule's
-    implied level (wk) to frontmatter, without inventing a doc_type."""
+    """--topic wpnb writes doc_topic + implied level without doc_type."""
     sc = make_sidecar(
         tmp_path,
         "a.pdf",
@@ -1728,8 +1729,7 @@ def test_meta_untouched_doc_type_not_silently_set_to_others(tmp_path, monkeypatc
 
 
 def test_meta_warns_on_legacy_remap_and_level_rule(tmp_path, monkeypatch):
-    """Touching a sidecar (even for an unrelated field) self-heals a stale
-    legacy doc_type and warns about both the remap and the level rule."""
+    """Touching sidecar self-heals stale legacy doc_type + warns."""
     sc = make_sidecar(
         tmp_path,
         "a.pdf",
@@ -1971,8 +1971,7 @@ def test_meta_valid_entity_override_proceeds(tmp_path, monkeypatch):
 
 
 def test_meta_no_sidecars_skips_store_and_validation(tmp_path, monkeypatch):
-    """Nothing to mutate -> early return before opening the store or
-    validating overrides (even bogus ones)."""
+    """No sidecars: early return before store or validation."""
 
     def exploding_store(*a, **kw):
         raise AssertionError("store must not be opened when there are no sidecars")

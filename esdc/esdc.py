@@ -2332,7 +2332,9 @@ def extract(
     """Parse .pdf/.docx/.md sources to reviewable .corpus.md sidecars (step 1 of 2)."""
     from esdc.corpus.pipeline import run_extract
 
-    _validate_corpus_overrides(level, doc_type, topic, wk_name, field_name, project_name)
+    _validate_corpus_overrides(
+        level, doc_type, topic, wk_name, field_name, project_name
+    )
 
     try:
         report = run_extract(
@@ -2468,7 +2470,9 @@ def corpus_meta(
     """
     from esdc.corpus.pipeline import run_meta, run_meta_show
 
-    _validate_corpus_overrides(level, doc_type, topic, wk_name, field_name, project_name)
+    _validate_corpus_overrides(
+        level, doc_type, topic, wk_name, field_name, project_name
+    )
 
     values = (level, doc_type, topic, wk_name, field_name, project_name, reviewed)
     if not regenerate and all(v is None for v in values):

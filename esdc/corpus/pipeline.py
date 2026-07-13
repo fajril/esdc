@@ -394,10 +394,10 @@ def _warn_rule_effects(
     report: CorpusReport,
     name: str,
 ) -> None:
-    """Surface deterministic doc_level_rule effects normalize_metadata (or
-    the meta-command's surgical equivalent) applies silently.
+    """Surface deterministic doc_level_rule effects applied silently.
 
-    ``pre_rule_meta`` is the metadata as it stood right before the legacy
+    These come from ``normalize_metadata`` (or the meta-command's surgical
+    equivalent). ``pre_rule_meta`` is the metadata as it stood right before the legacy
     doc_type remap/rule stage ran; ``meta`` is the final, rule-applied
     result. Three effects are surfaced: a legacy doc_type remap (+ topic
     seed), a rule that changed doc_level, and a "regulation" rule clearing
@@ -1153,13 +1153,16 @@ def run_meta(
                             meta["raw_entities"] = existing_raws
 
                     file_hash = meta.get("file_hash")
-                    if store is not None and file_hash:
-                        if store.document_exists(file_hash):
-                            report.warnings.append(
-                                f"{name}: already committed — run "
-                                "`esdc corpus commit --force` to apply the new "
-                                "metadata to the corpus"
-                            )
+                    if (
+                        store is not None
+                        and file_hash
+                        and store.document_exists(file_hash)
+                    ):
+                        report.warnings.append(
+                            f"{name}: already committed — run "
+                            "`esdc corpus commit --force` to apply the new "
+                            "metadata to the corpus"
+                        )
 
                     p.status("write sidecar")
                     write_sidecar_file(sc, meta, body)

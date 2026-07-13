@@ -339,8 +339,11 @@ def test_search_filter_by_doc_topic_returns_matching_doc_only(tmp_path: Path):
 def test_ensure_tables_adds_doc_topic_column_to_legacy_documents_table(
     tmp_path: Path,
 ):
-    """ensure_tables must not crash on a documents table predating doc_topic,
-    and must add the column so json_each-based filters work afterward."""
+    """ensure_tables adds doc_topic column to legacy table.
+
+    Must not crash on pre-doc_topic schema; json_each filters
+    must work after migration.
+    """
     db = tmp_path / "legacy_topic.duckdb"
 
     conn = duckdb.connect(str(db))
