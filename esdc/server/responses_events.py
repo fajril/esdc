@@ -1,9 +1,95 @@
 # Standard library
+import copy
 import json
 import time
 from typing import Any
 
 # Local
+
+# aiohttp-based SSE clients (e.g. Open WebUI) reject any single stream line
+# longer than 131072 bytes (2x the 64 KiB StreamReader read buffer).
+SSE_LINE_BYTE_LIMIT = 131_072
+# Budget for the serialized output list in terminal events, leaving headroom
+# for the event envelope, the "data: " prefix, and JSON string escaping.
+MAX_SSE_EVENT_BYTES = 100_000
+# Cap for tool-result text embedded in function_call_output items. The LLM
+# consumes the full result internally; the SSE copy is display/citation only.
+MAX_TOOL_RESULT_TEXT_CHARS = 40_000
+TRUNCATION_SUFFIX = "... [truncated]"
+# Stub length used when slimming oversized terminal events.
+_SLIM_TEXT_CHARS = 500
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + TRUNCATION_SUFFIX
+
+
+def create_function_call_output_item(
+    item_id: str,
+    call_id: str,
+    text: str,
+    max_text_chars: int = MAX_TOOL_RESULT_TEXT_CHARS,
+) -> dict[str, Any]:
+    """Build a function_call_output item with size-capped result text.
+
+    Uncapped tool results (document search dumps, query output) can push a
+    single SSE event past SSE_LINE_BYTE_LIMIT and break streaming clients.
+    """
+    return {
+        "id": item_id,
+        "type": "function_call_output",
+        "status": "completed",
+        "call_id": call_id,
+        "output": [{"type": "input_text", "text": _truncate(text, max_text_chars)}],
+    }
+
+
+def _output_byte_size(output: list[dict[str, Any]]) -> int:
+    return len(json.dumps(output).encode("utf-8"))
+
+
+def slim_output_items(
+    output: list[dict[str, Any]],
+    max_bytes: int = MAX_SSE_EVENT_BYTES,
+) -> list[dict[str, Any]]:
+    """Shrink bulky non-message fields until output fits within max_bytes.
+
+    Terminal events (response.completed / response.incomplete) re-send the
+    full accumulated output as one SSE line; over long agent runs this can
+    exceed what streaming clients will read. Truncates, in order:
+    function_call_output texts, reasoning summaries, function_call arguments.
+    Message text is never touched -- it is what the user sees. Returns the
+    input unchanged when it already fits; never mutates the input.
+    """
+    if _output_byte_size(output) <= max_bytes:
+        return output
+
+    slimmed = copy.deepcopy(output)
+
+    fco_fields: list[tuple[dict[str, Any], str]] = []
+    reasoning_fields: list[tuple[dict[str, Any], str]] = []
+    args_fields: list[tuple[dict[str, Any], str]] = []
+    for item in slimmed:
+        item_type = item.get("type")
+        if item_type == "function_call_output":
+            for part in item.get("output", []):
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    fco_fields.append((part, "text"))
+        elif item_type == "reasoning":
+            for part in item.get("summary", []):
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    reasoning_fields.append((part, "text"))
+        elif item_type == "function_call" and isinstance(item.get("arguments"), str):
+            args_fields.append((item, "arguments"))
+
+    for fields in (fco_fields, reasoning_fields, args_fields):
+        for container, key in fields:
+            container[key] = _truncate(container[key], _SLIM_TEXT_CHARS)
+        if _output_byte_size(slimmed) <= max_bytes:
+            break
+    return slimmed
 
 
 def format_sse_event(event: dict[str, Any]) -> str:
@@ -73,7 +159,7 @@ def create_response_completed_event(
             "created_at": time.time(),
             "model": model,
             "status": "completed",
-            "output": output,
+            "output": slim_output_items(output),
             "usage": usage,
         },
     }
@@ -126,7 +212,7 @@ def create_response_incomplete_event(
             "created_at": time.time(),
             "model": model,
             "status": "incomplete",
-            "output": output,
+            "output": slim_output_items(output),
             "error": error,
         },
     }

@@ -45,6 +45,7 @@ from esdc.server.responses_events import (
     create_content_part_done_event,
     create_function_call_arguments_delta_event,
     create_function_call_arguments_done_event,
+    create_function_call_output_item,
     create_output_item_added_event,
     create_output_item_done_event,
     create_output_text_delta_event,
@@ -1137,13 +1138,9 @@ async def generate_responses_stream(
                     len(tool_result_content),
                 )
 
-                function_call_output = {
-                    "id": item_id,
-                    "type": "function_call_output",
-                    "status": "completed",
-                    "call_id": tool_call_id,
-                    "output": [{"type": "input_text", "text": tool_result_content}],
-                }
+                function_call_output = create_function_call_output_item(
+                    item_id, tool_call_id, tool_result_content
+                )
 
                 # Add source metadata for OpenWebUI citation rendering
                 source = _build_source_metadata(event.get("tool_name", ""))
@@ -1627,18 +1624,9 @@ async def generate_responses_sync(
                 tool_call_id = event.get("tool_call_id", "")
                 result_text = event.get("result", "")
 
-                fco_item = {
-                    "id": generate_item_id("fco"),
-                    "type": "function_call_output",
-                    "status": "completed",
-                    "call_id": tool_call_id,
-                    "output": [
-                        {
-                            "type": "input_text",
-                            "text": result_text,
-                        }
-                    ],
-                }
+                fco_item = create_function_call_output_item(
+                    generate_item_id("fco"), tool_call_id, result_text
+                )
                 source = _build_source_metadata(tool_name)
                 if source:
                     fco_item["source"] = source
