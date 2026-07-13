@@ -339,6 +339,66 @@ class TestResolveName:
         assert resolver.resolve_name("   ", "field_name") == []
 
 
+class TestResolveNameParentFilter:
+    """parent_filter constrains resolution to rows under a resolved parent."""
+
+    def test_resolve_name_with_parent_filter(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        """Filtered resolution returns only entities under the parent."""
+        resolver = EntityResolver(db=mock_db)
+        # Duri is under WK Rokan, Widuri is under WK Widuri
+        results = resolver.resolve_name(
+            "Duri", "field_name", parent_filter={"wk_name": "WK Rokan"}
+        )
+        names = [r["name"] for r in results]
+        assert "Duri" in names
+        assert "Widuri" not in names
+
+    def test_resolve_name_parent_filter_no_match_fallback(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        """When filter yields nothing, returns empty (caller handles fallback)."""
+        resolver = EntityResolver(db=mock_db)
+        results = resolver.resolve_name(
+            "Widuri", "field_name", parent_filter={"wk_name": "WK Rokan"}
+        )
+        assert results == []
+
+    def test_resolve_name_parent_filter_none(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        """parent_filter=None behaves like before (no filtering)."""
+        resolver = EntityResolver(db=mock_db)
+        results = resolver.resolve_name("Duri", "field_name", parent_filter=None)
+        names = [r["name"] for r in results]
+        assert "Duri" in names
+
+    def test_resolve_name_project_with_field_filter(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        """Project resolution filtered by field_name + wk_name."""
+        resolver = EntityResolver(db=mock_db)
+        results = resolver.resolve_name(
+            "Duri Phase 1",
+            "project_name",
+            parent_filter={"wk_name": "WK Rokan", "field_name": "Duri"},
+        )
+        names = [r["name"] for r in results]
+        assert "Duri Phase 1" in names
+
+    def test_resolve_name_parent_filter_applies_to_name_branch(
+        self, mock_db: duckdb.DuckDBPyConnection
+    ):
+        """Parent filter must constrain name matches, not just id matches (OR/AND precedence)."""
+        resolver = EntityResolver(db=mock_db)
+        # "Duri" matches field_name directly; wrong wk must exclude it
+        results = resolver.resolve_name(
+            "Duri", "field_name", parent_filter={"wk_name": "WK Mahakam"}
+        )
+        assert results == []
+
+
 class TestSuggestNames:
     """suggest_names(): fuzzy-ranked canonical candidates for unresolvable names.
 

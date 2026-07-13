@@ -209,7 +209,12 @@ class EntityResolver:
             "confidence": best_confidence,
         }
 
-    def resolve_name(self, name: str, entity_type: str) -> list[dict[str, Any]]:
+    def resolve_name(
+        self,
+        name: str,
+        entity_type: str,
+        parent_filter: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Resolve a bare entity name against one registry spec.
 
         Unlike `resolve()`, there is no NL parsing. Returns the FINAL
@@ -229,6 +234,13 @@ class EntityResolver:
         Every candidate match is word-boundary guarded (see
         `_best_confident_match`) so a bare substring hit like "arung"
         matching "GARUNG - BASE" is rejected.
+
+        `parent_filter` restricts matches to rows whose parent columns
+        (e.g. {"wk_name": "WK Rokan"}) equal the given values
+        (case/whitespace-insensitive). It applies uniformly across all
+        three fallback steps. When given and nothing matches, an empty
+        list is returned -- callers handle the fallback (e.g. retry
+        without the filter) themselves.
         """
         if entity_type not in ENTITY_REGISTRY:
             raise ValueError(f"unknown entity_type: {entity_type}")
@@ -239,7 +251,7 @@ class EntityResolver:
             return []
 
         # 1. Whole string.
-        best = self._best_confident_match(spec, name)
+        best = self._best_confident_match(spec, name, parent_filter)
         if best is not None:
             return [best]
 
@@ -247,7 +259,7 @@ class EntityResolver:
         phrase = self._normalize_candidate_phrase(name, remove_domain_keywords=True)
         phrase = self._strip_name_noise_words(phrase)
         if phrase and phrase.lower() != name.lower():
-            best = self._best_confident_match(spec, phrase)
+            best = self._best_confident_match(spec, phrase, parent_filter)
             if best is not None:
                 return [best]
 
@@ -264,7 +276,7 @@ class EntityResolver:
                 if size == 1 and term_tokens[0].lower() in _NAME_SEGMENT_SKIP_TOKENS:
                     continue
                 term = " ".join(term_tokens)
-                best = self._best_confident_match(spec, term)
+                best = self._best_confident_match(spec, term, parent_filter)
                 if best is not None:
                     canonical = best["name"].strip().lower()
                     if canonical not in seen:
@@ -322,13 +334,18 @@ class EntityResolver:
         return [str(row[0]) for row in result if row[0]]
 
     def _best_confident_match(
-        self, spec: EntitySpec, term: str
+        self,
+        spec: EntitySpec,
+        term: str,
+        parent_filter: dict[str, str] | None = None,
     ) -> dict[str, Any] | None:
         """Highest-confidence word-boundary-guarded match for `term`, or None."""
         term = term.strip()
         if not term:
             return None
-        matches = self._query_entity_spec(spec, term, return_multiple=True)
+        matches = self._query_entity_spec(
+            spec, term, return_multiple=True, parent_filter=parent_filter
+        )
         confident = [
             m
             for m in matches
@@ -588,11 +605,26 @@ class EntityResolver:
         return []
 
     def _query_entity_spec(
-        self, spec: EntitySpec, search_term: str, return_multiple: bool
+        self,
+        spec: EntitySpec,
+        search_term: str,
+        return_multiple: bool,
+        parent_filter: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         columns = self._table_columns(spec.lookup_table)
         if spec.name_column not in columns:
             return []
+
+        # Build parent filter conditions (case/whitespace-insensitive).
+        parent_conditions = ""
+        parent_params: list[str] = []
+        if parent_filter:
+            for col, val in parent_filter.items():
+                if col in columns:
+                    parent_conditions += (
+                        f" AND lower(trim({col})) = lower(trim(?))"
+                    )
+                    parent_params.append(val)
 
         id_expr = spec.id_column if spec.id_column in columns else "NULL"
         id_condition = (
@@ -608,7 +640,8 @@ class EntityResolver:
                     {id_expr} AS entity_id,
                     {spec.name_column} AS entity_name
                 FROM {spec.lookup_table}
-                WHERE {spec.name_column} ILIKE '%' || ? || '%'{id_condition}
+                WHERE ({spec.name_column} ILIKE '%' || ? || '%'{id_condition})
+                {parent_conditions}
             ) matches
             ORDER BY
                 CASE
@@ -625,6 +658,7 @@ class EntityResolver:
 
         try:
             params = [search_term, search_term] if id_condition else [search_term]
+            params.extend(parent_params)
             params.extend([search_term, search_term, search_term])
             result = self.db.execute(sql, params).fetchall()
         except Exception:
