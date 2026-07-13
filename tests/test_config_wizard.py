@@ -384,6 +384,60 @@ class TestCorpusModelPicker:
         assert "main" not in values    # vision OCR can't route through chat provider
         assert "glm-ocr" in values and "__custom__" in values
 
+    _FAKE_PROVIDERS = {
+        "anthropic": {"provider_type": "anthropic", "model": "claude-haiku-4-5"},
+        "work": {"provider_type": "openai", "model": "gpt-5"},
+    }
+
+    @patch(
+        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
+    )
+    @patch("esdc.config_wizard._fetch_models", return_value=["qwen3:8b"])
+    def test_choices_include_configured_providers(self, mock_fetch, mock_providers):
+        from esdc.config_wizard import _corpus_model_choices
+
+        for key in ("corpus.metadata_model", "corpus.cleanup_model"):
+            choices = _corpus_model_choices(key)
+            values = [c.value for c in choices]
+            assert "provider:anthropic" in values
+            assert "provider:work" in values
+            labels = {
+                c.value: c.title for c in choices if str(c.value).startswith("provider:")
+            }
+            assert "anthropic" in str(labels["provider:anthropic"])
+            assert "claude-haiku-4-5" in str(labels["provider:anthropic"])
+            assert "work" in str(labels["provider:work"])
+            assert "gpt-5" in str(labels["provider:work"])
+            # provider entries come right after "main"
+            assert values.index("provider:anthropic") > values.index("main")
+
+    @patch(
+        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
+    )
+    @patch("esdc.config_wizard._fetch_models", return_value=["glm-ocr"])
+    def test_choices_ocr_model_has_no_providers(self, mock_fetch, mock_providers):
+        from esdc.config_wizard import _corpus_model_choices
+
+        values = [c.value for c in _corpus_model_choices("corpus.ocr_model")]
+        assert not any(str(v).startswith("provider:") for v in values)
+
+    @patch(
+        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
+    )
+    @patch("esdc.config_wizard._fetch_models", return_value=["qwen3:8b"])
+    @patch("esdc.config_wizard.questionary.select")
+    def test_current_provider_value_is_default_choice(
+        self, mock_select, mock_fetch, mock_providers
+    ):
+        mock_select.return_value.ask.return_value = "provider:anthropic"
+        result = _prompt_for_config_value(
+            "corpus.metadata_model", "provider:anthropic"
+        )
+        assert result == "provider:anthropic"
+        default = mock_select.call_args.kwargs["default"]
+        assert default is not None
+        assert default.value == "provider:anthropic"
+
     @patch("esdc.config_wizard._fetch_models", return_value=["qwen3:8b"])
     @patch("esdc.config_wizard.questionary.select")
     def test_select_main(self, mock_select, mock_fetch):

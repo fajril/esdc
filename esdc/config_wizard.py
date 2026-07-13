@@ -150,20 +150,29 @@ _CORPUS_MODEL_KEYS = (
 def _corpus_model_choices(key: str) -> list[questionary.Choice]:
     """Selectable models for a corpus.* model key.
 
-    metadata/cleanup keys offer 'main' (default chat provider) and an
-    off/fallback empty value; ocr_model is vision-only so it offers
-    neither. Local Ollama models are appended when the daemon answers;
+    metadata/cleanup keys offer 'main' (default chat provider), each
+    configured provider (as 'provider:<name>'), and an off/fallback empty
+    value; ocr_model is vision-only Ollama-only so it offers none of
+    those. Local Ollama models are appended when the daemon answers;
     'custom…' always escapes to free-text entry.
     """
     choices: list[questionary.Choice] = []
-    if key == "corpus.metadata_model":
+    if key in ("corpus.metadata_model", "corpus.cleanup_model"):
         choices.append(questionary.Choice("main — default chat provider", value="main"))
-        choices.append(
-            questionary.Choice("(image-based prefill via ocr_model)", value="")
-        )
-    elif key == "corpus.cleanup_model":
-        choices.append(questionary.Choice("main — default chat provider", value="main"))
-        choices.append(questionary.Choice("(disabled)", value=""))
+        for name, cfg in Config.get_providers().items():
+            if not isinstance(cfg, dict):
+                continue
+            label = _format_provider_label(name, cfg)
+            model = cfg.get("model")
+            if model:
+                label = f"{label} ({model})"
+            choices.append(questionary.Choice(label, value=f"provider:{name}"))
+        if key == "corpus.metadata_model":
+            choices.append(
+                questionary.Choice("(image-based prefill via ocr_model)", value="")
+            )
+        else:
+            choices.append(questionary.Choice("(disabled)", value=""))
     for model in _fetch_models("ollama"):
         choices.append(questionary.Choice(f"{model} (ollama)", value=model))
     choices.append(questionary.Choice("custom…", value="__custom__"))
