@@ -126,6 +126,29 @@ def test_search_documents_filter_excludes(populated):
     assert result["results"] == []
 
 
+def test_search_documents_doc_topic_filter(tool_env):
+    from esdc.chat.tools import search_documents
+
+    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder())
+    store.ensure_tables()
+    doc = dict(DOC)
+    doc["doc_topic"] = ["wpnb"]
+    store.insert_document(doc, [Chunk(0, None, "rencana kerja dan anggaran")])
+    store.rebuild_indexes()
+    store.close()
+
+    result = json.loads(
+        search_documents.invoke({"query": "rencana kerja", "doc_topic": "wpnb"})
+    )
+    assert result["status"] == "success"
+    assert result["results"][0]["doc_topic"] == ["wpnb"]
+
+    excluded = json.loads(
+        search_documents.invoke({"query": "rencana kerja", "doc_topic": "afe"})
+    )
+    assert excluded["status"] == "no_results"
+
+
 def test_search_documents_empty_db_not_available(tool_env):
     from esdc.chat.tools import search_documents
 

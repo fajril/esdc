@@ -91,6 +91,15 @@ def test_search_filter_excludes(store):
     assert result["results"] == []
 
 
+def test_search_results_include_doc_topic(store):
+    doc = dict(DOC)
+    doc["doc_topic"] = ["wpnb"]
+    store.insert_document(doc, [Chunk(0, None, "persetujuan POD")])
+    store.rebuild_indexes()
+    result = store.search("persetujuan", limit=5, filters=None)
+    assert result["results"][0]["doc_topic"] == ["wpnb"]
+
+
 def test_get_document(store):
     store.insert_document(DOC, [Chunk(0, None, "isi")])
     doc = store.get_document("abc123")

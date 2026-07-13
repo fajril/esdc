@@ -1784,6 +1784,7 @@ def _search_remarks_via_fts(
 
 
 _DOC_TYPE_VALUES = enum_values("doc_type")
+_DOC_TOPIC_VALUES = enum_values("doc_topic")
 _DOC_SCHEMA_CONTEXT = render_tool_context()
 
 
@@ -1799,6 +1800,9 @@ def search_documents(
     doc_type: Annotated[
         str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."
     ] = None,
+    doc_topic: Annotated[
+        str | None, f"Filter by business topic: {', '.join(_DOC_TOPIC_VALUES)}."
+    ] = None,
     year: Annotated[int | None, "Filter by document year."] = None,
     wk_name: Annotated[str | None, "Filter by working area (ILIKE pattern)."] = None,
     field_name: Annotated[str | None, "Filter by field name (ILIKE pattern)."] = None,
@@ -1813,8 +1817,8 @@ def search_documents(
       berita acara ingested via `esdc corpus`
     - User references correspondence, approvals, or meeting decisions:
       "surat tentang X", "MoM pembahasan Y", "dokumen persetujuan Z"
-    - User wants document hits filtered by type, year, working area,
-      field, or project
+    - User wants document hits filtered by type, topic (POD, WP&B, PSC,
+      ...), year, working area, field, or project
 
     DO NOT use for project issues/remarks (use semantic_search) or
     reserves/production numbers (use execute_sql).
@@ -1823,7 +1827,7 @@ def search_documents(
     JSON string with:
     - status: "success", "no_results", "not_available", or "error"
     - results: List of matching chunks with doc_id, file_name, doc_type,
-      doc_date, subject, wk_name, field_name, project_name, section,
+      doc_topic, doc_date, subject, wk_name, field_name, project_name, section,
       chunk_text, and relevance score (RRF fusion, small magnitudes
       ~0.01-0.03 are normal)
     - count: Number of results
@@ -1834,12 +1838,15 @@ def search_documents(
     Examples:
     - search_documents("persetujuan POD lapangan Duri") -> POD approval letters
     - search_documents("pembahasan work program", doc_type="mom") -> MoM hits
+    - search_documents("rencana kerja", doc_topic="wpnb") -> WP&B documents
     - search_documents("berita acara serah terima", year=2025) -> 2025 BA docs
     """
     # Build filters dict from optional parameters
     filters: dict[str, Any] = {}
     if doc_type is not None:
         filters["doc_type"] = doc_type
+    if doc_topic is not None:
+        filters["doc_topic"] = doc_topic
     if year is not None:
         filters["year"] = year
     if wk_name is not None:

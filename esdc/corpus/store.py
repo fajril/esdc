@@ -721,7 +721,7 @@ class CorpusStore:
             placeholders = ", ".join("?" for _ in doc_ids)
             doc_rows = conn.execute(
                 f"""
-                SELECT doc_id, file_name, doc_type, doc_date, subject,
+                SELECT doc_id, file_name, doc_type, doc_topic, doc_date, subject,
                        wk_name, field_name, project_name
                 FROM {self.DOC_TABLE}
                 WHERE doc_id IN ({placeholders})
@@ -729,13 +729,15 @@ class CorpusStore:
                 doc_ids,
             ).fetchall()
             doc_cols = [
-                "doc_id", "file_name", "doc_type", "doc_date", "subject",
+                "doc_id", "file_name", "doc_type", "doc_topic", "doc_date", "subject",
                 "wk_name", "field_name", "project_name",
             ]
             docs_by_id = {}
             for row in doc_rows:
                 doc = dict(zip(doc_cols, row, strict=True))
-                _parse_json_fields(doc, ("wk_name", "field_name", "project_name"))
+                _parse_json_fields(
+                    doc, ("doc_topic", "wk_name", "field_name", "project_name")
+                )
                 docs_by_id[row[0]] = doc
 
             results = []
@@ -746,6 +748,7 @@ class CorpusStore:
                         "doc_id": r["doc_id"],
                         "file_name": doc.get("file_name"),
                         "doc_type": doc.get("doc_type"),
+                        "doc_topic": doc.get("doc_topic"),
                         "doc_date": doc.get("doc_date"),
                         "subject": doc.get("subject"),
                         "wk_name": doc.get("wk_name"),
