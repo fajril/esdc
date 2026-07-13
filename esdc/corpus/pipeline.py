@@ -988,59 +988,67 @@ def run_meta(
         # fail fast before any sidecar is rewritten.
         _validate_entity_overrides(resolver, overrides)
 
-        for sc in sidecars:
-            name = sc.name
-            try:
+        with _progress_with_status("meta", len(sidecars), "docs") as p:
+            for sc in sidecars:
+                name = sc.name
+                p.file(name)
                 try:
-                    meta, body = read_sidecar(sc)
-                except ValueError as e:
-                    report.failed[name] = str(e)
-                    continue
+                    try:
+                        p.status("read sidecar")
+                        meta, body = read_sidecar(sc)
+                    except ValueError as e:
+                        report.failed[name] = str(e)
+                        continue
 
-                if regenerate:
-                    regen_fields = llm_extract(body, regen_caller)
-                    for key in _REGENERATE_FIELDS:
-                        meta[key] = regen_fields.get(key)
+                    if regenerate:
+                        p.status("regenerate metadata")
+                        regen_fields = llm_extract(body, regen_caller)
+                        for key in _REGENERATE_FIELDS:
+                            meta[key] = regen_fields.get(key)
 
-                _apply_overrides(meta, overrides)
-                if reviewed is not None:
-                    meta["reviewed"] = reviewed
-                elif regenerate:
-                    meta["reviewed"] = False
+                    _apply_overrides(meta, overrides)
+                    if reviewed is not None:
+                        meta["reviewed"] = reviewed
+                    elif regenerate:
+                        meta["reviewed"] = False
 
-                pre_rule_meta = dict(meta)
-                meta = _apply_meta_rules(meta)
-                _warn_rule_effects(pre_rule_meta, meta, report, name)
-                meta = normalize_entity_fields(meta)
+                    pre_rule_meta = dict(meta)
+                    meta = _apply_meta_rules(meta)
+                    _warn_rule_effects(pre_rule_meta, meta, report, name)
+                    meta = normalize_entity_fields(meta)
 
-                if resolver is not None:
-                    existing_raws = meta.get("raw_entities") or {}
-                    resolved_raws = _apply_entity_resolution(
-                        meta, resolver, report, name
-                    )
-                    # Overridden fields get the user-supplied value as their
-                    # new raw; untouched fields keep their original raw.
-                    for key in ("wk_name", "field_name", "project_name"):
-                        if overrides[key] is not None:
-                            existing_raws[key] = overrides[key]
-                        elif key not in existing_raws:
-                            existing_raws[key] = resolved_raws.get(key)
-                    if any(v is not None for v in existing_raws.values()):
-                        meta["raw_entities"] = existing_raws
-
-                file_hash = meta.get("file_hash")
-                if store is not None and file_hash:
-                    if store.document_exists(file_hash):
-                        report.warnings.append(
-                            f"{name}: already committed — run "
-                            "`esdc corpus commit --force` to apply the new "
-                            "metadata to the corpus"
+                    if resolver is not None:
+                        p.status("resolve entities")
+                        existing_raws = meta.get("raw_entities") or {}
+                        resolved_raws = _apply_entity_resolution(
+                            meta, resolver, report, name
                         )
+                        # Overridden fields get the user-supplied value as their
+                        # new raw; untouched fields keep their original raw.
+                        for key in ("wk_name", "field_name", "project_name"):
+                            if overrides[key] is not None:
+                                existing_raws[key] = overrides[key]
+                            elif key not in existing_raws:
+                                existing_raws[key] = resolved_raws.get(key)
+                        if any(v is not None for v in existing_raws.values()):
+                            meta["raw_entities"] = existing_raws
 
-                write_sidecar_file(sc, meta, body)
-                report.processed.append(name)
-            except Exception as e:
-                report.failed[name] = str(e)
+                    file_hash = meta.get("file_hash")
+                    if store is not None and file_hash:
+                        if store.document_exists(file_hash):
+                            report.warnings.append(
+                                f"{name}: already committed — run "
+                                "`esdc corpus commit --force` to apply the new "
+                                "metadata to the corpus"
+                            )
+
+                    p.status("write sidecar")
+                    write_sidecar_file(sc, meta, body)
+                    report.processed.append(name)
+                except Exception as e:
+                    report.failed[name] = str(e)
+                finally:
+                    p.advance()
     finally:
         if store is not None:
             store.close()

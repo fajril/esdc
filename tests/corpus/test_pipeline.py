@@ -2152,6 +2152,43 @@ def test_extract_shows_progress_bar(tmp_path, monkeypatch):
     assert "write sidecar" in handle.statuses
 
 
+def test_meta_shows_progress_bar(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        pipeline, "_progress_with_status", fake_progress_with_status_factory(captured)
+    )
+    make_sidecar(tmp_path, "a.pdf", reviewed=False, file_hash="dd" * 32)
+
+    report = pipeline.run_meta([tmp_path], reviewed=True)
+
+    assert report.failed == {}
+    assert captured["verb"] == "meta"
+    assert captured["total"] == 1
+    assert captured["unit"] == "docs"
+    handle = captured["handle"]
+    assert handle.files == ["a.corpus.md"]
+    assert handle.advances == 1
+    assert "read sidecar" in handle.statuses
+    assert "write sidecar" in handle.statuses
+    assert "regenerate metadata" not in handle.statuses
+
+
+def test_meta_regenerate_shows_progress_status(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        pipeline, "_progress_with_status", fake_progress_with_status_factory(captured)
+    )
+    monkeypatch.setattr(
+        pipeline, "llm_extract", lambda markdown, caller: {"doc_type": "mom"}
+    )
+    make_sidecar(tmp_path, "a.pdf", reviewed=True, file_hash="ee" * 32)
+
+    report = pipeline.run_meta([tmp_path], regenerate=True)
+
+    assert report.failed == {}
+    assert "regenerate metadata" in captured["handle"].statuses
+
+
 def test_commit_shows_progress_bar(tmp_path, monkeypatch):
     captured = {}
     monkeypatch.setattr(
