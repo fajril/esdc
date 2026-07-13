@@ -306,7 +306,8 @@ ollama pull glm-ocr
 | `chunk_size` | `3000` | Max characters per chunk (~750 tokens) |
 | `chunk_overlap` | `300` | Characters carried over between consecutive chunks |
 | `ocr_model` | `glm-ocr` | Ollama vision model used to OCR scanned pages |
-| `metadata_model` | `""` | Optional text LLM for metadata extraction; empty uses `ocr_model` on the rendered first page |
+| `metadata_model` | `"main"` | Text LLM for metadata extraction: `main` (default chat provider), `provider:<name>` (a configured provider from config.yaml), an Ollama model name, or `""` (image-based prefill via `ocr_model`) |
+| `cleanup_model` | `"main"` | LLM for formatting cleanup of native-extracted pages: `main`, `provider:<name>`, an Ollama model name, or `""` (off) |
 | `ocr_dpi` | `200` | Page render resolution for OCR; raise to 300 if OCR quality is poor |
 | `num_ctx` | `16384` | Ollama context window; `glm-ocr` fails on page images below this |
 | `min_chars_per_page` | `50` | Text-layer character threshold below which a page counts as scanned |

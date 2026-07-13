@@ -42,14 +42,16 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "corpus.ocr_model": "Ollama vision model used for OCR of scanned pages",
     "corpus.metadata_model": (
         "Text LLM for metadata pre-fill at extract time ('main' = default "
-        "chat provider [default], an Ollama model name to override, or "
-        "'' = image-based prefill via ocr_model)"
+        "chat provider [default], 'provider:<name>' = a configured provider, "
+        "an Ollama model name to override, or '' = image-based prefill via "
+        "ocr_model)"
     ),
     "corpus.cleanup_model": (
         "LLM for formatting cleanup of native-extracted pages at extract "
-        "time ('main' = default chat provider [default], an Ollama model "
-        "name to override, or '' = off); guarded — original text kept if "
-        "the model invents numbers or changes length grossly"
+        "time ('main' = default chat provider [default], 'provider:<name>' "
+        "= a configured provider, an Ollama model name to override, or "
+        "'' = off); guarded — original text kept if the model invents "
+        "numbers or changes length grossly"
     ),
     "corpus.ollama_host": (
         "Ollama server URL for corpus OCR and Ollama-named corpus models "

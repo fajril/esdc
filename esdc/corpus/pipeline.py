@@ -141,24 +141,45 @@ def _resolve_text_caller(
 
     "" / None -> None (feature off). "main" -> the default chat provider
     (may be a cloud API — sends document text off-machine; user opt-in).
+    "provider:<name>" -> the named provider from config.yaml's providers
+    section; the prefix is explicit because provider names can collide
+    with Ollama model names (e.g. "mistral"), so bare names stay Ollama.
     Anything else -> an Ollama model on `host` (default local daemon).
-    Returns None when "main" is requested but no provider is configured
-    or construction fails.
+    Returns None when "main"/"provider:<name>" is requested but no such
+    provider is configured or construction fails.
     """
     if not model_spec:
         return None
-    if model_spec != "main":
-        return _text_llm_caller(model_spec, host)
 
-    provider_config = Config.get_provider_config()
-    if not provider_config:
-        return None
+    if model_spec.startswith("provider:"):
+        name = model_spec[len("provider:"):]
+        named_config = Config.get_provider_config_by_name(name)
+        if not isinstance(named_config, dict):
+            logger.warning(
+                "[Corpus] unknown provider '%s' in corpus model spec %r",
+                name,
+                model_spec,
+            )
+            return None
+        # Same shape get_provider_configs_by_priority produces for "main".
+        provider_config = dict(named_config)
+        provider_config.setdefault("name", name)
+        provider_config.setdefault(
+            "provider_type", provider_config.get("type") or name
+        )
+    elif model_spec != "main":
+        return _text_llm_caller(model_spec, host)
+    else:
+        provider_config = Config.get_provider_config()
+        if not provider_config:
+            return None
+
     try:
         import esdc.providers as providers
 
         llm = providers.create_llm_from_config(provider_config)
     except Exception as e:
-        logger.warning("[Corpus] main-model caller unavailable: %s", e)
+        logger.warning("[Corpus] %s-model caller unavailable: %s", model_spec, e)
         return None
 
     def call(prompt: str) -> str:

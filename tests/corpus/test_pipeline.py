@@ -563,6 +563,62 @@ def test_resolve_text_caller_ollama_name(monkeypatch):
     assert pipeline._resolve_text_caller("qwen3:8b") is sentinel
 
 
+def test_resolve_text_caller_named_provider(monkeypatch):
+    import esdc.providers as providers
+
+    monkeypatch.setattr(
+        pipeline.Config,
+        "get_providers",
+        classmethod(
+            lambda cls: {
+                "foo": {"provider_type": "openai", "model": "gpt-x"},
+                "bar": {"provider_type": "anthropic", "model": "claude-x"},
+            }
+        ),
+    )
+    captured = {}
+
+    def fake_create(cfg):
+        captured.update(cfg)
+        return FakeLLM()
+
+    monkeypatch.setattr(providers, "create_llm_from_config", fake_create)
+
+    caller = pipeline._resolve_text_caller("provider:foo", None)
+    assert caller is not None
+    assert caller("extract metadata") == '{"doc_type": "mom"}'
+    # that provider's config was used, with the same shape the priority
+    # accessor produces (name/provider_type filled in)
+    assert captured["provider_type"] == "openai"
+    assert captured["model"] == "gpt-x"
+    assert captured["name"] == "foo"
+
+
+def test_resolve_text_caller_unknown_provider_returns_none(monkeypatch, caplog):
+    monkeypatch.setattr(
+        pipeline.Config, "get_providers", classmethod(lambda cls: {})
+    )
+    with caplog.at_level("WARNING"):
+        assert pipeline._resolve_text_caller("provider:nope", None) is None
+    assert any("nope" in r.message for r in caplog.records)
+
+
+def test_resolve_text_caller_provider_construction_failure_returns_none(monkeypatch):
+    import esdc.providers as providers
+
+    monkeypatch.setattr(
+        pipeline.Config,
+        "get_providers",
+        classmethod(lambda cls: {"foo": {"provider_type": "openai"}}),
+    )
+
+    def raise_create(cfg):
+        raise RuntimeError("no api key")
+
+    monkeypatch.setattr(providers, "create_llm_from_config", raise_create)
+    assert pipeline._resolve_text_caller("provider:foo", None) is None
+
+
 def test_prefill_metadata_main_model(monkeypatch, tmp_path):
     """metadata_model='main' routes prefill through the provider LLM."""
     import esdc.providers as providers
