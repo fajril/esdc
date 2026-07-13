@@ -230,6 +230,30 @@ class TestQueryClassifier:
         assert result.query_type == QueryType.SIMPLE_FACTUAL
         assert "prospective" in result.reason.lower()
 
+    def test_document_query_pod_revisi_comparison(self):
+        """Real-world failure query: POD revision comparison -> DOCUMENT."""
+        result = self.classifier.classify(
+            "apakah beda Surat Persetujuan POD I Lapangan Abadi Revisi 1 dan 2"
+        )
+        assert result.query_type == QueryType.DOCUMENT
+        assert result.confidence == 0.9
+
+    def test_document_query_surat_persetujuan(self):
+        """Test 'surat persetujuan POD Duri' is classified as DOCUMENT."""
+        result = self.classifier.classify("surat persetujuan POD Duri")
+        assert result.query_type == QueryType.DOCUMENT
+        assert result.confidence == 0.9
+
+    def test_document_patterns_take_priority_over_conceptual(self):
+        """Technical-problem queries without document wording stay CONCEPTUAL."""
+        result = self.classifier.classify("kendala teknis di WK Rokan")
+        assert result.query_type == QueryType.CONCEPTUAL
+
+    def test_simple_factual_query_unaffected_by_document_patterns(self):
+        """Test 'berapa cadangan Duri' is still SIMPLE_FACTUAL (unchanged)."""
+        result = self.classifier.classify("berapa cadangan Duri")
+        assert result.query_type == QueryType.SIMPLE_FACTUAL
+
 
 class TestToolSelection:
     """Test tool selection based on classification."""
@@ -317,6 +341,38 @@ class TestToolSelection:
         assert "Semantic Search" not in tools
         assert "Spatial Resolver" not in tools
 
+    def test_document_tools(self):
+        """DOCUMENT queries get Semantic Search plus doc tools from base_tools."""
+        classification = QueryClassification(
+            query_type=QueryType.DOCUMENT,
+            confidence=0.9,
+            detected_entities={},
+            suggested_table=None,
+            suggested_columns=[],
+            reason="Test",
+        )
+
+        tools = get_tools_for_classification(classification)
+        assert "Document Search" in tools
+        assert "Document Reader" in tools
+        assert "Semantic Search" in tools
+        assert "SQL Executor" in tools
+
+    def test_document_tools_always_available(self):
+        """Document Search/Reader are in base_tools for every query type."""
+        for qtype in QueryType:
+            classification = QueryClassification(
+                query_type=qtype,
+                confidence=0.9,
+                detected_entities={},
+                suggested_table=None,
+                suggested_columns=[],
+                reason="Test",
+            )
+            tools = get_tools_for_classification(classification)
+            assert "Document Search" in tools, f"missing for {qtype.name}"
+            assert "Document Reader" in tools, f"missing for {qtype.name}"
+
 
 class TestPromptFormatting:
     """Test formatting classification for prompts."""
@@ -371,6 +427,23 @@ class TestPromptFormatting:
         formatted = format_classification_for_prompt(classification)
 
         assert "resolve_spatial" in formatted
+
+    def test_document_formatting(self):
+        """Test formatting of DOCUMENT classification."""
+        classification = QueryClassification(
+            query_type=QueryType.DOCUMENT,
+            confidence=0.9,
+            detected_entities={},
+            suggested_table=None,
+            suggested_columns=[],
+            reason="Document query detected: document_types",
+        )
+
+        formatted = format_classification_for_prompt(classification)
+
+        assert "search_documents" in formatted
+        assert "DO NOT call entity_resolver" in formatted
+        assert "read_document" in formatted
 
     def test_year_transition_formatting(self):
         """Test formatting of year transition classification."""

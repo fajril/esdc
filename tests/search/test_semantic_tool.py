@@ -11,8 +11,14 @@ def test_semantic_search_tool_exists():
     assert semantic_search is not None
 
 
-def test_semantic_search_by_text():
-    """Test semantic search by text."""
+def test_semantic_search_by_text(isolated_config):
+    """Test semantic search by text.
+
+    semantic_search now fans out to the document corpus too (see
+    docs/plans/2026-07-13-improve-document-search-usage.md); isolated_config
+    keeps that fan-out pointed at an empty tmp DuckDB instead of the real
+    ~/.esdc store, so it deterministically returns documents=not_available.
+    """
     with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
         mock_resolver = Mock()
         mock_resolver.hybrid_search.return_value = {
@@ -36,10 +42,11 @@ def test_semantic_search_by_text():
             )
 
             data = json.loads(result)
-            assert data["status"] == "success"
+            assert data["remarks"]["status"] == "success"
+            assert data["documents"]["status"] == "not_available"
 
 
-def test_semantic_search_not_available():
+def test_semantic_search_not_available(isolated_config):
     """Test fallback when embeddings not available."""
     with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
         mock_resolver = Mock()
@@ -59,4 +66,8 @@ def test_semantic_search_not_available():
             result = semantic_search.invoke({"query": "test query"})
 
             data = json.loads(result)
-            assert data["status"] == "not_available"
+            # FTS fallback reports "error" (not "not_available") when the
+            # DB file itself doesn't exist yet -- pre-existing behavior of
+            # _search_remarks_via_fts, unrelated to the corpus fan-out.
+            assert data["remarks"]["status"] == "error"
+            assert data["documents"]["status"] == "not_available"

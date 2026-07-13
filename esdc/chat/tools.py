@@ -1577,7 +1577,11 @@ def semantic_search(
         "Filter by SKK Migas region (ILIKE pattern, e.g., '%Duri%'). Optional.",
     ] = None,
 ) -> str:
-    """Search for documents by semantic similarity to the query.
+    """Search project remarks AND official documents by semantic similarity.
+
+    Every call fans out to two sources and returns both:
+    - project_remarks (via hybrid semantic + FTS search)
+    - the ingested document corpus (surat, MoM, berita acara)
 
     Use this tool when:
     - User asks about concepts, meanings, or topics (not exact keywords)
@@ -1586,11 +1590,15 @@ def semantic_search(
     - User wants to filter by year, field, working area, etc.
 
     Returns:
-    JSON string with:
-    - status: "success", "no_results", "not_available", "fallback_to_fts", or "error"
-    - results: List of similar documents with similarity scores and contextual columns
-    - count: Number of results
-    - message: Additional information (e.g., fallback explanation)
+    JSON string with two top-level sections:
+    - remarks: {status, results, count, message} — same shape as before,
+      status is "success", "no_results", "not_available", "fallback_to_fts",
+      or "error"
+    - documents: {status, results, count, message} — hits from the document
+      corpus, or status="not_available"/"error" if no corpus is ingested or
+      the corpus lookup failed. A corpus failure never affects the remarks
+      section. If documents is "not_available", do not mention documents in
+      the answer unless the user specifically asked about them.
 
     Examples:
     - semantic_search("proyek dengan reservoir kompleks") ->
@@ -1636,7 +1644,12 @@ def semantic_search(
         filters["wk_area_perwakilan_skkmigas"] = wk_area_perwakilan_skkmigas
 
     cache = _get_tool_cache()
-    cache_key = _tool_cache_key("semantic_search", query=query, limit=limit, **filters)
+    # v2 key: the return envelope changed from flat {status, ...} to
+    # {remarks, documents}. The tool cache is permanent on disk, so old
+    # flat-shape entries must never hit.
+    cache_key = _tool_cache_key(
+        "semantic_search_v2", query=query, limit=limit, **filters
+    )
     if cache_key in cache:
         logger.debug("[CACHE] hit | tool=semantic_search key=%s", cache_key[:16])
         return str(cache[cache_key])
@@ -1646,42 +1659,62 @@ def semantic_search(
     resolver = SemanticResolver()
 
     try:
-        result = resolver.hybrid_search(
+        remarks_result = resolver.hybrid_search(
             query=query,
             limit=limit,
             filters=filters if filters else None,
         )
 
         # If embeddings not available, fallback to FTS search
-        if result.get("status") == "not_available":
+        if remarks_result.get("status") == "not_available":
             logger.info("[Semantic] embeddings not available, falling back to FTS")
-            fallback_result = _search_remarks_via_fts(query, limit, "project_resources")
-            fallback_str = json.dumps(fallback_result, indent=2, ensure_ascii=False)
-            if fallback_result.get("status") in ("success", "no_results"):
-                cache.set(cache_key, fallback_str)
-                logger.debug(
-                    "[CACHE] stored | tool=semantic_search key=%s (fts fallback)",
-                    cache_key[:16],
-                )
-            return fallback_str
-
-        result_str = json.dumps(result, indent=2, ensure_ascii=False)
-        if result.get("status") in ("success", "no_results"):
-            cache.set(cache_key, result_str)
-            logger.debug("[CACHE] stored | tool=semantic_search key=%s", cache_key[:16])
-        return result_str
+            remarks_result = _search_remarks_via_fts(query, limit, "project_resources")
 
     except Exception as e:
         logger.error("[Semantic] tool failed | query=%s error=%s", query, e)
-        return json.dumps(
-            {
-                "status": "error",
-                "message": str(e),
-                "query": query,
-            }
-        )
+        remarks_result = {
+            "status": "error",
+            "message": str(e),
+            "query": query,
+        }
     finally:
         resolver.close()
+
+    # Fan out to the document corpus so issue/topic queries surface official
+    # documents too. A corpus failure must never break the remarks result.
+    documents_result: dict[str, Any] = {"status": "not_available"}
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        store = CorpusStore(embedder=_get_corpus_embedder())
+        try:
+            documents_result = store.search(
+                query=query,
+                limit=5,
+                filters=_map_remarks_filters_to_corpus(filters),
+            )
+        finally:
+            store.close()
+    except Exception as e:
+        logger.warning("[SemanticSearch] corpus fan-out failed: %s", e)
+        documents_result = {"status": "error", "message": str(e)}
+
+    result_str = json.dumps(
+        {"remarks": remarks_result, "documents": documents_result},
+        indent=2,
+        ensure_ascii=False,
+        default=str,
+    )
+    # Cache only when BOTH sections are definitive. The cache is not
+    # invalidated by `esdc corpus commit`, so caching a not_available/error
+    # documents section would freeze it even after a corpus is ingested.
+    if remarks_result.get("status") in (
+        "success",
+        "no_results",
+    ) and documents_result.get("status") in ("success", "no_results"):
+        cache.set(cache_key, result_str)
+        logger.debug("[CACHE] stored | tool=semantic_search key=%s", cache_key[:16])
+    return result_str
 
 
 def _search_remarks_via_fts(
@@ -1783,6 +1816,27 @@ def _search_remarks_via_fts(
         }
 
 
+def _map_remarks_filters_to_corpus(filters: dict[str, Any]) -> dict[str, Any]:
+    """Map semantic_search's remarks filters to CorpusStore's filter schema.
+
+    Only wk_name, field_name, project_name, and report_year (-> year) have
+    equivalents in the document corpus; the rest (pod_name, province,
+    basin128, project_class/stage/level, operator_*, wk_subgroup,
+    wk_regionisasi_ngi, wk_area_perwakilan_skkmigas) are remarks-only and
+    are dropped.
+    """
+    corpus_filters: dict[str, Any] = {}
+    if "wk_name" in filters:
+        corpus_filters["wk_name"] = filters["wk_name"]
+    if "field_name" in filters:
+        corpus_filters["field_name"] = filters["field_name"]
+    if "project_name" in filters:
+        corpus_filters["project_name"] = filters["project_name"]
+    if "report_year" in filters:
+        corpus_filters["year"] = filters["report_year"]
+    return corpus_filters
+
+
 _DOC_TYPE_VALUES = enum_values("doc_type")
 _DOC_TOPIC_VALUES = enum_values("doc_topic")
 _DOC_SCHEMA_CONTEXT = render_tool_context()
@@ -1820,8 +1874,13 @@ def search_documents(
     - User wants document hits filtered by type, topic (POD, WP&B, PSC,
       ...), year, working area, field, or project
 
-    DO NOT use for project issues/remarks (use semantic_search) or
-    reserves/production numbers (use execute_sql).
+    Use this tool directly when the user asks about a specific document or
+    document type (surat, MoM, berita acara, "POD I Revisi 2") — its
+    doc_type/doc_topic/year filters give precise hits. For broad issue/topic
+    exploration, semantic_search already includes a documents section.
+    DO NOT use for reserves/production numbers (use execute_sql).
+    DO NOT call entity_resolver first — this tool takes free-text names
+    directly.
 
     Returns:
     JSON string with:

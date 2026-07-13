@@ -1,5 +1,6 @@
 # Standard library
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -192,6 +193,68 @@ def _merge_allowed_tools(
 
 
 MAX_TOOL_RESULT_CHARS = 10000
+
+# A signature is blocked once it would be the 3rd+ execution of an
+# identical tool+args call (i.e. 2 prior executions already happened):
+# repeating past this point cannot change the output and only burns the
+# MAX_TOOL_CALLS budget (see the Entity Resolver death-spiral in
+# docs/plans/2026-07-13-improve-document-search-usage.md).
+_LOOP_DETECTION_MAX_PRIOR_EXECUTIONS = 2
+
+_REPEATED_CALL_BLOCKED_PREFIX = "REPEATED CALL BLOCKED"
+
+
+def _tool_call_signature(tool_name: str, tool_args: Any) -> str:
+    """Build a stable signature identifying a tool call by name + args.
+
+    Used by the tool_node loop guard to recognize when the LLM repeats an
+    identical call instead of trying something different.
+    """
+    if isinstance(tool_args, str):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            tool_args = json.loads(tool_args)
+    return f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
+
+
+def _count_executed_tool_signatures(messages: list[AnyMessage]) -> dict[str, int]:
+    """Count prior tool executions per call signature in the current turn.
+
+    Only messages after the last HumanMessage are counted: a user asking
+    the same question in a later turn legitimately re-runs the same tool
+    calls and must not inherit counts from earlier turns.
+
+    Pairs each ToolMessage with the tool_call it answers (matched by
+    tool_call_id against preceding AIMessage.tool_calls) to recover the
+    tool+args combination it represents. Calls the loop guard itself
+    already blocked (content prefixed with "REPEATED CALL BLOCKED") never
+    actually executed, so they are not counted.
+    """
+    turn_start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            turn_start = i + 1
+            break
+    turn_messages = messages[turn_start:]
+
+    call_index: dict[str, tuple[str, Any]] = {}
+    for msg in turn_messages:
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id")
+                if tc_id:
+                    call_index[tc_id] = (tc.get("name", "unknown"), tc.get("args", {}))
+
+    counts: dict[str, int] = {}
+    for msg in turn_messages:
+        if isinstance(msg, ToolMessage) and not str(msg.content).startswith(
+            _REPEATED_CALL_BLOCKED_PREFIX
+        ):
+            entry = call_index.get(msg.tool_call_id)
+            if entry is None:
+                continue
+            signature = _tool_call_signature(*entry)
+            counts[signature] = counts.get(signature, 0) + 1
+    return counts
 
 
 async def generate_conversation_title(
@@ -716,10 +779,39 @@ def create_agent(
             "[TOOL] TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
         )
 
+        signature_counts = _count_executed_tool_signatures(state["messages"])
+
         for tool_call in ai_message.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call.get("args", {})
             tool_id = tool_call.get("id", "unknown")
+
+            signature = _tool_call_signature(tool_name, tool_args)
+            prior_executions = signature_counts.get(signature, 0)
+            if prior_executions >= _LOOP_DETECTION_MAX_PRIOR_EXECUTIONS:
+                logger.warning(
+                    "[TOOL_NODE] Loop detected: %s already executed %d times with "
+                    "identical args, blocking | signature=%s",
+                    tool_name,
+                    prior_executions,
+                    signature,
+                )
+                result.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": (
+                            f"{_REPEATED_CALL_BLOCKED_PREFIX}: '{tool_name}' already "
+                            f"returned identical results for these exact arguments "
+                            f"{prior_executions} times. Calling again will not change "
+                            "the output. Use a DIFFERENT tool (e.g. search_documents "
+                            "for document queries) or give your final answer with "
+                            "what you have."
+                        ),
+                    }
+                )
+                continue
 
             if tool_name in _external_tool_names:
                 logger.info(
@@ -795,6 +887,7 @@ def create_agent(
                     logger.error("[TOOL] TOOL_NODE: %s failed: %s", tool_name, e)
                     observation = f"Error: {str(e)}"
 
+                signature_counts[signature] = prior_executions + 1
                 result.append(
                     {
                         "tool_call_id": tool_id,

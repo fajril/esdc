@@ -303,3 +303,212 @@ def test_search_documents_reuses_embedder(tool_env, monkeypatch):
     tools_mod.search_documents.invoke({"query": "query two"})
 
     assert sum(instantiations) <= 1
+
+
+class TestSemanticSearchCorpusFanOut:
+    """Tests for semantic_search's fan-out to the document corpus.
+
+    See docs/plans/2026-07-13-improve-document-search-usage.md. It must
+    always return a `{"remarks": ..., "documents": ...}` envelope, and a
+    corpus failure must never break the remarks section.
+    """
+
+    def test_fanout_returns_both_sections_with_documents_hit(
+        self, populated, monkeypatch
+    ):
+        """Corpus has a matching doc -> documents section carries the hit."""
+        from unittest.mock import Mock, patch
+
+        import esdc.chat.tools as tools_mod
+        from esdc.chat.tools import semantic_search
+
+        # Force a fresh embedder lookup so it picks up tool_env's FakeEmbedder
+        # instead of a global singleton some other test may have cached
+        # (e.g. test_search_documents_reuses_embedder's _CountingEmbedder).
+        monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
+
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+            mock_resolver = Mock()
+            mock_resolver.hybrid_search.return_value = {
+                "status": "success",
+                "count": 1,
+                "results": [{"project_id": "P1", "similarity": 0.9}],
+            }
+            mock_resolver.close = Mock()
+            MockResolver.return_value = mock_resolver
+
+            result = json.loads(
+                semantic_search.invoke({"query": "persetujuan POD Duri"})
+            )
+
+        assert result["remarks"]["status"] == "success"
+        assert result["remarks"]["count"] == 1
+        assert result["documents"]["status"] == "success"
+        assert result["documents"]["results"][0]["doc_id"] == "abc123"
+
+    def test_fanout_corpus_error_never_breaks_remarks(self, tool_env, monkeypatch):
+        """A corpus exception must not affect the remarks section at all."""
+        import importlib
+        from unittest.mock import Mock, patch
+
+        from esdc.chat.tools import semantic_search
+
+        store_mod = importlib.import_module("esdc.corpus.store")
+        monkeypatch.setattr(store_mod, "CorpusStore", ExplodingStore)
+
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+            mock_resolver = Mock()
+            mock_resolver.hybrid_search.return_value = {
+                "status": "success",
+                "count": 2,
+                "results": [
+                    {"project_id": "P1", "similarity": 0.95},
+                    {"project_id": "P2", "similarity": 0.89},
+                ],
+            }
+            mock_resolver.close = Mock()
+            MockResolver.return_value = mock_resolver
+
+            result = json.loads(
+                semantic_search.invoke({"query": "kendala teknis"})
+            )
+
+        assert result["remarks"]["status"] == "success"
+        assert result["remarks"]["count"] == 2
+        assert result["documents"]["status"] == "error"
+        assert "store exploded" in result["documents"]["message"]
+
+    def test_fanout_empty_corpus_reports_not_available(self, tool_env):
+        """No corpus ingested -> documents section is not_available, remarks intact."""
+        from unittest.mock import Mock, patch
+
+        from esdc.chat.tools import semantic_search
+
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+            mock_resolver = Mock()
+            mock_resolver.hybrid_search.return_value = {
+                "status": "no_results",
+                "count": 0,
+                "results": [],
+            }
+            mock_resolver.close = Mock()
+            MockResolver.return_value = mock_resolver
+
+            result = json.loads(semantic_search.invoke({"query": "apa saja"}))
+
+        assert result["remarks"]["status"] == "no_results"
+        assert result["documents"]["status"] == "not_available"
+
+    def test_fanout_filters_mapped_to_corpus_schema(self, tool_env, monkeypatch):
+        """report_year -> year; field_name/wk_name pass through; others dropped."""
+        from unittest.mock import Mock, patch
+
+        import esdc.chat.tools as tools_mod
+        from esdc.chat.tools import semantic_search
+
+        captured_filters = {}
+
+        class _SpyStore:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def search(self, query, limit, filters):
+                captured_filters.update(filters or {})
+                return {"status": "no_results", "count": 0, "results": []}
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            "esdc.corpus.store.CorpusStore", _SpyStore
+        )
+        tools_mod.invalidate_tool_cache()
+
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+            mock_resolver = Mock()
+            mock_resolver.hybrid_search.return_value = {
+                "status": "success",
+                "count": 0,
+                "results": [],
+            }
+            mock_resolver.close = Mock()
+            MockResolver.return_value = mock_resolver
+
+            semantic_search.invoke(
+                {
+                    "query": "kendala teknis",
+                    "report_year": 2024,
+                    "field_name": "%Duri%",
+                    "wk_name": "%Rokan%",
+                    "province": "%Riau%",
+                }
+            )
+
+        assert captured_filters == {
+            "year": 2024,
+            "field_name": "%Duri%",
+            "wk_name": "%Rokan%",
+        }
+
+    def test_fanout_not_cached_when_documents_not_available(self, tool_env):
+        """documents=not_available must not be cached.
+
+        The tool cache is only invalidated on `esdc reload`, not on
+        `esdc corpus commit` — caching a not_available documents section
+        would freeze it even after a corpus is ingested later. So the
+        search must re-run on every call until the corpus exists.
+        """
+        from unittest.mock import Mock, patch
+
+        from esdc.chat.tools import semantic_search
+
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+            mock_resolver = Mock()
+            mock_resolver.hybrid_search.return_value = {
+                "status": "success",
+                "count": 0,
+                "results": [],
+            }
+            mock_resolver.close = Mock()
+            MockResolver.return_value = mock_resolver
+
+            first = json.loads(semantic_search.invoke({"query": "kendala unik"}))
+            second = json.loads(semantic_search.invoke({"query": "kendala unik"}))
+
+        assert first["documents"]["status"] == "not_available"
+        assert second["documents"]["status"] == "not_available"
+        # No cache hit: both calls reached the (mocked) remarks search.
+        assert mock_resolver.hybrid_search.call_count == 2
+
+    def test_fanout_cached_when_both_sections_definitive(
+        self, populated, monkeypatch
+    ):
+        """Both sections success/no_results -> second call is a cache hit."""
+        from unittest.mock import Mock, patch
+
+        import esdc.chat.tools as tools_mod
+        from esdc.chat.tools import semantic_search
+
+        monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
+
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+            mock_resolver = Mock()
+            mock_resolver.hybrid_search.return_value = {
+                "status": "success",
+                "count": 1,
+                "results": [{"project_id": "P1", "similarity": 0.9}],
+            }
+            mock_resolver.close = Mock()
+            MockResolver.return_value = mock_resolver
+
+            first = json.loads(
+                semantic_search.invoke({"query": "persetujuan POD Duri"})
+            )
+            second = json.loads(
+                semantic_search.invoke({"query": "persetujuan POD Duri"})
+            )
+
+        assert first["documents"]["status"] == "success"
+        assert second == first
+        # Cache hit: the second call never reached the remarks search.
+        assert mock_resolver.hybrid_search.call_count == 1

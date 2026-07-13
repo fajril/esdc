@@ -138,8 +138,13 @@ class TestHybridSearchMerge:
 class TestHybridSearchToolIntegration:
     """Test that semantic_search tool uses hybrid search."""
 
-    def test_semantic_search_tool_uses_hybrid(self):
-        """The semantic_search tool should call hybrid_search method."""
+    def test_semantic_search_tool_uses_hybrid(self, isolated_config):
+        """The semantic_search tool should call hybrid_search method.
+
+        isolated_config keeps the semantic_search corpus fan-out (see
+        docs/plans/2026-07-13-improve-document-search-usage.md) pointed at
+        an empty tmp DuckDB instead of the developer's real ~/.esdc store.
+        """
         import json
         from unittest.mock import MagicMock, patch
 
@@ -162,7 +167,7 @@ class TestHybridSearchToolIntegration:
 
                 result = semantic_search.invoke({"query": "test query"})
                 result_dict = json.loads(result)
-                assert result_dict["status"] == "success"
+                assert result_dict["remarks"]["status"] == "success"
                 mock_instance.hybrid_search.assert_called_once()
 
     def test_hybrid_search_returns_success_status(self):

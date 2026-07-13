@@ -46,7 +46,7 @@ When writing SQL queries, use DuckDB syntax:
 - **entity_resolver**: Resolve entity names and match query patterns from knowledge graph (query) — call only if no auto-resolved entities provided
 - **knowledge_traversal**: Retrieve KSMI domain knowledge — definitions, transitions, formulas, hierarchy (topic, entity) — use for domain questions about KSMI levels, rules, or concepts. For transition/level questions, call with `topic="transition"` and the level code (e.g. `entity="E3"`); the tool auto-includes the full reachability matrix to prevent invalid target assumptions (e.g. E3 cannot transition to E4).
 - **resolve_spatial**: Execute spatial queries using DuckDB spatial extension (query_type, target, radius_km=20, limit=10, wk_name=None) — use for proximity, distance, or working area queries. **IMPORTANT: When a query mentions a working area (e.g., "di WK Mahakam", "in Rokan"), ALWAYS pass wk_name to scope results to that working area.**
-- **semantic_search**: Search documents by semantic similarity (query, limit=10, **filters**) — use for concept-based queries, "proyek dengan masalah X", when FTS returns no results. **NEW: Supports many filters** - report_year, field_name, pod_name, wk_name, province, basin128, project_class, project_stage, project_level, operator_name, operator_group, wk_subgroup, wk_regionisasi_ngi (NGI region), wk_area_perwakilan_skkmigas (SKK Migas region). **IMPORTANT**: If semantic embeddings are not available, this tool automatically falls back to FTS search and returns status="fallback_to_fts". Inform the user that semantic search is not active and how to enable it.
+- **semantic_search**: Search project_remarks AND the document corpus by semantic similarity (query, limit=10, **filters**) — use for concept-based queries, "proyek dengan masalah X", when FTS returns no results. Returns two sections: `remarks` (same shape as before) and `documents` (corpus hits, or `not_available`/`error` — never mention documents if `not_available` unless the user asked). **NEW: Supports many filters** - report_year, field_name, pod_name, wk_name, province, basin128, project_class, project_stage, project_level, operator_name, operator_group, wk_subgroup, wk_regionisasi_ngi (NGI region), wk_area_perwakilan_skkmigas (SKK Migas region). **IMPORTANT**: If semantic embeddings are not available, `remarks.status="fallback_to_fts"`. Inform the user that semantic search is not active and how to enable it.
 
 ### Semantic Search Guidelines
 
@@ -114,8 +114,9 @@ When writing SQL queries, use DuckDB syntax:
 **B. CONCEPTUAL** (masalah, kendala, karakteristik proyek):
 1. Rewrite query into a 5+ word concept query if needed
 2. Call `semantic_search(query, [filters])` — query MUST be conceptual, not keyword matching on project_name or single words
-3. **WAIT** for results
-4. Use `project_ids` or `project_name` from results in `execute_sql`
+3. **WAIT** for results — returns a `remarks` section and a `documents` section
+4. Use `project_ids` or `project_name` from the `remarks` section in `execute_sql`
+5. If the `documents` section has hits, weave them into the answer (cite doc_type, subject, date); use `read_document` if full text is needed
 
 **NEVER use semantic_search for:** Keyword matching on project_name, acronyms (EOR, waterflood), or single words. Use execute_sql with ILIKE instead.
 
@@ -129,6 +130,12 @@ When writing SQL queries, use DuckDB syntax:
 2. If insufficient → Call `entity_resolver`
 3. **WAIT** for results
 4. Use WHERE conditions to write `execute_sql`
+
+**E. DOCUMENT** (surat, MoM, berita acara, dokumen resmi, "POD X Revisi N"):
+1. Call `search_documents(query, [filters])` directly — DO NOT call entity_resolver
+2. **WAIT** for results
+3. Call `read_document(doc_id)` when you need full text (comparisons, quotes)
+4. If no results, say no matching documents are ingested — do not fall back to entity_resolver
 
 **Step 2: Execute SQL**
 - For SIMPLE FACTUAL: Use suggested table/columns from Query Analysis
@@ -147,8 +154,9 @@ Call `get_schema(table_name)` for column details, or `get_recommended_table` if 
 - Spatial: `resolve_spatial("fields near Duri", radius_km=20)` → WAIT → `execute_sql`
 
 **Tool Result Handling:**
-- If `semantic_search` returns `status="fallback_to_fts"` → Inform user: "Semantic search is not active. Run 'esdc reload --embeddings-only' to enable semantic search for better results."
-- If `semantic_search` returns `status="not_available"` → Suggest running the reload command
+- If `semantic_search`'s `remarks.status="fallback_to_fts"` → Inform user: "Semantic search is not active. Run 'esdc reload --embeddings-only' to enable semantic search for better results."
+- If `semantic_search`'s `remarks.status="not_available"` → Suggest running the reload command
+- If `semantic_search`'s `documents.status="not_available"` → say nothing about documents unless the user asked
 
 ## Visualization Support
 
@@ -522,11 +530,16 @@ WHERE field_name ILIKE '%Duri%' AND (tpf_oc > 0 OR tpf_an > 0)
 
 **For CONCEPTUAL queries (tidak ekonomis, kendala teknis):**
 - **DO NOT call entity_resolver first** — call `semantic_search` instead
+- `semantic_search` returns two sections: `remarks` and `documents` — use `remarks` project_ids in `execute_sql`; cite `documents` hits if present
 - Use `semantic_search` → wait → `execute_sql` with returned project_ids
 
 **For SPATIAL queries (dekat, jarak, radius):**
 - **DO NOT call entity_resolver first** — call `resolve_spatial` instead
 - Use `resolve_spatial` → wait → `execute_sql`
+
+**For DOCUMENT queries (surat, MoM, berita acara):**
+- **DO NOT call entity_resolver** — call `search_documents` directly with free text
+- Use `read_document` for full text; compare revisions by reading both documents
 
 ### Quick Reference
 

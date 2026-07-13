@@ -20,6 +20,7 @@ class QueryType(Enum):
     SPATIAL = auto()
     YEAR_TRANSITION = auto()
     AMBIGUOUS = auto()
+    DOCUMENT = auto()
 
 
 @dataclass
@@ -179,6 +180,26 @@ class QueryClassifier:
         ],
     }
 
+    # Document patterns (surat, MoM, berita acara, official correspondence)
+    DOCUMENT_PATTERNS = {
+        "document_types": [
+            r"surat\s+(?:tentang|perihal|persetujuan|keputusan|rekomendasi)",
+            r"\bmom\b",
+            r"minutes\s+of\s+meeting",
+            r"berita\s+acara",
+            r"notulen",
+            r"korespondensi",
+            r"correspondence",
+            r"official\s+letter",
+            r"dokumen\s+(?:resmi|persetujuan|terkait)",
+        ],
+        "document_references": [
+            r"pod\s+(?:i{1,3}|iv|\d+|pertama|kedua|ketiga)\s+.*revisi",
+            r"revisi\s+\d+",
+            r"persetujuan\s+(?:pod|wp&?b|afe|poffd|pofd)",
+        ],
+    }
+
     # Spatial patterns
     SPATIAL_PATTERNS = {
         "proximity": [
@@ -217,7 +238,21 @@ class QueryClassifier:
         query_lower = query.lower()
         detected_entities = self._extract_entities(query_lower)
 
-        # Check for conceptual queries first (highest priority)
+        # Check for document queries first (highest priority) — surat/MoM/
+        # berita acara wording (e.g. "persetujuan") could otherwise drift
+        # into CONCEPTUAL, so document intent must be resolved explicitly.
+        document_match = self._match_patterns(query_lower, self.DOCUMENT_PATTERNS)
+        if document_match:
+            return QueryClassification(
+                query_type=QueryType.DOCUMENT,
+                confidence=0.9,
+                detected_entities=detected_entities,
+                suggested_table=None,
+                suggested_columns=[],
+                reason=f"Document query detected: {document_match}",
+            )
+
+        # Check for conceptual queries
         conceptual_match = self._match_patterns(query_lower, self.CONCEPTUAL_PATTERNS)
         if conceptual_match:
             return QueryClassification(
@@ -393,6 +428,8 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
         "Shell Executor",
         "Resources Column Guide",
         "Timeseries Column Guide",
+        "Document Search",
+        "Document Reader",
     ] + _SCHEMA_TOOLS
 
     if classification.query_type in (
@@ -402,7 +439,7 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
         return base_tools
 
     elif classification.query_type == QueryType.CONCEPTUAL:
-        return ["Semantic Search", "Document Search", "Document Reader"] + base_tools
+        return ["Semantic Search"] + base_tools
 
     elif classification.query_type == QueryType.SPATIAL:
         return ["Spatial Resolver"] + base_tools
@@ -410,11 +447,12 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
     elif classification.query_type == QueryType.COMPLEX_FACTUAL:
         return ["Uncertainty Resolver", "Problem Cluster Search"] + base_tools
 
+    elif classification.query_type == QueryType.DOCUMENT:
+        return ["Semantic Search"] + base_tools  # doc tools already in base_tools
+
     else:  # AMBIGUOUS
         return [
             "Semantic Search",
-            "Document Search",
-            "Document Reader",
             "Spatial Resolver",
             "Uncertainty Resolver",
             "Problem Cluster Search",
@@ -488,6 +526,19 @@ def format_classification_for_prompt(classification: QueryClassification) -> str
             "- If auto-resolved entities above are sufficient → write SQL directly"
         )
         lines.append("- If entities are unclear → call entity_resolver")
+
+    elif classification.query_type == QueryType.DOCUMENT:
+        lines.append("**This is a document query (surat/MoM/berita acara).**")
+        lines.append(
+            "- Call search_documents(query, [doc_type/doc_topic/year filters]) FIRST"
+        )
+        lines.append("- DO NOT call entity_resolver — it cannot find documents")
+        lines.append(
+            "- Use read_document(doc_id) for full text when comparing or quoting"
+        )
+        lines.append(
+            "- If no results: tell the user no matching documents are ingested"
+        )
 
     lines.append("")
     lines.append(f"*Reason: {classification.reason}*")
