@@ -997,6 +997,57 @@ def test_extract_entity_resolver_or_none_skips_when_tables_missing(tmp_path, mon
 
 
 # --------------------------------------------------------------------------
+# _validate_entity_overrides hierarchy
+# --------------------------------------------------------------------------
+
+
+def test_validate_entity_overrides_hierarchy_mismatch():
+    """CLI overrides with invalid hierarchy raise ValueError."""
+    resolver = FakeEntityResolver(matches={
+        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+        # Mahakam belongs to WK Mahakam in the fake hierarchy, not WK Rokan
+        "Mahakam": {"entity_type": "field_name", "name": "Mahakam", "confidence": 1.0,
+                    "wk_name": "WK Mahakam"},
+    })
+    overrides = {"wk_name": "WK Rokan", "field_name": "Mahakam"}
+    with pytest.raises(ValueError, match="does not belong to"):
+        pipeline._validate_entity_overrides(resolver, overrides)
+
+
+def test_validate_entity_overrides_hierarchy_valid():
+    """CLI overrides with valid hierarchy pass."""
+    resolver = FakeEntityResolver(matches={
+        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
+                 "wk_name": "WK Rokan"},
+    })
+    overrides = {"wk_name": "WK Rokan", "field_name": "Duri"}
+    # Should not raise
+    pipeline._validate_entity_overrides(resolver, overrides)
+
+
+def test_validate_entity_overrides_project_hierarchy_mismatch():
+    """--project-name under a different field/wk raises, naming both flags."""
+    resolver = FakeEntityResolver(matches={
+        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
+                 "wk_name": "WK Rokan"},
+        "POD Mahakam": {"entity_type": "project_name", "name": "POD Mahakam",
+                         "confidence": 1.0, "wk_name": "WK Mahakam",
+                         "field_name": "Mahakam"},
+    })
+    overrides = {
+        "wk_name": "WK Rokan",
+        "field_name": "Duri",
+        "project_name": "POD Mahakam",
+    }
+    with pytest.raises(ValueError, match="does not belong to") as excinfo:
+        pipeline._validate_entity_overrides(resolver, overrides)
+    assert "--wk-name" in str(excinfo.value)
+    assert "--field-name" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
 # run_extract CLI overrides
 # --------------------------------------------------------------------------
 

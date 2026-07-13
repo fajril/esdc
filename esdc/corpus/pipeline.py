@@ -269,6 +269,52 @@ _ENTITY_OVERRIDE_FLAGS = {
 }
 
 
+def _validate_entity_hierarchy(
+    resolver: EntityResolver,
+    given: dict[str, str],
+    canonical: dict[str, str],
+) -> None:
+    """Reject CLI entity overrides that don't form a valid hierarchy.
+
+    Checks that field_name belongs to wk_name, and project_name belongs
+    to field_name + wk_name, by querying project_resources. `given` holds
+    the raw CLI values (for error messages); `canonical` holds the
+    resolved canonical names (for filtering). Levels that resolved to
+    multiple canonical names are skipped — ambiguity is warned elsewhere.
+    """
+    wk = canonical.get("wk_name")
+    field = canonical.get("field_name")
+    project = given.get("project_name")
+
+    if wk and field:
+        matches = resolver.resolve_name(
+            field, "field_name", parent_filter={"wk_name": wk}
+        )
+        if not matches:
+            flag_field = _ENTITY_OVERRIDE_FLAGS["field_name"]
+            flag_wk = _ENTITY_OVERRIDE_FLAGS["wk_name"]
+            raise ValueError(
+                f"{flag_field} '{given['field_name']}' does not belong to "
+                f"{flag_wk} '{given['wk_name']}' in the database"
+            )
+
+    if wk and project:
+        parent = {"wk_name": wk}
+        parent_desc = f"{_ENTITY_OVERRIDE_FLAGS['wk_name']} '{given['wk_name']}'"
+        if field:
+            parent["field_name"] = field
+            parent_desc += (
+                f" / {_ENTITY_OVERRIDE_FLAGS['field_name']} '{given['field_name']}'"
+            )
+        matches = resolver.resolve_name(project, "project_name", parent_filter=parent)
+        if not matches:
+            flag_project = _ENTITY_OVERRIDE_FLAGS["project_name"]
+            raise ValueError(
+                f"{flag_project} '{project}' does not belong to {parent_desc} "
+                f"in the database"
+            )
+
+
 def _validate_entity_overrides(
     resolver: EntityResolver | None,
     overrides: dict[str, Any],
@@ -277,7 +323,10 @@ def _validate_entity_overrides(
 
     Raises ValueError before any sidecar is touched. Only explicit CLI
     values are validated strictly — LLM-prefilled/frontmatter values stay
-    warn-only so unreviewed data never jams the pipeline.
+    warn-only so unreviewed data never jams the pipeline. Also validates
+    that the given wk_name/field_name/project_name form a consistent
+    hierarchy (see `_validate_entity_hierarchy`), using the canonical
+    resolved names rather than the raw CLI values.
     """
     given = {
         key: overrides[key]
@@ -292,8 +341,12 @@ def _validate_entity_overrides(
             "the database — corpus DB unavailable (run `esdc fetch`, or "
             "close other esdc instances holding the DB lock)"
         )
+    canonical: dict[str, str] = {}
     for key, value in given.items():
-        if resolver.resolve_name(str(value), key):
+        matches = resolver.resolve_name(str(value), key)
+        if matches:
+            if len(matches) == 1:
+                canonical[key] = matches[0]["name"]
             continue
         flag = _ENTITY_OVERRIDE_FLAGS[key]
         suggestions = resolver.suggest_names(str(value), key)
@@ -303,6 +356,9 @@ def _validate_entity_overrides(
                 f"{flag} '{value}' not found in database; closest matches: {listed}"
             )
         raise ValueError(f"{flag} '{value}' not found in database and no close matches")
+
+    # Hierarchy check: wk -> field -> project must be consistent
+    _validate_entity_hierarchy(resolver, given, canonical)
 
 
 def _warn_vocab_demotions(
