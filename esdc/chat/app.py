@@ -78,6 +78,7 @@ from textual.binding import Binding  # noqa: E402
 from textual.containers import Horizontal  # noqa: E402
 from textual.widgets import TextArea  # noqa: E402
 
+from esdc.chat.media import extract_image_urls  # noqa: E402
 from esdc.chat.widgets import (  # noqa: F401,E402  (re-exported for tests/back-compat)
     ChatInput,
     ChatMessage,
@@ -261,6 +262,7 @@ class ESDCChatApp(App):
         Binding("ctrl+r", "toggle_results_section", "Toggle Results"),
         Binding("ctrl+e", "toggle_all_sections", "Toggle All"),
         Binding("ctrl+shift+s", "save_screenshot", "Save Screenshot"),
+        Binding("ctrl+o", "open_image", "Open Image"),
         Binding("escape", "cancel_query", "Cancel"),
     ]
 
@@ -295,6 +297,7 @@ class ESDCChatApp(App):
         self._render_dirty: bool = False
         self._conversation_title: str = ""
         self._title_generated: bool = False
+        self._last_image_url: str | None = None
 
     def compose(self) -> ComposeResult:
         """Compose the main application layout."""
@@ -730,6 +733,13 @@ class ESDCChatApp(App):
             # resetting streaming state.
             self._flush_stream_render()
 
+            if success:
+                for url in extract_image_urls(self._accumulated_content):
+                    self._last_image_url = url
+                    self.display_message(
+                        "system", f"🖼 Image saved: {url} — press ctrl+o to open"
+                    )
+
             if not success and error and self._streaming_message:
                 self._streaming_message.update(f"Error: {error}")
 
@@ -879,6 +889,15 @@ class ESDCChatApp(App):
                 results_panel.collapsed = not results_panel.collapsed
             except Exception:
                 logger.debug("toggle results section failed", exc_info=True)
+
+    def action_open_image(self) -> None:
+        """Open the most recent image from the conversation."""
+        if not self._last_image_url:
+            self.display_message("system", "No image in this conversation yet.")
+            return
+        import webbrowser
+
+        webbrowser.open(self._last_image_url)
 
     def action_save_screenshot(self, filename: str | None = None) -> None:
         """Save screenshot of the current screen.
