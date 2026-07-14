@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 # Third-party
@@ -583,8 +584,11 @@ def create_agent(
                 empty_count,
             )
 
+        # Inject current datetime so model knows "latest" context
+        wib = timezone(timedelta(hours=7))
+        now = datetime.now(wib).strftime("%Y-%m-%d %H:%M WIB")
         messages_with_system = [
-            SystemMessage(content=system_prompt)
+            SystemMessage(content=f"{system_prompt}\n\nCurrent datetime: {now}")
         ] + filtered_messages
 
         tool_call_count = state.get("tool_call_count", 0)
