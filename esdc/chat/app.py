@@ -416,6 +416,52 @@ class ESDCChatApp(App):
         if self.user_input.styles.height != new_height:
             self.user_input.styles.height = new_height
 
+    def _handle_slash_command(self, text: str) -> bool:
+        """Handle /commands typed into the chat input. Returns True if handled."""
+        if not text.startswith("/"):
+            return False
+
+        command = text.split()[0].lower()
+
+        if command == "/new":
+            from esdc.chat.memory import create_thread_id
+
+            self._thread_id = create_thread_id()
+            self._token_count = 0
+            self._context_metadata = None
+            self._conversation_title = ""
+            self._title_generated = False
+            if self.chat_panel:
+                self.chat_panel.remove_children()
+            if self._context_panel:
+                try:
+                    self._context_panel.timeline.reset()
+                    self._context_panel.sql_panel.set_sql("")
+                    self._context_panel.results_panel.set_results("")
+                    self._context_panel.query_history.clear()
+                    self._context_panel.update_conversation_title("New Conversation")
+                except Exception:
+                    logger.debug("panel reset failed", exc_info=True)
+            if self.status_bar:
+                self.status_bar.set_status(
+                    model_name=self._model_name,
+                    thread_id=self._thread_id,
+                    token_count=0,
+                    context_length=self._context_length,
+                )
+            self.display_message("system", "New conversation started.")
+            return True
+
+        if command == "/help":
+            self.display_message(
+                "system",
+                "Commands: /new — start a new conversation · /help — this list",
+            )
+            return True
+
+        self.display_message("system", f"Unknown command: {command} — try /help")
+        return True
+
     def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
         """Handle message submission from ChatInput."""
         if not self.user_input:
@@ -423,6 +469,10 @@ class ESDCChatApp(App):
 
         user_input = self.user_input.text.strip()
         if not user_input:
+            return
+
+        if self._handle_slash_command(user_input):
+            self.user_input.text = ""
             return
 
         # Generate conversation title on first query (in background)
