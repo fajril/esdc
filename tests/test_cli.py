@@ -430,3 +430,16 @@ class TestChatCommandCleanup:
         result = runner.invoke(app, ["chat"])
         assert result.exit_code == 0
         assert "esdc configs" in result.output
+
+
+class TestServeCommandCleanup:
+    def test_serve_help_has_no_web_flag(self):
+        from typer.testing import CliRunner
+
+        from esdc.esdc import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["serve", "--help"])
+        assert result.exit_code == 0
+        assert "--web" not in result.output
+        assert "--port" in result.output
