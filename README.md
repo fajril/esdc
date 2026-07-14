@@ -213,6 +213,28 @@ Start interactive chat with IRIS.
 esdc chat
 ```
 
+Requires a configured provider (`esdc configs`).
+
+Layout: full-width chat column; right panel with conversation title, live tool
+timeline, collapsible SQL/results, and query history; one-line status bar
+showing version, model, thread, and context usage (turns red at 75%). Model
+reasoning streams into a thinking indicator above the answer. Plots generated
+via OpenTerminal are surfaced as image links.
+
+Slash commands:
+- `/new` — start a new conversation (fresh thread, cleared panels)
+- `/help` — list commands
+
+Keybindings:
+| Key | Action |
+|-----|--------|
+| `ctrl+h` | Toggle right panel |
+| `ctrl+l` | Toggle SQL section |
+| `ctrl+r` | Toggle results section |
+| `ctrl+o` | Open last image in browser |
+| `ctrl+shift+s` | Save screenshot |
+| `escape` | Cancel current query |
+
 ### `fetch`
 Download data from ESDC API.
 
