@@ -34,11 +34,11 @@ from esdc.chat.agent import (
     generate_conversation_tags,
     generate_conversation_title,
 )
+from esdc.chat.event_streamer import astream_agent_events
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
 from esdc.server.constants import SSE_STREAM_TIMEOUT
-from esdc.server.event_streamer import astream_agent_events
 from esdc.server.title_detection import (
     create_ancillary_chat_response,
     create_ancillary_chat_stream_chunks,

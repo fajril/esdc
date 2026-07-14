@@ -30,6 +30,7 @@ from esdc.chat.agent import (
     generate_conversation_tags,
     generate_conversation_title,
 )
+from esdc.chat.event_streamer import astream_agent_events
 from esdc.chat.external_tools import (
     categorize_tools,
     convert_external_specs_to_langchain,
@@ -39,7 +40,6 @@ from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
 from esdc.server.constants import SSE_STREAM_TIMEOUT
-from esdc.server.event_streamer import astream_agent_events
 from esdc.server.responses_events import (
     create_content_part_added_event,
     create_content_part_done_event,

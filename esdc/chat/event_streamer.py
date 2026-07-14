@@ -26,7 +26,7 @@ from langchain_core.runnables import RunnableConfig
 
 from esdc.chat.external_tools import is_external_tool_marker, parse_external_tool_name
 
-logger = logging.getLogger("esdc.server.event_streamer")
+logger = logging.getLogger("esdc.chat.event_streamer")
 
 DEFAULT_RECURSION_LIMIT = 100
 
