@@ -748,13 +748,23 @@ class ThinkingIndicator(Collapsible):
         height: auto;
         min-height: 1;
     }
+
+    ThinkingIndicator.done {
+        color: $text-muted;
+        height: 1;
+        overflow: hidden;
+    }
     """
+
+    _MAX_VISIBLE_LINES = 12
 
     def __init__(self):
         """Initialize the thinking indicator widget."""
         super().__init__(title="▶ Thinking...", collapsed=False)
         self.steps: list[str] = []
         self._content_widget: Static | None = None
+        self._reasoning_text: str = ""
+        self._done: bool = False
 
     def compose(self) -> ComposeResult:
         """Compose the thinking indicator layout."""
@@ -794,6 +804,22 @@ class ThinkingIndicator(Collapsible):
     def on_collapsible_collapse(self) -> None:
         """Handle collapse - show summary."""
         self.title = f"▶ Thinking... ({len(self.steps)} steps)"
+
+    def append_reasoning(self, text: str) -> None:
+        """Accumulate reasoning text and show the tail."""
+        if not hasattr(self, "_reasoning_text"):
+            self._reasoning_text = ""
+            self._done = False
+        self._reasoning_text += text
+        lines = self._reasoning_text.splitlines() or [self._reasoning_text]
+        tail = "\n".join(lines[-self._MAX_VISIBLE_LINES :])
+        if self._content_widget:
+            self._content_widget.update(tail)
+
+    def mark_done(self) -> None:
+        """Dim/collapse the indicator once real answer tokens start."""
+        self._done = True
+        self.add_class("done")
 
 
 class SQLPanel(Collapsible):

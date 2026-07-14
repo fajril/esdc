@@ -290,6 +290,7 @@ class ESDCChatApp(App):
         # Queue-based streaming infrastructure
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._streaming_message: ChatMessage | None = None
+        self._thinking_indicator: ThinkingIndicator | None = None
         self._accumulated_content: str = ""
         self._render_dirty: bool = False
         self._conversation_title: str = ""
@@ -546,7 +547,19 @@ class ESDCChatApp(App):
         """Process a single chunk and update UI."""
         chunk_type = chunk.get("type", "unknown")
 
-        if chunk_type == "token":
+        if chunk_type == "reasoning_token":
+            content = chunk.get("content", "")
+            if not content:
+                return
+            if self._thinking_indicator is None and self.chat_panel:
+                self._thinking_indicator = ThinkingIndicator()
+                self.chat_panel.mount(self._thinking_indicator)
+            if self._thinking_indicator:
+                self._thinking_indicator.append_reasoning(content)
+
+        elif chunk_type == "token":
+            if self._thinking_indicator and not self._thinking_indicator._done:
+                self._thinking_indicator.mark_done()
             token = chunk.get("content", "")
             if token and self._streaming_message:
                 self._accumulated_content += token
@@ -676,6 +689,7 @@ class ESDCChatApp(App):
 
             # Reset state
             self._streaming_message = None
+            self._thinking_indicator = None
             self._accumulated_content = ""
 
     async def _stream_response(

@@ -130,3 +130,22 @@ class TestToolResultWiring:
         )
         assert calls["sql"] == "SELECT col_a FROM t"
         assert calls["results"] == "col_a\n1\n2"
+
+
+class TestThinkingIndicator:
+    def test_append_reasoning_accumulates(self):
+        from esdc.chat.widgets import ThinkingIndicator
+
+        ti = ThinkingIndicator()
+        ti.append_reasoning("step one. ")
+        ti.append_reasoning("step two.")
+        assert "step one" in ti._reasoning_text
+        assert "step two" in ti._reasoning_text
+
+    def test_mark_done_sets_done_state(self):
+        from esdc.chat.widgets import ThinkingIndicator
+
+        ti = ThinkingIndicator()
+        ti.append_reasoning("hmm")
+        ti.mark_done()
+        assert ti._done is True
