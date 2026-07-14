@@ -360,14 +360,20 @@ class ESDCChatApp(App):
         self.set_interval(0.05, self._consume_events)
         self.set_interval(0.1, self._flush_stream_render)
 
-        self.status_bar.set_status(
-            model_name=self._model_name,
-            thread_id=self._thread_id,
-            token_count=self._token_count,
-            context_length=self._context_length,
-        )
+        self._set_status()
 
         self._init_agent()
+
+    def _set_status(self, tool_status: str = "") -> None:
+        """Update the status bar with current session state."""
+        if self.status_bar:
+            self.status_bar.set_status(
+                model_name=self._model_name,
+                thread_id=self._thread_id,
+                token_count=self._token_count,
+                context_length=self._context_length,
+                tool_status=tool_status,
+            )
 
     def _init_agent(self) -> None:
         """Initialize the LLM and agent."""
@@ -439,13 +445,7 @@ class ESDCChatApp(App):
                     self._context_panel.update_conversation_title("New Conversation")
                 except Exception:
                     logger.debug("panel reset failed", exc_info=True)
-            if self.status_bar:
-                self.status_bar.set_status(
-                    model_name=self._model_name,
-                    thread_id=self._thread_id,
-                    token_count=0,
-                    context_length=self._context_length,
-                )
+            self._set_status()
             self.display_message("system", "New conversation started.")
             return True
 
@@ -515,6 +515,7 @@ class ESDCChatApp(App):
             )
 
         # Start background streaming task (NON-blocking)
+        self._set_status("⏳ thinking…")
         asyncio.create_task(self._stream_in_background(user_input))
         logger.info("🚀 Started background streaming task")
 
@@ -644,14 +645,7 @@ class ESDCChatApp(App):
                     self._context_panel.timeline.start_tool(tool_name)
                 except Exception:
                     logger.debug("timeline start failed", exc_info=True)
-            if self.status_bar:
-                self.status_bar.set_status(
-                    model_name=self._model_name,
-                    thread_id=self._thread_id,
-                    token_count=self._token_count,
-                    context_length=self._context_length,
-                    tool_status=f"⏳ {tool_name}",
-                )
+            self._set_status(f"⏳ {tool_name}")
 
         elif chunk_type == "tool_result":
             result = chunk.get("result", "")
@@ -668,13 +662,7 @@ class ESDCChatApp(App):
                     self._context_panel.timeline.finish_tool(tool_name)
                 except Exception:
                     logger.debug("timeline finish failed", exc_info=True)
-            if self.status_bar:
-                self.status_bar.set_status(
-                    model_name=self._model_name,
-                    thread_id=self._thread_id,
-                    token_count=self._token_count,
-                    context_length=self._context_length,
-                )
+            self._set_status("⏳ thinking…")
 
             sql = chunk.get("sql", "")
             if tool_name in _DATA_TOOL_NAMES:
@@ -713,13 +701,7 @@ class ESDCChatApp(App):
                     model=self._model_name,
                     base_url=self._base_url,
                 )
-                if self.status_bar:
-                    self.status_bar.set_status(
-                        model_name=self._model_name,
-                        thread_id=self._thread_id,
-                        token_count=self._token_count,
-                        context_length=self._context_length,
-                    )
+                self._set_status()
 
         elif chunk_type == "token_usage":
             # DEPRECATED: messages_state provides more accurate token count
@@ -729,6 +711,10 @@ class ESDCChatApp(App):
         elif chunk_type == "complete":
             success = chunk.get("success", True)
             error = chunk.get("error")
+
+            # Clear the inference-in-progress indicator now that the turn
+            # is done.
+            self._set_status()
 
             # Force a final render of any pending accumulated content before
             # resetting streaming state.

@@ -75,6 +75,32 @@ class TestToolTimeline:
         assert len(tl.entries) == 20
         assert tl.entries[-1][0] == "tool_24"
 
+    def test_tick_renders_when_running_entry_present(self, monkeypatch):
+        """Running entries show elapsed seconds.
+
+        Without a periodic re-render the displayed elapsed time freezes at
+        whatever it was when start/finish last ran.
+        """
+        from esdc.chat.widgets import ToolTimeline
+
+        tl = ToolTimeline()
+        tl.start_tool("SQL Executor")
+        calls = {"n": 0}
+        monkeypatch.setattr(tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1))
+        tl._tick()
+        assert calls["n"] == 1
+
+    def test_tick_does_not_render_when_no_running_entries(self, monkeypatch):
+        from esdc.chat.widgets import ToolTimeline
+
+        tl = ToolTimeline()
+        tl.start_tool("SQL Executor")
+        tl.finish_tool("SQL Executor")
+        calls = {"n": 0}
+        monkeypatch.setattr(tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1))
+        tl._tick()
+        assert calls["n"] == 0
+
 
 class TestChatDecluttered:
     def test_tool_status_maps_removed_from_app(self):
@@ -245,3 +271,45 @@ class TestThinkingIndicatorMountSafety:
             ti.mark_done()
             await pilot.pause()
             assert ti._content_widget is not None
+
+
+class TestStatusBarLiveness:
+    """Liveness indicator behavior for the status bar.
+
+    The status bar should show an inference-in-progress indicator while the
+    agent is thinking or between tool calls, and clear it on completion.
+    """
+
+    def _make_app(self):
+        from esdc.chat.app import ESDCChatApp
+        from esdc.chat.widgets import StatusBar
+
+        app = ESDCChatApp()
+        app.status_bar = StatusBar()
+        app._model_name = "qwen3:32b"
+        app._thread_id = "esdc-test1234"
+        app._token_count = 10
+        app._context_length = 1000
+        return app
+
+    def test_complete_clears_liveness_indicator(self):
+        app = self._make_app()
+        app._handle_stream_chunk(
+            {"type": "tool_call", "tool": "SQL Executor", "args": {}}
+        )
+        assert "⏳" in str(app.status_bar._status_text)
+
+        app._handle_stream_chunk({"type": "complete", "success": True})
+        assert "⏳" not in str(app.status_bar._status_text)
+
+    def test_tool_result_shows_thinking_status(self):
+        app = self._make_app()
+        app._handle_stream_chunk(
+            {
+                "type": "tool_result",
+                "tool": "SQL Executor",
+                "result": "ok",
+                "sql": "",
+            }
+        )
+        assert "thinking" in str(app.status_bar._status_text).lower()

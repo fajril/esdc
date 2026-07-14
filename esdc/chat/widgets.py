@@ -162,6 +162,15 @@ class ToolTimeline(Static):
         self._entries = []
         self._render_entries()
 
+    def on_mount(self) -> None:
+        """Refresh running entries every second so elapsed time ticks."""
+        self.set_interval(1.0, self._tick)
+
+    def _tick(self) -> None:
+        """Re-render if any entry is still running (elapsed time ticks)."""
+        if any(state == "running" for _, state, _ in self._entries):
+            self._render_entries()
+
     def _render_entries(self) -> None:
         """Refresh the rendered timeline text."""
         lines = []
