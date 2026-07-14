@@ -1511,15 +1511,6 @@ class ESDCChatApp(App):
             await self._event_queue.put({"type": "complete", "success": True})
             logger.info("Query completed successfully")
 
-        except asyncio.TimeoutError:
-            logger.warning("Query timed out after 120 seconds")
-            await self._event_queue.put(
-                {
-                    "type": "complete",
-                    "success": False,
-                    "error": "Request timed out after 2 minutes. Please try again.",
-                }
-            )
         except Exception as e:
             logger.exception(f"Query failed with error: {e}")
             await self._event_queue.put(
@@ -1771,40 +1762,93 @@ class ESDCChatApp(App):
     async def _stream_response(
         self, user_input: str
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Stream response from the agent."""
-        from esdc.chat.agent import run_agent_stream
+        """Adapt shared astream_agent_events into UI chunks."""
+        from langchain_core.messages import HumanMessage, ToolMessage
+        from langchain_core.runnables import RunnableConfig
+
+        import esdc.chat.event_streamer as event_streamer
 
         if not self._agent:
             return
 
-        async for chunk in run_agent_stream(
-            self._agent,
-            user_input,
-            self._thread_id,
+        config = RunnableConfig(
+            configurable={
+                "thread_id": self._thread_id,
+                "checkpoint_ns": "esdc_chat",
+            },
+            recursion_limit=event_streamer.DEFAULT_RECURSION_LIMIT,
+        )
+
+        tracked_messages: list[Any] = [HumanMessage(content=user_input)]
+        pending_sql: dict[str, str] = {}
+
+        async for event in event_streamer.astream_agent_events(
+            self._agent, [HumanMessage(content=user_input)], config=config
         ):
-            # CRITICAL: Forward token events for real-time streaming
-            if chunk["type"] == "token":
-                yield chunk
-            elif chunk["type"] == "message":
-                content = chunk.get("content", "")
-                if content:
-                    yield {"type": "message", "content": content}
-            elif chunk["type"] == "tool_call":
+            etype = event.get("type")
+
+            if etype == "token":
+                yield {"type": "token", "content": event.get("content", "")}
+
+            elif etype == "reasoning_token":
                 yield {
-                    "type": "tool_call",
-                    "tool": chunk.get("tool", ""),
-                    "args": chunk.get("args", {}),
+                    "type": "reasoning_token",
+                    "content": event.get("content", ""),
                 }
-            elif chunk["type"] == "tool_result":
-                result = chunk.get("result", "")
-                sql = chunk.get("sql", "")
-                yield {"type": "tool_result", "result": result, "sql": sql}
-            elif (
-                chunk["type"] == "token_usage"
-                or chunk["type"] == "messages_state"
-                or chunk["type"] == "context_metadata"
-            ):
-                yield chunk
+
+            elif etype == "message_complete":
+                ai_message = event.get("ai_message")
+                if ai_message is None:
+                    continue
+                tracked_messages.append(ai_message)
+                tool_calls = getattr(ai_message, "tool_calls", None) or []
+                for tc in tool_calls:
+                    args = tc.get("args", {}) or {}
+                    if tc.get("name") == "execute_sql" and isinstance(args, dict):
+                        pending_sql[tc.get("id") or ""] = args.get("query", "")
+                    yield {
+                        "type": "tool_call",
+                        "tool": tc.get("name", ""),
+                        "args": args,
+                    }
+                if not tool_calls:
+                    content = str(ai_message.content or "")
+                    if content:
+                        yield {"type": "message", "content": content}
+                yield {
+                    "type": "messages_state",
+                    "messages": list(tracked_messages),
+                    "message_count": len(tracked_messages),
+                }
+
+            elif etype == "tool_result":
+                tool_call_id = event.get("tool_call_id") or ""
+                result = str(event.get("result", ""))
+                tracked_messages.append(
+                    ToolMessage(content=result, tool_call_id=tool_call_id)
+                )
+                yield {
+                    "type": "tool_result",
+                    "tool": event.get("tool_name", ""),
+                    "result": result,
+                    "sql": pending_sql.pop(tool_call_id, ""),
+                }
+
+            elif etype == "context_metadata":
+                yield {
+                    "type": "context_metadata",
+                    "metadata": event.get("metadata"),
+                }
+
+            elif etype == "recursion_error":
+                yield {
+                    "type": "message",
+                    "content": (
+                        "The agent hit its step limit for this question: "
+                        f"{event.get('message', 'recursion limit exceeded')}. "
+                        "Try a more specific question."
+                    ),
+                }
 
     def display_message(self, role: str, content: str) -> None:
         """Display a message in the chat panel."""
