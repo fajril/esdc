@@ -1,5 +1,7 @@
 """Widget-level tests for the overhauled TUI."""
 
+import pytest
+
 
 class TestStatusBar:
     def test_status_line_contains_all_segments(self):
@@ -149,3 +151,31 @@ class TestThinkingIndicator:
         ti.append_reasoning("hmm")
         ti.mark_done()
         assert ti._done is True
+
+
+class TestThinkingIndicatorMountSafety:
+    def test_append_before_mount_does_not_crash(self):
+        from esdc.chat.widgets import ThinkingIndicator
+
+        ti = ThinkingIndicator()
+        ti.append_reasoning("early reasoning")  # before any mount
+        ti.mark_done()
+        assert ti._done is True
+
+    @pytest.mark.asyncio
+    async def test_dynamic_mount_mid_stream_is_safe(self):
+        from textual.app import App
+
+        from esdc.chat.widgets import ThinkingIndicator
+
+        class _Host(App):
+            pass
+
+        app = _Host()
+        async with app.run_test() as pilot:
+            ti = ThinkingIndicator()
+            app.mount(ti)  # deliberately not awaited — mirrors app.py usage
+            ti.append_reasoning("racing text")
+            ti.mark_done()
+            await pilot.pause()
+            assert ti._content_widget is not None

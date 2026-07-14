@@ -768,13 +768,13 @@ class ThinkingIndicator(Collapsible):
 
     def compose(self) -> ComposeResult:
         """Compose the thinking indicator layout."""
-        yield Static("", classes="thinking-steps")
+        self._content_widget = Static("", classes="thinking-steps")
+        yield self._content_widget
 
     def on_mount(self) -> None:
         """Handle widget mount event."""
-        self._content_widget = self.query_one(".thinking-steps", Static)
         # Update display if steps were added before mount
-        if self.steps:
+        if self._content_widget is not None and self.steps:
             self._update_display()
 
     def add_step(self, step: str):
