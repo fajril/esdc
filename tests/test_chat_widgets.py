@@ -134,6 +134,27 @@ class TestToolResultWiring:
         assert calls["results"] == "col_a\n1\n2"
 
 
+class TestToggleAllSections:
+    def test_toggle_all_collapses_when_any_expanded(self):
+        from esdc.chat.app import ESDCChatApp
+
+        app = ESDCChatApp()
+
+        class _Panel:
+            collapsed = False
+
+        class _CP:
+            sql_panel = _Panel()
+            results_panel = _Panel()
+
+        app._context_panel = _CP()
+        app.action_toggle_all_sections()
+        assert app._context_panel.sql_panel.collapsed is True
+        assert app._context_panel.results_panel.collapsed is True
+        app.action_toggle_all_sections()
+        assert app._context_panel.sql_panel.collapsed is False
+
+
 class TestThinkingIndicator:
     def test_append_reasoning_accumulates(self):
         from esdc.chat.widgets import ThinkingIndicator

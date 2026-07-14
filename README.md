@@ -231,6 +231,7 @@ Keybindings:
 | `ctrl+h` | Toggle right panel |
 | `ctrl+l` | Toggle SQL section |
 | `ctrl+r` | Toggle results section |
+| `ctrl+e` | Toggle SQL + results together |
 | `ctrl+o` | Open last image in browser |
 | `ctrl+shift+s` | Save screenshot |
 | `escape` | Cancel current query |

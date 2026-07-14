@@ -84,8 +84,6 @@ from esdc.chat.widgets import (  # noqa: F401,E402  (re-exported for tests/back-
     ChatMessage,
     ChatPanel,
     ContextPanel,
-    ContextSection,
-    ContextUsageWidget,
     ConversationTitle,
     Footer,
     QueryHistory,
@@ -163,7 +161,7 @@ class ESDCChatApp(App):
     }
 
     /* Content widgets for sections */
-    .sql-content, .results-content, .schema-content, .session-content {
+    .sql-content, .results-content, .schema-content {
         padding: 1 1;
         color: #ffffff;
         background: transparent;
@@ -182,18 +180,7 @@ class ESDCChatApp(App):
         color: #a0a0a0;
     }
 
-    .session-content {
-        color: #a0a0a0;
-    }
-
     /* ===== Widget - Clean Design ===== */
-    ContextUsageWidget {
-        height: auto;
-        padding: 0;
-        background: transparent;
-        border: none;
-    }
-
     QueryHistory {
         height: auto;
         padding: 1;
@@ -889,6 +876,21 @@ class ESDCChatApp(App):
                 results_panel.collapsed = not results_panel.collapsed
             except Exception:
                 logger.debug("toggle results section failed", exc_info=True)
+
+    def action_toggle_all_sections(self) -> None:
+        """Toggle SQL and results panels together."""
+        if not self._context_panel:
+            return
+        try:
+            sql_panel = self._context_panel.sql_panel
+            results_panel = self._context_panel.results_panel
+        except Exception:
+            logger.debug("toggle all failed", exc_info=True)
+            return
+        # Collapse all if any is expanded; otherwise expand all
+        any_expanded = not sql_panel.collapsed or not results_panel.collapsed
+        sql_panel.collapsed = any_expanded
+        results_panel.collapsed = any_expanded
 
     def action_open_image(self) -> None:
         """Open the most recent image from the conversation."""
