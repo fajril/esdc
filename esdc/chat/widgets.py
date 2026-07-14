@@ -15,6 +15,7 @@ logger = logging.getLogger("esdc.chat.widgets")
 
 MAX_MESSAGE_HISTORY = 100
 DEFAULT_CONTEXT_LENGTH = 4096
+IRIS_VERSION = "0.6.0"
 
 
 class ContextSection(Container):
@@ -356,50 +357,8 @@ class ContextPanel(Vertical):
         self._context_length: int = 4096
 
     def compose(self) -> ComposeResult:
-        """Compose all sections of context panel."""
-        from textual.widgets import Static
-
-        # 1. Conversation Title (static top)
-        yield ConversationTitle(
-            self._conversation_title,
-            id="conversation-title",
-        )
-
-        # 2. Session Info (collapsible, expanded by default)
-
-        self._current_directory = os.getcwd()
-        thread_display = (
-            str(self._session_thread_id)[:8] if self._session_thread_id else "N/A"
-        )
-        session_content = (
-            f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"
-        )
-
-        with ContextSection(
-            "Session Info",
-            expanded=True,
-            id="session-section",
-        ):
-            yield Static(
-                session_content,
-                classes="session-content",
-                id="session-content",
-            )
-
-        # 3. Context (collapsible, expanded by default)
-        with ContextSection(
-            "Context",
-            expanded=True,
-            id="context-section",
-        ):
-            yield ContextUsageWidget(
-                token_count=self._token_count,
-                context_length=self._context_length,
-                id="context-usage",
-            )
-
-        # 4. Tool status indicator (static)
-        yield Static(self._tool_status, classes="tool-status idle", id="tool-status")
+        """Compose the working-state panel."""
+        yield ConversationTitle(self._conversation_title, id="conversation-title")
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""
@@ -420,20 +379,14 @@ class ContextPanel(Vertical):
             logger.debug(f"Failed to update conversation title: {e}")
 
     def update_context_usage(self, token_count: int, context_length: int) -> None:
-        """Update context usage display."""
+        """Store context usage values.
+
+        The context/session sections were removed from the panel in favor of
+        the consolidated StatusBar (see app.py). This method is kept
+        no-op-compatible for existing callers and tests.
+        """
         self._token_count = token_count
         self._context_length = context_length
-        try:
-            context_widget = self.query_one("#context-usage", ContextUsageWidget)
-            context_widget.token_count = token_count
-            context_widget.context_length = context_length
-            context_widget._update_display()
-            logger.debug(
-                f"🔍 Updated context usage: {token_count:,} / {context_length:,}"
-            )
-        except Exception as e:
-            logger.warning(f"❌ Failed to update context usage: {e}")
-        self.refresh()
 
     def update_session_info(
         self,
@@ -441,47 +394,25 @@ class ContextPanel(Vertical):
         model: str,
         thread_id: str,
     ) -> None:
-        """Update session information displayed in the context panel."""
+        """Store session info values.
+
+        The Session Info section was removed from the panel in favor of the
+        consolidated StatusBar (see app.py). This method is kept
+        no-op-compatible for existing callers and tests.
+        """
         self._provider_name = provider
         self._model_name = model
         self._session_thread_id = thread_id
-
-        # Get current directory
-
         self._current_directory = os.getcwd()
 
-        # Update the static content
-        try:
-            session_content = self.query_one("#session-content", Static)
-            thread_display = str(thread_id)[:8] if thread_id else "N/A"
-            session_content.update(
-                f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"  # noqa: E501
-            )
-        except Exception:
-            pass
-        self.refresh()
-
     def update_tool_status(self, status: str) -> None:
-        """Update tool execution status with emoji+text."""
+        """Store tool status value.
+
+        The #tool-status static was removed; tool status now lives in the
+        StatusBar (Task 9 adds the timeline). Kept as a no-op-compatible
+        method for existing callers and tests.
+        """
         self._tool_status = status
-        try:
-            status_widget = self.query_one("#tool-status", Static)
-            status_widget.update(status)
-            # Set appropriate class based on status
-            if "⏳" in status:
-                status_widget.set_class(True, "querying")
-                status_widget.set_class(False, "completed")
-                status_widget.set_class(False, "idle")
-            elif "✅" in status:
-                status_widget.set_class(False, "querying")
-                status_widget.set_class(True, "completed")
-                status_widget.set_class(False, "idle")
-            else:
-                status_widget.set_class(False, "querying")
-                status_widget.set_class(False, "completed")
-                status_widget.set_class(True, "idle")
-        except Exception:
-            pass
 
     def reset_tool_status(self) -> None:
         """Reset tool status to idle state."""
@@ -531,7 +462,7 @@ class ChatMessage(Markdown):
 
 
 class StatusBar(Static):
-    """Status line showing IRIS and token count."""
+    """One-line status bar: version, model, thread, context usage, tool state."""
 
     DEFAULT_CSS = """
     StatusBar {
@@ -541,47 +472,37 @@ class StatusBar(Static):
         background: $background;
         border-top: solid $surface;
     }
-
-    .status-provider {
-        color: $text;
-        text-style: bold;
-    }
-
-    .status-model {
-        color: $text;
-    }
-
-    .status-tokens {
-        color: $text-muted;
-    }
     """
 
     def __init__(self):
         """Initialize the status bar widget."""
         super().__init__("Loading...")
+        self._status_text: str = "Loading..."
 
     def set_status(
         self,
-        provider_name: str,
         model_name: str,
+        thread_id: str,
         token_count: int = 0,
         context_length: int = 0,
-        thread_id: str = "",
+        tool_status: str = "",
     ) -> None:
         """Update status bar display."""
-        parts = ["IRIS"]
-
-        if context_length > 0 and token_count > 0:
-            percentage = int((token_count / context_length) * 100)
-            parts.append(f"{token_count:,} tokens ({percentage}%)")
-        elif token_count > 0:
-            parts.append(f"{token_count:,} tokens")
-
+        parts = [f"IRIS v{IRIS_VERSION}"]
+        if model_name:
+            parts.append(model_name)
         if thread_id:
-            thread_id_str = str(thread_id)
-            parts.append(f"thread: {thread_id_str[:8]}")
-
-        self.update(" | ".join(parts))
+            parts.append(f"thread {str(thread_id)[:8]}")
+        if context_length > 0:
+            pct = int((token_count / context_length) * 100)
+            usage = f"{token_count:,}/{context_length:,} ({pct}%)"
+            if pct >= 75:
+                usage = f"[red]{usage}[/red]"
+            parts.append(usage)
+        if tool_status:
+            parts.append(tool_status)
+        self._status_text = " │ ".join(parts)
+        self.update(self._status_text)
 
 
 class ChatInput(TextArea):

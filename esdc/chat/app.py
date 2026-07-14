@@ -433,29 +433,15 @@ class ESDCChatApp(App):
             f"📊 Context length: {self._model_name} = {self._context_length:,} tokens"
         )
 
-        # Update context panel with session info
-        if self._context_panel:
-            self._context_panel.update_session_info(
-                self._provider_name,
-                self._model_name,
-                self._thread_id,
-            )
-            # Initialize context usage display
-            self._context_panel.update_context_usage(
-                self._token_count,
-                self._context_length,
-            )
-
         # Set up timer to consume events from queue (runs every 50ms)
         self.set_interval(0.05, self._consume_events)
         self.set_interval(0.1, self._flush_stream_render)
 
         self.status_bar.set_status(
-            self._provider_name,
-            self._model_name,
-            self._token_count,
-            self._context_length,
-            self._thread_id,
+            model_name=self._model_name,
+            thread_id=self._thread_id,
+            token_count=self._token_count,
+            context_length=self._context_length,
         )
 
         self._init_agent()
@@ -728,7 +714,6 @@ class ESDCChatApp(App):
 
         elif chunk_type == "messages_state":
             messages = chunk.get("messages", [])
-            message_count = chunk.get("message_count", len(messages))
             if messages:
                 from esdc.chat.context_manager import estimate_tokens
 
@@ -741,26 +726,11 @@ class ESDCChatApp(App):
                 )
                 if self.status_bar:
                     self.status_bar.set_status(
-                        self._provider_name,
-                        self._model_name,
-                        self._token_count,
-                        self._context_length,
-                        self._thread_id,
+                        model_name=self._model_name,
+                        thread_id=self._thread_id,
+                        token_count=self._token_count,
+                        context_length=self._context_length,
                     )
-                if self._context_panel:
-                    self._context_panel.update_context_usage(
-                        self._token_count,
-                        self._context_length,
-                    )
-                    try:
-                        context_widget = self._context_panel.query_one(
-                            "#context-usage", ContextUsageWidget
-                        )
-                        context_widget.update_usage(
-                            self._token_count, message_count, self._context_metadata
-                        )
-                    except Exception:
-                        pass
 
         elif chunk_type == "token_usage":
             # DEPRECATED: messages_state provides more accurate token count
