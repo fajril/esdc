@@ -100,6 +100,11 @@ class TestRightPanelComposition:
 
 class TestToolResultWiring:
     def test_tool_result_feeds_sql_and_results_panels(self, monkeypatch):
+        """Tools register with display names, not python names.
+
+        e.g. 'SQL Executor', not 'execute_sql' — the wiring must match on
+        the real name.
+        """
         from esdc.chat.app import ESDCChatApp
 
         app = ESDCChatApp()
@@ -125,13 +130,53 @@ class TestToolResultWiring:
         app._handle_stream_chunk(
             {
                 "type": "tool_result",
-                "tool": "execute_sql",
+                "tool": "SQL Executor",
                 "result": "col_a\n1\n2",
                 "sql": "SELECT col_a FROM t",
             }
         )
         assert calls["sql"] == "SELECT col_a FROM t"
         assert calls["results"] == "col_a\n1\n2"
+
+    def test_simple_data_query_result_feeds_sql_and_results_panels(self):
+        """'Simple Data Query' returns a JSON string with an embedded key.
+
+        The 'sql' key is embedded in the JSON body (no top-level sql chunk
+        field) — the wiring must extract it and populate both the SQL and
+        results panels.
+        """
+        from esdc.chat.app import ESDCChatApp
+
+        app = ESDCChatApp()
+        calls = {}
+
+        class _P:
+            def set_sql(self, s):
+                calls["sql"] = s
+
+            def set_results(self, r):
+                calls["results"] = r
+
+        class _CP:
+            sql_panel = _P()
+            results_panel = _P()
+
+            class timeline:  # noqa: N801
+                @staticmethod
+                def finish_tool(name):
+                    pass
+
+        app._context_panel = _CP()
+        app._handle_stream_chunk(
+            {
+                "type": "tool_result",
+                "tool": "Simple Data Query",
+                "sql": "",
+                "result": '{"sql": "SELECT x FROM t", "rows": [[1]]}',
+            }
+        )
+        assert calls["sql"] == "SELECT x FROM t"
+        assert calls["results"] == '{"sql": "SELECT x FROM t", "rows": [[1]]}'
 
 
 class TestToggleAllSections:

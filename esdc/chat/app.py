@@ -97,6 +97,13 @@ from esdc.chat.widgets import (  # noqa: F401,E402  (re-exported for tests/back-
 MAX_QUERY_HISTORY = 5
 TOOLS_LIST = ["execute_sql", "get_schema", "list_tables"]
 
+# Tools register with LangChain display names (e.g. @tool("SQL Executor")),
+# not their python function names — those display names are what actually
+# show up in tool_calls[].name / tool_result "tool" fields at runtime. Keep
+# the python names too for backward compatibility with older agent builds.
+_SQL_EXECUTOR_NAMES = {"SQL Executor", "execute_sql"}
+_DATA_TOOL_NAMES = _SQL_EXECUTOR_NAMES | {"Simple Data Query", "simple_data_query"}
+
 
 class ESDCChatApp(App):
     """Main ESDC chat application."""
@@ -670,16 +677,23 @@ class ESDCChatApp(App):
                 )
 
             sql = chunk.get("sql", "")
-            if self._context_panel and sql:
-                try:
-                    self._context_panel.sql_panel.set_sql(sql)
-                except Exception:
-                    logger.debug("sql panel update failed", exc_info=True)
-            if self._context_panel and result and tool_name == "execute_sql":
-                try:
-                    self._context_panel.results_panel.set_results(result)
-                except Exception:
-                    logger.debug("results panel update failed", exc_info=True)
+            if tool_name in _DATA_TOOL_NAMES:
+                extracted_sql = sql
+                if not extracted_sql and result:
+                    try:
+                        parsed = json.loads(result)
+                        if isinstance(parsed, dict):
+                            extracted_sql = parsed.get("sql", "") or ""
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if self._context_panel:
+                    try:
+                        if extracted_sql:
+                            self._context_panel.sql_panel.set_sql(extracted_sql)
+                        if result:
+                            self._context_panel.results_panel.set_results(result)
+                    except Exception:
+                        logger.debug("panel wiring failed", exc_info=True)
 
         elif chunk_type == "context_metadata":
             metadata = chunk.get("metadata")
@@ -784,7 +798,9 @@ class ESDCChatApp(App):
                 tool_calls = getattr(ai_message, "tool_calls", None) or []
                 for tc in tool_calls:
                     args = tc.get("args", {}) or {}
-                    if tc.get("name") == "execute_sql" and isinstance(args, dict):
+                    if tc.get("name") in _SQL_EXECUTOR_NAMES and isinstance(
+                        args, dict
+                    ):
                         pending_sql[tc.get("id") or ""] = args.get("query", "")
                     yield {
                         "type": "tool_call",

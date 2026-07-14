@@ -107,3 +107,41 @@ def test_run_agent_stream_is_deleted():
     import esdc.chat.agent as agent_mod
 
     assert not hasattr(agent_mod, "run_agent_stream")
+
+
+@pytest.mark.asyncio
+async def test_message_complete_with_display_name_tool_call_emits_sql(monkeypatch):
+    """Tools register with display names, not python names.
+
+    e.g. 'SQL Executor', not 'execute_sql'. The adapter must match on the
+    real runtime name.
+    """
+    app = _make_app()
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "SQL Executor", "args": {"query": "SELECT 2"}, "id": "tc9"}
+        ],
+    )
+    chunks = await _collect(
+        app,
+        monkeypatch,
+        [
+            {"type": "message_complete", "ai_message": ai},
+            {
+                "type": "tool_result",
+                "tool_name": "SQL Executor",
+                "result": "1 row",
+                "tool_call_id": "tc9",
+            },
+        ],
+    )
+    tool_results = [c for c in chunks if c["type"] == "tool_result"]
+    assert tool_results == [
+        {
+            "type": "tool_result",
+            "tool": "SQL Executor",
+            "result": "1 row",
+            "sql": "SELECT 2",
+        }
+    ]
