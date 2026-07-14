@@ -1312,6 +1312,7 @@ class ESDCChatApp(App):
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._streaming_message: ChatMessage | None = None
         self._accumulated_content: str = ""
+        self._render_dirty: bool = False
         self._conversation_title: str = ""
         self._title_generated: bool = False
 
@@ -1393,6 +1394,7 @@ class ESDCChatApp(App):
 
         # Set up timer to consume events from queue (runs every 50ms)
         self.set_interval(0.05, self._consume_events)
+        self.set_interval(0.1, self._flush_stream_render)
 
         self.status_bar.set_status(
             self._provider_name,
@@ -1542,20 +1544,29 @@ class ESDCChatApp(App):
             if self._context_panel:
                 self._context_panel.update_conversation_title(self._conversation_title)
 
-    async def _consume_events(self) -> None:
+    def _consume_events(self) -> None:
         """Consume events from queue in main thread (called by timer every 50ms)."""
         try:
             # Process up to 10 events per tick to avoid blocking
             for _ in range(10):
                 try:
                     chunk = self._event_queue.get_nowait()
-                    await self._process_chunk(chunk)
+                    self._handle_stream_chunk(chunk)
                 except asyncio.QueueEmpty:
                     break
         except Exception as e:
             logger.error(f"Error consuming events: {e}")
 
-    async def _process_chunk(self, chunk: dict[str, Any]) -> None:
+    def _flush_stream_render(self) -> None:
+        """Render accumulated stream content at most 10x/sec."""
+        if not self._render_dirty or not self._streaming_message:
+            return
+        self._render_dirty = False
+        self._streaming_message.update(self._accumulated_content)
+        if self.chat_panel:
+            self.chat_panel.scroll_end(animate=False)
+
+    def _handle_stream_chunk(self, chunk: dict[str, Any]) -> None:
         """Process a single chunk and update UI."""
         chunk_type = chunk.get("type", "unknown")
 
@@ -1563,38 +1574,14 @@ class ESDCChatApp(App):
             token = chunk.get("content", "")
             if token and self._streaming_message:
                 self._accumulated_content += token
-                self._streaming_message.update(self._accumulated_content)
-
-                # Always scroll to bottom on new content (after DOM update + delay for Markdown)  # noqa: E501
-                if self.chat_panel:
-                    chat_panel = self.chat_panel
-                    self.call_after_refresh(
-                        lambda: self.set_timer(
-                            0.1,
-                            lambda: chat_panel.scroll_end(
-                                animate=False, immediate=True
-                            ),
-                        )
-                    )
+                self._render_dirty = True
 
         elif chunk_type == "message":
             content = chunk.get("content", "")
             if content and not self._accumulated_content:
                 self._accumulated_content = content
                 if self._streaming_message:
-                    self._streaming_message.update(self._accumulated_content)
-
-                # Always scroll to bottom on new content (after DOM update + delay for Markdown)  # noqa: E501
-                if self.chat_panel:
-                    chat_panel = self.chat_panel
-                    self.call_after_refresh(
-                        lambda: self.set_timer(
-                            0.1,
-                            lambda: chat_panel.scroll_end(
-                                animate=False, immediate=True
-                            ),
-                        )
-                    )
+                    self._render_dirty = True
 
         elif chunk_type == "tool_call":
             tool_name = chunk.get("tool", "")
@@ -1646,19 +1633,7 @@ class ESDCChatApp(App):
                     indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
 
                 self._accumulated_content += indicator_text
-                self._streaming_message.update(self._accumulated_content)
-
-                # Always scroll to bottom when adding tool indicator (after DOM update + delay for Markdown)  # noqa: E501
-                if self.chat_panel:
-                    chat_panel = self.chat_panel
-                    self.call_after_refresh(
-                        lambda: self.set_timer(
-                            0.1,
-                            lambda: chat_panel.scroll_end(
-                                animate=False, immediate=True
-                            ),
-                        )
-                    )
+                self._render_dirty = True
 
         elif chunk_type == "tool_result":
             result = chunk.get("result", "")
@@ -1742,18 +1717,16 @@ class ESDCChatApp(App):
             success = chunk.get("success", True)
             error = chunk.get("error")
 
+            # Force a final render of any pending accumulated content before
+            # resetting streaming state.
+            self._flush_stream_render()
+
             if not success and error and self._streaming_message:
                 self._streaming_message.update(f"Error: {error}")
 
             # Final scroll to bottom after streaming completes (critical fix)
             if self.chat_panel:
-                chat_panel = self.chat_panel
-                self.call_after_refresh(
-                    lambda: self.set_timer(
-                        0.1,
-                        lambda: chat_panel.scroll_end(animate=False, immediate=True),
-                    )
-                )
+                self.chat_panel.scroll_end(animate=False)
 
             # Reset state
             self._streaming_message = None
