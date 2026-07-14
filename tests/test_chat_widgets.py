@@ -83,3 +83,50 @@ class TestChatDecluttered:
         source = inspect.getsource(app_mod)
         assert "TOOL_STATUS_MAP" not in source
         assert "TOOL_COMPLETED_MAP" not in source
+
+
+class TestRightPanelComposition:
+    def test_context_panel_composes_working_state_widgets(self):
+        import inspect
+
+        from esdc.chat.widgets import ContextPanel
+
+        source = inspect.getsource(ContextPanel.compose)
+        for widget in ("ToolTimeline", "SQLPanel", "ResultsPanel", "QueryHistory"):
+            assert widget in source, f"{widget} missing from ContextPanel.compose"
+
+
+class TestToolResultWiring:
+    def test_tool_result_feeds_sql_and_results_panels(self, monkeypatch):
+        from esdc.chat.app import ESDCChatApp
+
+        app = ESDCChatApp()
+        calls = {}
+
+        class _P:
+            def set_sql(self, s):
+                calls["sql"] = s
+
+            def set_results(self, r):
+                calls["results"] = r
+
+        class _CP:
+            sql_panel = _P()
+            results_panel = _P()
+
+            class timeline:  # noqa: N801
+                @staticmethod
+                def finish_tool(name):
+                    pass
+
+        app._context_panel = _CP()
+        app._handle_stream_chunk(
+            {
+                "type": "tool_result",
+                "tool": "execute_sql",
+                "result": "col_a\n1\n2",
+                "sql": "SELECT col_a FROM t",
+            }
+        )
+        assert calls["sql"] == "SELECT col_a FROM t"
+        assert calls["results"] == "col_a\n1\n2"

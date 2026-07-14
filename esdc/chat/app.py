@@ -448,6 +448,10 @@ class ESDCChatApp(App):
                 self._context_panel.timeline.reset()
             except Exception:
                 logger.debug("timeline reset failed", exc_info=True)
+            try:
+                self._context_panel.query_history.add_query(user_input)
+            except Exception:
+                logger.debug("query history update failed", exc_info=True)
 
         # Create streaming AI message
         self._streaming_message = ChatMessage("ai", "")
@@ -611,11 +615,18 @@ class ESDCChatApp(App):
                     token_count=self._token_count,
                     context_length=self._context_length,
                 )
-            # Note: no existing SQLPanel / ResultsPanel mounting code was
-            # found in this branch prior to this change -- `sql`/`result`
-            # were only logged, never displayed. Nothing to preserve here;
-            # a future task can wire chunk["sql"] / result into SQLPanel /
-            # ResultsPanel if that display is desired.
+
+            sql = chunk.get("sql", "")
+            if self._context_panel and sql:
+                try:
+                    self._context_panel.sql_panel.set_sql(sql)
+                except Exception:
+                    logger.debug("sql panel update failed", exc_info=True)
+            if self._context_panel and result and tool_name == "execute_sql":
+                try:
+                    self._context_panel.results_panel.set_results(result)
+                except Exception:
+                    logger.debug("results panel update failed", exc_info=True)
 
         elif chunk_type == "context_metadata":
             metadata = chunk.get("metadata")
@@ -786,6 +797,24 @@ class ESDCChatApp(App):
         self.notify(
             f"Context panel {'shown' if self._context_panel_visible else 'hidden'}"
         )
+
+    def action_toggle_sql_section(self) -> None:
+        """Toggle the SQL panel's collapsed state."""
+        if self._context_panel:
+            try:
+                sql_panel = self._context_panel.sql_panel
+                sql_panel.collapsed = not sql_panel.collapsed
+            except Exception:
+                logger.debug("toggle sql section failed", exc_info=True)
+
+    def action_toggle_results_section(self) -> None:
+        """Toggle the results panel's collapsed state."""
+        if self._context_panel:
+            try:
+                results_panel = self._context_panel.results_panel
+                results_panel.collapsed = not results_panel.collapsed
+            except Exception:
+                logger.debug("toggle results section failed", exc_info=True)
 
     def action_save_screenshot(self, filename: str | None = None) -> None:
         """Save screenshot of the current screen.

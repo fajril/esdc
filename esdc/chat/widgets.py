@@ -426,11 +426,29 @@ class ContextPanel(Vertical):
         """Compose the working-state panel."""
         yield ConversationTitle(self._conversation_title, id="conversation-title")
         yield ToolTimeline(id="tool-timeline")
+        yield SQLPanel(id="sql-panel")
+        yield ResultsPanel(id="results-panel")
+        yield QueryHistory(id="query-history")
 
     @property
     def timeline(self) -> "ToolTimeline":
         """Return the mounted ToolTimeline widget."""
         return self.query_one("#tool-timeline", ToolTimeline)
+
+    @property
+    def sql_panel(self) -> "SQLPanel":
+        """Return the mounted SQLPanel widget."""
+        return self.query_one("#sql-panel", SQLPanel)
+
+    @property
+    def results_panel(self) -> "ResultsPanel":
+        """Return the mounted ResultsPanel widget."""
+        return self.query_one("#results-panel", ResultsPanel)
+
+    @property
+    def query_history(self) -> "QueryHistory":
+        """Return the mounted QueryHistory widget."""
+        return self.query_one("#query-history", QueryHistory)
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""
@@ -809,9 +827,9 @@ class SQLPanel(Collapsible):
     }
     """
 
-    def __init__(self, sql: str = ""):
+    def __init__(self, sql: str = "", id: str | None = None):
         """Initialize the SQL panel widget."""
-        super().__init__(title="📝 SQL Query", collapsed=not sql)
+        super().__init__(title="📝 SQL Query", collapsed=not sql, id=id)
         self.sql_content = sql
         self._content_widget: Markdown | None = None
 
@@ -868,9 +886,9 @@ class ResultsPanel(Collapsible):
     }
     """
 
-    def __init__(self, results: str = ""):
+    def __init__(self, results: str = "", id: str | None = None):
         """Initialize the results panel widget."""
-        super().__init__(title="📊 Query Results", collapsed=not results)
+        super().__init__(title="📊 Query Results", collapsed=not results, id=id)
         self.results_content = results
         self._content_widget: Markdown | None = None
 
