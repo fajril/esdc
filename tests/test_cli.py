@@ -404,3 +404,29 @@ class TestPrintHitRate:
         from esdc.esdc import _print_hit_rate
 
         _print_hit_rate(10, 90)
+
+
+class TestChatCommandCleanup:
+    """chat command has no --setup flag and clean guard logic."""
+
+    def test_chat_help_has_no_setup_flag(self):
+        from typer.testing import CliRunner
+
+        from esdc.esdc import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["chat", "--help"])
+        assert result.exit_code == 0
+        assert "--setup" not in result.output
+
+    def test_chat_without_config_points_to_configs(self, monkeypatch):
+        from typer.testing import CliRunner
+
+        from esdc.configs import Config
+        from esdc.esdc import app
+
+        monkeypatch.setattr(Config, "has_chat_config", staticmethod(lambda: False))
+        runner = CliRunner()
+        result = runner.invoke(app, ["chat"])
+        assert result.exit_code == 0
+        assert "esdc configs" in result.output

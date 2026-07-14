@@ -1422,7 +1422,7 @@ class ESDCChatApp(App):
         if not provider_config:
             self.display_message(
                 "system",
-                "Error: No provider configured. Run 'esdc chat --setup' first.",
+                "Error: No provider configured. Run 'esdc configs' first.",
             )
             return
 

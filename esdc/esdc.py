@@ -1307,24 +1307,21 @@ def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
 
 
 @app.command(name="chat")
-def chat(setup: bool = False):
+def chat():
     """Start the interactive chat TUI."""
     from esdc.configs import Config
 
-    if setup or not Config.has_chat_config():
+    if not Config.has_chat_config():
         rich.print(
             "[bold yellow]No provider configured.[/bold yellow] "
-            "Run '[cyan]esdc configs[/cyan]' to set one up."
+            "Run '[cyan]esdc configs[/cyan]' first."
         )
         return
 
-    if Config.has_chat_config():
-        from esdc.chat.app import ESDCChatApp
+    from esdc.chat.app import ESDCChatApp
 
-        app = ESDCChatApp()
-        app.run()
-    else:
-        rich.print("[yellow]Setup incomplete. Chat cannot start.[/yellow]")
+    app_ = ESDCChatApp()
+    app_.run()
 
 
 def _print_cache_subsection(name: str, stats: dict[str, Any]) -> None:

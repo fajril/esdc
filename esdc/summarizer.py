@@ -286,7 +286,7 @@ def summarize_resources(
 
     provider_config = Config.get_provider_config()
     if not provider_config:
-        raise ValueError("No provider configured. Run 'esdc chat --setup' first.")
+        raise ValueError("No provider configured. Run 'esdc configs' first.")
 
     from esdc.providers import create_llm_from_config
 

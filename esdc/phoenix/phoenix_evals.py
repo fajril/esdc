@@ -70,7 +70,7 @@ def _create_judge_llm() -> PhoenixLLM:
     if not provider_config:
         raise RuntimeError(
             "Cannot create judge LLM: no provider configured. "
-            "Run 'esdc chat --setup' or configure provider first."
+            "Run 'esdc configs' first."
         )
 
     provider_type: str = provider_config["provider_type"]
