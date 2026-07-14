@@ -42,3 +42,44 @@ class TestContextPanelSlim:
         assert "Session Info" not in source
         assert "session-section" not in source
         assert "context-section" not in source
+
+
+class TestToolTimeline:
+    def test_start_and_finish_lifecycle(self):
+        from esdc.chat.widgets import ToolTimeline
+
+        tl = ToolTimeline()
+        tl.start_tool("execute_sql")
+        assert tl.entries[-1][0] == "execute_sql"
+        assert tl.entries[-1][1] == "running"
+        tl.finish_tool("execute_sql")
+        assert tl.entries[-1][1] == "done"
+        assert tl.entries[-1][2] >= 0.0
+
+    def test_reset_clears_entries(self):
+        from esdc.chat.widgets import ToolTimeline
+
+        tl = ToolTimeline()
+        tl.start_tool("search_documents")
+        tl.reset()
+        assert tl.entries == []
+
+    def test_caps_at_20_entries(self):
+        from esdc.chat.widgets import ToolTimeline
+
+        tl = ToolTimeline()
+        for i in range(25):
+            tl.start_tool(f"tool_{i}")
+        assert len(tl.entries) == 20
+        assert tl.entries[-1][0] == "tool_24"
+
+
+class TestChatDecluttered:
+    def test_tool_status_maps_removed_from_app(self):
+        import inspect
+
+        import esdc.chat.app as app_mod
+
+        source = inspect.getsource(app_mod)
+        assert "TOOL_STATUS_MAP" not in source
+        assert "TOOL_COMPLETED_MAP" not in source

@@ -76,7 +76,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
 from textual.containers import Horizontal  # noqa: E402
-from textual.widgets import Static, TextArea  # noqa: E402
+from textual.widgets import TextArea  # noqa: E402
 
 from esdc.chat.widgets import (  # noqa: F401,E402  (re-exported for tests/back-compat)
     ChatInput,
@@ -92,73 +92,11 @@ from esdc.chat.widgets import (  # noqa: F401,E402  (re-exported for tests/back-
     SQLPanel,
     StatusBar,
     ThinkingIndicator,
+    ToolTimeline,
 )
 
 MAX_QUERY_HISTORY = 5
 TOOLS_LIST = ["execute_sql", "get_schema", "list_tables"]
-
-
-class ToolStatusList(Static):
-    """Widget to display available tools and their status."""
-
-    DEFAULT_CSS = """
-    ToolStatusList {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-    }
-
-    .tool-item {
-        height: auto;
-        padding: 0 1;
-        margin: 1 0;
-    }
-
-    .tool-available {
-        color: $text-muted;
-    }
-
-    .tool-available .icon {
-        color: $text-disabled;
-    }
-
-    .tool-used {
-        color: $primary;
-        text-style: bold;
-    }
-
-    .tool-used .icon {
-        color: $primary;
-    }
-    """
-
-    def __init__(self, id: str | None = None):
-        """Initialize the tool status list widget."""
-        super().__init__(id=id)
-        self.tools = TOOLS_LIST
-        self.tools_used: list[str] = []
-
-    def mark_used(self, tools: list[str]) -> None:
-        """Mark specific tools as used."""
-        self.tools_used = tools
-        self._update_display()
-
-    def reset_used(self) -> None:
-        """Reset used tools list."""
-        self.tools_used = []
-        self._update_display()
-
-    def compose(self) -> ComposeResult:
-        """Compose the tool list."""
-        for tool in self.tools:
-            used = "✓" if tool not in self.tools_used else "●"
-            css_class = "tool-used" if tool in self.tools_used else "tool-available"
-            yield Static(f"{used} {tool}", classes=f"tool-item {css_class}")
-
-    def _update_display(self) -> None:
-        """Refresh the display."""
-        self.refresh()
 
 
 class ESDCChatApp(App):
@@ -253,19 +191,6 @@ class ESDCChatApp(App):
         padding: 0;
         background: transparent;
         border: none;
-    }
-
-    ToolStatusList {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-    }
-
-    .tool-item {
-        height: auto;
-        padding: 0 1;
-        margin: 1 0;
     }
 
     QueryHistory {
@@ -517,6 +442,13 @@ class ESDCChatApp(App):
             self.display_message("ai", "Error: Agent not initialized")
             return
 
+        # Reset the tool timeline for the new turn
+        if self._context_panel:
+            try:
+                self._context_panel.timeline.reset()
+            except Exception:
+                logger.debug("timeline reset failed", exc_info=True)
+
         # Create streaming AI message
         self._streaming_message = ChatMessage("ai", "")
         self._accumulated_content = ""
@@ -627,22 +559,6 @@ class ESDCChatApp(App):
             tool_name = chunk.get("tool", "")
             tool_args = chunk.get("args", {})
 
-            # Tool-specific status messages
-            TOOL_STATUS_MAP = {  # noqa: N806
-                "execute_sql": "⏳ Executing SQL query...",
-                "SQL Executor": "🛠️ Using SQL Executor...",
-                "get_schema": "⏳ Getting table schema...",
-                "Schema Inspector": "🛠️ Using Schema Inspector...",
-                "list_tables": "⏳ Listing available tables...",
-                "Table Lister": "🛠️ Using Table Lister...",
-                "get_recommended_table": "⏳ Finding recommended table...",
-                "Table Selector": "🛠️ Using Table Selector...",
-                "resolve_uncertainty_level": "⏳ Resolving uncertainty level...",
-                "Uncertainty Resolver": "🛠️ Using Uncertainty Resolver...",
-                "search_problem_cluster": "⏳ Searching problem cluster definitions...",
-                "Problem Cluster Search": "🛠️ Using Problem Cluster Search...",
-            }
-
             sql_query = ""
             if isinstance(tool_args, dict):
                 sql_query = tool_args.get("query", "")
@@ -659,21 +575,19 @@ class ESDCChatApp(App):
                 len(sql_query) if sql_query else 0,
             )
 
-            # Get appropriate status message
-            status_msg = TOOL_STATUS_MAP.get(tool_name, f"⏳ Using {tool_name}...")
-
-            # Update tool status
-            if self._context_panel:
-                self._context_panel.update_tool_status(status_msg)
-
-            # Add indicator to message
-            if self._streaming_message:
-                indicator_text = f"\n\n{status_msg}"
-                if sql_query and tool_name in ("execute_sql", "SQL Executor"):
-                    indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
-
-                self._accumulated_content += indicator_text
-                self._render_dirty = True
+            if self._context_panel and tool_name:
+                try:
+                    self._context_panel.timeline.start_tool(tool_name)
+                except Exception:
+                    logger.debug("timeline start failed", exc_info=True)
+            if self.status_bar:
+                self.status_bar.set_status(
+                    model_name=self._model_name,
+                    thread_id=self._thread_id,
+                    token_count=self._token_count,
+                    context_length=self._context_length,
+                    tool_status=f"⏳ {tool_name}",
+                )
 
         elif chunk_type == "tool_result":
             result = chunk.get("result", "")
@@ -685,26 +599,23 @@ class ESDCChatApp(App):
                 len(result),
             )
 
-            # Tool-specific completion messages
-            TOOL_COMPLETED_MAP = {  # noqa: N806
-                "execute_sql": "✅ SQL query completed",
-                "SQL Executor": "✅ SQL Executor completed",
-                "get_schema": "✅ Schema retrieved",
-                "Schema Inspector": "✅ Schema Inspector completed",
-                "list_tables": "✅ Tables listed",
-                "Table Lister": "✅ Table Lister completed",
-                "get_recommended_table": "✅ Recommended table found",
-                "Table Selector": "✅ Table Selector completed",
-                "resolve_uncertainty_level": "✅ Uncertainty level resolved",
-                "Uncertainty Resolver": "✅ Uncertainty Resolver completed",
-                "search_problem_cluster": "✅ Problem cluster definition found",
-                "Problem Cluster Search": "✅ Problem Cluster Search completed",
-            }
-
-            # Update tool status
-            if self._context_panel:
-                completed_msg = TOOL_COMPLETED_MAP.get(tool_name, "✅ Tool completed")
-                self._context_panel.update_tool_status(completed_msg)
+            if self._context_panel and tool_name:
+                try:
+                    self._context_panel.timeline.finish_tool(tool_name)
+                except Exception:
+                    logger.debug("timeline finish failed", exc_info=True)
+            if self.status_bar:
+                self.status_bar.set_status(
+                    model_name=self._model_name,
+                    thread_id=self._thread_id,
+                    token_count=self._token_count,
+                    context_length=self._context_length,
+                )
+            # Note: no existing SQLPanel / ResultsPanel mounting code was
+            # found in this branch prior to this change -- `sql`/`result`
+            # were only logged, never displayed. Nothing to preserve here;
+            # a future task can wire chunk["sql"] / result into SQLPanel /
+            # ResultsPanel if that display is desired.
 
         elif chunk_type == "context_metadata":
             metadata = chunk.get("metadata")

@@ -309,6 +309,72 @@ class ConversationTitle(Static):
         self.update(title)
 
 
+class ToolTimeline(Static):
+    """Live timeline of tool calls for the current conversation turn."""
+
+    DEFAULT_CSS = """
+    ToolTimeline {
+        padding: 0 1;
+        color: $text-muted;
+        background: transparent;
+    }
+    """
+
+    MAX_ENTRIES = 20
+
+    def __init__(self, id: str | None = None):
+        """Initialize the tool timeline widget."""
+        super().__init__("", id=id)
+        # each entry: [name, state ("running"|"done"), elapsed_or_start]
+        self._entries: list[list] = []
+
+    @property
+    def entries(self) -> list[tuple[str, str, float]]:
+        """Return the current timeline entries as (name, state, elapsed)."""
+        import time as _time
+
+        out = []
+        for name, state, t in self._entries:
+            elapsed = (_time.monotonic() - t) if state == "running" else t
+            out.append((name, state, elapsed))
+        return out
+
+    def start_tool(self, name: str) -> None:
+        """Record a tool starting execution."""
+        import time as _time
+
+        self._entries.append([name, "running", _time.monotonic()])
+        if len(self._entries) > self.MAX_ENTRIES:
+            self._entries = self._entries[-self.MAX_ENTRIES :]
+        self._render_entries()
+
+    def finish_tool(self, name: str) -> None:
+        """Record a tool finishing execution."""
+        import time as _time
+
+        for entry in reversed(self._entries):
+            if entry[0] == name and entry[1] == "running":
+                entry[1] = "done"
+                entry[2] = _time.monotonic() - entry[2]
+                break
+        self._render_entries()
+
+    def reset(self) -> None:
+        """Clear all timeline entries."""
+        self._entries = []
+        self._render_entries()
+
+    def _render_entries(self) -> None:
+        """Refresh the rendered timeline text."""
+        lines = []
+        for name, state, elapsed in self.entries:
+            if state == "running":
+                lines.append(f"⏳ {name} …")
+            else:
+                lines.append(f"[green]✓[/green] {name} {elapsed:.1f}s")
+        self.update("\n".join(lines))
+
+
 class ContextPanel(Vertical):
     """Static context panel showing session info and tool status."""
 
@@ -359,6 +425,12 @@ class ContextPanel(Vertical):
     def compose(self) -> ComposeResult:
         """Compose the working-state panel."""
         yield ConversationTitle(self._conversation_title, id="conversation-title")
+        yield ToolTimeline(id="tool-timeline")
+
+    @property
+    def timeline(self) -> "ToolTimeline":
+        """Return the mounted ToolTimeline widget."""
+        return self.query_one("#tool-timeline", ToolTimeline)
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""

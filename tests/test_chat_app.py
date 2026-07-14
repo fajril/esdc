@@ -176,37 +176,6 @@ class TestContextUsageWidget:
         assert "33%" in formatted or "34%" in formatted
 
 
-class TestToolStatusList:
-    """Tests for ToolStatusList widget."""
-
-    def test_tool_status_list_creation(self):
-        """Test ToolStatusList can be created."""
-        from esdc.chat.app import ToolStatusList
-
-        widget = ToolStatusList()
-        assert len(widget.tools) == 3
-        assert "execute_sql" in widget.tools
-
-    def test_tool_status_list_mark_used(self):
-        """Test marking tools as used."""
-        from esdc.chat.app import ToolStatusList
-
-        widget = ToolStatusList()
-        widget.mark_used(["execute_sql", "get_schema"])
-
-        assert widget.tools_used == ["execute_sql", "get_schema"]
-
-    def test_tool_status_list_reset(self):
-        """Test resetting used tools."""
-        from esdc.chat.app import ToolStatusList
-
-        widget = ToolStatusList()
-        widget.mark_used(["execute_sql"])
-        widget.reset_used()
-
-        assert widget.tools_used == []
-
-
 class TestQueryHistory:
     """Tests for QueryHistory widget."""
 
