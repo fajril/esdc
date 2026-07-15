@@ -59,3 +59,39 @@ def test_m_pod_unique_pod_id(monkeypatch, tmp_path):
             pass
     finally:
         conn.close()
+
+
+from esdc.pod_registry.store import allocate_pod_id
+
+
+def _seed_refs(conn):
+    conn.execute("INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')")
+    conn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (3, 'POFD/OPL/OPLL')")
+
+
+def test_allocate_first_id(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    conn = get_sqlite_connection()
+    try:
+        pod_id, seq = allocate_pod_id(conn, "2026-07-15", 4, 3, 0)
+        assert pod_id == "PL-2026-0001-4-3-0"
+        assert seq == 1
+    finally:
+        conn.close()
+
+
+def test_allocate_increments_from_max_seq_ignoring_gaps(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    conn = get_sqlite_connection()
+    try:
+        _seed_refs(conn)
+        conn.execute(
+            "INSERT INTO m_pod (id, pod_id, pod_name, approval_date,"
+            " institution_code, pod_type_code, rev_num, approval_seq)"
+            " VALUES (10, 'PL-2020-0741-4-3-0', 'X', '2020-01-01', 4, 3, 0, 741)"
+        )
+        pod_id, seq = allocate_pod_id(conn, "2026-07-15", 4, 3, 1)
+        assert seq == 742
+        assert pod_id == "PL-2026-0742-4-3-1"
+    finally:
+        conn.close()

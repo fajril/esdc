@@ -64,3 +64,22 @@ def get_sqlite_connection(path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     ensure_tables(conn)
     return conn
+
+
+def allocate_pod_id(
+    conn: sqlite3.Connection,
+    approval_date: str,
+    institution_code: int,
+    pod_type_code: int,
+    rev_num: int,
+) -> tuple[str, int]:
+    """Compute the next pod_id. Caller must insert within the same transaction.
+
+    pod_id is immutable once issued and approval_seq never gets reused, so the
+    next sequence is always max(approval_seq) + 1 (gaps from deletes are fine).
+    """
+    year = approval_date[:4]
+    row = conn.execute("SELECT COALESCE(MAX(approval_seq), 0) FROM m_pod").fetchone()
+    seq = int(row[0]) + 1
+    pod_id = f"PL-{year}-{seq:04d}-{institution_code}-{pod_type_code}-{rev_num}"
+    return pod_id, seq
