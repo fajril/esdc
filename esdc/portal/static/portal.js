@@ -257,11 +257,14 @@ function applyRowErrors(state, changeset, errors) {
     if (!bucket || !(err.index in bucket)) continue;
     const rowData = bucket[err.index];
     // For inserts pk may not be fully known (e.g. pod_id not yet issued);
-    // fall back to matching on whatever pk fields are present.
+    // fall back to matching on whatever pk fields are present. Compare
+    // stringified: the changeset coerces numeric pks (id, pod_id) to Number
+    // via stripForInsert, while live row data from "input"/"list" editors
+    // holds strings — strict === would never match and no cell turns red.
     const row = state.table.getRows().find((r) => {
       const d = r.getData();
       return state.cfg.pk.every(
-        (k) => rowData[k] === undefined || d[k] === rowData[k]
+        (k) => rowData[k] === undefined || String(d[k]) === String(rowData[k])
       );
     });
     if (row) {

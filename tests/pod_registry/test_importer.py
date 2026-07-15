@@ -124,3 +124,27 @@ def test_import_rejects_orphan_revision(monkeypatch, tmp_path):
     )
     with pytest.raises(PodRegistryImportError):
         import_pod_registry_workbook(xlsx)
+
+
+def test_import_rejects_self_referencing_revision(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        revision_rows=[[1, "PL-2003-0005-3-2-0", "PL-2003-0005-3-2-0"]],
+    )
+    with pytest.raises(PodRegistryImportError) as exc:
+        import_pod_registry_workbook(xlsx)
+    assert any("self-referencing" in e for e in exc.value.errors)
+
+
+def test_import_rejects_missing_approval_seq(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        pod_rows=[[645, datetime(2003, 11, 21), "BP Migas", "POD/Waterflood/EOR", 0,
+                   "POD Mengoepeh", "294/BP", None, "PL-2003-0005-3-2-0", None, None]],
+        project_rows=[], revision_rows=[],
+    )
+    with pytest.raises(PodRegistryImportError) as exc:
+        import_pod_registry_workbook(xlsx)
+    assert any("approval_seq" in e for e in exc.value.errors)

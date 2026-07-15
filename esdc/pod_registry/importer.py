@@ -91,10 +91,16 @@ def import_pod_registry_workbook(
             errors.append(f"POD Record row {i}: duplicate approval_seq '{seq}'")
         if pid in seen_ids:
             errors.append(f"POD Record row {i}: duplicate pod_id_itb '{pid}'")
+        if pid is None:
+            errors.append(f"POD Record row {i}: missing pod_id_itb")
+        if seq is None:
+            errors.append(f"POD Record row {i}: missing approval_seq")
+        if pod_id is None:
+            errors.append(f"POD Record row {i}: missing pod_id_skk")
         seen_pod_ids.add(pod_id)
         seen_seqs.add(seq)
         seen_ids.add(pid)
-        if inst is None or ptype is None:
+        if inst is None or ptype is None or pid is None or seq is None or pod_id is None:
             continue
         m_pod_rows.append((
             int(pid), str(pod_id), r.get("pod_name"), r.get("pod_letter_num"),
@@ -114,11 +120,19 @@ def import_pod_registry_workbook(
         project_rows.append((int(r["pod_id"]), str(r["project_id"])))
 
     revision_rows: list[tuple] = []
+    seen_rev_pairs: set[tuple] = set()
     for i, r in enumerate(revisions, start=2):
         succ, pred = r.get("successor_id"), r.get("predecessor_id")
         if succ not in valid_pod_ids or pred not in valid_pod_ids:
             errors.append(f"pod_revision row {i}: unknown pod_id ({succ}, {pred})")
             continue
+        if succ == pred:
+            errors.append(f"pod_revision row {i}: self-referencing pod_id ({succ})")
+            continue
+        if (succ, pred) in seen_rev_pairs:
+            errors.append(f"pod_revision row {i}: duplicate pair ({succ}, {pred})")
+            continue
+        seen_rev_pairs.add((succ, pred))
         revision_rows.append((succ, pred))
 
     if errors:
