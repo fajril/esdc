@@ -80,6 +80,10 @@ from esdc.loaders import (  # noqa: E402
     load_pod_workbook_to_duckdb,
     print_load_result,
 )
+from esdc.pod_registry.importer import (  # noqa: E402
+    PodRegistryImportError,
+    import_pod_registry_workbook,
+)
 from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
 from esdc.summarizer import (  # noqa: E402
     SummaryDependencyError,
@@ -261,16 +265,31 @@ def load(
             help="Use the built-in POD schema template.",
         ),
     ] = False,
+    pod_registry: Annotated[
+        bool,
+        typer.Option(
+            "--pod-registry",
+            help="Seed the POD master registry (SQLite) from pod-itb-skk workbook.",
+        ),
+    ] = False,
 ) -> None:
     """Load a spreadsheet into DuckDB and register its data dictionary.
 
     Run `esdc schema --generate --from-excel data.xlsx` to create a starter schema.
     Use `--schema-pod` to load POD workbook data with the built-in POD template.
+    Use `--pod-registry` to seed the POD master registry from the pod-itb-skk workbook.
     """
-    if (schema is None) == (not schema_pod):
-        typer.echo("Error: specify exactly one of --schema or --schema-pod.")
+    modes = sum([schema is not None, schema_pod, pod_registry])
+    if modes != 1:
+        typer.echo("Error: specify exactly one of --schema, --schema-pod, or --pod-registry.")
         raise typer.Exit(1) from None
     try:
+        if pod_registry:
+            counts = import_pod_registry_workbook(from_excel)
+            for table, n in counts.items():
+                typer.echo(f"  {table}: {n} rows")
+            typer.echo("POD registry seeded and published to DuckDB.")
+            return
         if schema_pod:
             results = load_pod_workbook_to_duckdb(from_excel)
             for result in results:
@@ -279,6 +298,11 @@ def load(
         schema_path = schema
         assert schema_path is not None
         result = load_excel_to_duckdb(from_excel, schema_path)
+    except PodRegistryImportError as e:
+        typer.echo("Error: POD registry import failed:")
+        for msg in e.errors:
+            typer.echo(f"  - {msg}")
+        raise typer.Exit(1) from None
     except (LoadSchemaError, SpreadsheetLoadError) as e:
         typer.echo(f"Error: {e}")
         raise typer.Exit(1) from None
