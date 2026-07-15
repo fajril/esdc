@@ -83,10 +83,10 @@ from esdc.chat.widgets import (  # noqa: F401,E402  (re-exported for tests/back-
     ChatInput,
     ChatMessage,
     ChatPanel,
+    ContextHealth,
     ContextPanel,
     ConversationTitle,
     Footer,
-    QueryHistory,
     ResultsPanel,
     SQLPanel,
     StatusBar,
@@ -187,20 +187,6 @@ class ESDCChatApp(App):
         color: #a0a0a0;
     }
 
-    /* ===== Widget - Clean Design ===== */
-    QueryHistory {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-    }
-
-    .history-item {
-        height: auto;
-        padding: 0 1;
-        margin: 1 0;
-    }
-
     /* ===== Thinking Indicator - Subtle ===== */
     ThinkingIndicator {
         padding: 1 2;
@@ -282,6 +268,7 @@ class ESDCChatApp(App):
         self._system_prompt: str = ""
         self._context_panel_visible: bool = True
         self._context_metadata: dict | None = None
+        self._compaction_notified: bool = False
 
         # Queue-based streaming infrastructure
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -432,6 +419,7 @@ class ESDCChatApp(App):
             self._thread_id = create_thread_id()
             self._token_count = 0
             self._context_metadata = None
+            self._compaction_notified = False
             self._conversation_title = ""
             self._title_generated = False
             if self.chat_panel:
@@ -441,7 +429,7 @@ class ESDCChatApp(App):
                     self._context_panel.timeline.reset()
                     self._context_panel.sql_panel.set_sql("")
                     self._context_panel.results_panel.set_results("")
-                    self._context_panel.query_history.clear()
+                    self._context_panel.context_health.reset()
                     self._context_panel.update_conversation_title("New Conversation")
                 except Exception:
                     logger.debug("panel reset failed", exc_info=True)
@@ -496,10 +484,6 @@ class ESDCChatApp(App):
                 self._context_panel.timeline.reset()
             except Exception:
                 logger.debug("timeline reset failed", exc_info=True)
-            try:
-                self._context_panel.query_history.add_query(user_input)
-            except Exception:
-                logger.debug("query history update failed", exc_info=True)
 
         # Create streaming AI message
         self._streaming_message = ChatMessage("ai", "")
@@ -688,6 +672,13 @@ class ESDCChatApp(App):
             # Only update if compaction occurred (don't overwrite with non-compaction)
             if metadata and metadata.get("was_compacted"):
                 self._context_metadata = metadata
+                if not self._compaction_notified:
+                    self._compaction_notified = True
+                    self.display_message(
+                        "system",
+                        "Context compacted — older turns are now summarized. "
+                        "For unrelated topics, /new gives a fresh start.",
+                    )
 
         elif chunk_type == "messages_state":
             messages = chunk.get("messages", [])
@@ -702,6 +693,20 @@ class ESDCChatApp(App):
                     base_url=self._base_url,
                 )
                 self._set_status()
+                message_count = chunk.get("message_count", len(messages))
+                if self._context_panel:
+                    try:
+                        self._context_panel.context_health.update_health(
+                            self._token_count,
+                            self._context_length,
+                            message_count,
+                            compacted=bool(
+                                self._context_metadata
+                                and self._context_metadata.get("was_compacted")
+                            ),
+                        )
+                    except Exception:
+                        logger.debug("context health update failed", exc_info=True)
 
         elif chunk_type == "token_usage":
             # DEPRECATED: messages_state provides more accurate token count

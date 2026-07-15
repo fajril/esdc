@@ -120,7 +120,7 @@ class TestRightPanelComposition:
         from esdc.chat.widgets import ContextPanel
 
         source = inspect.getsource(ContextPanel.compose)
-        for widget in ("ToolTimeline", "SQLPanel", "ResultsPanel", "QueryHistory"):
+        for widget in ("ToolTimeline", "SQLPanel", "ResultsPanel", "ContextHealth"):
             assert widget in source, f"{widget} missing from ContextPanel.compose"
 
 
@@ -313,3 +313,64 @@ class TestStatusBarLiveness:
             }
         )
         assert "thinking" in str(app.status_bar._status_text).lower()
+
+
+class TestContextHealth:
+    """Tests for ContextHealth's rendered text.
+
+    `Static` in this Textual version exposes no public `.renderable`
+    attribute, so we capture the string passed to `update()` instead —
+    behavior (the text shown to the user) is the contract, not the
+    storage mechanism.
+    """
+
+    def _captured_text(self, ch, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(ch, "update", lambda content: captured.__setitem__("v", content))
+        return captured
+
+    def test_green_below_50(self, monkeypatch):
+        from esdc.chat.widgets import ContextHealth
+
+        ch = ContextHealth()
+        captured = self._captured_text(ch, monkeypatch)
+        ch.update_health(10_000, 100_000, 4)
+        text = captured["v"]
+        assert "10%" in text and "Full memory" in text
+
+    def test_yellow_between_50_and_75(self, monkeypatch):
+        from esdc.chat.widgets import ContextHealth
+
+        ch = ContextHealth()
+        captured = self._captured_text(ch, monkeypatch)
+        ch.update_health(60_000, 100_000, 12)
+        assert "Getting long" in captured["v"]
+
+    def test_compaction_latches_red(self, monkeypatch):
+        from esdc.chat.widgets import ContextHealth
+
+        ch = ContextHealth()
+        captured = self._captured_text(ch, monkeypatch)
+        ch.update_health(80_000, 100_000, 20, compacted=True)
+        assert "Compacted" in captured["v"]
+        ch.update_health(10_000, 100_000, 2)  # stays red until reset
+        assert "Compacted" in captured["v"]
+        ch.reset()
+        ch.update_health(10_000, 100_000, 2)
+        assert "Full memory" in captured["v"]
+
+
+class TestCompactionNotice:
+    def test_one_time_system_message(self, monkeypatch):
+        from esdc.chat.app import ESDCChatApp
+
+        app = ESDCChatApp()
+        shown = []
+        monkeypatch.setattr(
+            app, "display_message", lambda role, c: shown.append((role, c))
+        )
+        meta = {"type": "context_metadata", "metadata": {"was_compacted": True}}
+        app._handle_stream_chunk(meta)
+        app._handle_stream_chunk(meta)
+        notices = [c for r, c in shown if r == "system" and "compacted" in c.lower()]
+        assert len(notices) == 1

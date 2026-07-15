@@ -107,51 +107,6 @@ class TestChatPanel:
         assert panel.results_content == "result data"
 
 
-class TestQueryHistory:
-    """Tests for QueryHistory widget."""
-
-    def test_query_history_creation(self):
-        """Test QueryHistory can be created."""
-        from esdc.chat.app import QueryHistory
-
-        widget = QueryHistory()
-        assert widget.queries == []
-
-    def test_query_history_add(self):
-        """Test adding queries."""
-        from esdc.chat.app import QueryHistory
-
-        widget = QueryHistory(max_queries=5)
-        widget.add_query("SELECT * FROM table1")
-        widget.add_query("SELECT name FROM table2")
-
-        assert len(widget.queries) == 2
-        assert widget.queries[0] == "SELECT * FROM table1"
-
-    def test_query_history_limit(self):
-        """Test query history limit."""
-        from esdc.chat.app import QueryHistory
-
-        widget = QueryHistory(max_queries=3)
-        widget.add_query("query 1")
-        widget.add_query("query 2")
-        widget.add_query("query 3")
-        widget.add_query("query 4")
-
-        assert len(widget.queries) == 3
-        assert widget.queries[0] == "query 2"
-
-    def test_query_history_clear(self):
-        """Test clearing history."""
-        from esdc.chat.app import QueryHistory
-
-        widget = QueryHistory()
-        widget.add_query("query 1")
-        widget.clear()
-
-        assert widget.queries == []
-
-
 class TestContextPanel:
     """Tests for ContextPanel widget (session info only)."""
 

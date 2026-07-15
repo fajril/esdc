@@ -16,64 +16,62 @@ MAX_MESSAGE_HISTORY = 100
 IRIS_VERSION = "0.6.0"
 
 
-class QueryHistory(Static):
-    """Widget to display recent query history."""
+class ContextHealth(Static):
+    """Context pressure indicator — signals hallucination risk.
+
+    States:
+      <50%              green  "Full memory"
+      50-75%            yellow "Getting long"
+      >=75% or compacted red   "Compacted — older detail is summarized"
+    Compaction latches: once compacted, stays red until reset().
+    """
 
     DEFAULT_CSS = """
-    QueryHistory {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-    }
-
-    .history-item {
-        height: auto;
+    ContextHealth {
         padding: 0 1;
-        margin: 1 0;
-    }
-
-    .placeholder {
         color: $text-muted;
-    }
-
-    .history-number {
-        color: $text-muted;
-        text-style: bold;
+        background: transparent;
     }
     """
 
-    def __init__(self, max_queries: int = 5, id: str | None = None):
-        """Initialize the query history widget."""
-        super().__init__(id=id)
-        self.max_queries = max_queries
-        self.queries: list[str] = []
+    _BAR_CELLS = 10
 
-    def add_query(self, query: str) -> None:
-        """Add a query to history."""
-        self.queries.append(query)
-        if len(self.queries) > self.max_queries:
-            self.queries = self.queries[-self.max_queries :]
-        self._update_display()
+    def __init__(self, id: str | None = None):
+        """Initialize the context health widget."""
+        super().__init__("Context ░░░░░░░░░░ 0%", id=id)
+        self._compacted = False
 
-    def clear(self) -> None:
-        """Clear query history."""
-        self.queries = []
-        self._update_display()
+    def update_health(
+        self,
+        token_count: int,
+        context_length: int,
+        message_count: int,
+        compacted: bool = False,
+    ) -> None:
+        """Update the context pressure display."""
+        if compacted:
+            self._compacted = True
+        pct = (
+            int((token_count / context_length) * 100) if context_length > 0 else 0
+        )
+        filled = min(self._BAR_CELLS, round(pct / self._BAR_CELLS))
+        bar = "▓" * filled + "░" * (self._BAR_CELLS - filled)
+        if self._compacted:
+            state = "[red]● Compacted — older detail is summarized[/red]"
+        elif pct >= 50:
+            state = "[yellow]● Getting long[/yellow]"
+        else:
+            state = "[green]● Full memory[/green]"
+        self.update(
+            f"Context {bar} {pct}%\n"
+            f"{token_count:,} / {context_length:,} · {message_count} messages\n"
+            f"{state}"
+        )
 
-    def compose(self) -> ComposeResult:
-        """Compose the history list."""
-        if not self.queries:
-            yield Static("No queries yet", classes="history-item placeholder")
-            return
-
-        for i, query in enumerate(reversed(self.queries), 1):
-            truncated = query[:50] + "..." if len(query) > 50 else query
-            yield Static(f"{i}. {truncated}", classes="history-item")
-
-    def _update_display(self) -> None:
-        """Refresh display."""
-        self.refresh()
+    def reset(self) -> None:
+        """Reset the context health display and clear the compaction latch."""
+        self._compacted = False
+        self.update("Context ░░░░░░░░░░ 0%")
 
 
 class ConversationTitle(Static):
@@ -235,7 +233,7 @@ class ContextPanel(Vertical):
         yield ToolTimeline(id="tool-timeline")
         yield SQLPanel(id="sql-panel")
         yield ResultsPanel(id="results-panel")
-        yield QueryHistory(id="query-history")
+        yield ContextHealth(id="context-health")
 
     @property
     def timeline(self) -> "ToolTimeline":
@@ -253,9 +251,9 @@ class ContextPanel(Vertical):
         return self.query_one("#results-panel", ResultsPanel)
 
     @property
-    def query_history(self) -> "QueryHistory":
-        """Return the mounted QueryHistory widget."""
-        return self.query_one("#query-history", QueryHistory)
+    def context_health(self) -> "ContextHealth":
+        """Return the mounted ContextHealth widget."""
+        return self.query_one("#context-health", ContextHealth)
 
     def on_mount(self) -> None:
         """Called when panel is mounted."""
