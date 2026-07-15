@@ -1,0 +1,172 @@
+"""POD registry portal — Excel-like editor over the SQLite registry."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import asdict
+from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from esdc.pod_registry.changesets import apply_changeset
+from esdc.pod_registry.publish import publish_pod_registry
+from esdc.pod_registry.store import get_sqlite_connection
+from esdc.portal.tables import TABLE_CONFIGS
+
+logger = logging.getLogger(__name__)
+
+_M_POD_ROWS_SQL = """
+SELECT m.*,
+    (SELECT group_concat(predecessor_id, '; ') FROM pod_revision
+      WHERE successor_id = m.pod_id) AS preceded_by,
+    (SELECT group_concat(successor_id, '; ') FROM pod_revision
+      WHERE predecessor_id = m.pod_id) AS superseded_by
+FROM m_pod m ORDER BY m.approval_seq
+"""
+
+# r_institution/r_pod_type grid columns use "institution"/"pod_type" as the
+# editable field name, but the changeset service's insert/update contract for
+# these tables expects the key "name" (see pod_registry/changesets.py
+# _apply_inserts / _apply_updates for r_institution and r_pod_type).
+_R_TABLE_NAME_FIELD = {"r_institution": "institution", "r_pod_type": "pod_type"}
+
+
+def _normalize_r_table_rows(table: str, rows: list[dict]) -> list[dict]:
+    """Rename the grid's institution/pod_type field to "name" for apply_changeset."""
+    field = _R_TABLE_NAME_FIELD.get(table)
+    if field is None:
+        return rows
+    normalized = []
+    for row in rows:
+        row = dict(row)
+        if field in row:
+            row["name"] = row.pop(field)
+        normalized.append(row)
+    return normalized
+
+
+def _fetch_rows(table: str) -> list[dict]:
+    conn = get_sqlite_connection()
+    try:
+        sql = _M_POD_ROWS_SQL if table == "m_pod" else f"SELECT * FROM {table}"
+        return [dict(r) for r in conn.execute(sql)]
+    finally:
+        conn.close()
+
+
+def _fetch_refs() -> dict:
+    conn = get_sqlite_connection()
+    try:
+        return {
+            "institutions": [dict(r) for r in conn.execute(
+                "SELECT code, institution FROM r_institution ORDER BY code")],
+            "pod_types": [dict(r) for r in conn.execute(
+                "SELECT code, pod_type FROM r_pod_type ORDER BY code")],
+            "pods": [dict(r) for r in conn.execute(
+                "SELECT id, pod_id, pod_name FROM m_pod ORDER BY approval_seq")],
+            "pod_ids": [r["pod_id"] for r in conn.execute(
+                "SELECT pod_id FROM m_pod ORDER BY approval_seq")],
+        }
+    finally:
+        conn.close()
+
+
+def _known_project_ids() -> set[str] | None:
+    """Project ids from DuckDB for typo checking; None if unavailable."""
+    from esdc.configs import Config
+    from esdc.dbmanager import get_duckdb_connection
+
+    db_path = Config.get_db_file()
+    if not Path(db_path).exists():
+        return None
+    try:
+        conn = get_duckdb_connection(db_path, read_only=True)
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT project_id FROM project_resources"
+            ).fetchall()
+            return {r[0] for r in rows}
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("project id validation unavailable", exc_info=True)
+        return None
+
+
+def create_portal_app() -> FastAPI:
+    app = FastAPI(title="ESDC POD Portal")
+    base = Path(__file__).resolve().parent
+    app.mount("/static", StaticFiles(directory=base / "static"), name="static")
+    templates = Jinja2Templates(directory=base / "templates")
+
+    @app.get("/api/tables/{table}")
+    def get_table(table: str):
+        if table not in TABLE_CONFIGS:
+            raise HTTPException(status_code=404, detail="unknown table")
+        return {"rows": _fetch_rows(table), "refs": _fetch_refs()}
+
+    @app.post("/api/tables/{table}/save")
+    async def save_table(table: str, request: Request):
+        if table not in TABLE_CONFIGS:
+            raise HTTPException(status_code=404, detail="unknown table")
+        changes = await request.json()
+        if table in _R_TABLE_NAME_FIELD:
+            changes = dict(changes)
+            changes["inserts"] = _normalize_r_table_rows(
+                table, changes.get("inserts") or []
+            )
+            changes["updates"] = _normalize_r_table_rows(
+                table, changes.get("updates") or []
+            )
+        known = _known_project_ids() if table == "project_pod" else None
+        result = apply_changeset(table, changes, known_project_ids=known)
+        payload = {
+            "ok": result.ok,
+            "applied": result.applied,
+            "generated": result.generated,
+            "errors": [asdict(e) for e in result.errors],
+        }
+        if not result.ok:
+            return JSONResponse(status_code=422, content=payload)
+        try:
+            publish_pod_registry()
+        except Exception as exc:  # sqlite already committed — surface, allow retry
+            logger.error("publish after save failed", exc_info=True)
+            payload["publish_error"] = str(exc)
+        return payload
+
+    @app.post("/api/publish")
+    def publish():
+        results = publish_pod_registry()
+        return {"ok": True, "tables": {r.table_name: r.row_count for r in results}}
+
+    @app.get("/api/projects")
+    def projects(q: str = ""):
+        known = _known_project_ids()
+        if not known:
+            return []
+        ql = q.lower()
+        return sorted(p for p in known if ql in p.lower())[:20]
+
+    # HTML pages added in Task 8
+    _register_pages(app, templates)
+    return app
+
+
+def _register_pages(app: FastAPI, templates: Jinja2Templates) -> None:
+    """Grid pages — implemented in Task 8. No-op until then."""
+
+
+def run_portal(
+    host: str = "127.0.0.1", port: int = 13334, log_level: str = "info"
+) -> None:
+    from esdc.configs import Config
+
+    Config.init_config()
+    app = create_portal_app()
+    logger.info(f"Starting POD portal on http://{host}:{port}/")
+    uvicorn.run(app, host=host, port=port, log_level=log_level)
