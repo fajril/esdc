@@ -92,6 +92,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New `_record_cache_invalidation()` and `get_last_cache_invalidation()` in `esdc/dbmanager.py`
   - Color-coded hit rate: green ≥80%, yellow ≥50%, red <50%
 
+### Added
+- **Chat TUI overhaul** — complete redesign of chat interface with new panels, status bar, slash commands, and performance improvements
+  - Provider-reported token usage over heuristic
+  - Context health indicator (replaces query history)
+  - Inference liveness in status bar and ticking timeline
+  - Current WIB datetime injected into system prompt
+  - Image links surfacing with ctrl+o open shortcut
+  - /new and /help slash commands
+  - Model reasoning streaming into ThinkingIndicator
+  - SQL, results, and query history moved to right panel
+  - Live tool timeline in right panel
+  - Session/context info consolidated into one-line status bar
+  - Markdown rendering throttled to 10Hz flush
+- **Glossary for non-KSMI commercial terms**
+
+### Changed
+- Extracted widgets from `app.py` into `widgets.py`
+- Unified TUI streaming on shared `astream_agent_events`
+- Moved `event_streamer` to `esdc/chat` as shared streaming module
+- Deleted unused `AgentFactory` from server
+- Removed no-op `--web` flag from `serve` command
+- Removed broken `chat --setup` flag, point hints to `esdc configs`
+
+### Fixed
+- ThinkingIndicator safe for dynamic mid-stream mounting
+- Match real tool display names so SQL/results panels populate
+
 ## [0.7.0] - 2026-05-13
 
 ### Changed
