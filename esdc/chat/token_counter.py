@@ -269,6 +269,38 @@ def extract_usage_from_message(message: Any) -> TokenUsage | None:
     return None
 
 
+def resolve_context_tokens(
+    messages: Sequence[Any],
+    system_prompt: str = "",
+    provider_type: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> tuple[int, bool]:
+    """Best-available context token count.
+
+    Prefers the provider-reported usage from the most recent AI message
+    (its prompt already covers system + full history). Falls back to the
+    local estimate when no message carries usage.
+
+    Returns:
+        (token_count, exact) — exact is True when provider-reported.
+    """
+    for message in reversed(list(messages)):
+        usage = extract_usage_from_message(message)
+        if usage and usage.total_tokens > 0:
+            return usage.total_tokens, True
+    return (
+        estimate_messages_tokens(
+            messages,
+            system_prompt=system_prompt,
+            provider_type=provider_type,
+            model=model,
+            base_url=base_url,
+        ),
+        False,
+    )
+
+
 def estimate_message_output_tokens(
     message: Any,
     provider_type: str | None = None,

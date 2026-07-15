@@ -33,6 +33,31 @@ class TestStatusBar:
         )
         assert "[red]" in str(bar._status_text)
 
+    def test_estimated_usage_shows_approx_marker(self):
+        from esdc.chat.widgets import StatusBar
+
+        bar = StatusBar()
+        bar.set_status(
+            model_name="m",
+            thread_id="t",
+            token_count=50,
+            context_length=100,
+            exact=False,
+        )
+        assert "≈" in str(bar._status_text)
+
+    def test_exact_usage_has_no_approx_marker(self):
+        from esdc.chat.widgets import StatusBar
+
+        bar = StatusBar()
+        bar.set_status(
+            model_name="m",
+            thread_id="t",
+            token_count=50,
+            context_length=100,
+        )
+        assert "≈" not in str(bar._status_text)
+
 
 class TestContextPanelSlim:
     def test_context_panel_has_no_session_or_context_sections(self):
@@ -356,6 +381,24 @@ class TestContextHealth:
         ch.update_health(10_000, 100_000, 2)  # stays red until reset
         assert "Compacted" in captured["v"]
         ch.reset()
+
+    def test_estimated_usage_shows_approx_marker(self, monkeypatch):
+        from esdc.chat.widgets import ContextHealth
+
+        ch = ContextHealth()
+        captured = self._captured_text(ch, monkeypatch)
+        ch.update_health(10_000, 100_000, 4, exact=False)
+        text = captured["v"]
+        assert "≈10%" in text
+        assert "≈10,000" in text
+
+    def test_exact_usage_has_no_approx_marker(self, monkeypatch):
+        from esdc.chat.widgets import ContextHealth
+
+        ch = ContextHealth()
+        captured = self._captured_text(ch, monkeypatch)
+        ch.update_health(10_000, 100_000, 4)
+        assert "≈" not in captured["v"]
         ch.update_health(10_000, 100_000, 2)
         assert "Full memory" in captured["v"]
 

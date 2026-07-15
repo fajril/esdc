@@ -47,6 +47,7 @@ class ContextHealth(Static):
         context_length: int,
         message_count: int,
         compacted: bool = False,
+        exact: bool = True,
     ) -> None:
         """Update the context pressure display."""
         if compacted:
@@ -62,9 +63,10 @@ class ContextHealth(Static):
             state = "[yellow]● Getting long[/yellow]"
         else:
             state = "[green]● Full memory[/green]"
+        approx = "" if exact else "≈"
         self.update(
-            f"Context {bar} {pct}%\n"
-            f"{token_count:,} / {context_length:,} · {message_count} messages\n"
+            f"Context {bar} {approx}{pct}%\n"
+            f"{approx}{token_count:,} / {context_length:,} · {message_count} messages\n"
             f"{state}"
         )
 
@@ -381,6 +383,7 @@ class StatusBar(Static):
         token_count: int = 0,
         context_length: int = 0,
         tool_status: str = "",
+        exact: bool = True,
     ) -> None:
         """Update status bar display."""
         parts = [f"IRIS v{IRIS_VERSION}"]
@@ -390,7 +393,8 @@ class StatusBar(Static):
             parts.append(f"thread {str(thread_id)[:8]}")
         if context_length > 0:
             pct = int((token_count / context_length) * 100)
-            usage = f"{token_count:,}/{context_length:,} ({pct}%)"
+            approx = "" if exact else "≈"
+            usage = f"{approx}{token_count:,}/{context_length:,} ({pct}%)"
             if pct >= 75:
                 usage = f"[red]{usage}[/red]"
             parts.append(usage)

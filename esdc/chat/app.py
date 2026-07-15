@@ -260,6 +260,7 @@ class ESDCChatApp(App):
         self._message_count: int = 0
         self._cancelled: bool = False
         self._token_count: int = 0
+        self._token_count_exact: bool = False
         self._context_length: int = 4096
         self._provider_name: str = ""
         self._provider_type: str = ""
@@ -360,6 +361,7 @@ class ESDCChatApp(App):
                 token_count=self._token_count,
                 context_length=self._context_length,
                 tool_status=tool_status,
+                exact=self._token_count_exact,
             )
 
     def _init_agent(self) -> None:
@@ -418,6 +420,7 @@ class ESDCChatApp(App):
 
             self._thread_id = create_thread_id()
             self._token_count = 0
+            self._token_count_exact = False
             self._context_metadata = None
             self._compaction_notified = False
             self._conversation_title = ""
@@ -683,9 +686,9 @@ class ESDCChatApp(App):
         elif chunk_type == "messages_state":
             messages = chunk.get("messages", [])
             if messages:
-                from esdc.chat.context_manager import estimate_tokens
+                from esdc.chat.token_counter import resolve_context_tokens
 
-                self._token_count = estimate_tokens(
+                self._token_count, self._token_count_exact = resolve_context_tokens(
                     messages,
                     system_prompt=self._system_prompt,
                     provider_type=self._provider_type,
@@ -704,6 +707,7 @@ class ESDCChatApp(App):
                                 self._context_metadata
                                 and self._context_metadata.get("was_compacted")
                             ),
+                            exact=self._token_count_exact,
                         )
                     except Exception:
                         logger.debug("context health update failed", exc_info=True)
