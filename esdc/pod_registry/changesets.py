@@ -55,10 +55,18 @@ def apply_changeset(
         if errors:
             return ChangesetResult(ok=False, errors=errors)
         generated: list[dict] = []
-        with conn:
-            _apply_deletes(conn, table, deletes)
-            _apply_updates(conn, table, updates)
-            generated = _apply_inserts(conn, table, inserts)
+        try:
+            with conn:
+                _apply_deletes(conn, table, deletes)
+                _apply_updates(conn, table, updates)
+                generated = _apply_inserts(conn, table, inserts)
+        except sqlite3.IntegrityError as exc:
+            # Second line of defense: the with-block above has already rolled
+            # back, so map the constraint violation to a row error.
+            return ChangesetResult(
+                ok=False,
+                errors=[RowError("apply", -1, f"constraint violation: {exc}")],
+            )
         return ChangesetResult(
             ok=True,
             applied={

@@ -176,6 +176,36 @@ def test_pod_revision_rejects_self_link(monkeypatch, tmp_path):
     assert not result.ok
 
 
+def test_constraint_violation_returns_row_error_not_exception(monkeypatch, tmp_path):
+    _seed_refs(monkeypatch, tmp_path)
+    apply_changeset(
+        "m_pod",
+        {
+            "inserts": [
+                {
+                    "id": 900,
+                    "pod_name": "POD Baru",
+                    "approval_date": "2026-07-15",
+                    "institution_code": 4,
+                    "pod_type_code": 1,
+                    "rev_num": 0,
+                }
+            ]
+        },
+    )
+    result = apply_changeset("m_pod", {"updates": [{"id": 900, "pod_name": None}]})
+    assert not result.ok
+    assert result.errors[0].kind == "apply"
+    conn = get_sqlite_connection()
+    try:
+        assert (
+            conn.execute("SELECT pod_name FROM m_pod WHERE id=900").fetchone()[0]
+            == "POD Baru"
+        )
+    finally:
+        conn.close()
+
+
 def test_atomic_no_partial_writes(monkeypatch, tmp_path):
     _seed_refs(monkeypatch, tmp_path)
     result = apply_changeset(
