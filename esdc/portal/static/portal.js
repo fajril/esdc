@@ -208,6 +208,11 @@ function buildGrid(tableName, cfg, payload) {
     selectableRange: 1,
     selectableRangeColumns: true,
     selectableRangeRows: true,
+    // With range selection enabled, the default edit trigger ("focus")
+    // conflicts with the range-selection module: single click only selects
+    // the range and editors never open. Tabulator 6.x's documented pairing
+    // for spreadsheet-style UX is single click = select, double click = edit.
+    editTriggerEvent: "dblclick",
   };
   // Only a single-column pk is a valid, unique Tabulator row index; composite
   // pks (project_pod, pod_revision) fall back to Tabulator's internal index.
