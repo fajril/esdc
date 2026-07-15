@@ -6,11 +6,12 @@ description: >-
 llm_fields: # order = order of definition lines in METADATA_PROMPT
   - name: doc_type
     type: string
-    enum: [uu, perpu, mk, pp, permen, kepmen, ptk, sop, letter, mom, ba, note, contract, book, others]
+    enum: [uu, perpu, mk, pp, perpres, permen, kepres, kepmen, ptk, sop, letter, mom, ba, note, contract, book, others]
     prompt: |-
       one of "uu" (undang-undang) | "perpu" (peraturan pengganti UU) | "mk"
-        (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "permen"
-        (peraturan menteri) | "kepmen" (keputusan menteri) | "ptk" (pedoman
+        (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "perpres"
+        (peraturan presiden) | "permen" (peraturan menteri) | "kepres"
+        (keputusan presiden) | "kepmen" (keputusan menteri) | "ptk" (pedoman
         tata kerja SKK Migas) | "sop" (standard operating procedure) |
         "letter" (official letter: persetujuan/edaran/umum) | "mom" (minutes
         of meeting) | "ba" (berita acara) | "note" (non-binding note) |
@@ -18,7 +19,7 @@ llm_fields: # order = order of definition lines in METADATA_PROMPT
         (bound proposal/approval book, e.g. POD/WP&B) | "others"
     description: >-
       Document category (FORM, not topic): regulatory instruments (uu, perpu,
-      mk, pp, permen, kepmen, ptk, sop — high to low legal force), letter
+      mk, pp, perpres, permen, kepres, kepmen, ptk, sop — high to low legal force), letter
       (official letter), mom (minutes of meeting), ba (berita acara), note
       (non-binding note), contract (binding commercial contract, e.g. PSC or
       GSA), book (bound proposal/approval book, e.g. POD or WP&B submission),
@@ -148,12 +149,18 @@ doc_types: # authoritative glossary, one entry per doc_type enum value
   - name: pp
     title: Peraturan Pemerintah
     description: Peraturan pemerintah (PP) — aturan pelaksana di bawah UU.
+  - name: perpres
+    title: Peraturan Presiden
+    description: Peraturan presiden (perpres) — peraturan yang diterbitkan Presiden.
   - name: permen
     title: Peraturan Menteri
     description: Peraturan menteri (permen) — peraturan yang diterbitkan Menteri.
   - name: kepmen
     title: Keputusan Menteri
     description: Keputusan menteri (kepmen) — kebijakan yang diambil Menteri.
+  - name: kepres
+    title: Keputusan Presiden
+    description: Keputusan presiden (kepres) — kebijakan yang diambil Presiden.
   - name: ptk
     title: Pedoman Tata Kerja
     description: >-
@@ -194,7 +201,9 @@ doc_types: # authoritative glossary, one entry per doc_type enum value
 doc_type_hierarchy: # regulatory force, high to low; ties share a level
   - [uu, perpu, mk]
   - [pp]
+  - [perpres]
   - [permen]
+  - [kepres]
   - [kepmen]
   - [ptk]
   - [sop]
@@ -214,7 +223,9 @@ doc_level_rules: # doc_type rule takes precedence over doc_topic rule
     perpu: regulation
     mk: regulation
     pp: regulation
+    perpres: regulation
     permen: regulation
+    kepres: regulation
     kepmen: regulation
     ptk: regulation
     sop: regulation
@@ -229,5 +240,5 @@ doc_level_rules: # doc_type rule takes precedence over doc_topic rule
     psc: wk
 enums:
   doc_level: [wk, field, project, regulation, unknown]
-  doc_type: [uu, perpu, mk, pp, permen, kepmen, ptk, sop, letter, mom, ba, note, contract, book, others]
+  doc_type: [uu, perpu, mk, pp, perpres, permen, kepres, kepmen, ptk, sop, letter, mom, ba, note, contract, book, others]
   doc_topic: [pod_i, pod, pofd, opl, opll, wpnb, afe, psc, gsa, monitoring_pod, others]
