@@ -2118,7 +2118,7 @@ def knowledge_traversal(
         str | None,
         "Optional entity name to narrow results. "
         "Examples: 'E0', 'GRR', 'PSE', 'GROOVY', "
-        "'DokumenPenentuanStatusEksplorasi', 'SalesPotentialResources'. "
+        "'DokumenPenentuanStatusEksplorasi', 'SalesPotentialResources', 'TBS'. "
         "If provided, returns only that entity regardless of topic.",
     ] = None,
     relationship: Annotated[
@@ -2165,6 +2165,10 @@ def knowledge_traversal(
     reachability matrix covering all 18 levels (E0-E8, X0-X6, A1, A2).
     The queried entity, if provided, is visually highlighted.
 
+    Entity lookup also consults a general oil & gas glossary of non-KSMI
+    commercial/financing terms (e.g. TBS = Trustee Borrowing Scheme) that
+    may appear in document text but are not part of the KSMI framework.
+
     Returns formatted text with definitions, key concepts, and rules.
     """
     if entity:
@@ -2176,6 +2180,15 @@ def knowledge_traversal(
                 return loaded_schema_result
         except Exception as e:
             logger.warning("[LoadedSchema-KG] lookup_failed | error=%s", e)
+
+        try:
+            from esdc.chat.domain_knowledge.glossary import glossary_lookup
+
+            glossary_result = glossary_lookup(entity)
+            if glossary_result:
+                return glossary_result
+        except Exception as e:
+            logger.warning("[Glossary] lookup_failed | error=%s", e)
 
     base_output, matrix_text = _query_graph(
         entity, relationship, topic, include_reachability

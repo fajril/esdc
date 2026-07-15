@@ -308,4 +308,15 @@ DOMAIN_CONCEPTS: dict[str, dict] = {
             ),
         },
     },
+    "commercial_terms": {
+        "TBS": {
+            "full_name": "Trustee Borrowing Scheme",
+            "description": (
+                "Project financing scheme: pinjaman melalui trustee, dibayar"
+                " kembali dari hasil penjualan produksi via rekening trustee."
+                " Bukan izin berproduksi. Umumnya muncul di bagian pendanaan"
+                " dokumen POD/POFD. See KSMI: TrusteeBorrowingScheme"
+            ),
+        },
+    },
 }

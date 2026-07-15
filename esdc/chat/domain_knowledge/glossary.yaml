@@ -1,0 +1,24 @@
+# General Domain Glossary
+# General oil & gas / commercial / PSC (Production Sharing Contract) terms
+# that are NOT part of the KSMI framework schema (those live in
+# ksmi_schema.yaml). Used by knowledge_traversal for term definitions that
+# appear in document text but fall outside the KSMI classification standard.
+
+TrusteeBorrowingScheme:
+  name: Trustee Borrowing Scheme
+  code: TBS
+  aliases:
+    - TBS
+    - Trustee Borrowing
+    - Skema Trustee Borrowing
+  definition: >-
+    Trustee Borrowing Scheme (TBS) adalah skema pendanaan proyek hulu migas di mana
+    pinjaman diperoleh melalui trustee (wali amanat/bank): hasil penjualan produksi
+    (umumnya gas/LNG) dialirkan ke rekening trustee dan digunakan terlebih dahulu
+    untuk pembayaran kembali pinjaman, sebelum sisanya didistribusikan ke para pihak.
+    TBS digunakan sebagai alternatif pendanaan proyek (project financing) dibandingkan
+    pendanaan korporat oleh KKKS.
+  key_concepts:
+    - TBS adalah skema commercial/financing, BUKAN izin berproduksi dan bukan dokumen KSMI
+    - Umumnya muncul pada bagian pendanaan (financing) dokumen POD/POFD
+    - Pembayaran pinjaman bersumber dari hasil penjualan produksi melalui rekening trustee
