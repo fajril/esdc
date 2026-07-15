@@ -8,7 +8,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -157,8 +157,38 @@ def create_portal_app() -> FastAPI:
     return app
 
 
+def _grid_payload(table: str) -> dict:
+    cfg = TABLE_CONFIGS[table]
+    return {"table": table, "title": cfg["title"],
+            "config": {"table": table, **cfg}}
+
+
 def _register_pages(app: FastAPI, templates: Jinja2Templates) -> None:
-    """Grid pages — implemented in Task 8. No-op until then."""
+    @app.get("/")
+    def root():
+        return RedirectResponse("/pods")
+
+    def _page(request: Request, title: str, tables: list[str]):
+        return templates.TemplateResponse(
+            request, "grid.html",
+            {"title": title, "grids": [_grid_payload(t) for t in tables]},
+        )
+
+    @app.get("/pods")
+    def pods(request: Request):
+        return _page(request, "PODs", ["m_pod"])
+
+    @app.get("/links")
+    def links(request: Request):
+        return _page(request, "Project Links", ["project_pod"])
+
+    @app.get("/revisions")
+    def revisions(request: Request):
+        return _page(request, "Revisions", ["pod_revision"])
+
+    @app.get("/references")
+    def references(request: Request):
+        return _page(request, "References", ["r_institution", "r_pod_type"])
 
 
 def run_portal(

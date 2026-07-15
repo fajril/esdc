@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+{% for grid in grids %}
+<section class="grid-section">
+  <h2>{{ grid.title }}</h2>
+  <div class="toolbar">
+    <button class="add-row" data-table="{{ grid.table }}">+ Add row</button>
+    <button class="save" data-table="{{ grid.table }}">Save</button>
+  </div>
+  <div id="grid-{{ grid.table }}" class="grid"></div>
+  <script type="application/json" id="config-{{ grid.table }}">{{ grid.config | tojson }}</script>
+</section>
+{% endfor %}
+<script>document.addEventListener("DOMContentLoaded", () => initGrids());</script>
+{% endblock %}

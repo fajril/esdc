@@ -1,0 +1,11 @@
+body { font-family: system-ui, sans-serif; margin: 0; }
+nav { display: flex; gap: 1rem; align-items: center; padding: .6rem 1rem;
+      background: #1a2733; color: #fff; }
+nav a { color: #cfe3f5; text-decoration: none; }
+main { padding: 1rem; }
+.toolbar { margin: .5rem 0; display: flex; gap: .5rem; }
+.tabulator-cell.cell-error { background: #ffd7d7 !important; }
+.tabulator-row.row-new { background: #eaf7ea; }
+.tabulator-row.row-deleted { text-decoration: line-through; opacity: .6; }
+.tabulator-cell.cell-readonly { color: #888; background: #f5f5f5; }
+#status { margin-left: auto; font-size: .9rem; }
