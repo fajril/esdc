@@ -1920,6 +1920,21 @@ def serve(
     run_server(host=host, port=port, log_level=log_level)
 
 
+@app.command(name="portal")
+def portal(
+    port: int = typer.Option(13334, "--port", "-p", help="Portal port"),
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Portal host"),
+    log_level: str = typer.Option("info", "--log-level", help="Log level"),
+) -> None:
+    """Launch the POD registry portal (Excel-like master data editor)."""
+    from esdc.portal.app import run_portal
+
+    rich.print(
+        f"[bold green]Starting POD portal on http://{host}:{port}/[/bold green]"
+    )
+    run_portal(host=host, port=port, log_level=log_level)
+
+
 @app.command(name="validate")
 def validate(
     rule: Annotated[

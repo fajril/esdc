@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- POD master registry: SQLite source of truth (`pod.sqlite`) published to DuckDB
+  (`pod_registry`, `pod_project`) for iris; seed with
+  `esdc load --from-excel pod-itb-skk.xlsx --pod-registry`.
+- `esdc portal` — Excel-like web editor (Tabulator) for PODs, project links,
+  revision chains, and reference tables, with generated immutable pod_id
+  (`PL-YYYY-XXXX-A-B-R`) and typo-preventing dropdown/autocomplete editors.
 - **`esdc corpus` document ingestion pipeline** — parse official documents (POD approvals, MoM minutes, BA documents, regulations, contracts) into a searchable local corpus for IRIS document search
   - Two-phase, human-reviewed workflow: `esdc corpus extract` parses sources to reviewable `.corpus.md` sidecars with LLM-prefilled metadata and per-page `native`/`llm_ocr` markers; `esdc corpus commit` ingests only sidecars marked `reviewed: true` into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed). Nothing reaches the searchable corpus without passing through this review gate.
   - Source formats: `.pdf`, `.docx` (python-docx: headings, markdown tables, document-order walk), and `.md` (verbatim); sidecar-path collisions between same-named sources fail explicitly
