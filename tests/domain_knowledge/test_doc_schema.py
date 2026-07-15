@@ -39,7 +39,9 @@ DOC_TYPE_ENUM = (
     "perpu",
     "mk",
     "pp",
+    "perpres",
     "permen",
+    "kepres",
     "kepmen",
     "ptk",
     "sop",
@@ -86,7 +88,7 @@ def test_doc_type_hierarchy_flattens_to_subset_of_enum():
     hierarchy = doc_schema.doc_type_hierarchy()
     flattened = {name for level in hierarchy for name in level}
     assert flattened <= set(DOC_TYPE_ENUM)
-    assert flattened == {"uu", "perpu", "mk", "pp", "permen", "kepmen", "ptk", "sop"}
+    assert flattened == {"uu", "perpu", "mk", "pp", "perpres", "permen", "kepres", "kepmen", "ptk", "sop"}
 
 
 def test_doc_type_hierarchy_order_high_to_low():
@@ -94,7 +96,9 @@ def test_doc_type_hierarchy_order_high_to_low():
     assert hierarchy == (
         ("uu", "perpu", "mk"),
         ("pp",),
+        ("perpres",),
         ("permen",),
+        ("kepres",),
         ("kepmen",),
         ("ptk",),
         ("sop",),
@@ -136,7 +140,9 @@ def test_doc_level_rules_exact_mapping():
             "perpu": "regulation",
             "mk": "regulation",
             "pp": "regulation",
+            "perpres": "regulation",
             "permen": "regulation",
+            "kepres": "regulation",
             "kepmen": "regulation",
             "ptk": "regulation",
             "sop": "regulation",

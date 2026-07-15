@@ -16,8 +16,9 @@ EXPECTED_METADATA_PROMPT = """You extract metadata from Indonesian oil & gas off
 Given the markdown of a document, return ONLY a JSON object with these keys
 (use null when unknown, never guess):
 - doc_type: one of "uu" (undang-undang) | "perpu" (peraturan pengganti UU) | "mk"
-  (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "permen"
-  (peraturan menteri) | "kepmen" (keputusan menteri) | "ptk" (pedoman
+  (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "perpres"
+  (peraturan presiden) | "permen" (peraturan menteri) | "kepres"
+  (keputusan presiden) | "kepmen" (keputusan menteri) | "ptk" (pedoman
   tata kerja SKK Migas) | "sop" (standard operating procedure) |
   "letter" (official letter: persetujuan/edaran/umum) | "mom" (minutes
   of meeting) | "ba" (berita acara) | "note" (non-binding note) |
@@ -59,7 +60,9 @@ def test_vocab_tuples_derived_from_schema():
         "perpu",
         "mk",
         "pp",
+        "perpres",
         "permen",
+        "kepres",
         "kepmen",
         "ptk",
         "sop",
@@ -93,7 +96,9 @@ def test_doc_types_new_vocab():
         "perpu",
         "mk",
         "pp",
+        "perpres",
         "permen",
+        "kepres",
         "kepmen",
         "ptk",
         "sop",
