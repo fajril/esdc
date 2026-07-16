@@ -133,6 +133,28 @@ function pkFields(cfg, data) {
   return out;
 }
 
+// Fields a user can actually fill on a row (excludes readonly + computed).
+function rowEditableFields(cfg) {
+  return cfg.columns
+    .filter((c) => !c.readonly && !COMPUTED_FIELDS.has(c.field))
+    .map((c) => c.field);
+}
+
+// A _new row the user never touched — all editable fields blank.
+function isBlankNewRow(cfg, data) {
+  return rowEditableFields(cfg).every((f) => {
+    const v = data[f];
+    return v === undefined || v === null || String(v).trim() === "";
+  });
+}
+
+// Empty grid gets one blank _new row so the user can type/paste immediately.
+function seedIfEmpty(state) {
+  if (state.table.getRows().length === 0) {
+    state.table.addRow({ _new: true });
+  }
+}
+
 function rowFormatter(row) {
   const data = row.getData();
   const el = row.getElement();
@@ -155,7 +177,9 @@ function buildChangeset(state) {
   const inserts = [];
   for (const row of state.table.getRows()) {
     const data = row.getData();
-    if (data._new && !data._deleted) inserts.push(stripForInsert(state.cfg, data));
+    if (data._new && !data._deleted && !isBlankNewRow(state.cfg, data)) {
+      inserts.push(stripForInsert(state.cfg, data));
+    }
   }
   const updates = Array.from(state.updates.values());
   const deletes = Array.from(state.deletes.values());
@@ -229,6 +253,7 @@ function buildGrid(tableName, cfg, payload) {
   };
   table.pod_state = state;
   gridState[tableName] = state;
+  table.on("tableBuilt", () => seedIfEmpty(state));
   return table;
 }
 
@@ -239,6 +264,7 @@ async function reloadGrid(tableName) {
   state.updates.clear();
   state.deletes.clear();
   await state.table.setData(payload.rows);
+  seedIfEmpty(state);
 }
 
 function clearRowErrors(table) {
