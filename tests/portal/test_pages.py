@@ -29,3 +29,15 @@ def test_all_pages_render(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     for path in ("/pods", "/links", "/revisions", "/references"):
         assert client.get(path).status_code == 200, path
+
+
+def test_pods_page_columns_in_excel_order(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    text = client.get("/pods").text
+    # Column headers must appear in the Excel POD Record order.
+    order = [
+        "ID (ITB)", "Approval Date", "Institution", "POD Type", "Rev",
+        "Name", "Letter No.", "Seq", "POD ID", "Preceded By", "Superseded By",
+    ]
+    positions = [text.index(f'"title": "{t}"') for t in order]
+    assert positions == sorted(positions), positions
