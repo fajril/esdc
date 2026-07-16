@@ -155,6 +155,85 @@ function seedIfEmpty(state) {
   }
 }
 
+// Can a pasted value be written into this column for this row?
+// Existing rows: only always-editable columns (structural fields stay locked).
+// New rows: editable or editableOnNew. Readonly columns are never written.
+function isColWritable(col, isNew) {
+  if (col.readonly) return false;
+  if (isNew) return !!(col.editable || col.editableOnNew);
+  return !!col.editable;
+}
+
+// Excel-style block paste: fill from the anchor cell across columns/rows,
+// overwriting editable cells and auto-adding new rows for overflow.
+async function handlePaste(e, state) {
+  const clip = e.clipboardData || window.clipboardData;
+  const text = clip ? clip.getData("text/plain") : "";
+  if (!text) return;
+  e.preventDefault();
+
+  const lines = text.replace(/\r?\n$/, "").split(/\r?\n/).map((l) => l.split("\t"));
+  const cfg = state.cfg;
+  const cols = cfg.columns; // ordered data columns (excludes the _delete col)
+
+  // Anchor = top-left of the current range selection; default row 0 / col 0.
+  let anchorRowPos = 0;
+  let anchorColIndex = 0;
+  const ranges = state.table.getRanges ? state.table.getRanges() : [];
+  if (ranges && ranges.length) {
+    const rg = ranges[0];
+    const rgRows = rg.getRows();
+    const rgCols = rg.getColumns();
+    if (rgRows.length) {
+      const pos = state.table.getRows().indexOf(rgRows[0]);
+      if (pos >= 0) anchorRowPos = pos;
+    }
+    if (rgCols.length) {
+      const field = rgCols[0].getField();
+      const ci = cols.findIndex((c) => c.field === field);
+      if (ci >= 0) anchorColIndex = ci;
+    }
+  }
+
+  for (let r = 0; r < lines.length; r++) {
+    const line = lines[r];
+    const targetPos = anchorRowPos + r;
+    let row = state.table.getRows()[targetPos];
+    let isNew;
+    if (!row) {
+      row = await state.table.addRow({ _new: true });
+      isNew = true;
+    } else {
+      isNew = row.getData()._new === true;
+    }
+
+    const patch = {};
+    const updatedFields = {};
+    for (let c = 0; c < line.length; c++) {
+      const fi = anchorColIndex + c;
+      if (fi >= cols.length) break; // pasted past the last column
+      const col = cols[fi];
+      if (!isColWritable(col, isNew)) continue;
+      const val = coerceValue(cfg, col.field, line[c]);
+      patch[col.field] = val;
+      if (!isNew) updatedFields[col.field] = val;
+    }
+
+    if (Object.keys(patch).length) {
+      row.update(patch);
+      if (!isNew) {
+        const d = row.getData();
+        const key = pkKey(cfg, d);
+        state.updates.set(key, {
+          ...(state.updates.get(key) || {}),
+          ...pkFields(cfg, d),
+          ...updatedFields,
+        });
+      }
+    }
+  }
+}
+
 function rowFormatter(row) {
   const data = row.getData();
   const el = row.getElement();
@@ -228,7 +307,7 @@ function buildGrid(tableName, cfg, payload) {
     layout: "fitDataStretch",
     rowFormatter,
     clipboard: true,
-    clipboardPasteAction: "range",
+    clipboardPasteAction: false, // paste handled by our custom handlePaste
     selectableRange: 1,
     selectableRangeColumns: true,
     selectableRangeRows: true,
@@ -254,6 +333,10 @@ function buildGrid(tableName, cfg, payload) {
   table.pod_state = state;
   gridState[tableName] = state;
   table.on("tableBuilt", () => seedIfEmpty(state));
+
+  const holder = document.getElementById(`grid-${tableName}`);
+  if (holder) holder.addEventListener("paste", (e) => handlePaste(e, state));
+
   return table;
 }
 
