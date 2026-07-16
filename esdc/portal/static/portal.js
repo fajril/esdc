@@ -176,23 +176,20 @@ async function handlePaste(e, state) {
   const cfg = state.cfg;
   const cols = cfg.columns; // ordered data columns (excludes the _delete col)
 
-  // Anchor = top-left of the current range selection; default row 0 / col 0.
+  // Anchor = the last cell the user clicked (tracked in state.anchor by the
+  // cellClick handler in buildGrid); default to the top-left data cell.
   let anchorRowPos = 0;
   let anchorColIndex = 0;
-  const ranges = state.table.getRanges ? state.table.getRanges() : [];
-  if (ranges && ranges.length) {
-    const rg = ranges[0];
-    const rgRows = rg.getRows();
-    const rgCols = rg.getColumns();
-    if (rgRows.length) {
-      const pos = state.table.getRows().indexOf(rgRows[0]);
-      if (pos >= 0) anchorRowPos = pos;
-    }
-    if (rgCols.length) {
-      const field = rgCols[0].getField();
-      const ci = cols.findIndex((c) => c.field === field);
-      if (ci >= 0) anchorColIndex = ci;
-    }
+  if (state.anchor) {
+    if (typeof state.anchor.rowPos === "number") anchorRowPos = state.anchor.rowPos;
+    const ci = cols.findIndex((c) => c.field === state.anchor.field);
+    if (ci >= 0) anchorColIndex = ci;
+  }
+
+  // A cell editor may be open on the anchor cell; commit/close it so its
+  // default paste does not also fire into the single input.
+  if (document.activeElement && typeof document.activeElement.blur === "function") {
+    document.activeElement.blur();
   }
 
   for (let r = 0; r < lines.length; r++) {
@@ -308,29 +305,11 @@ function buildGrid(tableName, cfg, payload) {
     rowFormatter,
     clipboard: true,
     clipboardPasteAction: false, // paste handled by our custom handlePaste
-    // Explicit row-number gutter. Without it, Tabulator's range module
-    // commandeers the first data column (id) as the row header, making id
-    // non-selectable — so it can never be a paste anchor and block paste is
-    // off by one. A dedicated gutter frees every data column for selection.
-    rowHeader: {
-      title: "",
-      field: "_rownum",
-      formatter: "rownum",
-      hozAlign: "center",
-      frozen: true,
-      width: 40,
-      resizable: false,
-      editable: false,
-      headerSort: false,
-    },
-    selectableRange: 1,
-    selectableRangeColumns: true,
-    selectableRangeRows: true,
-    // With range selection enabled, the default edit trigger ("focus")
-    // conflicts with the range-selection module: single click only selects
-    // the range and editors never open. Tabulator 6.x's documented pairing
-    // for spreadsheet-style UX is single click = select, double click = edit.
-    editTriggerEvent: "dblclick",
+    // Standard single-click editing. We deliberately do NOT enable Tabulator's
+    // range-selection module: it reserves single-click for range selection
+    // (forcing double-click to edit, which users miss), hijacks the first data
+    // column as a row-header gutter, and captures Enter. The paste anchor is
+    // tracked ourselves via the cellClick handler below.
   };
   // Only a single-column pk is a valid, unique Tabulator row index; composite
   // pks (project_pod, pod_revision) fall back to Tabulator's internal index.
@@ -344,10 +323,16 @@ function buildGrid(tableName, cfg, payload) {
     refs: payload.refs,
     updates: new Map(),
     deletes: new Map(),
+    anchor: null, // last-clicked cell {rowPos, field} — the paste anchor
   };
   table.pod_state = state;
   gridState[tableName] = state;
   table.on("tableBuilt", () => seedIfEmpty(state));
+
+  // Track the last-clicked cell as the paste anchor (getPosition is 1-based).
+  table.on("cellClick", (e, cell) => {
+    state.anchor = { rowPos: cell.getRow().getPosition() - 1, field: cell.getField() };
+  });
 
   const holder = document.getElementById(`grid-${tableName}`);
   if (holder) holder.addEventListener("paste", (e) => handlePaste(e, state));
