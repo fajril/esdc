@@ -308,6 +308,21 @@ function buildGrid(tableName, cfg, payload) {
     rowFormatter,
     clipboard: true,
     clipboardPasteAction: false, // paste handled by our custom handlePaste
+    // Explicit row-number gutter. Without it, Tabulator's range module
+    // commandeers the first data column (id) as the row header, making id
+    // non-selectable — so it can never be a paste anchor and block paste is
+    // off by one. A dedicated gutter frees every data column for selection.
+    rowHeader: {
+      title: "",
+      field: "_rownum",
+      formatter: "rownum",
+      hozAlign: "center",
+      frozen: true,
+      width: 40,
+      resizable: false,
+      editable: false,
+      headerSort: false,
+    },
     selectableRange: 1,
     selectableRangeColumns: true,
     selectableRangeRows: true,
