@@ -121,6 +121,7 @@ function buildColumn(col, refs) {
     column.editor = "list";
     column.editorParams = {
       valuesLookup: async (_cell, filterTerm) => {
+        // server returns [{value, label}] — label is "id — name"
         const resp = await fetch(`${url}?q=${encodeURIComponent(filterTerm || "")}`);
         return resp.ok ? await resp.json() : [];
       },
@@ -128,6 +129,11 @@ function buildColumn(col, refs) {
       freetext: true,
       filterRemote: true, // re-query per term; filterDelay debounces keystrokes
       filterDelay: 300,
+    };
+    const projects = refs.projects || {};
+    column.formatter = (cell) => {
+      const v = cell.getValue();
+      return v && projects[v] ? `${v} — ${projects[v]}` : (v ?? "");
     };
   }
 

@@ -77,12 +77,13 @@ def _fetch_refs() -> dict:
         conn.close()
 
 
-# project_id lookups back both the per-keystroke autocomplete and save-time
-# validation; opening DuckDB + DISTINCT-scanning project_resources on every
-# request makes typing stall, so cache the id set briefly (keyed by db path
-# so tests with distinct tmp dirs don't share entries).
+# project lookups back the per-keystroke autocomplete, save-time validation,
+# and the grid's id — name cell formatter; opening DuckDB + scanning
+# project_resources on every request makes typing stall, so cache the
+# id→name map briefly (keyed by db path so tests with distinct tmp dirs
+# don't share entries).
 _PROJECT_IDS_TTL_S = 60.0
-_project_ids_cache: dict[str, tuple[float, set[str] | None]] = {}
+_projects_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
 
 # publish rewrites the DuckDB snapshot tables; serialize concurrent requests
 # (save-triggered publish racing the Publish button) instead of letting two
@@ -90,20 +91,26 @@ _project_ids_cache: dict[str, tuple[float, set[str] | None]] = {}
 _publish_lock = threading.Lock()
 
 
-def _known_project_ids() -> set[str] | None:
-    """Project ids from DuckDB for typo checking; None if unavailable."""
+def _known_projects() -> dict[str, str] | None:
+    """Project id → name map from DuckDB; None if unavailable."""
     from esdc.configs import Config
 
     db_path = Config.get_db_file()
-    cached = _project_ids_cache.get(str(db_path))
+    cached = _projects_cache.get(str(db_path))
     if cached is not None and time.monotonic() - cached[0] < _PROJECT_IDS_TTL_S:
         return cached[1]
-    ids = _load_project_ids(db_path)
-    _project_ids_cache[str(db_path)] = (time.monotonic(), ids)
-    return ids
+    projects = _load_projects(db_path)
+    _projects_cache[str(db_path)] = (time.monotonic(), projects)
+    return projects
 
 
-def _load_project_ids(db_path) -> set[str] | None:
+def _known_project_ids() -> set[str] | None:
+    """Project ids for typo checking; None if unavailable."""
+    projects = _known_projects()
+    return set(projects) if projects is not None else None
+
+
+def _load_projects(db_path) -> dict[str, str] | None:
     from esdc.dbmanager import get_duckdb_connection
 
     if not Path(db_path).exists():
@@ -112,9 +119,10 @@ def _load_project_ids(db_path) -> set[str] | None:
         conn = get_duckdb_connection(db_path, read_only=True)
         try:
             rows = conn.execute(
-                "SELECT DISTINCT project_id FROM project_resources"
+                "SELECT project_id, any_value(project_name)"
+                " FROM project_resources GROUP BY project_id"
             ).fetchall()
-            return {r[0] for r in rows}
+            return {r[0]: r[1] or "" for r in rows}
         finally:
             conn.close()
     except Exception:
@@ -132,7 +140,11 @@ def create_portal_app() -> FastAPI:
     def get_table(table: str):
         if table not in TABLE_CONFIGS:
             raise HTTPException(status_code=404, detail="unknown table")
-        return {"rows": _fetch_rows(table), "refs": _fetch_refs()}
+        refs = _fetch_refs()
+        if table == "project_pod":
+            # id → name map for the grid's "id — name" project cell formatter
+            refs["projects"] = _known_projects() or {}
+        return {"rows": _fetch_rows(table), "refs": refs}
 
     @app.post("/api/tables/{table}/save")
     async def save_table(table: str, request: Request):
@@ -175,11 +187,18 @@ def create_portal_app() -> FastAPI:
 
     @app.get("/api/projects")
     def projects(q: str = ""):
-        known = _known_project_ids()
+        known = _known_projects()
         if not known:
             return []
         ql = q.lower()
-        return sorted(p for p in known if ql in p.lower())[:20]
+        matches = sorted(
+            (pid, name) for pid, name in known.items()
+            if ql in pid.lower() or ql in name.lower()
+        )
+        return [
+            {"value": pid, "label": f"{pid} — {name}" if name else pid}
+            for pid, name in matches[:20]
+        ]
 
     # HTML pages added in Task 8
     _register_pages(app, templates)
