@@ -13,7 +13,7 @@ import yaml
 from esdc.configs import Config
 from esdc.dbmanager import get_duckdb_connection
 from esdc.loaders import _METADATA_TABLE, LoadResult, _create_metadata_table
-from esdc.pod_registry.store import get_sqlite_connection
+from esdc.pod_registry.store import ESDC_SQLITE_FILENAME, get_sqlite_connection
 
 _REGISTRY_SQL = """
 SELECT
@@ -98,7 +98,7 @@ def publish_pod_registry(
                 [
                     table_name,
                     entry["description"],
-                    "pod.sqlite",
+                    ESDC_SQLITE_FILENAME,
                     yaml.safe_dump(entry, sort_keys=False, allow_unicode=True),
                     datetime.now(timezone.utc).isoformat(),
                 ],

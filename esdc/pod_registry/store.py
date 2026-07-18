@@ -1,5 +1,10 @@
 # esdc/pod_registry/store.py
-"""SQLite store for the POD master registry (source of truth)."""
+"""SQLite store for esdc operational data (source of truth).
+
+Currently holds the POD master registry; intended to grow into the
+app-wide operational database (auth, entity relationships, ...), hence
+the generic esdc.sqlite filename.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,8 @@ from pathlib import Path
 
 from esdc.configs import Config
 
-POD_SQLITE_FILENAME = "pod.sqlite"
+ESDC_SQLITE_FILENAME = "esdc.sqlite"
+_LEGACY_SQLITE_FILENAME = "pod.sqlite"  # pre-rename registry database
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS r_institution (
@@ -46,9 +52,16 @@ CREATE TABLE IF NOT EXISTS pod_revision (
 """
 
 
-def get_pod_sqlite_path() -> Path:
-    """Location of the registry database inside the esdc db directory."""
-    return Config.get_db_dir() / POD_SQLITE_FILENAME
+def get_esdc_sqlite_path() -> Path:
+    """Location of the operational database inside the esdc db directory."""
+    return Config.get_db_dir() / ESDC_SQLITE_FILENAME
+
+
+def _migrate_legacy_pod_sqlite(db_path: Path) -> None:
+    """One-time rename of the pre-existing pod.sqlite to esdc.sqlite."""
+    legacy = db_path.parent / _LEGACY_SQLITE_FILENAME
+    if not db_path.exists() and legacy.exists():
+        legacy.rename(db_path)
 
 
 def ensure_tables(conn: sqlite3.Connection) -> None:
@@ -56,9 +69,11 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
 
 
 def get_sqlite_connection(path: Path | None = None) -> sqlite3.Connection:
-    """Open (creating if needed) the registry db with FK enforcement on."""
-    db_path = path or get_pod_sqlite_path()
+    """Open (creating if needed) the operational db with FK enforcement on."""
+    db_path = path or get_esdc_sqlite_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    if path is None:
+        _migrate_legacy_pod_sqlite(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
