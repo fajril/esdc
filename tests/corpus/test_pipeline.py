@@ -397,6 +397,71 @@ def test_extract_force_overwrites(tmp_path, monkeypatch):
     assert "new body" in body
 
 
+# --------------------------------------------------------------------------
+# run_extract --force metadata preservation
+# --------------------------------------------------------------------------
+
+
+def test_extract_force_preserves_reviewed_metadata(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path)
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash="oldhash",
+        doc_number="KEEP-123", subject="human-reviewed subject",
+        raw_entities={"wk_name": "Raw WK"},
+    )
+    calls = []
+    monkeypatch.setattr(
+        pipeline, "llm_extract",
+        lambda markdown, caller: calls.append(1) or {"doc_type": "letter"},
+    )
+
+    report = pipeline.run_extract([pdf], force=True)
+
+    assert report.processed and not report.failed
+    meta, body = read_sidecar(sc)
+    assert meta["doc_number"] == "KEEP-123"
+    assert meta["subject"] == "human-reviewed subject"
+    assert meta["raw_entities"] == {"wk_name": "Raw WK"}
+    assert meta["reviewed"] is False  # body changed — needs re-review
+    # file_hash refreshed from the actual source bytes, not the stale sidecar
+    assert meta["file_hash"] != "oldhash"
+    assert calls == []  # LLM prefill skipped
+    assert any("preserved" in w for w in report.warnings)
+
+
+def test_extract_force_overrides_beat_preserved_metadata(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path)
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash="oldhash",
+        doc_number="KEEP-123",
+    )
+    report = pipeline.run_extract([pdf], force=True, level="national")
+
+    assert report.processed and not report.failed
+    meta, _body = read_sidecar(sc)
+    assert meta["doc_level"] == "national"      # override wins
+    assert meta["doc_number"] == "KEEP-123"     # untouched field preserved
+
+
+def test_extract_force_unreviewed_sidecar_fully_regenerated(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path)
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=False, file_hash="oldhash",
+        doc_number="DISPOSABLE",
+    )
+    calls = []
+    monkeypatch.setattr(
+        pipeline, "llm_extract",
+        lambda markdown, caller: calls.append(1) or {"doc_type": "letter"},
+    )
+    report = pipeline.run_extract([pdf], force=True)
+
+    assert report.processed and not report.failed
+    meta, _body = read_sidecar(sc)
+    assert meta.get("doc_number") != "DISPOSABLE"  # prefill replaced it
+    assert calls  # LLM prefill ran
+
+
 def test_extract_ocr_ratio_sort_and_flags(tmp_path, monkeypatch):
     pdf_native = make_pdf(tmp_path, "native.pdf")
     pdf_heavy = make_pdf(tmp_path, "heavy.pdf")

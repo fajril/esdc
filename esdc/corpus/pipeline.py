@@ -583,10 +583,19 @@ def run_extract(
             for src in sources:
                 name = src.name
                 p.file(name)
-                if sidecar_path(src).exists() and not force:
-                    report.skipped.append(f"{name} (sidecar exists)")
-                    p.advance()
-                    continue
+                existing_sc = sidecar_path(src)
+                preserved_meta: dict[str, Any] | None = None
+                if existing_sc.exists():
+                    if not force:
+                        report.skipped.append(f"{name} (sidecar exists)")
+                        p.advance()
+                        continue
+                    try:
+                        old_meta, _old_body = read_sidecar(existing_sc)
+                        if old_meta.get("reviewed") is True:
+                            preserved_meta = old_meta
+                    except ValueError:
+                        preserved_meta = None  # unreadable — full regenerate
 
                 try:
                     file_hash = hashlib.sha256(src.read_bytes()).hexdigest()
@@ -622,10 +631,17 @@ def run_extract(
                                 f"{name}: {n_rejected} segment(s) failed cleanup guard "
                                 "— original text kept"
                             )
-                    p.status("prefill metadata")
-                    meta_fields = _prefill_metadata(
-                        src, markdown, metadata_caller, ocr_client, cfg, report, name
-                    )
+                    if preserved_meta is None:
+                        p.status("prefill metadata")
+                        meta_fields = _prefill_metadata(
+                            src, markdown, metadata_caller, ocr_client, cfg,
+                            report, name,
+                        )
+                    else:
+                        meta_fields = {
+                            key: preserved_meta.get(key)
+                            for key in _PRESERVED_FIELDS
+                        }
 
                     meta = {
                         "source_file": name,
@@ -646,6 +662,10 @@ def run_extract(
                         "project_name": meta_fields.get("project_name"),
                         "extras": meta_fields.get("extras"),
                     }
+                    if preserved_meta is not None:
+                        for key in ("raw_entities", "entity_warnings"):
+                            if meta_fields.get(key) is not None:
+                                meta[key] = meta_fields[key]
                     _apply_overrides(meta, overrides)
                     # A --topic override is a single string; normalize it to
                     # the list form doc_topic is stored as.
@@ -653,13 +673,18 @@ def run_extract(
                         meta["doc_topic"] = normalize_topic(overrides["doc_topic"])
                     meta = normalize_entity_fields(meta)
 
-                    if resolver is not None:
+                    if resolver is not None and preserved_meta is None:
                         p.status("resolve entities")
                         raw_entities = _apply_entity_resolution(
                             meta, resolver, report, name
                         )
                         if any(v is not None for v in raw_entities.values()):
                             meta["raw_entities"] = raw_entities
+                    if preserved_meta is not None:
+                        report.warnings.append(
+                            f"{name}: reviewed metadata preserved — body "
+                            "re-extracted, set reviewed: true after re-review"
+                        )
 
                     p.status("write sidecar")
                     write_sidecar(src, meta, markdown)
@@ -1034,6 +1059,13 @@ _REGENERATE_FIELDS = (
     "field_name",
     "project_name",
     "extras",
+)
+
+# Reviewed frontmatter preserved by `extract --force` on a reviewed sidecar.
+_PRESERVED_FIELDS = (
+    "doc_type", "doc_topic", "doc_number", "doc_date", "subject",
+    "sender", "recipient", "doc_level", "wk_name", "field_name",
+    "project_name", "extras", "raw_entities", "entity_warnings",
 )
 
 
