@@ -407,11 +407,12 @@ function hasPendingChanges() {
   });
 }
 
-function markRowDeleted(table, row) {
+function markRowDeleted(table, row, persist = true) {
   const data = row.getData();
   const state = table.pod_state;
   if (data._new) {
     row.delete();
+    if (persist) persistState(state);
     return;
   }
   data._deleted = true;
@@ -419,7 +420,45 @@ function markRowDeleted(table, row) {
   const key = pkKey(state.cfg, data);
   state.deletes.set(key, pkFields(state.cfg, data));
   state.updates.delete(key);
+  if (persist) persistState(state);
+}
+
+function insertRowAt(row, above) {
+  row.getTable().addRow({ _new: true }, above, row);
+}
+
+// Stage deletion of every row in the grid (applied on Save, like any delete).
+function clearAllRows(state) {
+  const rows = state.table.getRows();
+  const live = rows.filter((r) => !r.getData()._deleted);
+  if (!live.length) return;
+  const noun = live.length === 1 ? "row" : "rows";
+  const ok = confirm(
+    `Clear all ${live.length} ${noun} in this grid?\n` +
+    "Existing rows are deleted when you press Save; use Discard to undo."
+  );
+  if (!ok) return;
+  state.table.blockRedraw();
+  try {
+    for (const row of [...rows]) markRowDeleted(state.table, row, false);
+  } finally {
+    state.table.restoreRedraw();
+  }
   persistState(state);
+  seedIfEmpty(state);
+  setStatus("All rows marked for deletion — Save to apply, Discard to undo", true);
+}
+
+// Throw away all staged changes for this grid and reload server truth.
+// (Refreshing does NOT discard: pagehide re-persists staged edits.)
+async function discardChanges(tableName) {
+  const state = gridState[tableName];
+  if (!state) return;
+  state.updates.clear();
+  state.deletes.clear();
+  sessionStorage.removeItem(STORAGE_PREFIX + state.cfg.table);
+  await reloadGrid(tableName);
+  setStatus("Changes discarded", false);
 }
 
 function setStatus(msg, isError) {
@@ -463,6 +502,12 @@ function buildGrid(tableName, cfg, payload) {
     selectableRangeRows: true,
     editTriggerEvent: "dblclick",
     history: true, // undo/redo via Ctrl+Z / Ctrl+Y (built-in keybindings)
+    rowContextMenu: [
+      { label: "Insert row above", action: (e, row) => insertRowAt(row, true) },
+      { label: "Insert row below", action: (e, row) => insertRowAt(row, false) },
+      { separator: true },
+      { label: "Delete row", action: (e, row) => markRowDeleted(row.getTable(), row) },
+    ],
     clipboard: true,
     clipboardCopyRowRange: "range",
     clipboardCopyConfig: { rowHeaders: false, columnHeaders: false },
@@ -728,6 +773,17 @@ function initGrids() {
 
   document.querySelectorAll("button.save").forEach((btn) => {
     btn.addEventListener("click", () => saveTable(btn.dataset.table));
+  });
+
+  document.querySelectorAll("button.clear-all").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const state = gridState[btn.dataset.table];
+      if (state) clearAllRows(state);
+    });
+  });
+
+  document.querySelectorAll("button.discard").forEach((btn) => {
+    btn.addEventListener("click", () => discardChanges(btn.dataset.table));
   });
 
   const publishBtn = document.getElementById("publish-btn");
