@@ -14,7 +14,6 @@ from pathlib import Path
 from esdc.configs import Config
 
 ESDC_SQLITE_FILENAME = "esdc.sqlite"
-_LEGACY_SQLITE_FILENAME = "pod.sqlite"  # pre-rename registry database
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS r_institution (
@@ -57,13 +56,6 @@ def get_esdc_sqlite_path() -> Path:
     return Config.get_db_dir() / ESDC_SQLITE_FILENAME
 
 
-def _migrate_legacy_pod_sqlite(db_path: Path) -> None:
-    """One-time rename of the pre-existing pod.sqlite to esdc.sqlite."""
-    legacy = db_path.parent / _LEGACY_SQLITE_FILENAME
-    if not db_path.exists() and legacy.exists():
-        legacy.rename(db_path)
-
-
 def ensure_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(_DDL)
 
@@ -72,8 +64,6 @@ def get_sqlite_connection(path: Path | None = None) -> sqlite3.Connection:
     """Open (creating if needed) the operational db with FK enforcement on."""
     db_path = path or get_esdc_sqlite_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    if path is None:
-        _migrate_legacy_pod_sqlite(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")

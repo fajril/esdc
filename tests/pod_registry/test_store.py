@@ -14,24 +14,6 @@ def test_path_under_db_dir(monkeypatch, tmp_path):
     assert get_esdc_sqlite_path() == tmp_path / "esdc.sqlite"
 
 
-def test_legacy_pod_sqlite_migrated_on_connect(monkeypatch, tmp_path):
-    _patch_dirs(monkeypatch, tmp_path)
-    legacy = tmp_path / "pod.sqlite"
-    conn = sqlite3.connect(legacy)
-    conn.execute("CREATE TABLE marker (x INTEGER)")
-    conn.execute("INSERT INTO marker VALUES (42)")
-    conn.commit()
-    conn.close()
-
-    conn = get_sqlite_connection()
-    try:
-        assert (tmp_path / "esdc.sqlite").exists()
-        assert not legacy.exists()
-        assert conn.execute("SELECT x FROM marker").fetchone()[0] == 42
-    finally:
-        conn.close()
-
-
 def test_connection_creates_tables_and_enforces_fk(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     conn = get_sqlite_connection()
