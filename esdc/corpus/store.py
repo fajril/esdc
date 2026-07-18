@@ -402,6 +402,21 @@ class CorpusStore:
             docs.append(doc)
         return docs
 
+    def find_doc_ids(self, filters: dict[str, Any]) -> list[tuple[str, str]]:
+        """(doc_id, file_name) pairs matching documents-column filters.
+
+        Same allowlisted filter semantics as search(); empty filters
+        match everything (callers gate destructive use).
+        """
+        conn = self._get_connection()
+        clause, params = self._build_filter_clause(filters, "d")
+        rows = conn.execute(
+            f"SELECT d.doc_id, d.file_name FROM {self.DOC_TABLE} d "
+            f"WHERE 1=1{clause} ORDER BY d.file_name",
+            params,
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
     def clear(self) -> dict[str, int]:
         """Delete all documents and chunks; corpus_meta is preserved."""
         conn = self._get_connection()

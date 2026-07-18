@@ -2604,13 +2604,83 @@ def list_documents() -> None:
 
 @corpus_app.command()
 def remove(
-    doc_ids: Annotated[list[str], typer.Argument(help="Document ID(s) to remove.")],
+    doc_ids: Annotated[
+        list[str] | None, typer.Argument(help="Document ID(s) to remove.")
+    ] = None,
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Remove all docs of this type.")
+    ] = None,
+    year: Annotated[
+        int | None, typer.Option("--year", help="Filter by document year.")
+    ] = None,
+    wk_name: Annotated[
+        str | None, typer.Option("--wk-name", help="Filter by working area name.")
+    ] = None,
+    field_name: Annotated[
+        str | None, typer.Option("--field-name", help="Filter by field name.")
+    ] = None,
+    project_name: Annotated[
+        str | None, typer.Option("--project-name", help="Filter by project name.")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="List matches without deleting.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Confirm filter-based deletion.")
+    ] = False,
 ) -> None:
-    """Remove document(s) from the corpus (does not touch files on disk)."""
+    """Remove document(s) from the corpus (does not touch files on disk).
+
+    Sidecars are untouched: a later `esdc corpus commit` re-ingests them.
+    """
+    filters = {
+        k: v
+        for k, v in {
+            "doc_type": doc_type,
+            "year": year,
+            "wk_name": wk_name,
+            "field_name": field_name,
+            "project_name": project_name,
+        }.items()
+        if v is not None
+    }
+    explicit = list(doc_ids or [])
+    if not explicit and not filters:
+        typer.echo(
+            "Nothing to remove: pass doc id(s) or a filter "
+            "(--doc-type/--year/--wk-name/--field-name/--project-name). "
+            "To delete everything, use `esdc corpus clear`.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     store = _open_corpus_store()
     removed = 0
     try:
-        for doc_id in doc_ids:
+        targets: list[tuple[str, str]] = []
+        if filters:
+            matched = store.find_doc_ids(filters)
+            typer.echo(f"Matched {len(matched)} document(s):")
+            for _doc_id, file_name in matched:
+                typer.echo(f"  {file_name}")
+            targets.extend(matched)
+        for doc_id in explicit:
+            if all(doc_id != t[0] for t in targets):
+                targets.append((doc_id, doc_id))
+
+        if dry_run:
+            typer.echo(f"Dry run — {len(targets)} document(s) would be removed.")
+            return
+        if filters and not yes:
+            typer.echo(
+                f"This deletes {len(targets)} document(s). Re-run with --yes.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        _warn_pod_links([t[0] for t in targets])
+
+        for doc_id, _name in targets:
             if store.get_document(doc_id) is None:
                 typer.echo(f"Not found: {doc_id}", err=True)
                 continue
@@ -2620,7 +2690,44 @@ def remove(
             store.rebuild_indexes()
     finally:
         store.close()
-    typer.echo(f"Removed {removed} document(s).")
+    typer.echo(
+        f"Removed {removed} document(s). Sidecars kept — "
+        "`esdc corpus commit` would re-ingest them."
+    )
+
+
+def _warn_pod_links(doc_ids: list[str]) -> None:
+    """Warn when removed docs are linked in the registry's pod_document table.
+
+    Links are kept: doc_id is derived from source bytes, so a re-committed
+    document returns under the same id. Tolerates the table (or the whole
+    registry db) not existing.
+    """
+    if not doc_ids:
+        return
+    try:
+        from esdc.pod_registry.store import get_sqlite_connection
+
+        conn = get_sqlite_connection()
+        try:
+            placeholders = ", ".join("?" for _ in doc_ids)
+            rows = conn.execute(
+                "SELECT DISTINCT doc_id FROM pod_document "
+                f"WHERE doc_id IN ({placeholders})",
+                doc_ids,
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return
+    linked = [r["doc_id"] for r in rows]
+    if linked:
+        typer.echo(
+            f"Warning: {len(linked)} removed document(s) are linked to PODs "
+            "in the registry (links kept; re-commit restores the same doc_id): "
+            + ", ".join(linked),
+            err=True,
+        )
 
 
 @corpus_app.command()
