@@ -46,12 +46,6 @@ function coerceValue(cfg, field, value) {
   return value;
 }
 
-function refLookup(refRows, codeField, labelField) {
-  const map = {};
-  for (const row of refRows) map[row[codeField]] = row[labelField];
-  return map;
-}
-
 function buildColumn(col, refs) {
   const column = {
     field: col.field,
@@ -85,7 +79,10 @@ function buildColumn(col, refs) {
   if (col.ref === "institutions" || col.ref === "pod_types") {
     const rows = col.ref === "institutions" ? refs.institutions : refs.pod_types;
     const labelField = col.ref === "institutions" ? "institution" : "pod_type";
-    const values = refLookup(rows, "code", labelField);
+    // "code — name" labels so typing either the code or the name filters
+    // the list (Tabulator matches on the visible label).
+    const values = {};
+    for (const row of rows) values[row.code] = `${row.code} — ${row[labelField]}`;
     column.editor = "list";
     column.editorParams = {
       values,
@@ -95,7 +92,7 @@ function buildColumn(col, refs) {
     };
     column.formatter = (cell) => {
       const v = cell.getValue();
-      return values[v] !== undefined ? `${v} — ${values[v]}` : v;
+      return values[v] !== undefined ? values[v] : (v ?? "");
     };
   } else if (col.ref === "pods") {
     const values = {};
@@ -112,8 +109,21 @@ function buildColumn(col, refs) {
       return values[v] !== undefined ? values[v] : v;
     };
   } else if (col.ref === "pod_ids") {
+    // "pod_id — name" labels (value stays the bare pod_id) so revisions are
+    // searchable by name like every other POD dropdown.
+    const values = {};
+    for (const p of refs.pods) values[p.pod_id] = `${p.pod_id} — ${p.pod_name}`;
     column.editor = "list";
-    column.editorParams = { values: refs.pod_ids, autocomplete: true };
+    column.editorParams = {
+      values,
+      autocomplete: true,
+      listOnEmpty: true,
+      placeholderEmpty: "No PODs yet — add them on the PODs page",
+    };
+    column.formatter = (cell) => {
+      const v = cell.getValue();
+      return values[v] !== undefined ? values[v] : (v ?? "");
+    };
   }
 
   if (col.autocomplete) {
