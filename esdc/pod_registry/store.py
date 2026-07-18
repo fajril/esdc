@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS project_pod (
     project_id TEXT NOT NULL,
     UNIQUE (pod_id, project_id)
 );
+CREATE TABLE IF NOT EXISTS pod_document (
+    pod_id INTEGER NOT NULL REFERENCES m_pod(id),
+    doc_id TEXT NOT NULL,
+    UNIQUE (pod_id, doc_id)
+);
 CREATE TABLE IF NOT EXISTS pod_revision (
     successor_id   TEXT NOT NULL REFERENCES m_pod(pod_id),
     predecessor_id TEXT NOT NULL REFERENCES m_pod(pod_id),
