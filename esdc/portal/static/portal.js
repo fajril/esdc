@@ -133,13 +133,13 @@ function buildColumn(col, refs) {
     // term (backspace appears to "undo"). The browser-native datalist
     // filters by id and name without touching the input and copes with
     // thousands of options.
-    const projects = refs.projects || {};
+    const lookup = refs[col.autocompleteRef || "projects"] || {};
     const listId = `datalist-${col.field}`;
     const old = document.getElementById(listId);
-    if (old) old.remove(); // rebuild so reloads pick up fresh projects
+    if (old) old.remove(); // rebuild so reloads pick up fresh entries
     const dl = document.createElement("datalist");
     dl.id = listId;
-    for (const [id, name] of Object.entries(projects)) {
+    for (const [id, name] of Object.entries(lookup)) {
       const opt = document.createElement("option");
       opt.value = id;
       if (name) opt.label = name;
@@ -150,7 +150,7 @@ function buildColumn(col, refs) {
     column.editorParams = { elementAttributes: { list: listId } };
     column.formatter = (cell) => {
       const v = cell.getValue();
-      return v && projects[v] ? `${v} — ${projects[v]}` : (v ?? "");
+      return v && lookup[v] ? `${v} — ${lookup[v]}` : (v ?? "");
     };
   }
 
