@@ -9,7 +9,14 @@ from pathlib import Path
 
 from esdc.pod_registry.store import allocate_pod_id, get_sqlite_connection
 
-_TABLES = ("m_pod", "project_pod", "pod_revision", "r_institution", "r_pod_type")
+_TABLES = (
+    "m_pod",
+    "project_pod",
+    "pod_document",
+    "pod_revision",
+    "r_institution",
+    "r_pod_type",
+)
 _M_POD_REQUIRED = (
     "id",
     "pod_name",
@@ -42,6 +49,7 @@ def apply_changeset(
     changes: dict,
     sqlite_path: Path | None = None,
     known_project_ids: set[str] | None = None,
+    known_doc_ids: set[str] | None = None,
 ) -> ChangesetResult:
     if table not in _TABLES:
         raise ValueError(f"unknown table: {table}")
@@ -51,7 +59,9 @@ def apply_changeset(
 
     conn = get_sqlite_connection(sqlite_path)
     try:
-        errors = _validate(conn, table, inserts, updates, deletes, known_project_ids)
+        errors = _validate(
+            conn, table, inserts, updates, deletes, known_project_ids, known_doc_ids
+        )
         if errors:
             return ChangesetResult(ok=False, errors=errors)
         generated: list[dict] = []
@@ -92,11 +102,14 @@ def _validate(
     updates: list[dict],
     deletes: list[dict],
     known_project_ids: set[str] | None,
+    known_doc_ids: set[str] | None = None,
 ) -> list[RowError]:
     if table == "m_pod":
         return _validate_m_pod(conn, inserts, updates, deletes)
     if table == "project_pod":
         return _validate_project_pod(conn, inserts, updates, deletes, known_project_ids)
+    if table == "pod_document":
+        return _validate_pod_document(conn, inserts, updates, deletes, known_doc_ids)
     if table == "pod_revision":
         return _validate_pod_revision(conn, inserts, updates, deletes)
     if table in ("r_institution", "r_pod_type"):
@@ -227,6 +240,14 @@ def _validate_m_pod(
                 RowError("delete", i, f"id {row_id} is referenced by project_pod")
             )
             continue
+        doc_count = conn.execute(
+            "SELECT COUNT(*) FROM pod_document WHERE pod_id = ?", (row_id,)
+        ).fetchone()[0]
+        if doc_count:
+            errors.append(
+                RowError("delete", i, f"id {row_id} is referenced by pod_document")
+            )
+            continue
         pod_id_row = conn.execute(
             "SELECT pod_id FROM m_pod WHERE id = ?", (row_id,)
         ).fetchone()
@@ -255,6 +276,13 @@ def _apply_inserts(
             conn.execute(
                 "INSERT INTO project_pod (pod_id, project_id) VALUES (?, ?)",
                 (row["pod_id"], row["project_id"]),
+            )
+        return []
+    if table == "pod_document":
+        for row in inserts:
+            conn.execute(
+                "INSERT INTO pod_document (pod_id, doc_id) VALUES (?, ?)",
+                (row["pod_id"], row["doc_id"]),
             )
         return []
     if table == "pod_revision":
@@ -350,6 +378,12 @@ def _apply_deletes(conn: sqlite3.Connection, table: str, deletes: list[dict]) ->
             conn.execute(
                 "DELETE FROM project_pod WHERE pod_id = ? AND project_id = ?",
                 (row["pod_id"], row["project_id"]),
+            )
+    elif table == "pod_document":
+        for row in deletes:
+            conn.execute(
+                "DELETE FROM pod_document WHERE pod_id = ? AND doc_id = ?",
+                (row["pod_id"], row["doc_id"]),
             )
     elif table == "pod_revision":
         for row in deletes:
@@ -447,6 +481,91 @@ def _validate_project_pod(
         if existing is None:
             errors.append(
                 RowError("delete", i, f"pair ({pod_id}, {project_id}) does not exist")
+            )
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# pod_document
+# ---------------------------------------------------------------------------
+
+
+def _validate_pod_document(
+    conn: sqlite3.Connection,
+    inserts: list[dict],
+    updates: list[dict],
+    deletes: list[dict],
+    known_doc_ids: set[str] | None,
+) -> list[RowError]:
+    errors: list[RowError] = []
+
+    if updates:
+        for i, _row in enumerate(updates):
+            errors.append(
+                RowError(
+                    "update",
+                    i,
+                    "pod_document does not support updates; delete and insert instead",
+                )
+            )
+
+    seen_pairs_in_changeset: set[tuple[int, str]] = set()
+    for i, row in enumerate(inserts):
+        pod_id = row.get("pod_id")
+        doc_id = row.get("doc_id")
+        if not isinstance(pod_id, int):
+            errors.append(RowError("insert", i, "pod_id must be an integer"))
+        else:
+            exists = conn.execute(
+                "SELECT 1 FROM m_pod WHERE id = ?", (pod_id,)
+            ).fetchone()
+            if exists is None:
+                errors.append(
+                    RowError("insert", i, f"pod_id {pod_id} does not exist in m_pod")
+                )
+        if not isinstance(doc_id, str) or not doc_id.strip():
+            errors.append(RowError("insert", i, "doc_id must be a non-empty string"))
+        else:
+            if known_doc_ids is not None and doc_id not in known_doc_ids:
+                errors.append(
+                    RowError(
+                        "insert",
+                        i,
+                        f"doc_id {doc_id!r} is not a known corpus document",
+                    )
+                )
+
+        if isinstance(pod_id, int) and isinstance(doc_id, str):
+            pair = (pod_id, doc_id)
+            if pair in seen_pairs_in_changeset:
+                errors.append(
+                    RowError(
+                        "insert",
+                        i,
+                        f"duplicate pair ({pod_id}, {doc_id}) within changeset",
+                    )
+                )
+            seen_pairs_in_changeset.add(pair)
+            existing = conn.execute(
+                "SELECT 1 FROM pod_document WHERE pod_id = ? AND doc_id = ?",
+                (pod_id, doc_id),
+            ).fetchone()
+            if existing is not None:
+                errors.append(
+                    RowError("insert", i, f"pair ({pod_id}, {doc_id}) already exists")
+                )
+
+    for i, row in enumerate(deletes):
+        pod_id = row.get("pod_id")
+        doc_id = row.get("doc_id")
+        existing = conn.execute(
+            "SELECT 1 FROM pod_document WHERE pod_id = ? AND doc_id = ?",
+            (pod_id, doc_id),
+        ).fetchone()
+        if existing is None:
+            errors.append(
+                RowError("delete", i, f"pair ({pod_id}, {doc_id}) does not exist")
             )
 
     return errors

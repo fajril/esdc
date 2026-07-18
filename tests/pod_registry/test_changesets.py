@@ -144,6 +144,88 @@ def test_project_pod_validates_against_known_ids(monkeypatch, tmp_path):
     assert "P-TYPO" in result.errors[0].message
 
 
+def _insert_pod_900(monkeypatch, tmp_path):
+    _seed_refs(monkeypatch, tmp_path)
+    apply_changeset(
+        "m_pod",
+        {
+            "inserts": [
+                {
+                    "id": 900,
+                    "pod_name": "POD Baru",
+                    "approval_date": "2026-07-15",
+                    "institution_code": 4,
+                    "pod_type_code": 1,
+                    "rev_num": 0,
+                }
+            ]
+        },
+    )
+
+
+def test_pod_document_insert_and_delete(monkeypatch, tmp_path):
+    _insert_pod_900(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
+    )
+    assert result.ok
+    result = apply_changeset(
+        "pod_document", {"deletes": [{"pod_id": 900, "doc_id": "abc123"}]}
+    )
+    assert result.ok
+    conn = get_sqlite_connection()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM pod_document").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_pod_document_validates_against_known_doc_ids(monkeypatch, tmp_path):
+    _insert_pod_900(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_document",
+        {"inserts": [{"pod_id": 900, "doc_id": "nope"}]},
+        known_doc_ids={"abc123", "def456"},
+    )
+    assert not result.ok
+    assert "nope" in result.errors[0].message
+
+
+def test_pod_document_unknown_pod_rejected(monkeypatch, tmp_path):
+    _insert_pod_900(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_document", {"inserts": [{"pod_id": 999, "doc_id": "abc123"}]}
+    )
+    assert not result.ok
+    assert "999" in result.errors[0].message
+
+
+def test_pod_document_rejects_updates_and_duplicates(monkeypatch, tmp_path):
+    _insert_pod_900(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_document", {"updates": [{"pod_id": 900, "doc_id": "abc123"}]}
+    )
+    assert not result.ok
+    apply_changeset(
+        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
+    )
+    result = apply_changeset(
+        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
+    )
+    assert not result.ok
+    assert "already exists" in result.errors[0].message
+
+
+def test_delete_m_pod_blocked_by_pod_document(monkeypatch, tmp_path):
+    _insert_pod_900(monkeypatch, tmp_path)
+    apply_changeset(
+        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
+    )
+    result = apply_changeset("m_pod", {"deletes": [{"id": 900}]})
+    assert not result.ok
+    assert "pod_document" in result.errors[0].message
+
+
 def test_pod_revision_rejects_self_link(monkeypatch, tmp_path):
     _seed_refs(monkeypatch, tmp_path)
     r = apply_changeset(
