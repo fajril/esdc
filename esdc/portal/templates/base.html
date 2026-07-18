@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <title>{{ title }} — ESDC POD Portal</title>
   <link rel="stylesheet" href="/static/tabulator.min.css">
-  <link rel="stylesheet" href="/static/portal.css">
+  <link rel="stylesheet" href="/static/portal.css?v={{ asset_version }}">
 </head>
 <body>
   <nav>
@@ -19,6 +19,6 @@
   </nav>
   <main>{% block content %}{% endblock %}</main>
   <script src="/static/tabulator.min.js"></script>
-  <script src="/static/portal.js"></script>
+  <script src="/static/portal.js?v={{ asset_version }}"></script>
 </body>
 </html>

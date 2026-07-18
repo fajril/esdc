@@ -40,7 +40,6 @@ def test_get_unknown_table_404(monkeypatch, tmp_path):
 
 def test_save_insert_returns_generated_pod_id(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr("esdc.portal.app.publish_pod_registry", lambda **kw: ())
     resp = client.post("/api/tables/m_pod/save", json={"inserts": [{
         "id": 1, "pod_name": "POD Baru", "approval_date": "2026-07-15",
         "institution_code": 4, "pod_type_code": 1, "rev_num": 0,
@@ -59,7 +58,9 @@ def test_save_validation_error_422(monkeypatch, tmp_path):
     assert resp.json()["errors"]
 
 
-def test_save_publish_failure_reported_not_fatal(monkeypatch, tmp_path):
+def test_save_does_not_run_publish(monkeypatch, tmp_path):
+    # Publish moved out of the save round-trip (client fires /api/publish
+    # after save); a broken publish must not fail or slow the save itself.
     client = _client(monkeypatch, tmp_path)
 
     def boom(**kw):
@@ -71,7 +72,21 @@ def test_save_publish_failure_reported_not_fatal(monkeypatch, tmp_path):
         "institution_code": 4, "pod_type_code": 1, "rev_num": 0,
     }]})
     assert resp.status_code == 200
-    assert "duckdb locked" in resp.json()["publish_error"]
+    assert "publish_error" not in resp.json()
+
+
+def test_publish_endpoint_reports_error(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    def boom(**kw):
+        raise RuntimeError("duckdb locked")
+
+    monkeypatch.setattr("esdc.portal.app.publish_pod_registry", boom)
+    resp = client.post("/api/publish")
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["ok"] is False
+    assert "duckdb locked" in body["error"]
 
 
 def test_projects_autocomplete_empty_when_no_duckdb(monkeypatch, tmp_path):

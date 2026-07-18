@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -75,12 +77,35 @@ def _fetch_refs() -> dict:
         conn.close()
 
 
+# project_id lookups back both the per-keystroke autocomplete and save-time
+# validation; opening DuckDB + DISTINCT-scanning project_resources on every
+# request makes typing stall, so cache the id set briefly (keyed by db path
+# so tests with distinct tmp dirs don't share entries).
+_PROJECT_IDS_TTL_S = 60.0
+_project_ids_cache: dict[str, tuple[float, set[str] | None]] = {}
+
+# publish rewrites the DuckDB snapshot tables; serialize concurrent requests
+# (save-triggered publish racing the Publish button) instead of letting two
+# writers collide.
+_publish_lock = threading.Lock()
+
+
 def _known_project_ids() -> set[str] | None:
     """Project ids from DuckDB for typo checking; None if unavailable."""
     from esdc.configs import Config
-    from esdc.dbmanager import get_duckdb_connection
 
     db_path = Config.get_db_file()
+    cached = _project_ids_cache.get(str(db_path))
+    if cached is not None and time.monotonic() - cached[0] < _PROJECT_IDS_TTL_S:
+        return cached[1]
+    ids = _load_project_ids(db_path)
+    _project_ids_cache[str(db_path)] = (time.monotonic(), ids)
+    return ids
+
+
+def _load_project_ids(db_path) -> set[str] | None:
+    from esdc.dbmanager import get_duckdb_connection
+
     if not Path(db_path).exists():
         return None
     try:
@@ -132,16 +157,20 @@ def create_portal_app() -> FastAPI:
         }
         if not result.ok:
             return JSONResponse(status_code=422, content=payload)
-        try:
-            publish_pod_registry()
-        except Exception as exc:  # sqlite already committed — surface, allow retry
-            logger.error("publish after save failed", exc_info=True)
-            payload["publish_error"] = str(exc)
+        # Publish is NOT run here: it drops/recreates the DuckDB snapshot,
+        # checkpoints, and invalidates chat caches — too slow to block the
+        # save round-trip on. The client fires POST /api/publish right after
+        # a successful save and surfaces any failure with a retry path.
         return payload
 
     @app.post("/api/publish")
     def publish():
-        results = publish_pod_registry()
+        try:
+            with _publish_lock:
+                results = publish_pod_registry()
+        except Exception as exc:  # sqlite state is intact — surface, allow retry
+            logger.error("publish failed", exc_info=True)
+            return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
         return {"ok": True, "tables": {r.table_name: r.row_count for r in results}}
 
     @app.get("/api/projects")
@@ -168,10 +197,21 @@ def _register_pages(app: FastAPI, templates: Jinja2Templates) -> None:
     def root():
         return RedirectResponse("/pods")
 
+    static_dir = Path(__file__).resolve().parent / "static"
+
+    def _asset_version() -> int:
+        # mtime-based cache buster: StaticFiles sends no Cache-Control, so
+        # browsers heuristically cache portal.js/css and keep serving stale
+        # code after an upgrade. A changed ?v= forces a refetch.
+        return int(max(
+            (static_dir / name).stat().st_mtime for name in ("portal.js", "portal.css")
+        ))
+
     def _page(request: Request, title: str, tables: list[str]):
         return templates.TemplateResponse(
             request, "grid.html",
-            {"title": title, "grids": [_grid_payload(t) for t in tables]},
+            {"title": title, "grids": [_grid_payload(t) for t in tables],
+             "asset_version": _asset_version()},
         )
 
     @app.get("/pods")
