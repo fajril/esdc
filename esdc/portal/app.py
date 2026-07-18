@@ -77,13 +77,14 @@ def _fetch_refs() -> dict:
         conn.close()
 
 
-# project lookups back the per-keystroke autocomplete, save-time validation,
-# and the grid's id — name cell formatter; opening DuckDB + scanning
-# project_resources on every request makes typing stall, so cache the
-# id→name map briefly (keyed by db path so tests with distinct tmp dirs
-# don't share entries).
+# project/document lookups back autocomplete datalists, save-time
+# validation, and the grid's id — name cell formatters; opening DuckDB
+# + scanning on every request makes typing stall, so cache the id→name
+# maps briefly (keyed by db path so tests with distinct tmp dirs don't
+# share entries).
 _PROJECT_IDS_TTL_S = 60.0
 _projects_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
+_documents_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
 
 # publish rewrites the DuckDB snapshot tables; serialize concurrent requests
 # (save-triggered publish racing the Publish button) instead of letting two
@@ -111,6 +112,38 @@ def _known_project_ids() -> set[str] | None:
 
 
 def _load_projects(db_path) -> dict[str, str] | None:
+    return _load_id_name_map(
+        db_path,
+        "SELECT project_id, any_value(project_name)"
+        " FROM project_resources GROUP BY project_id",
+        "project id validation unavailable",
+    )
+
+
+def _known_documents() -> dict[str, str] | None:
+    """Corpus doc_id → file_name map from DuckDB; None if unavailable."""
+    from esdc.configs import Config
+
+    db_path = Config.get_db_file()
+    cached = _documents_cache.get(str(db_path))
+    if cached is not None and time.monotonic() - cached[0] < _PROJECT_IDS_TTL_S:
+        return cached[1]
+    documents = _load_id_name_map(
+        db_path,
+        "SELECT doc_id, file_name FROM documents",
+        "corpus doc id validation unavailable",
+    )
+    _documents_cache[str(db_path)] = (time.monotonic(), documents)
+    return documents
+
+
+def _known_doc_ids() -> set[str] | None:
+    """Corpus doc ids for typo checking; None if unavailable."""
+    documents = _known_documents()
+    return set(documents) if documents is not None else None
+
+
+def _load_id_name_map(db_path, sql: str, warn: str) -> dict[str, str] | None:
     from esdc.dbmanager import get_duckdb_connection
 
     if not Path(db_path).exists():
@@ -118,15 +151,12 @@ def _load_projects(db_path) -> dict[str, str] | None:
     try:
         conn = get_duckdb_connection(db_path, read_only=True)
         try:
-            rows = conn.execute(
-                "SELECT project_id, any_value(project_name)"
-                " FROM project_resources GROUP BY project_id"
-            ).fetchall()
+            rows = conn.execute(sql).fetchall()
             return {r[0]: r[1] or "" for r in rows}
         finally:
             conn.close()
     except Exception:
-        logger.warning("project id validation unavailable", exc_info=True)
+        logger.warning(warn, exc_info=True)
         return None
 
 
@@ -144,6 +174,9 @@ def create_portal_app() -> FastAPI:
         if table == "project_pod":
             # id → name map for the grid's "id — name" project cell formatter
             refs["projects"] = _known_projects() or {}
+        if table == "pod_document":
+            # doc_id → file_name map for the documents datalist + formatter
+            refs["documents"] = _known_documents() or {}
         return {"rows": _fetch_rows(table), "refs": refs}
 
     @app.post("/api/tables/{table}/save")
@@ -160,7 +193,10 @@ def create_portal_app() -> FastAPI:
                 table, changes.get("updates") or []
             )
         known = _known_project_ids() if table == "project_pod" else None
-        result = apply_changeset(table, changes, known_project_ids=known)
+        known_docs = _known_doc_ids() if table == "pod_document" else None
+        result = apply_changeset(
+            table, changes, known_project_ids=known, known_doc_ids=known_docs
+        )
         payload = {
             "ok": result.ok,
             "applied": result.applied,
@@ -240,6 +276,10 @@ def _register_pages(app: FastAPI, templates: Jinja2Templates) -> None:
     @app.get("/links")
     def links(request: Request):
         return _page(request, "Project Links", ["project_pod"])
+
+    @app.get("/documents")
+    def documents(request: Request):
+        return _page(request, "Document Links", ["pod_document"])
 
     @app.get("/revisions")
     def revisions(request: Request):

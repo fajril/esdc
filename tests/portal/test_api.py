@@ -94,3 +94,66 @@ def test_projects_autocomplete_empty_when_no_duckdb(monkeypatch, tmp_path):
     resp = client.get("/api/projects", params={"q": "P-24"})
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def _insert_pod(client):
+    resp = client.post("/api/tables/m_pod/save", json={"inserts": [{
+        "id": 1, "pod_name": "POD Baru", "approval_date": "2026-07-15",
+        "institution_code": 4, "pod_type_code": 1, "rev_num": 0,
+    }]})
+    assert resp.status_code == 200
+
+
+def test_pod_document_refs_include_documents(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "esdc.portal.app._known_documents",
+        lambda: {"ccbd4f3f27635c76": "letter_a.pdf"},
+    )
+    resp = client.get("/api/tables/pod_document")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["rows"] == []
+    assert body["refs"]["documents"] == {"ccbd4f3f27635c76": "letter_a.pdf"}
+
+
+def test_pod_document_save_rejects_unknown_doc_id(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _insert_pod(client)
+    monkeypatch.setattr(
+        "esdc.portal.app._known_documents",
+        lambda: {"ccbd4f3f27635c76": "letter_a.pdf"},
+    )
+    resp = client.post("/api/tables/pod_document/save", json={"inserts": [
+        {"pod_id": 1, "doc_id": "nope"},
+    ]})
+    assert resp.status_code == 422
+    assert "nope" in resp.json()["errors"][0]["message"]
+
+
+def test_pod_document_save_and_roundtrip(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _insert_pod(client)
+    monkeypatch.setattr(
+        "esdc.portal.app._known_documents",
+        lambda: {"ccbd4f3f27635c76": "letter_a.pdf"},
+    )
+    resp = client.post("/api/tables/pod_document/save", json={"inserts": [
+        {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
+    ]})
+    assert resp.status_code == 200
+    rows = client.get("/api/tables/pod_document").json()["rows"]
+    assert rows == [{"pod_id": 1, "doc_id": "ccbd4f3f27635c76"}]
+
+
+def test_pod_document_save_skips_doc_check_when_corpus_unavailable(
+    monkeypatch, tmp_path
+):
+    # No DuckDB documents table -> validation degrades gracefully (like
+    # project ids), it must not hard-fail the save.
+    client = _client(monkeypatch, tmp_path)
+    _insert_pod(client)
+    resp = client.post("/api/tables/pod_document/save", json={"inserts": [
+        {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
+    ]})
+    assert resp.status_code == 200

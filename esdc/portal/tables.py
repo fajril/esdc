@@ -26,6 +26,14 @@ TABLE_CONFIGS: dict[str, dict] = {
             {"field": "project_id", "title": "Project ID", "editableOnNew": True, "autocomplete": "/api/projects", "required": True},
         ],
     },
+    "pod_document": {
+        "title": "Document Links",
+        "pk": ["pod_id", "doc_id"],
+        "columns": [
+            {"field": "pod_id", "title": "POD", "editableOnNew": True, "ref": "pods", "required": True},
+            {"field": "doc_id", "title": "Document", "editableOnNew": True, "autocomplete": True, "autocompleteRef": "documents", "required": True},
+        ],
+    },
     "pod_revision": {
         "title": "Revisions",
         "pk": ["successor_id", "predecessor_id"],
