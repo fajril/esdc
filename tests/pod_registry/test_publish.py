@@ -28,6 +28,7 @@ def _seed(monkeypatch, tmp_path):
         ],
     )
     conn.execute("INSERT INTO project_pod (pod_id, project_id) VALUES (645, 'P-2403431-01')")
+    conn.execute("INSERT INTO pod_document (pod_id, doc_id) VALUES (645, 'ccbd4f3f27635c76')")
     conn.execute(
         "INSERT INTO pod_revision (successor_id, predecessor_id)"
         " VALUES ('PL-2005-0051-3-2-1', 'PL-2003-0005-3-2-0')"
@@ -39,7 +40,9 @@ def _seed(monkeypatch, tmp_path):
 def test_publish_creates_denormalized_tables(monkeypatch, tmp_path):
     _seed(monkeypatch, tmp_path)
     results = publish_pod_registry()
-    assert {r.table_name for r in results} == {"pod_registry", "pod_project"}
+    assert {r.table_name for r in results} == {
+        "pod_registry", "pod_project", "pod_document",
+    }
 
     conn = get_duckdb_connection(tmp_path / "esdc.duckdb", read_only=True)
     try:
@@ -55,10 +58,15 @@ def test_publish_creates_denormalized_tables(monkeypatch, tmp_path):
         link = conn.execute("SELECT pod_id, project_id FROM pod_project").fetchall()
         assert link == [("PL-2003-0005-3-2-0", "P-2403431-01")]
 
+        # canonical PL-... pod_id in the doc snapshot, not the surrogate int
+        docs = conn.execute("SELECT pod_id, doc_id FROM pod_document").fetchall()
+        assert docs == [("PL-2003-0005-3-2-0", "ccbd4f3f27635c76")]
+
         meta = conn.execute(
             f"SELECT table_name FROM {_METADATA_TABLE} ORDER BY table_name"
         ).fetchall()
         assert ("pod_registry",) in meta and ("pod_project",) in meta
+        assert ("pod_document",) in meta
     finally:
         conn.close()
 

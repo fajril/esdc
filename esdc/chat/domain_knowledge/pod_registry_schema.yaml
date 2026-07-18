@@ -58,3 +58,14 @@ tables:
         type: string
         description: "esdc project identifier."
         aliases: ["kode proyek", "project code"]
+  - table_name: pod_document
+    description: "Many-to-many mapping between PODs and corpus documents (approval letters, POD documents). Join pod_id to pod_registry.pod_id and doc_id to documents.doc_id; from there pod_project links to project_resources for reserves comparison."
+    columns:
+      - name: pod_id
+        type: string
+        description: "Canonical POD identifier (PL-YYYY-XXXX-A-B-R)."
+        aliases: ["ID POD", "POD ID"]
+      - name: doc_id
+        type: string
+        description: "Corpus document identifier (16-hex prefix of the source file hash); joins documents.doc_id."
+        aliases: ["dokumen", "document id", "surat"]

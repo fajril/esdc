@@ -41,6 +41,12 @@ FROM project_pod pp
 JOIN m_pod m ON m.id = pp.pod_id
 """
 
+_DOCUMENT_SQL = """
+SELECT m.pod_id, pd.doc_id
+FROM pod_document pd
+JOIN m_pod m ON m.id = pd.pod_id
+"""
+
 
 def _load_schema_entries() -> dict[str, dict]:
     schema_path = (
@@ -59,6 +65,7 @@ def publish_pod_registry(
     try:
         registry_df = pd.read_sql_query(_REGISTRY_SQL, sconn)
         project_df = pd.read_sql_query(_PROJECT_SQL, sconn)
+        document_df = pd.read_sql_query(_DOCUMENT_SQL, sconn)
     finally:
         sconn.close()
 
@@ -73,6 +80,7 @@ def publish_pod_registry(
         for table_name, df, date_cols in (
             ("pod_registry", registry_df, ("approval_date",)),
             ("pod_project", project_df, ()),
+            ("pod_document", document_df, ()),
         ):
             conn.register("_pod_pub_df", df)
             select_cols = ", ".join(
