@@ -127,20 +127,27 @@ function buildColumn(col, refs) {
   }
 
   if (col.autocomplete) {
-    const url = col.autocomplete;
-    column.editor = "list";
-    column.editorParams = {
-      valuesLookup: async (_cell, filterTerm) => {
-        // server returns [{value, label}] — label is "id — name"
-        const resp = await fetch(`${url}?q=${encodeURIComponent(filterTerm || "")}`);
-        return resp.ok ? await resp.json() : [];
-      },
-      autocomplete: true,
-      freetext: true,
-      filterRemote: true, // re-query per term; filterDelay debounces keystrokes
-      filterDelay: 300,
-    };
+    // Native <datalist> autocomplete. Tabulator's list editor with
+    // filterRemote re-syncs the input to the current value's label every
+    // time the lookup resolves, clobbering the user's in-progress search
+    // term (backspace appears to "undo"). The browser-native datalist
+    // filters by id and name without touching the input and copes with
+    // thousands of options.
     const projects = refs.projects || {};
+    const listId = `datalist-${col.field}`;
+    const old = document.getElementById(listId);
+    if (old) old.remove(); // rebuild so reloads pick up fresh projects
+    const dl = document.createElement("datalist");
+    dl.id = listId;
+    for (const [id, name] of Object.entries(projects)) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      if (name) opt.label = name;
+      dl.appendChild(opt);
+    }
+    document.body.appendChild(dl);
+    column.editor = "input";
+    column.editorParams = { elementAttributes: { list: listId } };
     column.formatter = (cell) => {
       const v = cell.getValue();
       return v && projects[v] ? `${v} — ${projects[v]}` : (v ?? "");
