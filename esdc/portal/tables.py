@@ -43,7 +43,8 @@ TABLE_CONFIGS: dict[str, dict] = {
         "height": "45vh",
         "sql": """
             SELECT d.doc_id, d.file_name, d.doc_type, d.doc_date, d.subject,
-                   d.project_name, COUNT(pd.pod_id) AS linked_pods
+                   d.project_name, d.pod_name, d.suggested_pod_ids,
+                   COUNT(pd.pod_id) AS linked_pods
             FROM documents d
             LEFT JOIN pod_document pd ON pd.doc_id = d.doc_id
             GROUP BY d.doc_id
@@ -56,6 +57,8 @@ TABLE_CONFIGS: dict[str, dict] = {
             {"field": "doc_date", "title": "Date", "readonly": True, "headerFilter": True},
             {"field": "subject", "title": "Subject", "readonly": True, "headerFilter": True},
             {"field": "project_name", "title": "Project", "readonly": True, "headerFilter": True},
+            {"field": "pod_name", "title": "POD Name", "readonly": True, "headerFilter": True},
+            {"field": "suggested_pod_ids", "title": "Suggested POD", "readonly": True, "headerFilter": True},
             {"field": "linked_pods", "title": "Linked", "readonly": True, "headerFilter": True},
         ],
     },

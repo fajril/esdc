@@ -58,6 +58,7 @@ from esdc.corpus.metadata import (
     seed_topic_from_legacy,
 )
 from esdc.corpus.ocr import OllamaVisionOcr
+from esdc.corpus.pod_matcher import PodMatcher
 from esdc.corpus.sidecar import (
     read_sidecar,
     sidecar_path,
@@ -574,6 +575,7 @@ def run_extract(
     try:
         resolver = _entity_resolver_or_none(store, report)
         _validate_entity_overrides(resolver, overrides)
+        matcher = PodMatcher(store._get_sqlite())
 
         # (name, pages_ocr, page_count) collected so the final report can be
         # sorted by OCR ratio DESC once, instead of per-file.
@@ -660,6 +662,7 @@ def run_extract(
                         "wk_name": meta_fields.get("wk_name"),
                         "field_name": meta_fields.get("field_name"),
                         "project_name": meta_fields.get("project_name"),
+                        "pod_name": meta_fields.get("pod_name"),
                         "extras": meta_fields.get("extras"),
                     }
                     if preserved_meta is not None:
@@ -685,6 +688,9 @@ def run_extract(
                             f"{name}: reviewed metadata preserved — body "
                             "re-extracted, set reviewed: true after re-review"
                         )
+
+                    p.status("suggest POD links")
+                    _apply_pod_suggestions(meta, matcher, report, name)
 
                     p.status("write sidecar")
                     write_sidecar(src, meta, markdown)
@@ -862,6 +868,19 @@ def _apply_entity_resolution(
     return raw_entities
 
 
+def _apply_pod_suggestions(
+    meta: dict[str, Any],
+    matcher: PodMatcher,
+    report: CorpusReport,
+    name: str,
+) -> None:
+    """Set meta['suggested_pod_ids'] from registry matching (never links)."""
+    ids, reasons = matcher.suggest(meta.get("doc_number"), meta.get("pod_name"))
+    meta["suggested_pod_ids"] = ids or None
+    for reason in reasons:
+        report.warnings.append(f"{name}: suggested POD — {reason}")
+
+
 def run_commit(
     paths: list[Path],
     skip_review: bool = False,
@@ -879,6 +898,7 @@ def run_commit(
         # also needed to reach the conn for canonical names
         store.ensure_tables(validate_model=True)
         resolver = EntityResolver(db=store._get_connection())
+        matcher = PodMatcher(store._get_sqlite())
 
         with _progress_with_status("commit", len(sidecars), "docs") as p:
             for sc in sidecars:
@@ -927,6 +947,9 @@ def run_commit(
                     sidecar_raws = meta.pop("raw_entities", None)
                     meta.pop("entity_warnings", None)
 
+                    p.status("suggest POD links")
+                    _apply_pod_suggestions(meta, matcher, report, name)
+
                     p.status("chunk markdown")
                     chunks = chunk_markdown(
                         body, cfg["chunk_size"], cfg["chunk_overlap"]
@@ -951,6 +974,8 @@ def run_commit(
                         "wk_name": meta.get("wk_name"),
                         "field_name": meta.get("field_name"),
                         "project_name": meta.get("project_name"),
+                        "pod_name": meta.get("pod_name"),
+                        "suggested_pod_ids": meta.get("suggested_pod_ids"),
                         "raw_entities": json.dumps(sidecar_raws or resolver_raws),
                         "metadata": json.dumps(meta.get("extras") or {}),
                         "markdown": body,
@@ -1058,6 +1083,7 @@ _REGENERATE_FIELDS = (
     "wk_name",
     "field_name",
     "project_name",
+    "pod_name",
     "extras",
 )
 
@@ -1065,7 +1091,7 @@ _REGENERATE_FIELDS = (
 _PRESERVED_FIELDS = (
     "doc_type", "doc_topic", "doc_number", "doc_date", "subject",
     "sender", "recipient", "doc_level", "wk_name", "field_name",
-    "project_name", "extras", "raw_entities", "entity_warnings",
+    "project_name", "pod_name", "extras", "raw_entities", "entity_warnings",
 )
 
 
@@ -1122,11 +1148,13 @@ def run_meta(
 
     store: CorpusStore | None = None
     resolver = None
+    matcher: PodMatcher | None = None
     try:
         try:
             store = CorpusStore()
             store.ensure_tables()
             resolver = _entity_resolver_or_none(store, report)
+            matcher = PodMatcher(store._get_sqlite())
         except Exception as e:
             logger.warning("[Corpus] meta DB unavailable: %s", e)
             report.warnings.append(
@@ -1183,6 +1211,10 @@ def run_meta(
                                 existing_raws[key] = resolved_raws.get(key)
                         if any(v is not None for v in existing_raws.values()):
                             meta["raw_entities"] = existing_raws
+
+                    if matcher is not None:
+                        p.status("suggest POD links")
+                        _apply_pod_suggestions(meta, matcher, report, name)
 
                     file_hash = meta.get("file_hash")
                     if (

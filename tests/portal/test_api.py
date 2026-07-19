@@ -183,6 +183,22 @@ def test_documents_grid_rows_and_linked_count(monkeypatch, tmp_path):
     assert by_id["def456"]["linked_pods"] == 0
 
 
+def test_documents_grid_includes_pod_name_and_suggestions(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _seed_documents(["abc123"])
+    conn = get_sqlite_connection()
+    conn.execute(
+        "UPDATE documents SET pod_name = ?, suggested_pod_ids = ?"
+        " WHERE doc_id = 'abc123'",
+        ('["POD I Lapangan Abadi"]', '["PL-2019-0300-4-1-0"]'),
+    )
+    conn.commit()
+    conn.close()
+    rows = client.get("/api/tables/documents").json()["rows"]
+    assert rows[0]["pod_name"] == '["POD I Lapangan Abadi"]'
+    assert rows[0]["suggested_pod_ids"] == '["PL-2019-0300-4-1-0"]'
+
+
 def test_documents_table_empty_when_absent(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     resp = client.get("/api/tables/documents")

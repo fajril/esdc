@@ -2430,3 +2430,70 @@ def test_extract_passes_ollama_host_to_ocr_and_text_caller(tmp_path, monkeypatch
     pipeline.run_extract([pdf])
     assert ocr_kwargs.get("host") == "http://gpu-box:11434"
     assert caller_hosts == ["http://gpu-box:11434"]
+
+
+# --------------------------------------------------------------------------
+# POD suggestions (PodMatcher wiring)
+# --------------------------------------------------------------------------
+
+
+def _seed_registry_pod(store):
+    sconn = store._get_sqlite()
+    sconn.execute(
+        "INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')"
+    )
+    sconn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (1, 'POD I')")
+    sconn.execute(
+        "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
+        " institution_code, pod_type_code, rev_num, approval_seq)"
+        " VALUES (1, 'PL-2019-0300-4-1-0', 'POD I Lapangan Abadi',"
+        " 'SRT-0368', '2019-07-16', 4, 1, 0, 300)"
+    )
+    sconn.commit()
+
+
+def test_extract_writes_pod_suggestions(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    patch_store_factory(monkeypatch, store)
+    _seed_registry_pod(store)
+    monkeypatch.setattr(
+        pipeline, "llm_extract",
+        lambda markdown, caller: {
+            "doc_type": "letter",
+            "doc_number": "SRT-0368",
+            "pod_name": ["POD I Lapangan Abadi"],
+        },
+    )
+    pdf = make_pdf(tmp_path)
+    report = pipeline.run_extract([pdf])
+    assert report.processed and not report.failed
+    meta, _ = read_sidecar(sidecar_path(pdf))
+    assert meta["pod_name"] == ["POD I Lapangan Abadi"]
+    assert meta["suggested_pod_ids"] == ["PL-2019-0300-4-1-0"]
+    assert any("suggested POD" in w for w in report.warnings)
+
+
+def test_commit_stores_pod_fields(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    _seed_registry_pod(store)
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash="cc" * 32,
+        pod_name=["POD I Lapangan Abadi"], doc_number="SRT-0368",
+    )
+    report = pipeline.run_commit([sc])
+    assert report.processed and not report.failed
+    doc = store.get_document(("cc" * 32)[:16])
+    assert doc["pod_name"] == ["POD I Lapangan Abadi"]
+    assert doc["suggested_pod_ids"] == ["PL-2019-0300-4-1-0"]
+    store.close()
+
+
+def test_suggestions_empty_registry_is_quiet(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path)
+    report = pipeline.run_extract([pdf])  # default store, empty m_pod
+    assert report.processed and not report.failed
+    meta, _ = read_sidecar(sidecar_path(pdf))
+    assert meta.get("suggested_pod_ids") is None

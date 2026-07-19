@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS documents (
     wk_name TEXT,
     field_name TEXT,
     project_name TEXT,
+    pod_name TEXT,
+    suggested_pod_ids TEXT,
     raw_entities TEXT,
     metadata TEXT,
     markdown TEXT NOT NULL,
@@ -163,6 +165,11 @@ class CorpusStore:
 
             self._sconn = get_sqlite_connection(self._sqlite_path)
             self._sconn.execute(_SQLITE_DOC_DDL)
+            for col in ("pod_name", "suggested_pod_ids"):
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self._sconn.execute(
+                        f"ALTER TABLE documents ADD COLUMN {col} TEXT"
+                    )
             self._sconn.commit()
         return self._sconn
 
@@ -223,6 +230,8 @@ class CorpusStore:
                 wk_name JSON,
                 field_name JSON,
                 project_name JSON,
+                pod_name JSON,
+                suggested_pod_ids JSON,
                 raw_entities JSON,
                 metadata JSON,
                 markdown TEXT NOT NULL,
@@ -238,6 +247,10 @@ class CorpusStore:
         conn.execute(
             f"ALTER TABLE {self.DOC_TABLE} ADD COLUMN IF NOT EXISTS doc_topic JSON"
         )
+        for col in ("pod_name", "suggested_pod_ids"):
+            conn.execute(
+                f"ALTER TABLE {self.DOC_TABLE} ADD COLUMN IF NOT EXISTS {col} JSON"
+            )
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.CHUNK_TABLE} (
                 chunk_id VARCHAR PRIMARY KEY,
@@ -366,6 +379,8 @@ class CorpusStore:
             _to_json(doc.get("wk_name")),
             _to_json(doc.get("field_name")),
             _to_json(doc.get("project_name")),
+            _to_json(doc.get("pod_name")),
+            _to_json(doc.get("suggested_pod_ids")),
             doc.get("raw_entities"),
             doc.get("metadata"),
             doc["markdown"],
@@ -379,9 +394,10 @@ class CorpusStore:
             doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
             doc_number, doc_date, subject, sender, recipient,
             doc_level, wk_name, field_name, project_name,
+            pod_name, suggested_pod_ids,
             raw_entities, metadata, markdown, extraction_method,
             embedding_model, page_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     def insert_document(self, doc: dict[str, Any], chunks: list[Chunk]) -> None:
@@ -476,6 +492,7 @@ class CorpusStore:
             SELECT
                 doc_id, file_name, doc_type, doc_topic, doc_date,
                 subject, doc_level, wk_name, field_name, project_name,
+                pod_name, suggested_pod_ids,
                 extraction_method, page_count, ingested_at
             FROM {self.DOC_TABLE}
             ORDER BY ingested_at DESC, doc_id
@@ -493,7 +510,15 @@ class CorpusStore:
             doc = dict(row)
             doc["n_chunks"] = chunk_counts.get(doc["doc_id"], 0)
             _parse_json_fields(
-                doc, ("doc_topic", "wk_name", "field_name", "project_name")
+                doc,
+                (
+                    "doc_topic",
+                    "wk_name",
+                    "field_name",
+                    "project_name",
+                    "pod_name",
+                    "suggested_pod_ids",
+                ),
             )
             docs.append(doc)
         return docs
@@ -912,6 +937,7 @@ class CorpusStore:
             SELECT doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
                    doc_number, doc_date, subject, sender, recipient,
                    doc_level, wk_name, field_name, project_name,
+                   pod_name, suggested_pod_ids,
                    raw_entities, metadata, markdown, extraction_method,
                    embedding_model, page_count, ingested_at
             FROM {self.DOC_TABLE}
@@ -930,6 +956,8 @@ class CorpusStore:
                 "wk_name",
                 "field_name",
                 "project_name",
+                "pod_name",
+                "suggested_pod_ids",
                 "raw_entities",
                 "metadata",
             ),

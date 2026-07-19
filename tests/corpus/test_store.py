@@ -56,6 +56,7 @@ DOC = {
     "doc_number": "SRT-1", "doc_date": "2026-01-05", "subject": "Persetujuan",
     "sender": "SKK", "recipient": "KKKS", "doc_level": "field",
     "wk_name": "Rokan", "field_name": "Duri", "project_name": None,
+    "pod_name": ["POD Mengoepeh"], "suggested_pod_ids": ["PL-2003-0005-3-2-0"],
     "raw_entities": "{}", "metadata": "{}", "markdown": "# Surat\nisi",
     "extraction_method": "native", "page_count": 1,
 }
@@ -277,6 +278,15 @@ def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
         assert result["results"][0]["wk_name"] == ["Rokan"]
     finally:
         store.close()
+
+
+def test_insert_and_get_pod_name_round_trip(store):
+    store.insert_document(DOC, [Chunk(0, None, "isi")])
+    got = store.get_document(DOC["doc_id"])
+    assert got["pod_name"] == ["POD Mengoepeh"]
+    assert got["suggested_pod_ids"] == ["PL-2003-0005-3-2-0"]
+    docs = store.list_documents()
+    assert docs[0]["pod_name"] == ["POD Mengoepeh"]
 
 
 def test_insert_and_get_doc_topic_round_trip(store):
