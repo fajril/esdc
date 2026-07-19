@@ -46,6 +46,59 @@ function coerceValue(cfg, field, value) {
   return value;
 }
 
+// entityList columns (documents.wk_name/field_name/project_name) store
+// JSON-array TEXT server-side ('["Rokan","Kampar"]') or null. The grid
+// shows/edits them as a semicolon-joined string; the server re-parses and
+// canonicalizes that string on save (document_entities.py _parse_names).
+function formatEntityList(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (Array.isArray(value)) return value.join("; ");
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        const arr = JSON.parse(trimmed);
+        if (Array.isArray(arr)) return arr.join("; ");
+      } catch {
+        // Not valid JSON — fall through and show the raw string (e.g. an
+        // in-progress edit that hasn't round-tripped through the server yet).
+      }
+    }
+    return value;
+  }
+  return String(value);
+}
+
+// Plain-text editor pre-filled with the semicolon form rather than the raw
+// JSON cell value. Tabulator's built-in "input" editor seeds itself from
+// cell.getValue() directly, which would show '["Rokan","Kampar"]' instead
+// of "Rokan; Kampar" — a custom editor is needed to seed from the formatted
+// display value. The typed string is handed to success() as-is; the server
+// is authoritative for parsing it back into names.
+function entityListEditor(cell, onRendered, success, cancel) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.style.width = "100%";
+  input.style.boxSizing = "border-box";
+  input.value = formatEntityList(cell.getValue());
+  onRendered(() => {
+    input.focus();
+    input.select();
+  });
+  const finish = () => success(input.value);
+  input.addEventListener("blur", finish);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    }
+  });
+  return input;
+}
+
 function buildColumn(col, refs) {
   const column = {
     field: col.field,
@@ -152,6 +205,11 @@ function buildColumn(col, refs) {
       const v = cell.getValue();
       return v && lookup[v] ? `${v} — ${lookup[v]}` : (v ?? "");
     };
+  }
+
+  if (col.entityList) {
+    column.formatter = (cell) => formatEntityList(cell.getValue());
+    column.editor = entityListEditor;
   }
 
   if (col.headerFilter) column.headerFilter = "input";
@@ -740,29 +798,34 @@ async function saveTable(tableName) {
     setStatus(`Save failed (HTTP ${resp.status}) — nothing was saved`, true);
     return;
   }
-  setStatus("Saved ✓ · publishing…", false);
+  // warnings (e.g. documents' best-effort DuckDB mirror sync) are non-fatal —
+  // the save itself already committed — so they ride along on the success
+  // status rather than blocking it like the 422 errors path above.
+  const warnings = body.warnings || [];
+  const warningSuffix = warnings.length ? ` — ${warnings.join("; ")}` : "";
+  setStatus(`Saved ✓ · publishing…${warningSuffix}`, false);
   await reloadGrid(tableName);
-  await publishRegistry("Saved ✓ · ");
+  await publishRegistry("Saved ✓ · ", warningSuffix);
 }
 
-async function publishRegistry(prefix = "") {
+async function publishRegistry(prefix = "", suffix = "") {
   let resp;
   let body;
   try {
     resp = await fetch("/api/publish", { method: "POST" });
     body = await resp.json();
   } catch (err) {
-    setStatus(`${prefix}publish failed (${err.message || "network error"}) — use Publish to retry`, true);
+    setStatus(`${prefix}publish failed (${err.message || "network error"}) — use Publish to retry${suffix}`, true);
     return;
   }
   if (!resp.ok || body.ok === false) {
-    setStatus(`${prefix}publish failed: ${body.error || `HTTP ${resp.status}`} — use Publish to retry`, true);
+    setStatus(`${prefix}publish failed: ${body.error || `HTTP ${resp.status}`} — use Publish to retry${suffix}`, true);
     return;
   }
   const counts = Object.entries(body.tables || {})
     .map(([t, n]) => `${t}: ${n}`)
     .join(", ");
-  setStatus(`${prefix}published ✓ ${counts}`, false);
+  setStatus(`${prefix}published ✓ ${counts}${suffix}`, false);
 }
 
 function initGrids() {
