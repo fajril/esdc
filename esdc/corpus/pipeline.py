@@ -935,7 +935,31 @@ def run_commit(
                         continue
                     exists = store.document_exists(file_hash)
                     if exists and not force:
-                        report.skipped.append(f"{name} (already committed)")
+                        # Still skip re-ingest, but merge any blank entity
+                        # columns from this sidecar first -- portal edits
+                        # to non-empty columns are never clobbered. dry_run
+                        # must not write, so the merge is skipped there.
+                        filled = (
+                            []
+                            if dry_run
+                            else store.fill_blank_entities(
+                                (file_hash or "")[:16],
+                                {
+                                    k: meta.get(k)
+                                    for k in (
+                                        "wk_name",
+                                        "field_name",
+                                        "project_name",
+                                    )
+                                },
+                            )
+                        )
+                        if filled:
+                            report.processed.append(
+                                f"{name} (entities merged: {', '.join(filled)})"
+                            )
+                        else:
+                            report.skipped.append(f"{name} (already committed)")
                         continue
 
                     # Safety net for hand-edited sidecars: re-resolve even

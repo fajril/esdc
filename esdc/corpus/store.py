@@ -362,6 +362,67 @@ class CorpusStore:
         ).fetchone()
         return result is not None
 
+    def fill_blank_entities(
+        self, doc_id: str, entities: dict[str, list[str] | None]
+    ) -> list[str]:
+        """Fill NULL/empty entity columns on an already-committed doc.
+
+        For each column in ``entities`` (``wk_name``/``field_name``/
+        ``project_name``): if the stored SQLite value is NULL or an empty
+        array AND the given sidecar value is non-empty, write the sidecar
+        value (JSON array) to SQLite (truth) and the DuckDB mirror
+        (best-effort). A stored value that already holds names — including
+        one edited through the portal — is left untouched. Returns the
+        field names actually filled; doc_id not found -> [].
+        """
+        if not entities:
+            return []
+        sconn = self._get_sqlite()
+        cols = list(entities.keys())
+        row = sconn.execute(
+            f"SELECT {', '.join(cols)} FROM {self.DOC_TABLE} WHERE doc_id = ?",
+            [doc_id],
+        ).fetchone()
+        if row is None:
+            return []
+
+        updates: dict[str, list[str]] = {}
+        for col, current_raw in zip(cols, row, strict=True):
+            sidecar_value = entities.get(col)
+            if not sidecar_value:
+                continue
+            current = json.loads(current_raw) if current_raw else None
+            if current:
+                continue
+            updates[col] = sidecar_value
+
+        if not updates:
+            return []
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = [_to_json(v) for v in updates.values()]
+        with sconn:
+            sconn.execute(
+                f"UPDATE {self.DOC_TABLE} SET {set_clause} WHERE doc_id = ?",
+                (*values, doc_id),
+            )
+
+        try:
+            conn = self._get_connection()
+            conn.execute(
+                f"UPDATE {self.DOC_TABLE} SET {set_clause} WHERE doc_id = ?",
+                (*values, doc_id),
+            )
+        except Exception as e:
+            logger.warning(
+                "[Corpus] fill_blank_entities DuckDB mirror failed | "
+                "doc_id=%s error=%s",
+                doc_id,
+                e,
+            )
+
+        return list(updates.keys())
+
     def _doc_row_values(self, doc: dict[str, Any]) -> list[Any]:
         return [
             doc["doc_id"],

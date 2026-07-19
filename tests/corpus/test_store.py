@@ -457,3 +457,93 @@ def test_exists_get_list_read_sqlite(store, tmp_path):
     assert store.find_doc_ids({"doc_type": "surat"}) == [
         (DOC["doc_id"], DOC["file_name"])
     ]
+
+
+# --------------------------------------------------------------------------
+# fill_blank_entities
+# --------------------------------------------------------------------------
+
+
+def _blank_entity_doc() -> dict:
+    doc = dict(DOC)
+    doc["wk_name"] = None
+    doc["field_name"] = []
+    doc["project_name"] = ["Existing Project"]
+    return doc
+
+
+def test_fill_blank_entities_fills_null_and_empty_leaves_non_empty(store):
+    doc = _blank_entity_doc()
+    store.insert_document(doc, [Chunk(0, None, "isi")])
+
+    filled = store.fill_blank_entities(
+        doc["doc_id"],
+        {
+            "wk_name": ["Sidecar WK"],
+            "field_name": ["Sidecar Field"],
+            "project_name": ["Sidecar Project"],
+        },
+    )
+
+    assert filled == ["wk_name", "field_name"]
+    result = store.get_document(doc["doc_id"])
+    assert result["wk_name"] == ["Sidecar WK"]
+    assert result["field_name"] == ["Sidecar Field"]
+    # Non-empty stored value (e.g. portal-edited) is never clobbered.
+    assert result["project_name"] == ["Existing Project"]
+
+
+def test_fill_blank_entities_mirrors_to_duckdb(store):
+    doc = _blank_entity_doc()
+    store.insert_document(doc, [Chunk(0, None, "isi")])
+
+    filled = store.fill_blank_entities(doc["doc_id"], {"wk_name": ["Sidecar WK"]})
+
+    assert filled == ["wk_name"]
+    mirror_row = (
+        store._get_connection()
+        .execute("SELECT wk_name FROM documents WHERE doc_id = ?", [doc["doc_id"]])
+        .fetchone()
+    )
+    assert json.loads(mirror_row[0]) == ["Sidecar WK"]
+
+
+def test_fill_blank_entities_no_blank_fields_returns_empty(store):
+    doc = dict(DOC)
+    doc["wk_name"] = ["Already Set"]
+    doc["field_name"] = ["Already Set Field"]
+    doc["project_name"] = ["Already Set Project"]
+    store.insert_document(doc, [Chunk(0, None, "isi")])
+
+    filled = store.fill_blank_entities(
+        doc["doc_id"],
+        {
+            "wk_name": ["Sidecar WK"],
+            "field_name": ["Sidecar Field"],
+            "project_name": ["Sidecar Project"],
+        },
+    )
+
+    assert filled == []
+    result = store.get_document(doc["doc_id"])
+    assert result["wk_name"] == ["Already Set"]
+    assert result["field_name"] == ["Already Set Field"]
+    assert result["project_name"] == ["Already Set Project"]
+
+
+def test_fill_blank_entities_empty_sidecar_value_skips(store):
+    doc = _blank_entity_doc()
+    store.insert_document(doc, [Chunk(0, None, "isi")])
+
+    filled = store.fill_blank_entities(
+        doc["doc_id"], {"wk_name": None, "field_name": []}
+    )
+
+    assert filled == []
+    result = store.get_document(doc["doc_id"])
+    assert result["wk_name"] is None
+    assert result["field_name"] == []
+
+
+def test_fill_blank_entities_unknown_doc_id_returns_empty(store):
+    assert store.fill_blank_entities("nope", {"wk_name": ["X"]}) == []

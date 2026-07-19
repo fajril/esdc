@@ -1,3 +1,4 @@
+import json
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -1489,6 +1490,166 @@ def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch)
     report2 = pipeline.run_commit([tmp_path])
     assert report2.skipped == ["doc.corpus.md (already committed)"]
     assert counting_resolver.calls == calls_after_first  # unchanged: not re-invoked
+    store.close()
+
+
+def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
+    tmp_path, monkeypatch
+):
+    """Re-commit fills blanks from the sidecar but preserves portal edits.
+
+    A re-commit of an already-ingested doc fills blank entity columns
+    from the (re-extracted) sidecar but never clobbers a non-empty DB
+    value — portal edits to wk_name/field_name/project_name are source
+    of truth.
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)  # no matches -> raw names kept as-is
+
+    file_hash = "aa" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name=None,
+        field_name=None,
+        project_name=None,
+    )
+    report1 = pipeline.run_commit([tmp_path])
+    assert report1.processed == ["doc.corpus.md"]
+
+    doc_before = store.get_document(doc_id)
+    assert doc_before["wk_name"] is None
+    assert doc_before["project_name"] is None
+
+    # Simulate a portal edit made directly against the DB (source of truth).
+    sconn = store._get_sqlite()
+    with sconn:
+        sconn.execute(
+            "UPDATE documents SET project_name = ? WHERE doc_id = ?",
+            (json.dumps(["Portal Project"]), doc_id),
+        )
+
+    # Re-extract updates the same sidecar: wk_name now populated, and a
+    # DIFFERENT project_name than the portal-edited one.
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name="Rokan",
+        field_name=None,
+        project_name="Sidecar Project",
+    )
+
+    report2 = pipeline.run_commit([tmp_path])
+
+    assert report2.processed == ["doc.corpus.md (entities merged: wk_name)"]
+    assert report2.skipped == []
+    doc_after = store.get_document(doc_id)
+    assert doc_after["wk_name"] == ["Rokan"]
+    assert doc_after["field_name"] is None
+    # The portal edit was preserved, not overwritten by the sidecar value.
+    assert doc_after["project_name"] == ["Portal Project"]
+    store.close()
+
+
+def test_commit_already_committed_no_blanks_still_skips(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    file_hash = "cd" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokan"
+    )
+    pipeline.run_commit([tmp_path])
+    assert store.get_document(doc_id)["wk_name"] == ["Rokan"]
+
+    # Re-commit with the exact same (already non-blank) entity values.
+    report2 = pipeline.run_commit([tmp_path])
+
+    assert report2.skipped == ["doc.corpus.md (already committed)"]
+    assert report2.processed == []
+    store.close()
+
+
+def test_commit_force_overwrites_entities_ignoring_merge(tmp_path, monkeypatch):
+    """--force keeps its full-replace behavior: it does not merge, it wins."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    file_hash = "be" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokan"
+    )
+    pipeline.run_commit([tmp_path])
+
+    # Simulate a portal edit that --force must overwrite (unlike the
+    # default merge path, which would have preserved it).
+    sconn = store._get_sqlite()
+    with sconn:
+        sconn.execute(
+            "UPDATE documents SET wk_name = ? WHERE doc_id = ?",
+            (json.dumps(["Portal WK"]), doc_id),
+        )
+
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name="Rokan Hilir",
+    )
+    report = pipeline.run_commit([tmp_path], force=True)
+
+    assert report.processed == ["doc.corpus.md"]
+    doc = store.get_document(doc_id)
+    assert doc["wk_name"] == ["Rokan Hilir"]
+    store.close()
+
+
+def test_commit_dry_run_skips_entity_merge(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    file_hash = "df" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
+    )
+    pipeline.run_commit([tmp_path])
+    assert store.get_document(doc_id)["wk_name"] is None
+
+    fill_calls = []
+    orig_fill = store.fill_blank_entities
+
+    def spy_fill(*a, **kw):
+        fill_calls.append((a, kw))
+        return orig_fill(*a, **kw)
+
+    monkeypatch.setattr(store, "fill_blank_entities", spy_fill)
+
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokan"
+    )
+    report = pipeline.run_commit([tmp_path], dry_run=True)
+
+    assert fill_calls == []
+    assert report.skipped == ["doc.corpus.md (already committed)"]
+    doc_after = store.get_document(doc_id)
+    assert doc_after["wk_name"] is None  # dry_run: no write at all
     store.close()
 
 
