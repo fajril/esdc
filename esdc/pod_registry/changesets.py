@@ -49,7 +49,6 @@ def apply_changeset(
     changes: dict,
     sqlite_path: Path | None = None,
     known_project_ids: set[str] | None = None,
-    known_doc_ids: set[str] | None = None,
 ) -> ChangesetResult:
     if table not in _TABLES:
         raise ValueError(f"unknown table: {table}")
@@ -59,9 +58,7 @@ def apply_changeset(
 
     conn = get_sqlite_connection(sqlite_path)
     try:
-        errors = _validate(
-            conn, table, inserts, updates, deletes, known_project_ids, known_doc_ids
-        )
+        errors = _validate(conn, table, inserts, updates, deletes, known_project_ids)
         if errors:
             return ChangesetResult(ok=False, errors=errors)
         generated: list[dict] = []
@@ -102,14 +99,13 @@ def _validate(
     updates: list[dict],
     deletes: list[dict],
     known_project_ids: set[str] | None,
-    known_doc_ids: set[str] | None = None,
 ) -> list[RowError]:
     if table == "m_pod":
         return _validate_m_pod(conn, inserts, updates, deletes)
     if table == "project_pod":
         return _validate_project_pod(conn, inserts, updates, deletes, known_project_ids)
     if table == "pod_document":
-        return _validate_pod_document(conn, inserts, updates, deletes, known_doc_ids)
+        return _validate_pod_document(conn, inserts, updates, deletes)
     if table == "pod_revision":
         return _validate_pod_revision(conn, inserts, updates, deletes)
     if table in ("r_institution", "r_pod_type"):
@@ -496,7 +492,6 @@ def _validate_pod_document(
     inserts: list[dict],
     updates: list[dict],
     deletes: list[dict],
-    known_doc_ids: set[str] | None,
 ) -> list[RowError]:
     errors: list[RowError] = []
 
@@ -509,6 +504,13 @@ def _validate_pod_document(
                     "pod_document does not support updates; delete and insert instead",
                 )
             )
+
+    try:
+        docs_available = (
+            conn.execute("SELECT 1 FROM documents LIMIT 1").fetchone() is not None
+        )
+    except sqlite3.OperationalError:
+        docs_available = False  # corpus never ingested — skip doc checks
 
     seen_pairs_in_changeset: set[tuple[int, str]] = set()
     for i, row in enumerate(inserts):
@@ -526,8 +528,11 @@ def _validate_pod_document(
                 )
         if not isinstance(doc_id, str) or not doc_id.strip():
             errors.append(RowError("insert", i, "doc_id must be a non-empty string"))
-        else:
-            if known_doc_ids is not None and doc_id not in known_doc_ids:
+        elif docs_available:
+            exists = conn.execute(
+                "SELECT 1 FROM documents WHERE doc_id = ?", (doc_id,)
+            ).fetchone()
+            if exists is None:
                 errors.append(
                     RowError(
                         "insert",

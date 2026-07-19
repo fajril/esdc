@@ -154,6 +154,8 @@ function buildColumn(col, refs) {
     };
   }
 
+  if (col.headerFilter) column.headerFilter = "input";
+
   if (!col.readonly) {
     column.cellEdited = (cell) => onCellEdited(cell);
   }
@@ -163,14 +165,16 @@ function buildColumn(col, refs) {
 
 function buildColumns(cfg, refs) {
   const columns = cfg.columns.map((col) => buildColumn(col, refs));
-  columns.push({
-    title: "",
-    field: "_delete",
-    width: 40,
-    headerSort: false,
-    formatter: () => "🗑",
-    cellClick: (e, cell) => markRowDeleted(cell.getTable(), cell.getRow()),
-  });
+  if (!cfg.readonly) {
+    columns.push({
+      title: "",
+      field: "_delete",
+      width: 40,
+      headerSort: false,
+      formatter: () => "🗑",
+      cellClick: (e, cell) => markRowDeleted(cell.getTable(), cell.getRow()),
+    });
+  }
   return columns;
 }
 
@@ -210,6 +214,7 @@ function isBlankNewRow(cfg, data) {
 
 // Empty grid gets one blank _new row so the user can type/paste immediately.
 function seedIfEmpty(state) {
+  if (state.cfg.readonly) return;
   if (state.table.getRows().length === 0) {
     state.table.addRow({ _new: true });
   }
@@ -502,18 +507,21 @@ function buildGrid(tableName, cfg, payload) {
     selectableRangeRows: true,
     editTriggerEvent: "dblclick",
     history: true, // undo/redo via Ctrl+Z / Ctrl+Y (built-in keybindings)
-    rowContextMenu: [
-      { label: "Insert row above", action: (e, row) => insertRowAt(row, true) },
-      { label: "Insert row below", action: (e, row) => insertRowAt(row, false) },
-      { separator: true },
-      { label: "Delete row", action: (e, row) => markRowDeleted(row.getTable(), row) },
-    ],
     clipboard: true,
     clipboardCopyRowRange: "range",
     clipboardCopyConfig: { rowHeaders: false, columnHeaders: false },
     clipboardCopyStyled: false,
     clipboardPasteAction: false, // paste handled by our handlePaste
   };
+  if (!cfg.readonly) {
+    tableOptions.rowContextMenu = [
+      { label: "Insert row above", action: (e, row) => insertRowAt(row, true) },
+      { label: "Insert row below", action: (e, row) => insertRowAt(row, false) },
+      { separator: true },
+      { label: "Delete row", action: (e, row) => markRowDeleted(row.getTable(), row) },
+    ];
+  }
+  if (cfg.height) tableOptions.height = cfg.height;
   // Only a single-column pk is a valid, unique Tabulator row index; composite
   // pks (project_pod, pod_revision) fall back to Tabulator's internal index.
   if (cfg.pk.length === 1) tableOptions.index = cfg.pk[0];
@@ -569,6 +577,7 @@ function initKeyboard() {
   document.addEventListener("paste", (e) => {
     const state = activeGrid;
     if (!state) return;
+    if (state.cfg.readonly) return;
     const el = document.activeElement;
     // A cell editor (or any other form control) owns the paste natively.
     if (el && el.closest && el.closest(".tabulator-editing")) return;
@@ -586,6 +595,7 @@ function initKeyboard() {
       e.preventDefault();
       return;
     }
+    if (state.cfg.readonly) return;
     if (mod && (key === "z" || key === "y")) {
       if (key === "y" || e.shiftKey) state.table.redo();
       else state.table.undo();

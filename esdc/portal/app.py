@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 import time
 from dataclasses import asdict
@@ -20,15 +21,6 @@ from esdc.pod_registry.store import get_sqlite_connection
 from esdc.portal.tables import TABLE_CONFIGS
 
 logger = logging.getLogger(__name__)
-
-_M_POD_ROWS_SQL = """
-SELECT m.*,
-    (SELECT group_concat(predecessor_id, '; ') FROM pod_revision
-      WHERE successor_id = m.pod_id) AS preceded_by,
-    (SELECT group_concat(successor_id, '; ') FROM pod_revision
-      WHERE predecessor_id = m.pod_id) AS superseded_by
-FROM m_pod m ORDER BY m.approval_seq
-"""
 
 # r_institution/r_pod_type grid columns use "institution"/"pod_type" as the
 # editable field name, but the changeset service's insert/update contract for
@@ -54,8 +46,12 @@ def _normalize_r_table_rows(table: str, rows: list[dict]) -> list[dict]:
 def _fetch_rows(table: str) -> list[dict]:
     conn = get_sqlite_connection()
     try:
-        sql = _M_POD_ROWS_SQL if table == "m_pod" else f"SELECT * FROM {table}"
-        return [dict(r) for r in conn.execute(sql)]
+        sql = TABLE_CONFIGS[table].get("sql") or f"SELECT * FROM {table}"
+        try:
+            return [dict(r) for r in conn.execute(sql)]
+        except sqlite3.OperationalError:
+            # e.g. documents table absent because corpus never ingested
+            return []
     finally:
         conn.close()
 
@@ -84,7 +80,6 @@ def _fetch_refs() -> dict:
 # share entries).
 _PROJECT_IDS_TTL_S = 60.0
 _projects_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
-_documents_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
 
 # publish rewrites the DuckDB snapshot tables; serialize concurrent requests
 # (save-triggered publish racing the Publish button) instead of letting two
@@ -120,27 +115,19 @@ def _load_projects(db_path) -> dict[str, str] | None:
     )
 
 
-def _known_documents() -> dict[str, str] | None:
-    """Corpus doc_id → file_name map from DuckDB; None if unavailable."""
-    from esdc.configs import Config
-
-    db_path = Config.get_db_file()
-    cached = _documents_cache.get(str(db_path))
-    if cached is not None and time.monotonic() - cached[0] < _PROJECT_IDS_TTL_S:
-        return cached[1]
-    documents = _load_id_name_map(
-        db_path,
-        "SELECT doc_id, file_name FROM documents",
-        "corpus doc id validation unavailable",
-    )
-    _documents_cache[str(db_path)] = (time.monotonic(), documents)
-    return documents
-
-
-def _known_doc_ids() -> set[str] | None:
-    """Corpus doc ids for typo checking; None if unavailable."""
-    documents = _known_documents()
-    return set(documents) if documents is not None else None
+def _sqlite_documents() -> dict[str, str] | None:
+    """doc_id → file_name from the operational SQLite db; None if absent."""
+    conn = get_sqlite_connection()
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT doc_id, file_name FROM documents ORDER BY file_name"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return None
+        return {r["doc_id"]: r["file_name"] or "" for r in rows}
+    finally:
+        conn.close()
 
 
 def _load_id_name_map(db_path, sql: str, warn: str) -> dict[str, str] | None:
@@ -176,13 +163,15 @@ def create_portal_app() -> FastAPI:
             refs["projects"] = _known_projects() or {}
         if table == "pod_document":
             # doc_id → file_name map for the documents datalist + formatter
-            refs["documents"] = _known_documents() or {}
+            refs["documents"] = _sqlite_documents() or {}
         return {"rows": _fetch_rows(table), "refs": refs}
 
     @app.post("/api/tables/{table}/save")
     async def save_table(table: str, request: Request):
         if table not in TABLE_CONFIGS:
             raise HTTPException(status_code=404, detail="unknown table")
+        if TABLE_CONFIGS[table].get("readonly"):
+            raise HTTPException(status_code=405, detail="read-only table")
         changes = await request.json()
         if table in _R_TABLE_NAME_FIELD:
             changes = dict(changes)
@@ -193,10 +182,7 @@ def create_portal_app() -> FastAPI:
                 table, changes.get("updates") or []
             )
         known = _known_project_ids() if table == "project_pod" else None
-        known_docs = _known_doc_ids() if table == "pod_document" else None
-        result = apply_changeset(
-            table, changes, known_project_ids=known, known_doc_ids=known_docs
-        )
+        result = apply_changeset(table, changes, known_project_ids=known)
         payload = {
             "ok": result.ok,
             "applied": result.applied,
@@ -279,7 +265,7 @@ def _register_pages(app: FastAPI, templates: Jinja2Templates) -> None:
 
     @app.get("/documents")
     def documents(request: Request):
-        return _page(request, "Document Links", ["pod_document"])
+        return _page(request, "Documents", ["documents", "pod_document"])
 
     @app.get("/revisions")
     def revisions(request: Request):

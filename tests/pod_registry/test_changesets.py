@@ -1,10 +1,26 @@
 import esdc.configs as configs
+from esdc.corpus.store import _SQLITE_DOC_DDL
 from esdc.pod_registry.changesets import apply_changeset
 from esdc.pod_registry.store import get_sqlite_connection
 
 
 def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(configs.Config, "get_db_dir", classmethod(lambda cls: tmp_path))
+
+
+def _seed_documents(doc_ids):
+    conn = get_sqlite_connection()
+    conn.execute(_SQLITE_DOC_DDL)
+    for i, doc_id in enumerate(doc_ids):
+        conn.execute(
+            "INSERT INTO documents (doc_id, file_name, file_path, file_hash,"
+            " markdown, extraction_method, embedding_model)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (doc_id, f"{doc_id}.pdf", f"/x/{doc_id}.pdf", doc_id * 4,
+             "# isi", "native", "fake-embed"),
+        )
+    conn.commit()
+    conn.close()
 
 
 def _seed_refs(monkeypatch, tmp_path):
@@ -180,15 +196,26 @@ def test_pod_document_insert_and_delete(monkeypatch, tmp_path):
         conn.close()
 
 
-def test_pod_document_validates_against_known_doc_ids(monkeypatch, tmp_path):
+def test_pod_document_validates_against_documents_table(monkeypatch, tmp_path):
     _insert_pod_900(monkeypatch, tmp_path)
+    _seed_documents(["abc123"])
     result = apply_changeset(
-        "pod_document",
-        {"inserts": [{"pod_id": 900, "doc_id": "nope"}]},
-        known_doc_ids={"abc123", "def456"},
+        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "nope"}]}
     )
     assert not result.ok
     assert "nope" in result.errors[0].message
+    result = apply_changeset(
+        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
+    )
+    assert result.ok
+
+
+def test_pod_document_check_skipped_when_no_documents_table(monkeypatch, tmp_path):
+    _insert_pod_900(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "anything"}]}
+    )
+    assert result.ok
 
 
 def test_pod_document_unknown_pod_rejected(monkeypatch, tmp_path):

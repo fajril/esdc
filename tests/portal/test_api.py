@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 import esdc.configs as configs
+from esdc.corpus.store import _SQLITE_DOC_DDL
 from esdc.portal.app import create_portal_app
 from esdc.pod_registry.store import get_sqlite_connection
 
@@ -10,6 +11,21 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(
         configs.Config, "get_db_file", classmethod(lambda cls: tmp_path / "esdc.duckdb")
     )
+
+
+def _seed_documents(doc_ids):
+    conn = get_sqlite_connection()
+    conn.execute(_SQLITE_DOC_DDL)
+    for i, doc_id in enumerate(doc_ids):
+        conn.execute(
+            "INSERT INTO documents (doc_id, file_name, file_path, file_hash,"
+            " markdown, extraction_method, embedding_model)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (doc_id, f"{doc_id}.pdf", f"/x/{doc_id}.pdf", doc_id * 4,
+             "# isi", "native", "fake-embed"),
+        )
+    conn.commit()
+    conn.close()
 
 
 def _client(monkeypatch, tmp_path):
@@ -106,24 +122,20 @@ def _insert_pod(client):
 
 def test_pod_document_refs_include_documents(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        "esdc.portal.app._known_documents",
-        lambda: {"ccbd4f3f27635c76": "letter_a.pdf"},
-    )
+    _seed_documents(["ccbd4f3f27635c76"])
     resp = client.get("/api/tables/pod_document")
     assert resp.status_code == 200
     body = resp.json()
     assert body["rows"] == []
-    assert body["refs"]["documents"] == {"ccbd4f3f27635c76": "letter_a.pdf"}
+    assert body["refs"]["documents"] == {
+        "ccbd4f3f27635c76": "ccbd4f3f27635c76.pdf"
+    }
 
 
 def test_pod_document_save_rejects_unknown_doc_id(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     _insert_pod(client)
-    monkeypatch.setattr(
-        "esdc.portal.app._known_documents",
-        lambda: {"ccbd4f3f27635c76": "letter_a.pdf"},
-    )
+    _seed_documents(["ccbd4f3f27635c76"])
     resp = client.post("/api/tables/pod_document/save", json={"inserts": [
         {"pod_id": 1, "doc_id": "nope"},
     ]})
@@ -134,10 +146,7 @@ def test_pod_document_save_rejects_unknown_doc_id(monkeypatch, tmp_path):
 def test_pod_document_save_and_roundtrip(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     _insert_pod(client)
-    monkeypatch.setattr(
-        "esdc.portal.app._known_documents",
-        lambda: {"ccbd4f3f27635c76": "letter_a.pdf"},
-    )
+    _seed_documents(["ccbd4f3f27635c76"])
     resp = client.post("/api/tables/pod_document/save", json={"inserts": [
         {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
     ]})
@@ -149,7 +158,7 @@ def test_pod_document_save_and_roundtrip(monkeypatch, tmp_path):
 def test_pod_document_save_skips_doc_check_when_corpus_unavailable(
     monkeypatch, tmp_path
 ):
-    # No DuckDB documents table -> validation degrades gracefully (like
+    # No SQLite documents table -> validation degrades gracefully (like
     # project ids), it must not hard-fail the save.
     client = _client(monkeypatch, tmp_path)
     _insert_pod(client)
@@ -157,3 +166,31 @@ def test_pod_document_save_skips_doc_check_when_corpus_unavailable(
         {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
     ]})
     assert resp.status_code == 200
+
+
+def test_documents_grid_rows_and_linked_count(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _insert_pod(client)
+    _seed_documents(["ccbd4f3f27635c76", "def456"])
+    resp = client.post("/api/tables/pod_document/save", json={"inserts": [
+        {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
+    ]})
+    assert resp.status_code == 200
+
+    rows = client.get("/api/tables/documents").json()["rows"]
+    by_id = {r["doc_id"]: r for r in rows}
+    assert by_id["ccbd4f3f27635c76"]["linked_pods"] == 1
+    assert by_id["def456"]["linked_pods"] == 0
+
+
+def test_documents_table_empty_when_absent(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    resp = client.get("/api/tables/documents")
+    assert resp.status_code == 200
+    assert resp.json()["rows"] == []
+
+
+def test_documents_save_rejected_405(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    resp = client.post("/api/tables/documents/save", json={"inserts": []})
+    assert resp.status_code == 405

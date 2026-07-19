@@ -1,9 +1,19 @@
 """Table/grid configuration for the POD portal."""
 
+_M_POD_ROWS_SQL = """
+SELECT m.*,
+    (SELECT group_concat(predecessor_id, '; ') FROM pod_revision
+      WHERE successor_id = m.pod_id) AS preceded_by,
+    (SELECT group_concat(successor_id, '; ') FROM pod_revision
+      WHERE predecessor_id = m.pod_id) AS superseded_by
+FROM m_pod m ORDER BY m.approval_seq
+"""
+
 TABLE_CONFIGS: dict[str, dict] = {
     "m_pod": {
         "title": "PODs",
         "pk": ["id"],
+        "sql": _M_POD_ROWS_SQL,
         "columns": [
             {"field": "id", "title": "ID (ITB)", "editableOnNew": True, "required": True},
             {"field": "approval_date", "title": "Approval Date", "editableOnNew": True, "editor": "date", "required": True},
@@ -26,9 +36,33 @@ TABLE_CONFIGS: dict[str, dict] = {
             {"field": "project_id", "title": "Project ID", "editableOnNew": True, "autocomplete": "/api/projects", "required": True},
         ],
     },
+    "documents": {
+        "title": "Documents (corpus)",
+        "pk": ["doc_id"],
+        "readonly": True,
+        "height": "45vh",
+        "sql": """
+            SELECT d.doc_id, d.file_name, d.doc_type, d.doc_date, d.subject,
+                   d.project_name, COUNT(pd.pod_id) AS linked_pods
+            FROM documents d
+            LEFT JOIN pod_document pd ON pd.doc_id = d.doc_id
+            GROUP BY d.doc_id
+            ORDER BY d.doc_date
+        """,
+        "columns": [
+            {"field": "doc_id", "title": "Doc ID", "readonly": True, "headerFilter": True},
+            {"field": "file_name", "title": "File", "readonly": True, "headerFilter": True},
+            {"field": "doc_type", "title": "Type", "readonly": True, "headerFilter": True},
+            {"field": "doc_date", "title": "Date", "readonly": True, "headerFilter": True},
+            {"field": "subject", "title": "Subject", "readonly": True, "headerFilter": True},
+            {"field": "project_name", "title": "Project", "readonly": True, "headerFilter": True},
+            {"field": "linked_pods", "title": "Linked", "readonly": True, "headerFilter": True},
+        ],
+    },
     "pod_document": {
         "title": "Document Links",
         "pk": ["pod_id", "doc_id"],
+        "height": "40vh",
         "columns": [
             {"field": "pod_id", "title": "POD", "editableOnNew": True, "ref": "pods", "required": True},
             {"field": "doc_id", "title": "Document", "editableOnNew": True, "autocomplete": True, "autocompleteRef": "documents", "required": True},
