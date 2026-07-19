@@ -1,10 +1,17 @@
-"""DuckDB-backed corpus store for ingested documents and their chunks.
+"""Corpus store: SQLite source of truth + DuckDB search mirror.
 
-Two user-data tables: ``documents`` (one row per source file, full
-markdown + metadata) and ``document_chunks`` (one row per chunk +
-embedding). A 1-row ``corpus_meta`` table pins the embedding model and
-dimension used to build ``document_chunks.embedding`` so a later model
-swap is caught instead of silently corrupting cosine similarity.
+``documents`` (one row per source file, full markdown + metadata) lives
+in the operational SQLite db (``esdc.sqlite``) — the source of truth for
+everything a human writes or corrects. DuckDB keeps ``document_chunks``
+(chunk + embedding, HNSW/FTS indexed), the 1-row ``corpus_meta`` pinning
+the embedding model/dim, and a continuously-maintained ``documents``
+mirror (same name/columns as the old DuckDB-native table) so chunk
+search joins, iris text-to-SQL, and status commands work unchanged.
+
+Every mutation writes both stores in one call; there is no cross-db
+transaction, so the SQLite row is the commit marker: inserts write the
+DuckDB rows first and the SQLite row last, and clear any orphaned DuckDB
+rows for that doc_id before writing.
 
 Incremental by design: dedupe on ``file_hash``, DELETE never DROP on
 user data — the one exception is ``set_meta`` recreating
@@ -21,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +38,33 @@ from esdc.configs import Config
 from esdc.corpus.chunker import Chunk
 
 logger = logging.getLogger(__name__)
+
+_SQLITE_DOC_DDL = """
+CREATE TABLE IF NOT EXISTS documents (
+    doc_id TEXT PRIMARY KEY,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_hash TEXT NOT NULL UNIQUE,
+    doc_type TEXT,
+    doc_topic TEXT,
+    doc_number TEXT,
+    doc_date TEXT,
+    subject TEXT,
+    sender TEXT,
+    recipient TEXT,
+    doc_level TEXT,
+    wk_name TEXT,
+    field_name TEXT,
+    project_name TEXT,
+    raw_entities TEXT,
+    metadata TEXT,
+    markdown TEXT NOT NULL,
+    extraction_method TEXT NOT NULL,
+    embedding_model TEXT NOT NULL,
+    page_count INTEGER,
+    ingested_at TEXT DEFAULT (datetime('now'))
+)
+"""
 
 
 def _to_json(val: Any) -> str | None:
@@ -61,9 +96,12 @@ class CorpusStore:
     META_TABLE = "corpus_meta"
 
     def __init__(
-        self, db_path: Path | None = None, embedder: Any | None = None
+        self,
+        db_path: Path | None = None,
+        embedder: Any | None = None,
+        sqlite_path: Path | None = None,
     ) -> None:
-        """Initialize with a lazy DuckDB connection and an embedder.
+        """Initialize with lazy DuckDB/SQLite connections and an embedder.
 
         Args:
             db_path: DuckDB file path. Defaults to Config.get_db_file().
@@ -71,11 +109,15 @@ class CorpusStore:
                 and a `.model` attribute. Defaults to a lazily-imported
                 EmbeddingManager() so importing this module does not
                 require ollama to be installed.
+            sqlite_path: Operational SQLite db holding the documents
+                source of truth. Defaults to the shared esdc.sqlite.
         """
         if db_path is None:
             db_path = Config.get_db_file()
         self._db_path = Path(db_path)
         self._conn: duckdb.DuckDBPyConnection | None = None
+        self._sqlite_path = Path(sqlite_path) if sqlite_path is not None else None
+        self._sconn: sqlite3.Connection | None = None
 
         if embedder is None:
             from esdc.search.embedding_manager import EmbeddingManager
@@ -106,6 +148,23 @@ class CorpusStore:
             self._conn.execute("SET hnsw_enable_experimental_persistence = true")
             logger.debug("[Corpus] DuckDB connection established with VSS/FTS")
         return self._conn
+
+    def _get_sqlite(self) -> sqlite3.Connection:
+        """Get or create the SQLite connection holding the documents table."""
+        if self._sconn is not None:
+            try:
+                self._sconn.execute("SELECT 1")
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self._sconn.close()
+                self._sconn = None
+        if self._sconn is None:
+            from esdc.pod_registry.store import get_sqlite_connection
+
+            self._sconn = get_sqlite_connection(self._sqlite_path)
+            self._sconn.execute(_SQLITE_DOC_DDL)
+            self._sconn.commit()
+        return self._sconn
 
     def ensure_tables(self, validate_model: bool = False) -> None:
         """Create documents/document_chunks/corpus_meta tables if missing.
@@ -233,6 +292,7 @@ class CorpusStore:
 
         self._migrate_legacy_entity_columns()
         self._create_document_indexes()
+        self._get_sqlite()  # documents source-of-truth table
 
     def _migrate_legacy_entity_columns(self) -> None:
         """Wrap pre-JSON plain-text entity values into JSON arrays.
@@ -282,56 +342,72 @@ class CorpusStore:
 
     def document_exists(self, file_hash: str) -> bool:
         """Return True if a document with this file_hash is already stored."""
-        conn = self._get_connection()
-        result = conn.execute(
+        sconn = self._get_sqlite()
+        result = sconn.execute(
             f"SELECT 1 FROM {self.DOC_TABLE} WHERE file_hash = ? LIMIT 1",
             [file_hash],
         ).fetchone()
         return result is not None
 
+    def _doc_row_values(self, doc: dict[str, Any]) -> list[Any]:
+        return [
+            doc["doc_id"],
+            doc["file_name"],
+            doc["file_path"],
+            doc["file_hash"],
+            doc.get("doc_type"),
+            _to_json(doc.get("doc_topic")),
+            doc.get("doc_number"),
+            doc.get("doc_date"),
+            doc.get("subject"),
+            doc.get("sender"),
+            doc.get("recipient"),
+            doc.get("doc_level"),
+            _to_json(doc.get("wk_name")),
+            _to_json(doc.get("field_name")),
+            _to_json(doc.get("project_name")),
+            doc.get("raw_entities"),
+            doc.get("metadata"),
+            doc["markdown"],
+            doc["extraction_method"],
+            self._embedder.model,
+            doc.get("page_count"),
+        ]
+
+    _DOC_INSERT_SQL_TEMPLATE = """
+        INSERT INTO {table} (
+            doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
+            doc_number, doc_date, subject, sender, recipient,
+            doc_level, wk_name, field_name, project_name,
+            raw_entities, metadata, markdown, extraction_method,
+            embedding_model, page_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
     def insert_document(self, doc: dict[str, Any], chunks: list[Chunk]) -> None:
-        """Insert a document row and its chunks (with embeddings) in one transaction."""
+        """Insert a document (SQLite truth + DuckDB mirror/chunks).
+
+        No cross-db transaction exists, so the SQLite row is written LAST
+        as the commit marker; any orphaned DuckDB rows from a previously
+        interrupted write are cleared first.
+        """
         conn = self._get_connection()
+        sconn = self._get_sqlite()
         texts = [c.text for c in chunks]
         embeddings = self._embedder.generate_embeddings_batch(texts) if texts else []
+        values = self._doc_row_values(doc)
 
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(
-                f"""
-                INSERT INTO {self.DOC_TABLE} (
-                    doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
-                    doc_number, doc_date, subject, sender, recipient,
-                    doc_level, wk_name, field_name, project_name,
-                    raw_entities, metadata, markdown, extraction_method,
-                    embedding_model, page_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    doc["doc_id"],
-                    doc["file_name"],
-                    doc["file_path"],
-                    doc["file_hash"],
-                    doc.get("doc_type"),
-                    _to_json(doc.get("doc_topic")),
-                    doc.get("doc_number"),
-                    doc.get("doc_date"),
-                    doc.get("subject"),
-                    doc.get("sender"),
-                    doc.get("recipient"),
-                    doc.get("doc_level"),
-                    _to_json(doc.get("wk_name")),
-                    _to_json(doc.get("field_name")),
-                    _to_json(doc.get("project_name")),
-                    doc.get("raw_entities"),
-                    doc.get("metadata"),
-                    doc["markdown"],
-                    doc["extraction_method"],
-                    self._embedder.model,
-                    doc.get("page_count"),
-                ],
+                f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc["doc_id"]]
             )
-
+            conn.execute(
+                f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc["doc_id"]]
+            )
+            conn.execute(
+                self._DOC_INSERT_SQL_TEMPLATE.format(table=self.DOC_TABLE), values
+            )
             if chunks:
                 conn.executemany(
                     f"""
@@ -356,8 +432,31 @@ class CorpusStore:
             conn.execute("ROLLBACK")
             raise
 
+        try:
+            with sconn:
+                sconn.execute(
+                    self._DOC_INSERT_SQL_TEMPLATE.format(table=self.DOC_TABLE),
+                    values,
+                )
+        except Exception:
+            # SQLite row is the truth marker: roll the mirror back so the
+            # failed insert leaves no half-written document behind.
+            with contextlib.suppress(Exception):
+                conn.execute(
+                    f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?",
+                    [doc["doc_id"]],
+                )
+                conn.execute(
+                    f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?",
+                    [doc["doc_id"]],
+                )
+            raise
+
     def delete_document(self, doc_id: str) -> None:
         """Delete a document and its chunks (used by --force and `corpus remove`)."""
+        sconn = self._get_sqlite()
+        with sconn:
+            sconn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
         conn = self._get_connection()
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -371,31 +470,28 @@ class CorpusStore:
             raise
 
     def list_documents(self) -> list[dict[str, Any]]:
-        """List all documents with their chunk counts, newest first."""
-        conn = self._get_connection()
-        rows = conn.execute(f"""
+        """List all documents (SQLite truth) with DuckDB chunk counts, newest first."""
+        sconn = self._get_sqlite()
+        rows = sconn.execute(f"""
             SELECT
-                d.doc_id, d.file_name, d.doc_type, d.doc_topic, d.doc_date,
-                d.subject, d.doc_level, d.wk_name, d.field_name, d.project_name,
-                d.extraction_method, d.page_count, d.ingested_at,
-                COUNT(c.chunk_id) AS n_chunks
-            FROM {self.DOC_TABLE} d
-            LEFT JOIN {self.CHUNK_TABLE} c ON c.doc_id = d.doc_id
-            GROUP BY
-                d.doc_id, d.file_name, d.doc_type, d.doc_topic, d.doc_date,
-                d.subject, d.doc_level, d.wk_name, d.field_name, d.project_name,
-                d.extraction_method, d.page_count, d.ingested_at
-            ORDER BY d.ingested_at DESC
+                doc_id, file_name, doc_type, doc_topic, doc_date,
+                subject, doc_level, wk_name, field_name, project_name,
+                extraction_method, page_count, ingested_at
+            FROM {self.DOC_TABLE}
+            ORDER BY ingested_at DESC, doc_id
         """).fetchall()
+        chunk_counts = dict(
+            self._get_connection()
+            .execute(
+                f"SELECT doc_id, COUNT(*) FROM {self.CHUNK_TABLE} GROUP BY doc_id"
+            )
+            .fetchall()
+        )
 
-        columns = [
-            "doc_id", "file_name", "doc_type", "doc_topic", "doc_date", "subject",
-            "doc_level", "wk_name", "field_name", "project_name",
-            "extraction_method", "page_count", "ingested_at", "n_chunks",
-        ]
         docs = []
         for row in rows:
-            doc = dict(zip(columns, row, strict=True))
+            doc = dict(row)
+            doc["n_chunks"] = chunk_counts.get(doc["doc_id"], 0)
             _parse_json_fields(
                 doc, ("doc_topic", "wk_name", "field_name", "project_name")
             )
@@ -408,9 +504,9 @@ class CorpusStore:
         Same allowlisted filter semantics as search(); empty filters
         match everything (callers gate destructive use).
         """
-        conn = self._get_connection()
-        clause, params = self._build_filter_clause(filters, "d")
-        rows = conn.execute(
+        sconn = self._get_sqlite()
+        clause, params = self._build_filter_clause(filters, "d", dialect="sqlite")
+        rows = sconn.execute(
             f"SELECT d.doc_id, d.file_name FROM {self.DOC_TABLE} d "
             f"WHERE 1=1{clause} ORDER BY d.file_name",
             params,
@@ -418,11 +514,13 @@ class CorpusStore:
         return [(r[0], r[1]) for r in rows]
 
     def clear(self) -> dict[str, int]:
-        """Delete all documents and chunks; corpus_meta is preserved."""
+        """Delete all documents (both stores) and chunks; corpus_meta is preserved."""
         conn = self._get_connection()
-        n_docs = self._count(self.DOC_TABLE)
-        n_chunks = self._count(self.CHUNK_TABLE)
+        sconn = self._get_sqlite()
+        counts = self.counts()
 
+        with sconn:
+            sconn.execute(f"DELETE FROM {self.DOC_TABLE}")
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(f"DELETE FROM {self.CHUNK_TABLE}")
@@ -432,7 +530,7 @@ class CorpusStore:
             conn.execute("ROLLBACK")
             raise
 
-        return {"documents": n_docs, "chunks": n_chunks}
+        return counts
 
     def replace_chunks(self, doc_id: str, chunks: list[Chunk]) -> None:
         """Replace all chunks for a document (used by `corpus reembed`)."""
@@ -470,6 +568,12 @@ class CorpusStore:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+        sconn = self._get_sqlite()
+        with sconn:
+            sconn.execute(
+                f"UPDATE {self.DOC_TABLE} SET embedding_model = ? WHERE doc_id = ?",
+                [self._embedder.model, doc_id],
+            )
 
     def set_meta(self, embedding_model: str, dim: int) -> None:
         """Overwrite corpus_meta; recreate document_chunks if dim changed.
@@ -544,25 +648,35 @@ class CorpusStore:
             logger.error("[Corpus] FTS index failed | error=%s", e)
 
     def counts(self) -> dict[str, int]:
-        """Return current row counts for documents and document_chunks."""
+        """Return current row counts for documents (SQLite) and chunks (DuckDB)."""
+        sconn = self._get_sqlite()
+        n_docs = sconn.execute(f"SELECT COUNT(*) FROM {self.DOC_TABLE}").fetchone()[0]
         return {
-            "documents": self._count(self.DOC_TABLE),
+            "documents": n_docs,
             "chunks": self._count(self.CHUNK_TABLE),
         }
 
     def _build_filter_clause(
-        self, filters: dict[str, Any] | None, table_alias: str
+        self,
+        filters: dict[str, Any] | None,
+        table_alias: str,
+        dialect: str = "duckdb",
     ) -> tuple[str, list[Any]]:
         """Build a parameterized WHERE clause for documents-column filters.
 
         Column names are validated against a hardcoded allowlist before
-        being interpolated; values are always bound via `?`.
+        being interpolated; values are always bound via `?`. The same
+        filters work on the DuckDB mirror (search paths) and the SQLite
+        truth table (find_doc_ids); only the case-insensitive LIKE and
+        the year extraction differ per dialect (SQLite LIKE is already
+        case-insensitive for ASCII).
         """
         conditions: list[str] = []
         params: list[Any] = []
         if not filters:
             return "", params
 
+        like = "ILIKE" if dialect == "duckdb" else "LIKE"
         for col in _EXACT_FILTER_COLUMNS:
             if filters.get(col):
                 conditions.append(f"{table_alias}.{col} = ?")
@@ -574,11 +688,16 @@ class CorpusStore:
                 # pattern makes the surrounding quotes irrelevant.
                 conditions.append(
                     f"EXISTS (SELECT 1 FROM json_each({table_alias}.{col}) "
-                    f"WHERE CAST(value AS VARCHAR) ILIKE '%' || ? || '%')"
+                    f"WHERE CAST(value AS VARCHAR) {like} '%' || ? || '%')"
                 )
                 params.append(str(filters[col]))
         if filters.get("year"):
-            conditions.append(f"EXTRACT(year FROM {table_alias}.doc_date) = ?")
+            if dialect == "duckdb":
+                conditions.append(f"EXTRACT(year FROM {table_alias}.doc_date) = ?")
+            else:
+                conditions.append(
+                    f"CAST(strftime('%Y', {table_alias}.doc_date) AS INTEGER) = ?"
+                )
             params.append(filters["year"])
 
         clause = (" AND " + " AND ".join(conditions)) if conditions else ""
@@ -786,9 +905,9 @@ class CorpusStore:
             return {"status": "error", "message": str(e), "results": [], "count": 0}
 
     def get_document(self, doc_id: str) -> dict[str, Any] | None:
-        """Fetch a single document's full row, or None if not found."""
-        conn = self._get_connection()
-        row = conn.execute(
+        """Fetch a single document's full row (SQLite truth), or None."""
+        sconn = self._get_sqlite()
+        row = sconn.execute(
             f"""
             SELECT doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
                    doc_number, doc_date, subject, sender, recipient,
@@ -803,14 +922,7 @@ class CorpusStore:
         if row is None:
             return None
 
-        columns = [
-            "doc_id", "file_name", "file_path", "file_hash", "doc_type", "doc_topic",
-            "doc_number", "doc_date", "subject", "sender", "recipient",
-            "doc_level", "wk_name", "field_name", "project_name",
-            "raw_entities", "metadata", "markdown", "extraction_method",
-            "embedding_model", "page_count", "ingested_at",
-        ]
-        doc = dict(zip(columns, row, strict=True))
+        doc = dict(row)
         _parse_json_fields(
             doc,
             (
@@ -825,7 +937,11 @@ class CorpusStore:
         return doc
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connections."""
         if self._conn:
             self._conn.close()
             self._conn = None
+        if self._sconn:
+            with contextlib.suppress(Exception):
+                self._sconn.close()
+            self._sconn = None
