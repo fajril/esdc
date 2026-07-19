@@ -2756,6 +2756,38 @@ def clear(
 
 
 @corpus_app.command()
+def export(
+    paths: Annotated[
+        list[Path] | None,
+        typer.Argument(help="Sidecar .corpus.md file(s) to regenerate from the DB."),
+    ] = None,
+    all_docs: Annotated[
+        bool,
+        typer.Option("--all", help="Regenerate every committed document's sidecar."),
+    ] = False,
+) -> None:
+    """Regenerate .corpus.md sidecars from the DB (documents table is truth).
+
+    Rebuilds each sidecar's frontmatter + body from its committed row —
+    including portal edits and Task-4 commit-time entity merges — so a
+    deleted or stale sidecar can be reconstructed. Overwrites the file(s)
+    at their DB-recorded file_path; run `esdc corpus commit` afterward
+    only if you want to re-ingest (a matching hash is already committed,
+    so a plain re-commit is a no-op).
+    """
+    from esdc.corpus.pipeline import run_export
+
+    if not all_docs and not paths:
+        typer.echo(
+            "Nothing to export: pass sidecar path(s) or --all.", err=True
+        )
+        raise typer.Exit(1)
+
+    report = run_export(paths or [], all_docs=all_docs)
+    _print_corpus_report(report)
+
+
+@corpus_app.command()
 def reembed() -> None:
     """Rebuild chunk embeddings for the whole corpus after an embedding-model change."""
     from esdc.corpus.pipeline import run_reembed

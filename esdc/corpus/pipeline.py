@@ -1334,3 +1334,98 @@ def run_reembed() -> CorpusReport:
         store.close()
 
     return report
+
+
+def _sidecar_meta_from_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    """Invert ``run_commit``'s doc-dict -> DB mapping into sidecar frontmatter.
+
+    ``doc`` is a ``CorpusStore.get_document`` row: JSON-array columns
+    (``doc_topic``, ``wk_name``/``field_name``/``project_name``,
+    ``pod_name``, ``suggested_pod_ids``) and JSON-object columns
+    (``raw_entities``, ``metadata``) already come back parsed to
+    lists/dicts, so they pass straight through. ``metadata`` becomes
+    ``extras`` (the frontmatter key ``run_commit`` reads it from), and
+    ``file_name`` becomes ``source_file`` -- the same rename ``run_commit``
+    applies in reverse. Every exported sidecar is marked ``reviewed: true``
+    since it reflects already-committed, human-reviewed data.
+    """
+    return {
+        "source_file": doc.get("file_name"),
+        "file_hash": doc.get("file_hash"),
+        "page_count": doc.get("page_count"),
+        "extraction_method": doc.get("extraction_method"),
+        "reviewed": True,
+        "doc_type": doc.get("doc_type"),
+        "doc_topic": doc.get("doc_topic"),
+        "doc_number": doc.get("doc_number"),
+        "doc_date": doc.get("doc_date"),
+        "subject": doc.get("subject"),
+        "sender": doc.get("sender"),
+        "recipient": doc.get("recipient"),
+        "doc_level": doc.get("doc_level"),
+        "wk_name": doc.get("wk_name"),
+        "field_name": doc.get("field_name"),
+        "project_name": doc.get("project_name"),
+        "pod_name": doc.get("pod_name"),
+        "suggested_pod_ids": doc.get("suggested_pod_ids"),
+        "raw_entities": doc.get("raw_entities"),
+        "extras": doc.get("metadata"),
+    }
+
+
+def run_export(paths: list[Path], all_docs: bool = False) -> CorpusReport:
+    """Regenerate ``.corpus.md`` sidecars from the ``documents`` table.
+
+    The DB is source of truth for document entity metadata (portal edits,
+    Task-4 commit-time merges); this closes the loop so sidecars are a
+    regenerable view of it rather than the only copy. ``all_docs=True``
+    exports every row; otherwise each given sidecar path is matched to a
+    row via its ``file_path`` column (a path with no matching row is
+    reported failed, not raised). Each sidecar is fully overwritten:
+    frontmatter rebuilt from the row (see ``_sidecar_meta_from_doc``) and
+    body set to the row's ``markdown`` column.
+
+    SQLite-only: unlike ``commit``/``reembed``, export never opens DuckDB
+    or the embedder, so it works even when Ollama/the embedding model is
+    unavailable.
+    """
+    report = CorpusReport()
+    store = CorpusStore()
+    try:
+        sconn = store._get_sqlite()
+
+        targets: list[tuple[str, Path]] = []
+        if all_docs:
+            rows = sconn.execute(
+                "SELECT doc_id, file_path FROM documents ORDER BY file_path"
+            ).fetchall()
+            targets = [(row["doc_id"], Path(row["file_path"])) for row in rows]
+        else:
+            for p in paths:
+                row = sconn.execute(
+                    "SELECT doc_id FROM documents WHERE file_path = ?",
+                    [str(p)],
+                ).fetchone()
+                if row is None:
+                    report.failed[p.name] = (
+                        f"no committed document with file_path={p}"
+                    )
+                    continue
+                targets.append((row["doc_id"], p))
+
+        for doc_id, path in targets:
+            name = path.name
+            try:
+                doc = store.get_document(doc_id)
+                if doc is None:
+                    report.failed[name] = "document not found"
+                    continue
+                meta = _sidecar_meta_from_doc(doc)
+                write_sidecar_file(path, meta, doc["markdown"])
+                report.processed.append(name)
+            except Exception as e:
+                report.failed[name] = str(e)
+    finally:
+        store.close()
+
+    return report
