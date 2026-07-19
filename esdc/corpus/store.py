@@ -530,10 +530,21 @@ class CorpusStore:
             raise
 
     def delete_document(self, doc_id: str) -> None:
-        """Delete a document and its chunks (used by --force and `corpus remove`)."""
-        sconn = self._get_sqlite()
-        with sconn:
-            sconn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
+        """Delete a document and its chunks (used by --force and `corpus remove`).
+
+        No cross-db transaction exists, so this honors the same
+        truth-marker rule as ``insert_document``: the DuckDB mirror
+        (chunks + documents row) is deleted FIRST, and the SQLite truth
+        row is deleted LAST.
+
+        If the DuckDB step fails (e.g. the file is locked by another
+        process), this raises and the SQLite row is left untouched — the
+        document stays fully visible via list/get/exists and the delete
+        can simply be retried. If the SQLite step fails after the DuckDB
+        step succeeded, the document is left listed as existing but with
+        no chunks — degraded but honest (no phantom search hits); a
+        `commit --force` re-ingest repairs it.
+        """
         conn = self._get_connection()
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -545,6 +556,10 @@ class CorpusStore:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+        sconn = self._get_sqlite()
+        with sconn:
+            sconn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
 
     def list_documents(self) -> list[dict[str, Any]]:
         """List all documents (SQLite truth) with DuckDB chunk counts, newest first."""

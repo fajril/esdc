@@ -429,6 +429,42 @@ def test_delete_removes_both_stores(store, tmp_path):
     assert store.counts() == {"documents": 0, "chunks": 0}
 
 
+class _RaisingConn:
+    """Proxy around a real DuckDB connection that fails DELETEs on one table.
+
+    DuckDBPyConnection.execute is a read-only attribute on the C extension
+    type, so it cannot be monkeypatched directly — wrap the connection
+    object instead and swap it in for ``store._conn``.
+    """
+
+    def __init__(self, real, table_to_fail: str):
+        self._real = real
+        self._table_to_fail = table_to_fail
+
+    def execute(self, sql, *args, **kwargs):
+        if "DELETE FROM" in sql and self._table_to_fail in sql:
+            raise duckdb.Error("mirror locked")
+        return self._real.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_delete_raises_and_keeps_sqlite_truth_when_mirror_delete_fails(
+    store, tmp_path
+):
+    store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store._conn = _RaisingConn(store._get_connection(), store.CHUNK_TABLE)
+
+    with pytest.raises(duckdb.Error):
+        store.delete_document(DOC["doc_id"])
+
+    # Mirror delete failed first, before the SQLite truth row was touched:
+    # the doc is still fully visible, and a retry is possible.
+    assert store.document_exists(DOC["file_hash"])
+    assert _sqlite_doc_count(tmp_path) == 1
+
+
 def test_orphaned_duckdb_rows_cleared_on_reinsert(store, tmp_path):
     import sqlite3
 
