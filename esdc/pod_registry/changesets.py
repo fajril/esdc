@@ -42,6 +42,10 @@ class ChangesetResult:
     applied: dict[str, int] = field(default_factory=dict)
     generated: list[dict] = field(default_factory=list)
     errors: list[RowError] = field(default_factory=list)
+    # Non-fatal issues that didn't block the SQLite commit (e.g. a DuckDB
+    # mirror write failure in document_entities.py) — surfaced to callers,
+    # never cause ok=False on their own.
+    warnings: list[str] = field(default_factory=list)
 
 
 def apply_changeset(
