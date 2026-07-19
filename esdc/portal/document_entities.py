@@ -17,6 +17,7 @@ rejected with `suggest_names` candidates.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from pathlib import Path
@@ -94,8 +95,14 @@ def apply_document_entity_changeset(
             ok=True, applied={"inserts": 0, "updates": 0, "deletes": 0}
         )
 
+    # The default resolver holds its own read-only DuckDB connection to the
+    # SAME file the mirror later opens read-write; DuckDB refuses to open a
+    # file with two different configurations at once, so the resolver
+    # connection MUST be closed (see the finally below) before
+    # _mirror_updates runs.
+    resolver_conn = None
     if resolver is None:
-        resolver = _build_resolver(db_path)
+        resolver, resolver_conn = _build_resolver(db_path)
         if resolver is None:
             return ChangesetResult(
                 ok=False,
@@ -112,24 +119,30 @@ def apply_document_entity_changeset(
     sconn = get_sqlite_connection(sqlite_path)
     try:
         resolved_rows: list[dict[str, Any]] = []
-        for item in parsed_updates:
-            i = item["index"]
-            doc_id = item["doc_id"]
-            existing = sconn.execute(
-                "SELECT 1 FROM documents WHERE doc_id = ?", (doc_id,)
-            ).fetchone()
-            if existing is None:
-                errors.append(
-                    RowError("update", i, f"doc_id {doc_id!r} does not exist")
-                )
-                continue
+        try:
+            for item in parsed_updates:
+                i = item["index"]
+                doc_id = item["doc_id"]
+                existing = sconn.execute(
+                    "SELECT 1 FROM documents WHERE doc_id = ?", (doc_id,)
+                ).fetchone()
+                if existing is None:
+                    errors.append(
+                        RowError("update", i, f"doc_id {doc_id!r} does not exist")
+                    )
+                    continue
 
-            resolved_fields: dict[str, list[str] | None] = {}
-            for field, raw_value in item["fields"].items():
-                resolved_fields[field] = _resolve_field(
-                    resolver, field, raw_value, i, errors
-                )
-            resolved_rows.append({"doc_id": doc_id, "fields": resolved_fields})
+                resolved_fields: dict[str, list[str] | None] = {}
+                for field, raw_value in item["fields"].items():
+                    resolved_fields[field] = _resolve_field(
+                        resolver, field, raw_value, i, errors
+                    )
+                if resolved_fields:
+                    resolved_rows.append({"doc_id": doc_id, "fields": resolved_fields})
+        finally:
+            if resolver_conn is not None:
+                with contextlib.suppress(Exception):
+                    resolver_conn.close()
 
         if errors:
             return ChangesetResult(ok=False, errors=errors)
@@ -140,7 +153,7 @@ def apply_document_entity_changeset(
     finally:
         sconn.close()
 
-    warnings = _mirror_updates(db_path, resolved_rows)
+    warnings = _mirror_updates(db_path, resolved_rows) if resolved_rows else []
 
     return ChangesetResult(
         ok=True,
@@ -200,8 +213,13 @@ def _resolve_field(
     return resolved
 
 
-def _build_resolver(db_path: Path | None) -> Any | None:
-    """Lazily construct an EntityResolver over the corpus DuckDB, or None."""
+def _build_resolver(db_path: Path | None) -> tuple[Any | None, Any | None]:
+    """Lazily construct an EntityResolver plus its owned DuckDB connection.
+
+    Returns (resolver, connection) — the caller MUST close the connection
+    once validation is done (before the read-write mirror open), or
+    (None, None) when the corpus DuckDB can't be opened.
+    """
     from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
     from esdc.configs import Config
     from esdc.dbmanager import get_duckdb_connection
@@ -210,8 +228,8 @@ def _build_resolver(db_path: Path | None) -> Any | None:
     try:
         conn = get_duckdb_connection(path, read_only=True)
     except Exception:
-        return None
-    return EntityResolver(conn)
+        return None, None
+    return EntityResolver(conn), conn
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +240,6 @@ def _build_resolver(db_path: Path | None) -> Any | None:
 def _apply_row_update(
     sconn: sqlite3.Connection, doc_id: str, fields: dict[str, list[str] | None]
 ) -> None:
-    if not fields:
-        return
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     values = [json.dumps(v) if v is not None else None for v in fields.values()]
     sconn.execute(
@@ -253,8 +269,6 @@ def _mirror_updates(
     try:
         for row in resolved_rows:
             fields = row["fields"]
-            if not fields:
-                continue
             set_clause = ", ".join(f"{k} = ?" for k in fields)
             values = [json.dumps(v) if v is not None else None for v in fields.values()]
             try:

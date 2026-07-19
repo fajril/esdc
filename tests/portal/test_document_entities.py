@@ -216,6 +216,66 @@ def test_resolver_unavailable_rejects_save(tmp_path):
     assert _read_doc(sqlite_path, "D1")["wk_name"] is None
 
 
+def test_default_resolver_and_mirror_share_db_path(tmp_path):
+    # Production lifecycle: resolver=None so the module opens its own
+    # read-only DuckDB connection for EntityResolver, and the mirror then
+    # needs a read-write connection to the SAME file. If the resolver
+    # connection is still open, DuckDB rejects the second open ("different
+    # configuration") and the mirror silently degrades to a warning — so
+    # this asserts the full sequence works with real connections.
+    sqlite_path = _seed_sqlite(tmp_path)
+    duckdb_path = tmp_path / "esdc.duckdb"
+    conn = duckdb.connect(str(duckdb_path))
+    # canonical lookup table queried by EntityResolver (all entity specs
+    # use project_resources as lookup_table)
+    conn.execute("CREATE TABLE project_resources (wk_name VARCHAR, wk_id VARCHAR)")
+    conn.execute("INSERT INTO project_resources VALUES ('Rokan', 'WK1')")
+    conn.execute(
+        "CREATE TABLE documents (doc_id VARCHAR PRIMARY KEY, wk_name JSON,"
+        " field_name JSON, project_name JSON)"
+    )
+    conn.execute("INSERT INTO documents VALUES ('D1', NULL, NULL, NULL)")
+    conn.close()
+
+    result = apply_document_entity_changeset(
+        {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
+        sqlite_path=sqlite_path,
+        db_path=duckdb_path,
+        resolver=None,
+    )
+
+    assert result.ok is True
+    assert result.warnings == []
+    assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
+
+    mirror = duckdb.connect(str(duckdb_path))
+    mirrored = mirror.execute(
+        "SELECT wk_name FROM documents WHERE doc_id = 'D1'"
+    ).fetchone()[0]
+    mirror.close()
+    assert mirrored == json.dumps(["Rokan"])
+
+
+def test_update_with_no_entity_fields_is_a_noop(tmp_path):
+    # A row carrying only doc_id changes nothing: it must not count in
+    # applied["updates"] nor trigger a mirror attempt.
+    sqlite_path = _seed_sqlite(tmp_path)
+    resolver = FakeResolver()
+    # nonexistent mirror file: a mirror attempt would produce a warning
+    missing_db_path = tmp_path / "does-not-exist.duckdb"
+
+    result = apply_document_entity_changeset(
+        {"updates": [{"doc_id": "D1"}]},
+        sqlite_path=sqlite_path,
+        db_path=missing_db_path,
+        resolver=resolver,
+    )
+
+    assert result.ok is True
+    assert result.applied["updates"] == 0
+    assert result.warnings == []
+
+
 def test_mirror_failure_returns_warning_but_saves(tmp_path):
     sqlite_path = _seed_sqlite(tmp_path)
     # DuckDB file exists but has no `documents` table -> the mirror UPDATE
