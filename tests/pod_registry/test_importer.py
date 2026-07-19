@@ -19,7 +19,9 @@ def _patch_dirs(monkeypatch, tmp_path):
     )
 
 
-def _write_workbook(path, pod_rows=None, project_rows=None, revision_rows=None):
+def _write_workbook(
+    path, pod_rows=None, project_rows=None, revision_rows=None, institution_rows=None
+):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
@@ -51,7 +53,9 @@ def _write_workbook(path, pod_rows=None, project_rows=None, revision_rows=None):
 
     ws = wb.create_sheet("institution")
     ws.append(["code", "institution", "description"])
-    for row in [[3, "BP Migas", "POD 2003 to 2012"], [4, "SKK Migas", "POD 2013 onward"]]:
+    for row in institution_rows if institution_rows is not None else [
+        [3, "BP Migas", "POD 2003 to 2012"], [4, "SKK Migas", "POD 2013 onward"]
+    ]:
         ws.append(row)
 
     ws = wb.create_sheet("pod_type")
@@ -148,3 +152,58 @@ def test_import_rejects_missing_approval_seq(monkeypatch, tmp_path):
     with pytest.raises(PodRegistryImportError) as exc:
         import_pod_registry_workbook(xlsx)
     assert any("approval_seq" in e for e in exc.value.errors)
+
+
+def test_import_rejects_blank_project_pod_id(monkeypatch, tmp_path):
+    """A blank pod_id cell in project_pod must surface as a row error, not crash.
+
+    Bare int(r["pod_id"]) on a blank cell raises TypeError outside any
+    try/except, which the CLI doesn't catch (only PodRegistryImportError) --
+    the row error naming the sheet+row is the fix, and the good sibling row
+    (645) must not also be flagged.
+    """
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        project_rows=[[None, "P-BLANK"], [645, "P-2403431-01"]],
+    )
+    with pytest.raises(PodRegistryImportError) as exc:
+        import_pod_registry_workbook(xlsx)
+    assert exc.value.errors == ["project_pod row 2: invalid pod_id 'None'"]
+
+
+def test_import_rejects_text_project_pod_id(monkeypatch, tmp_path):
+    """A non-numeric text pod_id cell must surface as a row error, not crash.
+
+    Bare int(r["pod_id"]) on a text cell raises ValueError outside any
+    try/except -- same fix as the blank-cell case.
+    """
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        project_rows=[["abc", "P-TEXT"], [645, "P-2403431-01"]],
+    )
+    with pytest.raises(PodRegistryImportError) as exc:
+        import_pod_registry_workbook(xlsx)
+    assert exc.value.errors == ["project_pod row 2: invalid pod_id 'abc'"]
+
+
+def test_import_rejects_non_numeric_institution_code(monkeypatch, tmp_path):
+    """A non-numeric institution code cell must surface as a row error, not crash.
+
+    inst_by_name = {r["institution"]: int(r["code"]) ...} runs before any
+    error collection even starts -- a bad code here used to crash the whole
+    import with a raw ValueError traceback.
+    """
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        pod_rows=[], project_rows=[], revision_rows=[],
+        institution_rows=[
+            ["XX", "BP Migas", "POD 2003 to 2012"],
+            [4, "SKK Migas", "POD 2013 onward"],
+        ],
+    )
+    with pytest.raises(PodRegistryImportError) as exc:
+        import_pod_registry_workbook(xlsx)
+    assert exc.value.errors == ["institution row 2: invalid code 'XX'"]

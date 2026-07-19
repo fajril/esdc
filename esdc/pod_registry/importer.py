@@ -45,6 +45,23 @@ def _iso(value: object) -> str | None:
     return str(value)[:10] if value else None
 
 
+def _int_cell(
+    value: object, sheet: str, row_idx: int, column: str, errors: list[str]
+) -> int | None:
+    """Parse a workbook cell as int, or record a row error and return None.
+
+    A blank or non-numeric cell raises TypeError/ValueError from a bare
+    int() call, which would otherwise crash the whole import with a raw
+    traceback instead of surfacing as one more entry in the per-row error
+    list that becomes PodRegistryImportError.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        errors.append(f"{sheet} row {row_idx}: invalid {column} '{value}'")
+        return None
+
+
 def import_pod_registry_workbook(
     xlsx_path: Path | str, sqlite_path: Path | None = None
 ) -> dict[str, int]:
@@ -63,10 +80,26 @@ def import_pod_registry_workbook(
     projects = _rows(wb["project_pod"])
     revisions = _rows(wb["pod_revision"])
 
-    inst_by_name = {r["institution"]: int(r["code"]) for r in institutions}
-    type_by_name = {r["podtype"]: int(r["code"]) for r in pod_types}
-
     errors: list[str] = []
+
+    inst_by_name: dict[str, int] = {}
+    institution_rows: list[tuple] = []
+    for i, r in enumerate(institutions, start=2):
+        code = _int_cell(r.get("code"), "institution", i, "code", errors)
+        if code is None:
+            continue
+        inst_by_name[r["institution"]] = code
+        institution_rows.append((code, r["institution"], r.get("description")))
+
+    type_by_name: dict[str, int] = {}
+    pod_type_rows: list[tuple] = []
+    for i, r in enumerate(pod_types, start=2):
+        code = _int_cell(r.get("code"), "pod_type", i, "code", errors)
+        if code is None:
+            continue
+        type_by_name[r["podtype"]] = code
+        pod_type_rows.append((code, r["podtype"], r.get("description")))
+
     m_pod_rows: list[tuple] = []
     seen_pod_ids: set[str] = set()
     seen_seqs: set[int] = set()
@@ -102,22 +135,30 @@ def import_pod_registry_workbook(
         seen_ids.add(pid)
         if inst is None or ptype is None or pid is None or seq is None or pod_id is None:
             continue
+        int_pid = _int_cell(pid, "POD Record", i, "pod_id_itb", errors)
+        int_seq = _int_cell(seq, "POD Record", i, "approval_seq", errors)
+        int_rev = _int_cell(r.get("rev_num") or 0, "POD Record", i, "rev_num", errors)
+        if int_pid is None or int_seq is None or int_rev is None:
+            continue
         m_pod_rows.append((
-            int(pid), str(pod_id), r.get("pod_name"), r.get("pod_letter_num"),
+            int_pid, str(pod_id), r.get("pod_name"), r.get("pod_letter_num"),
             _iso(r.get("approval_date")), inst, ptype,
-            int(r.get("rev_num") or 0), int(seq),
+            int_rev, int_seq,
         ))
 
     valid_ids = {row[0] for row in m_pod_rows}
     valid_pod_ids = {row[1] for row in m_pod_rows}
     project_rows: list[tuple] = []
     for i, r in enumerate(projects, start=2):
-        if int(r["pod_id"]) not in valid_ids:
+        pod_id_int = _int_cell(r.get("pod_id"), "project_pod", i, "pod_id", errors)
+        if pod_id_int is None:
+            continue
+        if pod_id_int not in valid_ids:
             errors.append(
                 f"project_pod row {i}: pod_id {r['pod_id']} not in POD Record"
             )
             continue
-        project_rows.append((int(r["pod_id"]), str(r["project_id"])))
+        project_rows.append((pod_id_int, str(r["project_id"])))
 
     revision_rows: list[tuple] = []
     seen_rev_pairs: set[tuple] = set()
@@ -148,17 +189,11 @@ def import_pod_registry_workbook(
             conn.executemany(
                 "INSERT INTO r_institution (code, institution, description)"
                 " VALUES (?,?,?)",
-                [
-                    (int(r["code"]), r["institution"], r.get("description"))
-                    for r in institutions
-                ],
+                institution_rows,
             )
             conn.executemany(
                 "INSERT INTO r_pod_type (code, pod_type, description) VALUES (?,?,?)",
-                [
-                    (int(r["code"]), r["podtype"], r.get("description"))
-                    for r in pod_types
-                ],
+                pod_type_rows,
             )
             conn.executemany(
                 "INSERT INTO m_pod"
@@ -176,8 +211,8 @@ def import_pod_registry_workbook(
                 revision_rows,
             )
         counts = {
-            "r_institution": len(institutions),
-            "r_pod_type": len(pod_types),
+            "r_institution": len(institution_rows),
+            "r_pod_type": len(pod_type_rows),
             "m_pod": len(m_pod_rows),
             "project_pod": len(project_rows),
             "pod_revision": len(revision_rows),
