@@ -731,6 +731,57 @@ def run_extract(
     return report
 
 
+_FILL_BLANK_ENTITY_KEYS = ("wk_name", "field_name", "project_name")
+
+
+def _resolve_fill_blank_candidates(
+    meta: dict[str, Any],
+    resolver: EntityResolver,
+    report: CorpusReport,
+    name: str,
+) -> dict[str, list[str] | None]:
+    """Resolve sidecar entity names before a fill-blank merge onto a committed doc.
+
+    The ``exists and not force`` branch in ``run_commit`` only merges
+    already-committed docs' blank entity columns from a hand-edited
+    sidecar -- ``normalize_entity_fields`` list-wraps the raw values but
+    never resolves them, since ``_apply_entity_resolution`` only runs on
+    the not-yet-committed path below. Writing those raw values straight
+    into the truth table would be the one write path (unlike extract, a
+    normal commit, or a portal save) that skips resolution.
+
+    Mirrors the single-name resolution rule in
+    ``esdc.portal.document_entities._resolve_field`` (not the fuller
+    hierarchy-aware ``_apply_entity_resolution``, since fill-blank never
+    needs parent-child validation -- it only ever touches empty columns):
+    exactly one match -> canonical name; two or more matches -> keep the
+    given name as-is (ambiguous, same as `_resolve_field`); zero matches
+    -> drop the name and warn.
+    """
+    resolved: dict[str, list[str] | None] = {}
+    for key in _FILL_BLANK_ENTITY_KEYS:
+        raw = meta.get(key)
+        if not raw:
+            resolved[key] = None
+            continue
+        raw_list = raw if isinstance(raw, list) else [raw]
+        names: list[str] = []
+        for raw_name in raw_list:
+            if not raw_name:
+                continue
+            matches = resolver.resolve_name(str(raw_name), key)
+            if len(matches) == 1:
+                names.append(matches[0]["name"])
+            elif len(matches) >= 2:
+                names.append(str(raw_name))
+            else:
+                report.warnings.append(
+                    f"{name}: {key} '{raw_name}' not found — not merged"
+                )
+        resolved[key] = names or None
+    return resolved
+
+
 def _apply_entity_resolution(
     meta: dict[str, Any],
     resolver: EntityResolver,
@@ -944,14 +995,9 @@ def run_commit(
                             if dry_run
                             else store.fill_blank_entities(
                                 (file_hash or "")[:16],
-                                {
-                                    k: meta.get(k)
-                                    for k in (
-                                        "wk_name",
-                                        "field_name",
-                                        "project_name",
-                                    )
-                                },
+                                _resolve_fill_blank_candidates(
+                                    meta, resolver, report, name
+                                ),
                             )
                         )
                         if filled:

@@ -1454,10 +1454,18 @@ def test_commit_entity_warnings_and_raw_entities_dont_leak_into_doc_columns(
     store.close()
 
 
-def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch):
-    """Skip-on-already-committed must short-circuit before resolution runs.
+def test_commit_already_committed_skips_heavy_resolution_but_resolves_merge_candidates(
+    tmp_path, monkeypatch
+):
+    """Skip-on-already-committed avoids the heavy resolver, not all of it.
 
-    Re-commits of already-ingested docs should never re-invoke the resolver.
+    The full hierarchical ``_apply_entity_resolution`` pass (with its
+    parent-filter re-resolution and ``suggest_names`` diagnosis calls)
+    never re-runs for an already-committed doc. But the fill-blank merge
+    path must still resolve its own (non-empty) sidecar candidates one
+    resolve_name call per candidate -- that's the fix: merged values are
+    never written straight from the sidecar without going through the
+    resolver first.
     """
     store = make_store(tmp_path)
     store.ensure_tables()
@@ -1465,13 +1473,15 @@ def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch)
 
     class CountingResolver:
         def __init__(self):
-            self.calls = 0
+            self.resolve_calls = 0
+            self.suggest_calls = 0
 
         def resolve_name(self, name, entity_type, parent_filter=None):
-            self.calls += 1
+            self.resolve_calls += 1
             return []
 
         def suggest_names(self, name, entity_type, limit=5):
+            self.suggest_calls += 1
             return []
 
     counting_resolver = CountingResolver()
@@ -1484,12 +1494,17 @@ def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch)
 
     report1 = pipeline.run_commit([tmp_path])
     assert report1.processed == ["doc.corpus.md"]
-    calls_after_first = counting_resolver.calls
-    assert calls_after_first > 0
+    resolve_calls_after_first = counting_resolver.resolve_calls
+    suggest_calls_after_first = counting_resolver.suggest_calls
+    assert resolve_calls_after_first > 0
 
     report2 = pipeline.run_commit([tmp_path])
     assert report2.skipped == ["doc.corpus.md (already committed)"]
-    assert counting_resolver.calls == calls_after_first  # unchanged: not re-invoked
+    # One additional resolve_name call for the single non-empty candidate
+    # (wk_name="Rokan"); no suggest_names calls -- that heavier diagnosis
+    # machinery is confined to _apply_entity_resolution and never runs here.
+    assert counting_resolver.resolve_calls == resolve_calls_after_first + 1
+    assert counting_resolver.suggest_calls == suggest_calls_after_first
     store.close()
 
 
@@ -1506,7 +1521,13 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
-    patch_entity_resolver(monkeypatch)  # no matches -> raw names kept as-is
+    # "Rokan" resolves (1 match) to the canonical "Rokan" -- the merge path
+    # must resolve sidecar values through the resolver like every other
+    # write path, not write raw sidecar text straight into the truth table.
+    patch_entity_resolver(
+        monkeypatch,
+        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}},
+    )
 
     file_hash = "aa" * 32
     doc_id = file_hash[:16]
@@ -1555,6 +1576,91 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
     assert doc_after["field_name"] is None
     # The portal edit was preserved, not overwritten by the sidecar value.
     assert doc_after["project_name"] == ["Portal Project"]
+    store.close()
+
+
+def test_commit_already_committed_fill_blank_merge_resolves_alias(
+    tmp_path, monkeypatch
+):
+    """Fill-blank merge resolves a sidecar alias to its canonical name.
+
+    A hand-edited sidecar holding a resolvable alias (not the exact
+    canonical string) must have that alias resolved -- exactly like
+    extract, a normal commit, or a portal save -- before it lands in the
+    truth table. Writing the raw alias straight through would be the one
+    write path that skips resolution.
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)  # no matches yet for the first commit
+
+    file_hash = "1a" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
+    )
+    report1 = pipeline.run_commit([tmp_path])
+    assert report1.processed == ["doc.corpus.md"]
+    assert store.get_document(doc_id)["wk_name"] is None
+
+    # Hand-edited sidecar now carries an alias that resolves to a
+    # DIFFERENT canonical name.
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokann"
+    )
+    patch_entity_resolver(
+        monkeypatch,
+        matches={
+            "Rokann": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 0.9}
+        },
+    )
+
+    report2 = pipeline.run_commit([tmp_path])
+
+    assert report2.processed == ["doc.corpus.md (entities merged: wk_name)"]
+    doc_after = store.get_document(doc_id)
+    # Canonical name stored, not the raw alias.
+    assert doc_after["wk_name"] == ["WK Rokan"]
+    store.close()
+
+
+def test_commit_already_committed_fill_blank_merge_drops_unresolvable(
+    tmp_path, monkeypatch
+):
+    """Unresolvable sidecar name is dropped, not merged, and warned about."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)  # no matches at all
+
+    file_hash = "2b" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
+    )
+    report1 = pipeline.run_commit([tmp_path])
+    assert report1.processed == ["doc.corpus.md"]
+    assert store.get_document(doc_id)["wk_name"] is None
+
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name="Totally Unknown WK",
+    )
+
+    report2 = pipeline.run_commit([tmp_path])
+
+    # Nothing merged: field stays None, doc reported as still-blank/skipped.
+    assert report2.processed == []
+    assert report2.skipped == ["doc.corpus.md (already committed)"]
+    assert store.get_document(doc_id)["wk_name"] is None
+    assert any(
+        "wk_name 'Totally Unknown WK' not found — not merged" in w
+        for w in report2.warnings
+    )
     store.close()
 
 
