@@ -1,3 +1,4 @@
+import duckdb
 from fastapi.testclient import TestClient
 
 import esdc.configs as configs
@@ -26,6 +27,40 @@ def _seed_documents(doc_ids):
         )
     conn.commit()
     conn.close()
+
+
+def _seed_duckdb_entities(
+    tmp_path, wk_name=None, field_name=None, project_name=None,
+    mirror_documents=True, mirror_doc_ids=(),
+):
+    """Seed the DuckDB file `_patch_dirs` points Config.get_db_file() at.
+
+    Populates the `project_resources` lookup table EntityResolver queries,
+    plus (optionally) a `documents` mirror table for `_mirror_updates` to
+    write into. Mirrors the setup in tests/portal/test_document_entities.py's
+    test_default_resolver_and_mirror_share_db_path.
+    """
+    path = tmp_path / "esdc.duckdb"
+    conn = duckdb.connect(str(path))
+    conn.execute(
+        "CREATE TABLE project_resources"
+        " (wk_name VARCHAR, field_name VARCHAR, project_name VARCHAR)"
+    )
+    conn.execute(
+        "INSERT INTO project_resources VALUES (?, ?, ?)",
+        [wk_name, field_name, project_name],
+    )
+    if mirror_documents:
+        conn.execute(
+            "CREATE TABLE documents (doc_id VARCHAR PRIMARY KEY, wk_name JSON,"
+            " field_name JSON, project_name JSON)"
+        )
+        for doc_id in mirror_doc_ids:
+            conn.execute(
+                "INSERT INTO documents VALUES (?, NULL, NULL, NULL)", [doc_id]
+            )
+    conn.close()
+    return path
 
 
 def _client(monkeypatch, tmp_path):
@@ -206,7 +241,59 @@ def test_documents_table_empty_when_absent(monkeypatch, tmp_path):
     assert resp.json()["rows"] == []
 
 
-def test_documents_save_rejected_405(monkeypatch, tmp_path):
+def test_documents_save_updates_entity_fields(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    resp = client.post("/api/tables/documents/save", json={"inserts": []})
-    assert resp.status_code == 405
+    _seed_documents(["D1"])
+    _seed_duckdb_entities(tmp_path, wk_name="Rokan", mirror_doc_ids=["D1"])
+
+    resp = client.post("/api/tables/documents/save", json={"updates": [
+        {"doc_id": "D1", "wk_name": "Rokan"},
+    ]})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["applied"]["updates"] == 1
+    assert body["warnings"] == []
+    rows = client.get("/api/tables/documents").json()["rows"]
+    assert rows[0]["wk_name"] == '["Rokan"]'
+
+
+def test_documents_save_inserts_and_deletes_rejected_422(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    resp = client.post("/api/tables/documents/save", json={
+        "inserts": [{"doc_id": "D2"}],
+        "deletes": [{"doc_id": "D1"}],
+    })
+    assert resp.status_code == 422
+    kinds = {e["kind"] for e in resp.json()["errors"]}
+    assert kinds == {"insert", "delete"}
+
+
+def test_documents_save_unknown_name_rejected_422(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _seed_documents(["D1"])
+    _seed_duckdb_entities(tmp_path, wk_name="Rokan", mirror_doc_ids=["D1"])
+
+    resp = client.post("/api/tables/documents/save", json={"updates": [
+        {"doc_id": "D1", "wk_name": "Nonexistent"},
+    ]})
+
+    assert resp.status_code == 422
+    assert "Nonexistent" in resp.json()["errors"][0]["message"]
+
+
+def test_documents_save_warnings_passthrough(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _seed_documents(["D1"])
+    # No documents mirror table -> the DuckDB UPDATE fails after the SQLite
+    # commit already succeeded, downgraded to a warning (never a 422/500).
+    _seed_duckdb_entities(tmp_path, wk_name="Rokan", mirror_documents=False)
+
+    resp = client.post("/api/tables/documents/save", json={"updates": [
+        {"doc_id": "D1", "wk_name": "Rokan"},
+    ]})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["warnings"]
+    assert "D1" in body["warnings"][0]

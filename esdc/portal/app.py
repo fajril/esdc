@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from esdc.pod_registry.changesets import apply_changeset
 from esdc.pod_registry.publish import publish_pod_registry
 from esdc.pod_registry.store import get_sqlite_connection
+from esdc.portal.document_entities import apply_document_entity_changeset
 from esdc.portal.tables import TABLE_CONFIGS
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,21 @@ def create_portal_app() -> FastAPI:
         if TABLE_CONFIGS[table].get("readonly"):
             raise HTTPException(status_code=405, detail="read-only table")
         changes = await request.json()
+        if table == "documents":
+            # documents is ingest-only (no inserts/deletes) and validates
+            # entity-name cells against the corpus resolver, so it bypasses
+            # apply_changeset entirely — see document_entities.py.
+            result = apply_document_entity_changeset(changes)
+            payload = {
+                "ok": result.ok,
+                "applied": result.applied,
+                "generated": result.generated,
+                "errors": [asdict(e) for e in result.errors],
+                "warnings": result.warnings,
+            }
+            if not result.ok:
+                return JSONResponse(status_code=422, content=payload)
+            return payload
         if table in _R_TABLE_NAME_FIELD:
             changes = dict(changes)
             changes["inserts"] = _normalize_r_table_rows(
