@@ -58,6 +58,7 @@ from esdc.corpus.metadata import (
     seed_topic_from_legacy,
 )
 from esdc.corpus.ocr import OllamaVisionOcr
+from esdc.corpus.pod_matcher import PodMatcher
 from esdc.corpus.sidecar import (
     read_sidecar,
     sidecar_path,
@@ -574,6 +575,7 @@ def run_extract(
     try:
         resolver = _entity_resolver_or_none(store, report)
         _validate_entity_overrides(resolver, overrides)
+        matcher = PodMatcher(store._get_sqlite())
 
         # (name, pages_ocr, page_count) collected so the final report can be
         # sorted by OCR ratio DESC once, instead of per-file.
@@ -583,10 +585,19 @@ def run_extract(
             for src in sources:
                 name = src.name
                 p.file(name)
-                if sidecar_path(src).exists() and not force:
-                    report.skipped.append(f"{name} (sidecar exists)")
-                    p.advance()
-                    continue
+                existing_sc = sidecar_path(src)
+                preserved_meta: dict[str, Any] | None = None
+                if existing_sc.exists():
+                    if not force:
+                        report.skipped.append(f"{name} (sidecar exists)")
+                        p.advance()
+                        continue
+                    try:
+                        old_meta, _old_body = read_sidecar(existing_sc)
+                        if old_meta.get("reviewed") is True:
+                            preserved_meta = old_meta
+                    except ValueError:
+                        preserved_meta = None  # unreadable — full regenerate
 
                 try:
                     file_hash = hashlib.sha256(src.read_bytes()).hexdigest()
@@ -622,10 +633,17 @@ def run_extract(
                                 f"{name}: {n_rejected} segment(s) failed cleanup guard "
                                 "— original text kept"
                             )
-                    p.status("prefill metadata")
-                    meta_fields = _prefill_metadata(
-                        src, markdown, metadata_caller, ocr_client, cfg, report, name
-                    )
+                    if preserved_meta is None:
+                        p.status("prefill metadata")
+                        meta_fields = _prefill_metadata(
+                            src, markdown, metadata_caller, ocr_client, cfg,
+                            report, name,
+                        )
+                    else:
+                        meta_fields = {
+                            key: preserved_meta.get(key)
+                            for key in _PRESERVED_FIELDS
+                        }
 
                     meta = {
                         "source_file": name,
@@ -644,8 +662,13 @@ def run_extract(
                         "wk_name": meta_fields.get("wk_name"),
                         "field_name": meta_fields.get("field_name"),
                         "project_name": meta_fields.get("project_name"),
+                        "pod_name": meta_fields.get("pod_name"),
                         "extras": meta_fields.get("extras"),
                     }
+                    if preserved_meta is not None:
+                        for key in ("raw_entities", "entity_warnings"):
+                            if meta_fields.get(key) is not None:
+                                meta[key] = meta_fields[key]
                     _apply_overrides(meta, overrides)
                     # A --topic override is a single string; normalize it to
                     # the list form doc_topic is stored as.
@@ -653,13 +676,21 @@ def run_extract(
                         meta["doc_topic"] = normalize_topic(overrides["doc_topic"])
                     meta = normalize_entity_fields(meta)
 
-                    if resolver is not None:
+                    if resolver is not None and preserved_meta is None:
                         p.status("resolve entities")
                         raw_entities = _apply_entity_resolution(
                             meta, resolver, report, name
                         )
                         if any(v is not None for v in raw_entities.values()):
                             meta["raw_entities"] = raw_entities
+                    if preserved_meta is not None:
+                        report.warnings.append(
+                            f"{name}: reviewed metadata preserved — body "
+                            "re-extracted, set reviewed: true after re-review"
+                        )
+
+                    p.status("suggest POD links")
+                    _apply_pod_suggestions(meta, matcher, report, name)
 
                     p.status("write sidecar")
                     write_sidecar(src, meta, markdown)
@@ -698,6 +729,57 @@ def run_extract(
         store.close()
 
     return report
+
+
+_FILL_BLANK_ENTITY_KEYS = ("wk_name", "field_name", "project_name")
+
+
+def _resolve_fill_blank_candidates(
+    meta: dict[str, Any],
+    resolver: EntityResolver,
+    report: CorpusReport,
+    name: str,
+) -> dict[str, list[str] | None]:
+    """Resolve sidecar entity names before a fill-blank merge onto a committed doc.
+
+    The ``exists and not force`` branch in ``run_commit`` only merges
+    already-committed docs' blank entity columns from a hand-edited
+    sidecar -- ``normalize_entity_fields`` list-wraps the raw values but
+    never resolves them, since ``_apply_entity_resolution`` only runs on
+    the not-yet-committed path below. Writing those raw values straight
+    into the truth table would be the one write path (unlike extract, a
+    normal commit, or a portal save) that skips resolution.
+
+    Mirrors the single-name resolution rule in
+    ``esdc.portal.document_entities._resolve_field`` (not the fuller
+    hierarchy-aware ``_apply_entity_resolution``, since fill-blank never
+    needs parent-child validation -- it only ever touches empty columns):
+    exactly one match -> canonical name; two or more matches -> keep the
+    given name as-is (ambiguous, same as `_resolve_field`); zero matches
+    -> drop the name and warn.
+    """
+    resolved: dict[str, list[str] | None] = {}
+    for key in _FILL_BLANK_ENTITY_KEYS:
+        raw = meta.get(key)
+        if not raw:
+            resolved[key] = None
+            continue
+        raw_list = raw if isinstance(raw, list) else [raw]
+        names: list[str] = []
+        for raw_name in raw_list:
+            if not raw_name:
+                continue
+            matches = resolver.resolve_name(str(raw_name), key)
+            if len(matches) == 1:
+                names.append(matches[0]["name"])
+            elif len(matches) >= 2:
+                names.append(str(raw_name))
+            else:
+                report.warnings.append(
+                    f"{name}: {key} '{raw_name}' not found — not merged"
+                )
+        resolved[key] = names or None
+    return resolved
 
 
 def _apply_entity_resolution(
@@ -837,6 +919,19 @@ def _apply_entity_resolution(
     return raw_entities
 
 
+def _apply_pod_suggestions(
+    meta: dict[str, Any],
+    matcher: PodMatcher,
+    report: CorpusReport,
+    name: str,
+) -> None:
+    """Set meta['suggested_pod_ids'] from registry matching (never links)."""
+    ids, reasons = matcher.suggest(meta.get("doc_number"), meta.get("pod_name"))
+    meta["suggested_pod_ids"] = ids or None
+    for reason in reasons:
+        report.warnings.append(f"{name}: suggested POD — {reason}")
+
+
 def run_commit(
     paths: list[Path],
     skip_review: bool = False,
@@ -854,6 +949,7 @@ def run_commit(
         # also needed to reach the conn for canonical names
         store.ensure_tables(validate_model=True)
         resolver = EntityResolver(db=store._get_connection())
+        matcher = PodMatcher(store._get_sqlite())
 
         with _progress_with_status("commit", len(sidecars), "docs") as p:
             for sc in sidecars:
@@ -890,7 +986,26 @@ def run_commit(
                         continue
                     exists = store.document_exists(file_hash)
                     if exists and not force:
-                        report.skipped.append(f"{name} (already committed)")
+                        # Still skip re-ingest, but merge any blank entity
+                        # columns from this sidecar first -- portal edits
+                        # to non-empty columns are never clobbered. dry_run
+                        # must not write, so the merge is skipped there.
+                        filled = (
+                            []
+                            if dry_run
+                            else store.fill_blank_entities(
+                                (file_hash or "")[:16],
+                                _resolve_fill_blank_candidates(
+                                    meta, resolver, report, name
+                                ),
+                            )
+                        )
+                        if filled:
+                            report.processed.append(
+                                f"{name} (entities merged: {', '.join(filled)})"
+                            )
+                        else:
+                            report.skipped.append(f"{name} (already committed)")
                         continue
 
                     # Safety net for hand-edited sidecars: re-resolve even
@@ -901,6 +1016,9 @@ def run_commit(
                     )
                     sidecar_raws = meta.pop("raw_entities", None)
                     meta.pop("entity_warnings", None)
+
+                    p.status("suggest POD links")
+                    _apply_pod_suggestions(meta, matcher, report, name)
 
                     p.status("chunk markdown")
                     chunks = chunk_markdown(
@@ -926,6 +1044,8 @@ def run_commit(
                         "wk_name": meta.get("wk_name"),
                         "field_name": meta.get("field_name"),
                         "project_name": meta.get("project_name"),
+                        "pod_name": meta.get("pod_name"),
+                        "suggested_pod_ids": meta.get("suggested_pod_ids"),
                         "raw_entities": json.dumps(sidecar_raws or resolver_raws),
                         "metadata": json.dumps(meta.get("extras") or {}),
                         "markdown": body,
@@ -1033,7 +1153,15 @@ _REGENERATE_FIELDS = (
     "wk_name",
     "field_name",
     "project_name",
+    "pod_name",
     "extras",
+)
+
+# Reviewed frontmatter preserved by `extract --force` on a reviewed sidecar.
+_PRESERVED_FIELDS = (
+    "doc_type", "doc_topic", "doc_number", "doc_date", "subject",
+    "sender", "recipient", "doc_level", "wk_name", "field_name",
+    "project_name", "pod_name", "extras", "raw_entities", "entity_warnings",
 )
 
 
@@ -1090,11 +1218,13 @@ def run_meta(
 
     store: CorpusStore | None = None
     resolver = None
+    matcher: PodMatcher | None = None
     try:
         try:
             store = CorpusStore()
             store.ensure_tables()
             resolver = _entity_resolver_or_none(store, report)
+            matcher = PodMatcher(store._get_sqlite())
         except Exception as e:
             logger.warning("[Corpus] meta DB unavailable: %s", e)
             report.warnings.append(
@@ -1151,6 +1281,10 @@ def run_meta(
                                 existing_raws[key] = resolved_raws.get(key)
                         if any(v is not None for v in existing_raws.values()):
                             meta["raw_entities"] = existing_raws
+
+                    if matcher is not None:
+                        p.status("suggest POD links")
+                        _apply_pod_suggestions(meta, matcher, report, name)
 
                     file_hash = meta.get("file_hash")
                     if (
@@ -1242,6 +1376,101 @@ def run_reembed() -> CorpusReport:
                 report.failed[name] = str(e)
 
         store.rebuild_indexes()
+    finally:
+        store.close()
+
+    return report
+
+
+def _sidecar_meta_from_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    """Invert ``run_commit``'s doc-dict -> DB mapping into sidecar frontmatter.
+
+    ``doc`` is a ``CorpusStore.get_document`` row: JSON-array columns
+    (``doc_topic``, ``wk_name``/``field_name``/``project_name``,
+    ``pod_name``, ``suggested_pod_ids``) and JSON-object columns
+    (``raw_entities``, ``metadata``) already come back parsed to
+    lists/dicts, so they pass straight through. ``metadata`` becomes
+    ``extras`` (the frontmatter key ``run_commit`` reads it from), and
+    ``file_name`` becomes ``source_file`` -- the same rename ``run_commit``
+    applies in reverse. Every exported sidecar is marked ``reviewed: true``
+    since it reflects already-committed, human-reviewed data.
+    """
+    return {
+        "source_file": doc.get("file_name"),
+        "file_hash": doc.get("file_hash"),
+        "page_count": doc.get("page_count"),
+        "extraction_method": doc.get("extraction_method"),
+        "reviewed": True,
+        "doc_type": doc.get("doc_type"),
+        "doc_topic": doc.get("doc_topic"),
+        "doc_number": doc.get("doc_number"),
+        "doc_date": doc.get("doc_date"),
+        "subject": doc.get("subject"),
+        "sender": doc.get("sender"),
+        "recipient": doc.get("recipient"),
+        "doc_level": doc.get("doc_level"),
+        "wk_name": doc.get("wk_name"),
+        "field_name": doc.get("field_name"),
+        "project_name": doc.get("project_name"),
+        "pod_name": doc.get("pod_name"),
+        "suggested_pod_ids": doc.get("suggested_pod_ids"),
+        "raw_entities": doc.get("raw_entities"),
+        "extras": doc.get("metadata"),
+    }
+
+
+def run_export(paths: list[Path], all_docs: bool = False) -> CorpusReport:
+    """Regenerate ``.corpus.md`` sidecars from the ``documents`` table.
+
+    The DB is source of truth for document entity metadata (portal edits,
+    Task-4 commit-time merges); this closes the loop so sidecars are a
+    regenerable view of it rather than the only copy. ``all_docs=True``
+    exports every row; otherwise each given sidecar path is matched to a
+    row via its ``file_path`` column (a path with no matching row is
+    reported failed, not raised). Each sidecar is fully overwritten:
+    frontmatter rebuilt from the row (see ``_sidecar_meta_from_doc``) and
+    body set to the row's ``markdown`` column.
+
+    SQLite-only: unlike ``commit``/``reembed``, export never opens DuckDB
+    or the embedder, so it works even when Ollama/the embedding model is
+    unavailable.
+    """
+    report = CorpusReport()
+    store = CorpusStore()
+    try:
+        sconn = store._get_sqlite()
+
+        targets: list[tuple[str, Path]] = []
+        if all_docs:
+            rows = sconn.execute(
+                "SELECT doc_id, file_path FROM documents ORDER BY file_path"
+            ).fetchall()
+            targets = [(row["doc_id"], Path(row["file_path"])) for row in rows]
+        else:
+            for p in paths:
+                row = sconn.execute(
+                    "SELECT doc_id FROM documents WHERE file_path = ?",
+                    [str(p)],
+                ).fetchone()
+                if row is None:
+                    report.failed[p.name] = (
+                        f"no committed document with file_path={p}"
+                    )
+                    continue
+                targets.append((row["doc_id"], p))
+
+        for doc_id, path in targets:
+            name = path.name
+            try:
+                doc = store.get_document(doc_id)
+                if doc is None:
+                    report.failed[name] = "document not found"
+                    continue
+                meta = _sidecar_meta_from_doc(doc)
+                write_sidecar_file(path, meta, doc["markdown"])
+                report.processed.append(name)
+            except Exception as e:
+                report.failed[name] = str(e)
     finally:
         store.close()
 

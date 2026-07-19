@@ -432,6 +432,49 @@ def test_extract_unknown_entity_prints_clean_error(tmp_path, monkeypatch):
     assert "Traceback" not in result.output
 
 
+def test_export_no_paths_no_all_exits_1():
+    result = runner.invoke(app, ["corpus", "export"])
+    assert result.exit_code == 1
+    assert "Nothing to export: pass sidecar path(s) or --all." in result.output
+
+
+def test_export_passes_all_to_pipeline(monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_export(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_export", fake_run_export)
+
+    result = runner.invoke(app, ["corpus", "export", "--all"])
+    assert result.exit_code == 0
+    assert captured["paths"] == []
+    assert captured["all_docs"] is True
+
+
+def test_export_passes_paths_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_export(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_export", fake_run_export)
+
+    sc = tmp_path / "doc.corpus.md"
+    result = runner.invoke(app, ["corpus", "export", str(sc)])
+    assert result.exit_code == 0
+    assert captured["paths"] == [sc]
+    assert captured["all_docs"] is False
+
+
 def test_entity_display_handles_legacy_plain_string():
     from esdc.esdc import _entity_display
 

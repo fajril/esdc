@@ -259,7 +259,10 @@ class TestLoadCommand:
         result = runner.invoke(app, ["load", "--from-excel", str(excel_path)])
 
         assert result.exit_code == 1
-        assert "specify exactly one of --schema or --schema-pod" in result.stdout
+        assert (
+            "specify exactly one of --schema, --schema-pod, or --pod-registry"
+            in result.stdout
+        )
 
     def test_load_excel_creates_table_and_metadata(self, runner, isolated_config, tmp_path):
         schema_path = _write_schema(tmp_path / "schema.yaml")
@@ -994,3 +997,32 @@ class TestSchemaCommand:
             "report_date": "date",
             "updated_at": "datetime",
         }
+
+
+class TestLoadPodRegistryCommand:
+    def test_load_pod_registry_invokes_importer(self, runner, monkeypatch, tmp_path):
+        called = {}
+
+        def fake_import(path):
+            called["path"] = path
+            return {"m_pod": 2}
+
+        monkeypatch.setattr("esdc.esdc.import_pod_registry_workbook", fake_import)
+        xlsx = tmp_path / "pod.xlsx"
+        xlsx.write_bytes(b"")
+
+        result = runner.invoke(app, ["load", "--from-excel", str(xlsx), "--pod-registry"])
+
+        assert result.exit_code == 0
+        assert called["path"] == xlsx
+        assert "m_pod" in result.stdout
+
+    def test_load_requires_exactly_one_mode(self, runner, tmp_path):
+        xlsx = tmp_path / "pod.xlsx"
+        xlsx.write_bytes(b"")
+
+        result = runner.invoke(
+            app, ["load", "--from-excel", str(xlsx), "--pod-registry", "--schema-pod"]
+        )
+
+        assert result.exit_code == 1

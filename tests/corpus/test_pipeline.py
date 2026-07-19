@@ -1,3 +1,4 @@
+import json
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -395,6 +396,71 @@ def test_extract_force_overwrites(tmp_path, monkeypatch):
     meta, body = read_sidecar(tmp_path / "surat.corpus.md")
     assert meta["reviewed"] is False
     assert "new body" in body
+
+
+# --------------------------------------------------------------------------
+# run_extract --force metadata preservation
+# --------------------------------------------------------------------------
+
+
+def test_extract_force_preserves_reviewed_metadata(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path)
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash="oldhash",
+        doc_number="KEEP-123", subject="human-reviewed subject",
+        raw_entities={"wk_name": "Raw WK"},
+    )
+    calls = []
+    monkeypatch.setattr(
+        pipeline, "llm_extract",
+        lambda markdown, caller: calls.append(1) or {"doc_type": "letter"},
+    )
+
+    report = pipeline.run_extract([pdf], force=True)
+
+    assert report.processed and not report.failed
+    meta, body = read_sidecar(sc)
+    assert meta["doc_number"] == "KEEP-123"
+    assert meta["subject"] == "human-reviewed subject"
+    assert meta["raw_entities"] == {"wk_name": "Raw WK"}
+    assert meta["reviewed"] is False  # body changed — needs re-review
+    # file_hash refreshed from the actual source bytes, not the stale sidecar
+    assert meta["file_hash"] != "oldhash"
+    assert calls == []  # LLM prefill skipped
+    assert any("preserved" in w for w in report.warnings)
+
+
+def test_extract_force_overrides_beat_preserved_metadata(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path)
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash="oldhash",
+        doc_number="KEEP-123",
+    )
+    report = pipeline.run_extract([pdf], force=True, level="national")
+
+    assert report.processed and not report.failed
+    meta, _body = read_sidecar(sc)
+    assert meta["doc_level"] == "national"      # override wins
+    assert meta["doc_number"] == "KEEP-123"     # untouched field preserved
+
+
+def test_extract_force_unreviewed_sidecar_fully_regenerated(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path)
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=False, file_hash="oldhash",
+        doc_number="DISPOSABLE",
+    )
+    calls = []
+    monkeypatch.setattr(
+        pipeline, "llm_extract",
+        lambda markdown, caller: calls.append(1) or {"doc_type": "letter"},
+    )
+    report = pipeline.run_extract([pdf], force=True)
+
+    assert report.processed and not report.failed
+    meta, _body = read_sidecar(sc)
+    assert meta.get("doc_number") != "DISPOSABLE"  # prefill replaced it
+    assert calls  # LLM prefill ran
 
 
 def test_extract_ocr_ratio_sort_and_flags(tmp_path, monkeypatch):
@@ -1388,10 +1454,18 @@ def test_commit_entity_warnings_and_raw_entities_dont_leak_into_doc_columns(
     store.close()
 
 
-def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch):
-    """Skip-on-already-committed must short-circuit before resolution runs.
+def test_commit_already_committed_skips_heavy_resolution_but_resolves_merge_candidates(
+    tmp_path, monkeypatch
+):
+    """Skip-on-already-committed avoids the heavy resolver, not all of it.
 
-    Re-commits of already-ingested docs should never re-invoke the resolver.
+    The full hierarchical ``_apply_entity_resolution`` pass (with its
+    parent-filter re-resolution and ``suggest_names`` diagnosis calls)
+    never re-runs for an already-committed doc. But the fill-blank merge
+    path must still resolve its own (non-empty) sidecar candidates one
+    resolve_name call per candidate -- that's the fix: merged values are
+    never written straight from the sidecar without going through the
+    resolver first.
     """
     store = make_store(tmp_path)
     store.ensure_tables()
@@ -1399,13 +1473,15 @@ def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch)
 
     class CountingResolver:
         def __init__(self):
-            self.calls = 0
+            self.resolve_calls = 0
+            self.suggest_calls = 0
 
         def resolve_name(self, name, entity_type, parent_filter=None):
-            self.calls += 1
+            self.resolve_calls += 1
             return []
 
         def suggest_names(self, name, entity_type, limit=5):
+            self.suggest_calls += 1
             return []
 
     counting_resolver = CountingResolver()
@@ -1418,12 +1494,268 @@ def test_commit_already_committed_skips_before_resolution(tmp_path, monkeypatch)
 
     report1 = pipeline.run_commit([tmp_path])
     assert report1.processed == ["doc.corpus.md"]
-    calls_after_first = counting_resolver.calls
-    assert calls_after_first > 0
+    resolve_calls_after_first = counting_resolver.resolve_calls
+    suggest_calls_after_first = counting_resolver.suggest_calls
+    assert resolve_calls_after_first > 0
 
     report2 = pipeline.run_commit([tmp_path])
     assert report2.skipped == ["doc.corpus.md (already committed)"]
-    assert counting_resolver.calls == calls_after_first  # unchanged: not re-invoked
+    # One additional resolve_name call for the single non-empty candidate
+    # (wk_name="Rokan"); no suggest_names calls -- that heavier diagnosis
+    # machinery is confined to _apply_entity_resolution and never runs here.
+    assert counting_resolver.resolve_calls == resolve_calls_after_first + 1
+    assert counting_resolver.suggest_calls == suggest_calls_after_first
+    store.close()
+
+
+def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
+    tmp_path, monkeypatch
+):
+    """Re-commit fills blanks from the sidecar but preserves portal edits.
+
+    A re-commit of an already-ingested doc fills blank entity columns
+    from the (re-extracted) sidecar but never clobbers a non-empty DB
+    value — portal edits to wk_name/field_name/project_name are source
+    of truth.
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    # "Rokan" resolves (1 match) to the canonical "Rokan" -- the merge path
+    # must resolve sidecar values through the resolver like every other
+    # write path, not write raw sidecar text straight into the truth table.
+    patch_entity_resolver(
+        monkeypatch,
+        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}},
+    )
+
+    file_hash = "aa" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name=None,
+        field_name=None,
+        project_name=None,
+    )
+    report1 = pipeline.run_commit([tmp_path])
+    assert report1.processed == ["doc.corpus.md"]
+
+    doc_before = store.get_document(doc_id)
+    assert doc_before["wk_name"] is None
+    assert doc_before["project_name"] is None
+
+    # Simulate a portal edit made directly against the DB (source of truth).
+    sconn = store._get_sqlite()
+    with sconn:
+        sconn.execute(
+            "UPDATE documents SET project_name = ? WHERE doc_id = ?",
+            (json.dumps(["Portal Project"]), doc_id),
+        )
+
+    # Re-extract updates the same sidecar: wk_name now populated, and a
+    # DIFFERENT project_name than the portal-edited one.
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name="Rokan",
+        field_name=None,
+        project_name="Sidecar Project",
+    )
+
+    report2 = pipeline.run_commit([tmp_path])
+
+    assert report2.processed == ["doc.corpus.md (entities merged: wk_name)"]
+    assert report2.skipped == []
+    doc_after = store.get_document(doc_id)
+    assert doc_after["wk_name"] == ["Rokan"]
+    assert doc_after["field_name"] is None
+    # The portal edit was preserved, not overwritten by the sidecar value.
+    assert doc_after["project_name"] == ["Portal Project"]
+    store.close()
+
+
+def test_commit_already_committed_fill_blank_merge_resolves_alias(
+    tmp_path, monkeypatch
+):
+    """Fill-blank merge resolves a sidecar alias to its canonical name.
+
+    A hand-edited sidecar holding a resolvable alias (not the exact
+    canonical string) must have that alias resolved -- exactly like
+    extract, a normal commit, or a portal save -- before it lands in the
+    truth table. Writing the raw alias straight through would be the one
+    write path that skips resolution.
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)  # no matches yet for the first commit
+
+    file_hash = "1a" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
+    )
+    report1 = pipeline.run_commit([tmp_path])
+    assert report1.processed == ["doc.corpus.md"]
+    assert store.get_document(doc_id)["wk_name"] is None
+
+    # Hand-edited sidecar now carries an alias that resolves to a
+    # DIFFERENT canonical name.
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokann"
+    )
+    patch_entity_resolver(
+        monkeypatch,
+        matches={
+            "Rokann": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 0.9}
+        },
+    )
+
+    report2 = pipeline.run_commit([tmp_path])
+
+    assert report2.processed == ["doc.corpus.md (entities merged: wk_name)"]
+    doc_after = store.get_document(doc_id)
+    # Canonical name stored, not the raw alias.
+    assert doc_after["wk_name"] == ["WK Rokan"]
+    store.close()
+
+
+def test_commit_already_committed_fill_blank_merge_drops_unresolvable(
+    tmp_path, monkeypatch
+):
+    """Unresolvable sidecar name is dropped, not merged, and warned about."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)  # no matches at all
+
+    file_hash = "2b" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
+    )
+    report1 = pipeline.run_commit([tmp_path])
+    assert report1.processed == ["doc.corpus.md"]
+    assert store.get_document(doc_id)["wk_name"] is None
+
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name="Totally Unknown WK",
+    )
+
+    report2 = pipeline.run_commit([tmp_path])
+
+    # Nothing merged: field stays None, doc reported as still-blank/skipped.
+    assert report2.processed == []
+    assert report2.skipped == ["doc.corpus.md (already committed)"]
+    assert store.get_document(doc_id)["wk_name"] is None
+    assert any(
+        "wk_name 'Totally Unknown WK' not found — not merged" in w
+        for w in report2.warnings
+    )
+    store.close()
+
+
+def test_commit_already_committed_no_blanks_still_skips(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    file_hash = "cd" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokan"
+    )
+    pipeline.run_commit([tmp_path])
+    assert store.get_document(doc_id)["wk_name"] == ["Rokan"]
+
+    # Re-commit with the exact same (already non-blank) entity values.
+    report2 = pipeline.run_commit([tmp_path])
+
+    assert report2.skipped == ["doc.corpus.md (already committed)"]
+    assert report2.processed == []
+    store.close()
+
+
+def test_commit_force_overwrites_entities_ignoring_merge(tmp_path, monkeypatch):
+    """--force keeps its full-replace behavior: it does not merge, it wins."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    file_hash = "be" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokan"
+    )
+    pipeline.run_commit([tmp_path])
+
+    # Simulate a portal edit that --force must overwrite (unlike the
+    # default merge path, which would have preserved it).
+    sconn = store._get_sqlite()
+    with sconn:
+        sconn.execute(
+            "UPDATE documents SET wk_name = ? WHERE doc_id = ?",
+            (json.dumps(["Portal WK"]), doc_id),
+        )
+
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name="Rokan Hilir",
+    )
+    report = pipeline.run_commit([tmp_path], force=True)
+
+    assert report.processed == ["doc.corpus.md"]
+    doc = store.get_document(doc_id)
+    assert doc["wk_name"] == ["Rokan Hilir"]
+    store.close()
+
+
+def test_commit_dry_run_skips_entity_merge(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    file_hash = "df" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
+    )
+    pipeline.run_commit([tmp_path])
+    assert store.get_document(doc_id)["wk_name"] is None
+
+    fill_calls = []
+    orig_fill = store.fill_blank_entities
+
+    def spy_fill(*a, **kw):
+        fill_calls.append((a, kw))
+        return orig_fill(*a, **kw)
+
+    monkeypatch.setattr(store, "fill_blank_entities", spy_fill)
+
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokan"
+    )
+    report = pipeline.run_commit([tmp_path], dry_run=True)
+
+    assert fill_calls == []
+    assert report.skipped == ["doc.corpus.md (already committed)"]
+    doc_after = store.get_document(doc_id)
+    assert doc_after["wk_name"] is None  # dry_run: no write at all
     store.close()
 
 
@@ -2365,3 +2697,189 @@ def test_extract_passes_ollama_host_to_ocr_and_text_caller(tmp_path, monkeypatch
     pipeline.run_extract([pdf])
     assert ocr_kwargs.get("host") == "http://gpu-box:11434"
     assert caller_hosts == ["http://gpu-box:11434"]
+
+
+# --------------------------------------------------------------------------
+# POD suggestions (PodMatcher wiring)
+# --------------------------------------------------------------------------
+
+
+def _seed_registry_pod(store):
+    sconn = store._get_sqlite()
+    sconn.execute(
+        "INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')"
+    )
+    sconn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (1, 'POD I')")
+    sconn.execute(
+        "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
+        " institution_code, pod_type_code, rev_num, approval_seq)"
+        " VALUES (1, 'PL-2019-0300-4-1-0', 'POD I Lapangan Abadi',"
+        " 'SRT-0368', '2019-07-16', 4, 1, 0, 300)"
+    )
+    sconn.commit()
+
+
+def test_extract_writes_pod_suggestions(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    patch_store_factory(monkeypatch, store)
+    _seed_registry_pod(store)
+    monkeypatch.setattr(
+        pipeline, "llm_extract",
+        lambda markdown, caller: {
+            "doc_type": "letter",
+            "doc_number": "SRT-0368",
+            "pod_name": ["POD I Lapangan Abadi"],
+        },
+    )
+    pdf = make_pdf(tmp_path)
+    report = pipeline.run_extract([pdf])
+    assert report.processed and not report.failed
+    meta, _ = read_sidecar(sidecar_path(pdf))
+    assert meta["pod_name"] == ["POD I Lapangan Abadi"]
+    assert meta["suggested_pod_ids"] == ["PL-2019-0300-4-1-0"]
+    assert any("suggested POD" in w for w in report.warnings)
+
+
+def test_commit_stores_pod_fields(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    _seed_registry_pod(store)
+    sc = make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash="cc" * 32,
+        pod_name=["POD I Lapangan Abadi"], doc_number="SRT-0368",
+    )
+    report = pipeline.run_commit([sc])
+    assert report.processed and not report.failed
+    doc = store.get_document(("cc" * 32)[:16])
+    assert doc["pod_name"] == ["POD I Lapangan Abadi"]
+    assert doc["suggested_pod_ids"] == ["PL-2019-0300-4-1-0"]
+    store.close()
+
+
+def test_suggestions_empty_registry_is_quiet(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path)
+    report = pipeline.run_extract([pdf])  # default store, empty m_pod
+    assert report.processed and not report.failed
+    meta, _ = read_sidecar(sidecar_path(pdf))
+    assert meta.get("suggested_pod_ids") is None
+
+
+# --------------------------------------------------------------------------
+# run_export
+# --------------------------------------------------------------------------
+
+
+def test_export_writes_sidecar_reflecting_db_including_portal_edits(
+    tmp_path, monkeypatch
+):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    file_hash = "bb" * 32
+    doc_id = file_hash[:16]
+    sc = make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name=None,
+        subject="orig subject",
+    )
+    commit_report = pipeline.run_commit([tmp_path])
+    assert commit_report.processed == ["doc.corpus.md"]
+
+    # Simulate a portal edit made directly against the DB (source of truth).
+    sconn = store._get_sqlite()
+    with sconn:
+        sconn.execute(
+            "UPDATE documents SET wk_name = ?, subject = ? WHERE doc_id = ?",
+            (json.dumps(["Portal WK"]), "portal-edited subject", doc_id),
+        )
+
+    report = pipeline.run_export([sc])
+
+    assert report.processed == ["doc.corpus.md"]
+    assert report.failed == {}
+    meta, body = read_sidecar(sc)
+    assert meta["wk_name"] == ["Portal WK"]  # reflects the portal edit, not the
+    assert meta["subject"] == "portal-edited subject"  # original sidecar values
+    assert meta["reviewed"] is True
+    assert meta["file_hash"] == file_hash
+    assert meta["source_file"] == "doc.pdf"
+    assert meta["doc_type"] == "letter"
+    assert "isi dokumen penting" in body
+    store.close()
+
+
+def test_export_round_trip_commit_is_noop(tmp_path, monkeypatch):
+    """export -> commit (no force) must skip as already-committed, DB unchanged."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(
+        monkeypatch,
+        matches={
+            "Rokan": {
+                "entity_type": "wk_name",
+                "name": "Rokan",
+                "confidence": 1.0,
+            },
+        },
+    )
+
+    file_hash = "aa" * 32
+    doc_id = file_hash[:16]
+    sc = make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        wk_name="Rokan",
+    )
+    pipeline.run_commit([tmp_path])
+    doc_before = store.get_document(doc_id)
+
+    export_report = pipeline.run_export([sc])
+    assert export_report.processed == ["doc.corpus.md"]
+
+    commit_report = pipeline.run_commit([sc])
+    assert commit_report.skipped == ["doc.corpus.md (already committed)"]
+    assert commit_report.processed == []
+
+    doc_after = store.get_document(doc_id)
+    assert doc_after == doc_before
+    store.close()
+
+
+def test_export_unmatched_path_reports_failed(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+
+    missing = tmp_path / "ghost.corpus.md"
+    report = pipeline.run_export([missing])
+
+    assert report.processed == []
+    assert "ghost.corpus.md" in report.failed
+    store.close()
+
+
+def test_export_all_covers_every_committed_row(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    make_sidecar(tmp_path, "a.pdf", reviewed=True, file_hash="aa" * 32)
+    make_sidecar(tmp_path, "b.pdf", reviewed=True, file_hash="bb" * 32)
+    pipeline.run_commit([tmp_path])
+
+    report = pipeline.run_export([], all_docs=True)
+
+    assert sorted(report.processed) == ["a.corpus.md", "b.corpus.md"]
+    assert report.failed == {}
+    store.close()

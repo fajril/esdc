@@ -40,6 +40,7 @@ Given the markdown of a document, return ONLY a JSON object with these keys
   (e.g. ["Rokan", "Mahakam"])
 - field_name: list of field (lapangan) names mentioned (e.g. ["Duri", "Minas"])
 - project_name: list of project or POD names mentioned (e.g. ["POD Duri", "POD Minas"])
+- pod_name: list of POD/plan-of-development name(s) this document approves or discusses, exactly as written (e.g. "POD I Lapangan Abadi", "Optimasi Pengembangan Lapangan Pedada"); null if none
 - extras: object with doc_type-specific fields, e.g. for mom:
   {{"peserta": [...], "keputusan": [...]}}
 

@@ -110,6 +110,17 @@ llm_fields: # order = order of definition lines in METADATA_PROMPT
     description: >-
       List of project or POD (Plan of Development) names mentioned in the document.
     aliases: [nama proyek, nama POD]
+  - name: pod_name
+    type: list[string]
+    prompt: >-
+      list of POD/plan-of-development name(s) this document approves or
+      discusses, exactly as written (e.g. "POD I Lapangan Abadi",
+      "Optimasi Pengembangan Lapangan Pedada"); null if none
+    description: >-
+      Name(s) of the POD (plan of development) the document approves or
+      discusses, as written in the document. Used to suggest links to the
+      POD registry; not resolved against project entities.
+    aliases: [nama POD, judul POD]
   - name: extras
     type: object
     prompt: |-
@@ -134,6 +145,11 @@ housekeeping_fields: # set by the pipeline, not the LLM
     description: >-
       Raw entity-resolution candidates captured before canonicalization,
       stored as JSON.
+  - name: suggested_pod_ids
+    description: >-
+      Registry pod_id(s) suggested by matching the letter number and
+      pod_name against the POD registry (pipeline-computed, JSON list).
+      Suggestions only — pod_document links are always human-confirmed.
 doc_types: # authoritative glossary, one entry per doc_type enum value
   - name: uu
     title: Undang-Undang

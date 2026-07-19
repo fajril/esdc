@@ -443,3 +443,18 @@ class TestServeCommandCleanup:
         assert result.exit_code == 0
         assert "--web" not in result.output
         assert "--port" in result.output
+
+
+def test_portal_command_invokes_run_portal(monkeypatch):
+    from typer.testing import CliRunner
+    from esdc.esdc import app
+
+    called = {}
+
+    def fake_run(host, port, log_level):
+        called.update(host=host, port=port, log_level=log_level)
+
+    monkeypatch.setattr("esdc.portal.app.run_portal", fake_run)
+    result = CliRunner().invoke(app, ["portal"])
+    assert result.exit_code == 0
+    assert called == {"host": "127.0.0.1", "port": 13334, "log_level": "info"}

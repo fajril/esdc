@@ -80,6 +80,10 @@ from esdc.loaders import (  # noqa: E402
     load_pod_workbook_to_duckdb,
     print_load_result,
 )
+from esdc.pod_registry.importer import (  # noqa: E402
+    PodRegistryImportError,
+    import_pod_registry_workbook,
+)
 from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
 from esdc.summarizer import (  # noqa: E402
     SummaryDependencyError,
@@ -261,16 +265,31 @@ def load(
             help="Use the built-in POD schema template.",
         ),
     ] = False,
+    pod_registry: Annotated[
+        bool,
+        typer.Option(
+            "--pod-registry",
+            help="Seed the POD master registry (SQLite) from pod-itb-skk workbook.",
+        ),
+    ] = False,
 ) -> None:
     """Load a spreadsheet into DuckDB and register its data dictionary.
 
     Run `esdc schema --generate --from-excel data.xlsx` to create a starter schema.
     Use `--schema-pod` to load POD workbook data with the built-in POD template.
+    Use `--pod-registry` to seed the POD master registry from the pod-itb-skk workbook.
     """
-    if (schema is None) == (not schema_pod):
-        typer.echo("Error: specify exactly one of --schema or --schema-pod.")
+    modes = sum([schema is not None, schema_pod, pod_registry])
+    if modes != 1:
+        typer.echo("Error: specify exactly one of --schema, --schema-pod, or --pod-registry.")
         raise typer.Exit(1) from None
     try:
+        if pod_registry:
+            counts = import_pod_registry_workbook(from_excel)
+            for table, n in counts.items():
+                typer.echo(f"  {table}: {n} rows")
+            typer.echo("POD registry seeded and published to DuckDB.")
+            return
         if schema_pod:
             results = load_pod_workbook_to_duckdb(from_excel)
             for result in results:
@@ -279,6 +298,11 @@ def load(
         schema_path = schema
         assert schema_path is not None
         result = load_excel_to_duckdb(from_excel, schema_path)
+    except PodRegistryImportError as e:
+        typer.echo("Error: POD registry import failed:")
+        for msg in e.errors:
+            typer.echo(f"  - {msg}")
+        raise typer.Exit(1) from None
     except (LoadSchemaError, SpreadsheetLoadError) as e:
         typer.echo(f"Error: {e}")
         raise typer.Exit(1) from None
@@ -1896,6 +1920,21 @@ def serve(
     run_server(host=host, port=port, log_level=log_level)
 
 
+@app.command(name="portal")
+def portal(
+    port: int = typer.Option(13334, "--port", "-p", help="Portal port"),
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Portal host"),
+    log_level: str = typer.Option("info", "--log-level", help="Log level"),
+) -> None:
+    """Launch the POD registry portal (Excel-like master data editor)."""
+    from esdc.portal.app import run_portal
+
+    rich.print(
+        f"[bold green]Starting POD portal on http://{host}:{port}/[/bold green]"
+    )
+    run_portal(host=host, port=port, log_level=log_level)
+
+
 @app.command(name="validate")
 def validate(
     rule: Annotated[
@@ -2565,13 +2604,83 @@ def list_documents() -> None:
 
 @corpus_app.command()
 def remove(
-    doc_ids: Annotated[list[str], typer.Argument(help="Document ID(s) to remove.")],
+    doc_ids: Annotated[
+        list[str] | None, typer.Argument(help="Document ID(s) to remove.")
+    ] = None,
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Remove all docs of this type.")
+    ] = None,
+    year: Annotated[
+        int | None, typer.Option("--year", help="Filter by document year.")
+    ] = None,
+    wk_name: Annotated[
+        str | None, typer.Option("--wk-name", help="Filter by working area name.")
+    ] = None,
+    field_name: Annotated[
+        str | None, typer.Option("--field-name", help="Filter by field name.")
+    ] = None,
+    project_name: Annotated[
+        str | None, typer.Option("--project-name", help="Filter by project name.")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="List matches without deleting.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Confirm filter-based deletion.")
+    ] = False,
 ) -> None:
-    """Remove document(s) from the corpus (does not touch files on disk)."""
+    """Remove document(s) from the corpus (does not touch files on disk).
+
+    Sidecars are untouched: a later `esdc corpus commit` re-ingests them.
+    """
+    filters = {
+        k: v
+        for k, v in {
+            "doc_type": doc_type,
+            "year": year,
+            "wk_name": wk_name,
+            "field_name": field_name,
+            "project_name": project_name,
+        }.items()
+        if v is not None
+    }
+    explicit = list(doc_ids or [])
+    if not explicit and not filters:
+        typer.echo(
+            "Nothing to remove: pass doc id(s) or a filter "
+            "(--doc-type/--year/--wk-name/--field-name/--project-name). "
+            "To delete everything, use `esdc corpus clear`.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     store = _open_corpus_store()
     removed = 0
     try:
-        for doc_id in doc_ids:
+        targets: list[tuple[str, str]] = []
+        if filters:
+            matched = store.find_doc_ids(filters)
+            typer.echo(f"Matched {len(matched)} document(s):")
+            for _doc_id, file_name in matched:
+                typer.echo(f"  {file_name}")
+            targets.extend(matched)
+        for doc_id in explicit:
+            if all(doc_id != t[0] for t in targets):
+                targets.append((doc_id, doc_id))
+
+        if dry_run:
+            typer.echo(f"Dry run — {len(targets)} document(s) would be removed.")
+            return
+        if filters and not yes:
+            typer.echo(
+                f"This deletes {len(targets)} document(s). Re-run with --yes.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        _warn_pod_links([t[0] for t in targets])
+
+        for doc_id, _name in targets:
             if store.get_document(doc_id) is None:
                 typer.echo(f"Not found: {doc_id}", err=True)
                 continue
@@ -2581,7 +2690,44 @@ def remove(
             store.rebuild_indexes()
     finally:
         store.close()
-    typer.echo(f"Removed {removed} document(s).")
+    typer.echo(
+        f"Removed {removed} document(s). Sidecars kept — "
+        "`esdc corpus commit` would re-ingest them."
+    )
+
+
+def _warn_pod_links(doc_ids: list[str]) -> None:
+    """Warn when removed docs are linked in the registry's pod_document table.
+
+    Links are kept: doc_id is derived from source bytes, so a re-committed
+    document returns under the same id. Tolerates the table (or the whole
+    registry db) not existing.
+    """
+    if not doc_ids:
+        return
+    try:
+        from esdc.pod_registry.store import get_sqlite_connection
+
+        conn = get_sqlite_connection()
+        try:
+            placeholders = ", ".join("?" for _ in doc_ids)
+            rows = conn.execute(
+                "SELECT DISTINCT doc_id FROM pod_document "
+                f"WHERE doc_id IN ({placeholders})",
+                doc_ids,
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return
+    linked = [r["doc_id"] for r in rows]
+    if linked:
+        typer.echo(
+            f"Warning: {len(linked)} removed document(s) are linked to PODs "
+            "in the registry (links kept; re-commit restores the same doc_id): "
+            + ", ".join(linked),
+            err=True,
+        )
 
 
 @corpus_app.command()
@@ -2607,6 +2753,38 @@ def clear(
     typer.echo(
         f"Removed {removed['documents']} documents and {removed['chunks']} chunks."
     )
+
+
+@corpus_app.command()
+def export(
+    paths: Annotated[
+        list[Path] | None,
+        typer.Argument(help="Sidecar .corpus.md file(s) to regenerate from the DB."),
+    ] = None,
+    all_docs: Annotated[
+        bool,
+        typer.Option("--all", help="Regenerate every committed document's sidecar."),
+    ] = False,
+) -> None:
+    """Regenerate .corpus.md sidecars from the DB (documents table is truth).
+
+    Rebuilds each sidecar's frontmatter + body from its committed row —
+    including portal edits and Task-4 commit-time entity merges — so a
+    deleted or stale sidecar can be reconstructed. Overwrites the file(s)
+    at their DB-recorded file_path; run `esdc corpus commit` afterward
+    only if you want to re-ingest (a matching hash is already committed,
+    so a plain re-commit is a no-op).
+    """
+    from esdc.corpus.pipeline import run_export
+
+    if not all_docs and not paths:
+        typer.echo(
+            "Nothing to export: pass sidecar path(s) or --all.", err=True
+        )
+        raise typer.Exit(1)
+
+    report = run_export(paths or [], all_docs=all_docs)
+    _print_corpus_report(report)
 
 
 @corpus_app.command()

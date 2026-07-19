@@ -16,7 +16,7 @@ class FakeEmbedder:
         return [self.generate_embedding(t) for t in texts]
 
 
-def test_llm_field_names_returns_twelve_fields_in_order():
+def test_llm_field_names_returns_thirteen_fields_in_order():
     names = doc_schema.llm_field_names()
     assert names == (
         "doc_type",
@@ -30,6 +30,7 @@ def test_llm_field_names_returns_twelve_fields_in_order():
         "wk_name",
         "field_name",
         "project_name",
+        "pod_name",
         "extras",
     )
 
