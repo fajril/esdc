@@ -40,6 +40,16 @@ METADATA_PROMPT_IMAGE = METADATA_PROMPT.split("Document markdown:")[0] + (
 )
 
 
+def metadata_image_prompt(filename: str | None = None) -> str:
+    """First-page-image metadata prompt, optionally prefixed with a filename hint."""
+    if filename:
+        return (
+            f"Filename (may hint doc_type/date/subject): {filename}\n\n"
+            f"{METADATA_PROMPT_IMAGE}"
+        )
+    return METADATA_PROMPT_IMAGE
+
+
 def parse_llm_json(raw: str) -> dict[str, Any]:
     """Parse LLM output into a dict; tolerate code fences and chatter."""
     match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -206,8 +216,18 @@ def normalize_entity_fields(meta: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def llm_extract(markdown: str, llm_caller: Callable[[str], str]) -> dict[str, Any]:
-    """Metadata candidates for the sidecar. llm_caller: prompt -> raw response."""
+def llm_extract(
+    markdown: str,
+    llm_caller: Callable[[str], str],
+    filename: str | None = None,
+) -> dict[str, Any]:
+    """Metadata candidates for the sidecar. llm_caller: prompt -> raw response.
+
+    ``filename`` is an optional hint prepended to the prompt (used by
+    ``corpus rename``); the model still returns the full metadata dict.
+    """
     prompt = METADATA_PROMPT.format(markdown=markdown[:MAX_PROMPT_CHARS])
+    if filename:
+        prompt = f"Filename (may hint doc_type/date/subject): {filename}\n\n{prompt}"
     return normalize_metadata(parse_llm_json(llm_caller(prompt)))
 

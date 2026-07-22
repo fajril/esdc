@@ -160,6 +160,43 @@ def test_llm_extract_uses_caller():
     assert result["doc_level"] == "unknown"  # normalized default
 
 
+def test_llm_extract_includes_filename_hint():
+    from esdc.corpus import metadata
+
+    seen = {}
+
+    def caller(prompt: str) -> str:
+        seen["prompt"] = prompt
+        return "{}"
+
+    metadata.llm_extract("body text", caller, filename="letter-2024.pdf")
+    assert "Filename (may hint doc_type/date/subject): letter-2024.pdf" in seen["prompt"]
+    assert "body text" in seen["prompt"]
+
+
+def test_llm_extract_no_filename_matches_base_prompt():
+    from esdc.corpus import metadata
+
+    seen = {}
+
+    def caller(prompt: str) -> str:
+        seen["prompt"] = prompt
+        return "{}"
+
+    metadata.llm_extract("body text", caller)
+    assert "Filename (may hint" not in seen["prompt"]
+
+
+def test_metadata_image_prompt_with_and_without_filename():
+    from esdc.corpus import metadata
+
+    base = metadata.metadata_image_prompt()
+    assert base == metadata.METADATA_PROMPT_IMAGE
+    hinted = metadata.metadata_image_prompt("scan.pdf")
+    assert hinted.startswith("Filename (may hint doc_type/date/subject): scan.pdf")
+    assert metadata.METADATA_PROMPT_IMAGE in hinted
+
+
 def test_metadata_prompt_image_excludes_markdown_section_includes_keys():
     assert "Document markdown:" not in METADATA_PROMPT_IMAGE
     assert "doc_type" in METADATA_PROMPT_IMAGE
