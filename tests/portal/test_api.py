@@ -3,8 +3,8 @@ from fastapi.testclient import TestClient
 
 import esdc.configs as configs
 from esdc.corpus.store import _SQLITE_DOC_DDL
-from esdc.portal.app import create_portal_app
 from esdc.pod_registry.store import get_sqlite_connection
+from esdc.portal.app import create_portal_app
 
 
 def _patch_dirs(monkeypatch, tmp_path):
@@ -17,7 +17,7 @@ def _patch_dirs(monkeypatch, tmp_path):
 def _seed_documents(doc_ids):
     conn = get_sqlite_connection()
     conn.execute(_SQLITE_DOC_DDL)
-    for i, doc_id in enumerate(doc_ids):
+    for _i, doc_id in enumerate(doc_ids):
         conn.execute(
             "INSERT INTO documents (doc_id, file_name, file_path, file_hash,"
             " markdown, extraction_method, embedding_model)"

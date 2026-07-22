@@ -482,7 +482,6 @@ def test_orphaned_duckdb_rows_cleared_on_reinsert(store, tmp_path):
 
 
 def test_exists_get_list_read_sqlite(store, tmp_path):
-    import sqlite3
 
     store.insert_document(DOC, [Chunk(0, None, "isi")])
     # Mutate the mirror only; reads must reflect sqlite truth, not the mirror.

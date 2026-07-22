@@ -281,7 +281,9 @@ def load(
     """
     modes = sum([schema is not None, schema_pod, pod_registry])
     if modes != 1:
-        typer.echo("Error: specify exactly one of --schema, --schema-pod, or --pod-registry.")
+        typer.echo(
+            "Error: specify exactly one of --schema, --schema-pod, or --pod-registry."
+        )
         raise typer.Exit(1) from None
     try:
         if pod_registry:

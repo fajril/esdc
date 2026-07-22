@@ -2,7 +2,11 @@
 import sqlite3
 
 import esdc.configs as configs
-from esdc.pod_registry.store import get_esdc_sqlite_path, get_sqlite_connection
+from esdc.pod_registry.store import (
+    allocate_pod_id,
+    get_esdc_sqlite_path,
+    get_sqlite_connection,
+)
 
 
 def _patch_dirs(monkeypatch, tmp_path):
@@ -31,7 +35,7 @@ def test_connection_creates_tables_and_enforces_fk(monkeypatch, tmp_path):
         # FK enforced: project_pod row without m_pod parent must fail
         try:
             conn.execute("INSERT INTO project_pod (pod_id, project_id) VALUES (999, 'P-X')")
-            assert False, "expected IntegrityError"
+            raise AssertionError("expected IntegrityError")
         except sqlite3.IntegrityError:
             pass
     finally:
@@ -47,7 +51,7 @@ def test_pod_document_fk_and_unique(monkeypatch, tmp_path):
             conn.execute(
                 "INSERT INTO pod_document (pod_id, doc_id) VALUES (999, 'abc123')"
             )
-            assert False, "expected IntegrityError"
+            raise AssertionError("expected IntegrityError")
         except sqlite3.IntegrityError:
             pass
         conn.execute("INSERT INTO r_institution (code, institution) VALUES (3, 'BP Migas')")
@@ -61,7 +65,7 @@ def test_pod_document_fk_and_unique(monkeypatch, tmp_path):
         # UNIQUE: same pair twice must fail
         try:
             conn.execute("INSERT INTO pod_document (pod_id, doc_id) VALUES (1, 'abc123')")
-            assert False, "expected IntegrityError"
+            raise AssertionError("expected IntegrityError")
         except sqlite3.IntegrityError:
             pass
         # different doc for same pod is fine (many-to-many)
@@ -89,14 +93,11 @@ def test_m_pod_unique_pod_id(monkeypatch, tmp_path):
                 " institution_code, pod_type_code, rev_num, approval_seq)"
                 " VALUES (2, 'PL-2003-0001-3-2-0', 'POD B', NULL, '2003-04-01', 3, 2, 0, 2)"
             )
-            assert False, "expected IntegrityError"
+            raise AssertionError("expected IntegrityError")
         except sqlite3.IntegrityError:
             pass
     finally:
         conn.close()
-
-
-from esdc.pod_registry.store import allocate_pod_id
 
 
 def _seed_refs(conn):

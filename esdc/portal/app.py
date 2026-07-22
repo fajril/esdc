@@ -220,7 +220,9 @@ def create_portal_app() -> FastAPI:
                 results = publish_pod_registry()
         except Exception as exc:  # sqlite state is intact — surface, allow retry
             logger.error("publish failed", exc_info=True)
-            return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+            return JSONResponse(
+                status_code=500, content={"ok": False, "error": str(exc)}
+            )
         return {"ok": True, "tables": {r.table_name: r.row_count for r in results}}
 
     @app.get("/api/projects")

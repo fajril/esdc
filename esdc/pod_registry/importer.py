@@ -133,7 +133,13 @@ def import_pod_registry_workbook(
         seen_pod_ids.add(pod_id)
         seen_seqs.add(seq)
         seen_ids.add(pid)
-        if inst is None or ptype is None or pid is None or seq is None or pod_id is None:
+        if (
+            inst is None
+            or ptype is None
+            or pid is None
+            or seq is None
+            or pod_id is None
+        ):
             continue
         int_pid = _int_cell(pid, "POD Record", i, "pod_id_itb", errors)
         int_seq = _int_cell(seq, "POD Record", i, "approval_seq", errors)

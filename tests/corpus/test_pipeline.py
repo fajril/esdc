@@ -2816,7 +2816,7 @@ def test_export_writes_sidecar_reflecting_db_including_portal_edits(
 
 
 def test_export_round_trip_commit_is_noop(tmp_path, monkeypatch):
-    """export -> commit (no force) must skip as already-committed, DB unchanged."""
+    """Export -> commit (no force) must skip as already-committed, DB unchanged."""
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)

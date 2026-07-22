@@ -11,7 +11,7 @@ def _patch_dirs(monkeypatch, tmp_path):
 def _seed_documents(doc_ids):
     conn = get_sqlite_connection()
     conn.execute(_SQLITE_DOC_DDL)
-    for i, doc_id in enumerate(doc_ids):
+    for _i, doc_id in enumerate(doc_ids):
         conn.execute(
             "INSERT INTO documents (doc_id, file_name, file_path, file_hash,"
             " markdown, extraction_method, embedding_model)"

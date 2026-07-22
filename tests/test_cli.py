@@ -447,6 +447,7 @@ class TestServeCommandCleanup:
 
 def test_portal_command_invokes_run_portal(monkeypatch):
     from typer.testing import CliRunner
+
     from esdc.esdc import app
 
     called = {}
