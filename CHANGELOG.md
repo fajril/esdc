@@ -38,9 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reachability matrix in `knowledge_traversal`** — when `topic` is `transition` or `level`, the tool now auto-appends a compact reachability matrix (Level → Allowed Targets) covering all 18 levels (E0-E8, X0-X6, A1, A2), with the queried entity highlighted. Prevents LLM reasoning errors like claiming E3 can transition to E4. Opt-out via `include_reachability=False`.
 - **OAuth authentication and OpenAI provider support** — device-flow OAuth with local S256 PKCE (no external hash service), HTML-escaped callback error page, refreshed tokens persisted atomically to config with `0o600` permissions, and an `expires_at` calculation fix
 - **CI workflow** — GitHub Actions running `ruff check esdc/ tests/` and the pytest suite on every push/PR
-
-### Added
-
 - **New LLM Providers**: Anthropic (Claude), Google (Gemini), Azure OpenAI, Groq, Ollama Cloud
   - Added `AnthropicProvider` via `langchain-anthropic` (`ChatAnthropic`)
   - Added `GoogleProvider` via `langchain-google-genai` (`ChatGoogleGenerativeAI`)
@@ -57,6 +54,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated CLI `esdc provider add` to accept new provider types
   - Updated Phoenix evals to route Groq and Azure OpenAI through OpenAI-compatible judge LLM
   - Added comprehensive unit tests in `tests/test_new_providers.py`
+- **Cache diagnostics in `esdc status`** — hit rate, size, entries, and invalidation history
+  - SQL Results Cache: entries, size, hits, misses, hit rate (via `diskcache` with `statistics=True`)
+  - Tool Results Cache: same stats for get_schema, list_tables, entity_resolver, etc.
+  - JSON Parsing Cache (RAM): entries, hits, misses, hit rate (in-memory counter)
+  - Last invalidated timestamp recorded when `esdc reload` or `invalidate_sql_cache()` runs
+  - New public functions: `get_sql_cache_stats()`, `get_tool_cache_stats()` in `esdc/chat/tools.py`
+  - New `_record_cache_invalidation()` and `get_last_cache_invalidation()` in `esdc/dbmanager.py`
+  - Color-coded hit rate: green ≥80%, yellow ≥50%, red <50%
+- **Chat TUI overhaul** — complete redesign of chat interface with new panels, status bar, slash commands, and performance improvements
+  - Provider-reported token usage over heuristic
+  - Context health indicator (replaces query history)
+  - Inference liveness in status bar and ticking timeline
+  - Current WIB datetime injected into system prompt
+  - Image links surfacing with ctrl+o open shortcut
+  - /new and /help slash commands
+  - Model reasoning streaming into ThinkingIndicator
+  - SQL, results, and query history moved to right panel
+  - Live tool timeline in right panel
+  - Session/context info consolidated into one-line status bar
+  - Markdown rendering throttled to 10Hz flush
+- **Glossary for non-KSMI commercial terms**
 
 ### Changed
 
@@ -67,7 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Added `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-pro`, `gemini-2.0-flash` to mappings
   - `GroqProvider`: added `llama-4-scout`, `qwen-qwq-32b`, `mistral-saba-24b` to `CONTEXT_LENGTHS`
   - All deprecated/retired models removed from `list_models()` (Claude 3.5 retired Oct 2025, Gemini 2.0 Flash retired Jun 2026)
-
 - **Refactored Configuration Wizard (`esdc configs`)**:
   - Replaced `textual` TUI with `questionary`-based interactive prompts
   - Deleted `esdc/chat/wizard.py` (854 baris) and `esdc/commands/provider.py` (131 baris)
@@ -85,37 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Colorful UI** (Blue Grey palette): key-value distinct, Rich Panel header, questionary Style
   - Removed `esdc chat --setup` — now displays "Run 'esdc configs'" redirect message
   - Added `--show` / `-s` flag to `esdc configs` for non-interactive config display
-
 - Added `langchain-anthropic>=0.3.0`, `langchain-google-genai>=2.0.0`, `langchain-groq>=0.2.0`
 - Added `questionary>=2.0.0`
-
-### Added
-
-- **Cache diagnostics in `esdc status`** — hit rate, size, entries, and invalidation history
-  - SQL Results Cache: entries, size, hits, misses, hit rate (via `diskcache` with `statistics=True`)
-  - Tool Results Cache: same stats for get_schema, list_tables, entity_resolver, etc.
-  - JSON Parsing Cache (RAM): entries, hits, misses, hit rate (in-memory counter)
-  - Last invalidated timestamp recorded when `esdc reload` or `invalidate_sql_cache()` runs
-  - New public functions: `get_sql_cache_stats()`, `get_tool_cache_stats()` in `esdc/chat/tools.py`
-  - New `_record_cache_invalidation()` and `get_last_cache_invalidation()` in `esdc/dbmanager.py`
-  - Color-coded hit rate: green ≥80%, yellow ≥50%, red <50%
-
-### Added
-- **Chat TUI overhaul** — complete redesign of chat interface with new panels, status bar, slash commands, and performance improvements
-  - Provider-reported token usage over heuristic
-  - Context health indicator (replaces query history)
-  - Inference liveness in status bar and ticking timeline
-  - Current WIB datetime injected into system prompt
-  - Image links surfacing with ctrl+o open shortcut
-  - /new and /help slash commands
-  - Model reasoning streaming into ThinkingIndicator
-  - SQL, results, and query history moved to right panel
-  - Live tool timeline in right panel
-  - Session/context info consolidated into one-line status bar
-  - Markdown rendering throttled to 10Hz flush
-- **Glossary for non-KSMI commercial terms**
-
-### Changed
 - Extracted widgets from `app.py` into `widgets.py`
 - Unified TUI streaming on shared `astream_agent_events`
 - Moved `event_streamer` to `esdc/chat` as shared streaming module
@@ -124,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed broken `chat --setup` flag, point hints to `esdc configs`
 
 ### Fixed
+
 - ThinkingIndicator safe for dynamic mid-stream mounting
 - Match real tool display names so SQL/results panels populate
 
