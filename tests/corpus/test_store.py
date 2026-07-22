@@ -582,3 +582,14 @@ def test_fill_blank_entities_empty_sidecar_value_skips(store):
 
 def test_fill_blank_entities_unknown_doc_id_returns_empty(store):
     assert store.fill_blank_entities("nope", {"wk_name": ["X"]}) == []
+
+
+def test_get_document_by_hash_returns_row_then_none(store):
+    store.insert_document(DOC, [Chunk(0, None, "isi")])
+    got = store.get_document_by_hash(DOC["file_hash"])
+    assert got is not None
+    assert got["doc_id"] == "abc123"
+    assert got["file_hash"] == DOC["file_hash"]
+    assert got["doc_date"] == DOC["doc_date"]
+    assert got["subject"] == "Persetujuan"
+    assert store.get_document_by_hash("deadbeef") is None

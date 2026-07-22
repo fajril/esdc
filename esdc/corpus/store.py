@@ -1040,6 +1040,42 @@ class CorpusStore:
         )
         return doc
 
+    def get_document_by_hash(self, file_hash: str) -> dict[str, Any] | None:
+        """Fetch a stored document's full row by file_hash (SQLite truth), or None."""
+        sconn = self._get_sqlite()
+        row = sconn.execute(
+            f"""
+            SELECT doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
+                   doc_number, doc_date, subject, sender, recipient,
+                   doc_level, wk_name, field_name, project_name,
+                   pod_name, suggested_pod_ids,
+                   raw_entities, metadata, markdown, extraction_method,
+                   embedding_model, page_count, ingested_at
+            FROM {self.DOC_TABLE}
+            WHERE file_hash = ?
+            LIMIT 1
+            """,
+            [file_hash],
+        ).fetchone()
+        if row is None:
+            return None
+
+        doc = dict(row)
+        _parse_json_fields(
+            doc,
+            (
+                "doc_topic",
+                "wk_name",
+                "field_name",
+                "project_name",
+                "pod_name",
+                "suggested_pod_ids",
+                "raw_entities",
+                "metadata",
+            ),
+        )
+        return doc
+
     def close(self) -> None:
         """Close the database connections."""
         if self._conn:
