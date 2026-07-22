@@ -1,52 +1,43 @@
-import os
 import re
 
 import pytest
-import typer.testing
 from typer.testing import CliRunner
 
-# CI (e.g. GitHub Actions) may set FORCE_COLOR/CLICOLOR_FORCE, which makes
-# Typer's Rich help emit ANSI color/bold codes even into CliRunner's non-tty
-# buffer. Those codes split flag strings like "--from-excel" and break plain
-# substring assertions. Drop the force-color triggers for the whole test
-# session so help output renders plain, matching local runs.
-os.environ.pop("FORCE_COLOR", None)
-os.environ.pop("CLICOLOR_FORCE", None)
-
-# SGR escape sequences (color/bold). Typer's Rich help emits these when the
-# console is in terminal mode (e.g. on CI), which splits flag strings like
-# "--from-excel" across escape codes and breaks plain substring assertions.
+# SGR escape sequences (color/bold). On CI, Typer's Rich help renders in
+# terminal mode and emits these codes even into CliRunner's non-tty buffer,
+# splitting flag strings like "--from-excel" across escape codes and breaking
+# plain substring assertions (they pass locally where color is off).
 _ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 
-
-class _PlainCliRunner(CliRunner):
-    """Strip ANSI SGR codes from CliRunner output.
-
-    Makes output assertions color-agnostic across local (no color) and CI
-    (color) environments.
-    """
-
-    def invoke(self, *args, **kwargs):
-        result = super().invoke(*args, **kwargs)
-        if result.stdout_bytes:
-            stripped = _ANSI_SGR_RE.sub(
-                "", result.stdout_bytes.decode("utf-8", "replace")
-            )
-            result.stdout_bytes = stripped.encode("utf-8")
-        return result
+# Patch CliRunner.invoke on the class in place so every runner -- the `runner`
+# fixture AND tests that build their own CliRunner() -- yields ANSI-stripped
+# output. All test modules share this one class object via
+# `from typer.testing import CliRunner`, so an in-place method patch reaches
+# them regardless of import order (rebinding the symbol would not).
+_orig_invoke = CliRunner.invoke
 
 
-# Patch the module symbol so tests that instantiate CliRunner() directly
-# (not via the `runner` fixture) also get ANSI-stripped output. conftest is
-# imported before the test modules, so their `from typer.testing import
-# CliRunner` binds to this patched class.
-typer.testing.CliRunner = _PlainCliRunner
+def _invoke_strip_ansi(self, *args, **kwargs):
+    result = _orig_invoke(self, *args, **kwargs)
+    # Result exposes several byte buffers depending on Click version:
+    # stdout_bytes backs `.stdout`, output_bytes backs `.output` (stdout+stderr
+    # combined), stderr_bytes backs `.stderr`. Strip SGR codes from each so
+    # every accessor is color-agnostic.
+    for attr in ("stdout_bytes", "output_bytes", "stderr_bytes"):
+        raw = getattr(result, attr, None)
+        if raw:
+            stripped = _ANSI_SGR_RE.sub("", raw.decode("utf-8", "replace"))
+            setattr(result, attr, stripped.encode("utf-8"))
+    return result
+
+
+CliRunner.invoke = _invoke_strip_ansi
 
 
 @pytest.fixture
 def runner():
     """Create a fresh CliRunner for each test."""
-    return _PlainCliRunner()
+    return CliRunner()
 
 
 @pytest.fixture(autouse=True)
