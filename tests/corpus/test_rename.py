@@ -215,3 +215,43 @@ def test_run_rename_collision_within_batch(tmp_path, monkeypatch):
     assert len(blocked) == 1
     assert "target exists" in blocked[0].note
     assert report.failed
+
+
+from esdc.corpus.sidecar import read_sidecar
+
+
+def test_apply_renames_source_and_sidecar(tmp_path, monkeypatch):
+    _stub_no_llm(monkeypatch)
+    src = tmp_path / "scan.pdf"
+    src.write_bytes(b"%PDF-1.4 dummy")
+    _write_sidecar(src, {
+        "file_hash": "abc", "source_file": "scan.pdf", "doc_type": "letter",
+        "doc_date": "2024-01-15", "subject": "Judul Surat",
+    })
+
+    report, plans = rename_mod.run_rename([tmp_path], apply=True)
+
+    new_src = tmp_path / "letter - 2024.01.15 - Judul Surat.pdf"
+    new_sc = tmp_path / "letter - 2024.01.15 - Judul Surat.corpus.md"
+    assert new_src.exists() and not src.exists()
+    assert new_sc.exists()
+    assert not (tmp_path / "scan.corpus.md").exists()
+    meta, _body = read_sidecar(new_sc)
+    assert meta["source_file"] == "letter - 2024.01.15 - Judul Surat.pdf"
+    assert any("scan.pdf" in p for p in report.processed)
+
+
+def test_apply_leaves_already_named_untouched(tmp_path, monkeypatch):
+    _stub_no_llm(monkeypatch)
+    name = "letter - 2024.01.15 - Judul.pdf"
+    src = tmp_path / name
+    src.write_bytes(b"%PDF-1.4 dummy")
+    _write_sidecar(src, {
+        "file_hash": "abc", "doc_type": "letter",
+        "doc_date": "2024-01-15", "subject": "Judul",
+    })
+
+    report, _plans = rename_mod.run_rename([tmp_path], apply=True)
+    assert src.exists()
+    assert any("already named" in s for s in report.skipped)
+    assert not report.processed

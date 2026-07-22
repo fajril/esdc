@@ -260,5 +260,21 @@ def run_rename(
     return report, plans
 
 
-def _apply_plans(plans, report):  # replaced in Task 5
-    raise NotImplementedError
+def _apply_plans(plans: list[RenamePlan], report: CorpusReport) -> None:
+    """Perform the disk renames for resolved plans; record results in report."""
+    from esdc.corpus.sidecar import write_sidecar_file
+
+    for plan in plans:
+        if plan.new_path is None or plan.note:
+            continue
+        try:
+            plan.src.rename(plan.new_path)
+            if plan.sidecar_src is not None and plan.sidecar_new is not None:
+                meta, body = read_sidecar(plan.sidecar_src)
+                meta["source_file"] = plan.new_path.name
+                write_sidecar_file(plan.sidecar_new, meta, body)
+                if plan.sidecar_src != plan.sidecar_new:
+                    plan.sidecar_src.unlink()
+            report.processed.append(plan.src.name)
+        except OSError as e:
+            report.failed[plan.src.name] = str(e)
