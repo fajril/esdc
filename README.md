@@ -381,6 +381,21 @@ esdc corpus clear --yes              # delete the entire corpus
 esdc corpus reembed                  # rebuild embeddings after an embedding-model change
 ```
 
+### Rename sources to a canonical structure
+
+```bash
+esdc corpus rename <file|folder>...            # preview (dry-run)
+esdc corpus rename <file|folder>... --yes      # apply
+esdc corpus rename report.pdf --doc-type letter --yes
+```
+
+Renames each source (and its `.corpus.md` sidecar, if present) to
+`DOC_TYPE - YYYY.MM.DD - title.<ext>`. The three parts are resolved from an
+existing sidecar, the committed corpus database, or — as a fallback —
+LLM/OCR inference with the filename passed as a hint. `--doc-type` overrides
+the detected type. Dry-run is the default; pass `--yes` to rename on disk.
+Files whose date/type/title cannot be resolved are skipped, not renamed.
+
 ### Remote Ollama
 
 `OLLAMA_HOST` is honored for OCR, so extraction can run against a remote Ollama server (e.g. a GPU host) instead of localhost:
