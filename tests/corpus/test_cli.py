@@ -486,3 +486,63 @@ def test_entity_display_handles_legacy_plain_string():
     assert _entity_display({"field_name": '["Duri"]'}) == "Duri"
     # Nothing set.
     assert _entity_display({}) == ""
+
+
+def test_rename_invalid_doc_type_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "rename", str(tmp_path), "--doc-type", "invoice"]
+    )
+    assert result.exit_code == 1
+    assert "Error: --doc-type must be one of" in result.output
+
+
+def test_rename_dry_run_is_default(tmp_path, monkeypatch):
+    import esdc.corpus.rename as rename_mod
+    from esdc.corpus.pipeline import CorpusReport
+    from esdc.corpus.rename import RenamePlan
+
+    captured = {}
+
+    def fake_run_rename(paths, doc_type=None, apply=False):
+        captured["apply"] = apply
+        plan = RenamePlan(
+            src=tmp_path / "scan.pdf",
+            new_path=tmp_path / "letter - 2024.01.15 - Judul.pdf",
+            doc_type="letter", doc_date="2024.01.15", title="Judul",
+            source="sidecar", sidecar_src=None, sidecar_new=None, note="",
+        )
+        return CorpusReport(), [plan]
+
+    monkeypatch.setattr(rename_mod, "run_rename", fake_run_rename)
+
+    result = runner.invoke(app, ["corpus", "rename", str(tmp_path)])
+    assert result.exit_code == 0
+    assert captured["apply"] is False
+    assert "letter - 2024.01.15 - Judul.pdf" in result.output
+    assert "re-run with --yes" in result.output.lower()
+
+
+def test_rename_yes_applies(tmp_path, monkeypatch):
+    import esdc.corpus.rename as rename_mod
+    from esdc.corpus.pipeline import CorpusReport
+    from esdc.corpus.rename import RenamePlan
+
+    captured = {}
+
+    def fake_run_rename(paths, doc_type=None, apply=False):
+        captured["apply"] = apply
+        report = CorpusReport()
+        report.processed.append("scan.pdf")
+        plan = RenamePlan(
+            src=tmp_path / "scan.pdf",
+            new_path=tmp_path / "letter - 2024.01.15 - Judul.pdf",
+            doc_type="letter", doc_date="2024.01.15", title="Judul",
+            source="sidecar", sidecar_src=None, sidecar_new=None, note="",
+        )
+        return report, [plan]
+
+    monkeypatch.setattr(rename_mod, "run_rename", fake_run_rename)
+
+    result = runner.invoke(app, ["corpus", "rename", str(tmp_path), "--yes"])
+    assert result.exit_code == 0
+    assert captured["apply"] is True

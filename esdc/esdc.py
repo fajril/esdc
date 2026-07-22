@@ -2389,6 +2389,59 @@ def extract(
         typer.echo("Review the .corpus.md files, then run: esdc corpus commit <folder>")
 
 
+@corpus_app.command(name="rename")
+def corpus_rename(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(
+            exists=True, help="Source file(s) (.pdf, .docx, .md) or folder(s)."
+        ),
+    ],
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Override doc_type.")
+    ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Apply the renames (default: dry-run preview)."),
+    ] = False,
+) -> None:
+    """Rename sources to `DOC_TYPE - YYYY.MM.DD - title.<ext>` (dry-run by default).
+
+    Resolves doc_type/doc_date/title from an existing .corpus.md sidecar, the
+    committed corpus DB, or LLM/OCR inference (filename passed as a hint).
+    Renames the matching .corpus.md sidecar in lockstep. Preview only unless
+    --yes is given.
+    """
+    from esdc.corpus.rename import run_rename
+
+    _validate_corpus_overrides(None, doc_type)
+
+    report, plans = run_rename(paths, doc_type=doc_type, apply=yes)
+
+    table = [
+        (
+            p.src.name,
+            "->",
+            p.new_path.name if p.new_path is not None else "",
+            p.doc_type or "",
+            p.doc_date or "",
+            p.title or "",
+            p.source,
+            p.note,
+        )
+        for p in plans
+    ]
+    headers = [
+        "file", "", "new name", "doc_type", "doc_date", "title", "source", "note",
+    ]
+    rich.print(tabulate(table, headers=headers, tablefmt="psql"))
+
+    if not yes:
+        typer.echo("Dry run — re-run with --yes to apply.")
+        return
+    _print_corpus_report(report)
+
+
 @corpus_app.command()
 def commit(
     paths: Annotated[
