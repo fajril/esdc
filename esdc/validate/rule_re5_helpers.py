@@ -264,10 +264,26 @@ def build_groovy_transition_sql(
     previous_level: str,
     groovy_value: bool,
     required_level: str,
+    require_no_production: bool = False,
+    tolerance: float = TOLERANCE,
 ) -> str:
-    """RE5003, RE5005, RE5006: Transition with groovy_isactive condition."""
+    """RE5003, RE5006, RE5013: Transition with groovy_isactive condition.
+
+    RE5003/RE5006 spec also requires ``q = 0`` (no production in current
+    period) as part of the antecedent. The spec expresses ``q`` as the
+    period production, which is equivalently computed as the increment of
+    cumulative ``cprd_sls_*`` columns: ``cprd_sls_curr - cprd_sls_prev``.
+    Computing it from the cumulative columns is more robust than trusting
+    a separate rate column from the API.
+
+    When ``require_no_production=True`` (RE5003, RE5006), the SQL self-joins
+    ``project_resources`` to previous year and adds a HAVING check that
+    ``ABS(SUM(curr sales) - SUM(prev sales)) <= tolerance``.
+
+    When ``require_no_production=False`` (RE5013 default), the SQL is a
+    single-table query as before.
+    """
     groovy_int = 1 if groovy_value else 0
-    ident = ", ".join(IDENTIFIER_COLS)
     pl_val = (
         previous_level.value
         if isinstance(previous_level, ProjectLevel)
@@ -278,6 +294,24 @@ def build_groovy_transition_sql(
         if isinstance(required_level, ProjectLevel)
         else required_level
     )
+    if require_no_production:
+        ident_curr = ", ".join(f"curr.{c}" for c in IDENTIFIER_COLS)
+        sales_prev = " + ".join(f"COALESCE(prev.{c}, 0)" for c in SALES_COLUMNS)
+        sales_curr = " + ".join(f"COALESCE(curr.{c}, 0)" for c in SALES_COLUMNS)
+        return (
+            f"SELECT DISTINCT ON (curr.project_id, curr.report_year) {ident_curr},"
+            f" curr.project_level AS val_ref, curr.groovy_isactive AS val_cmp"
+            f" FROM project_resources curr"
+            f" JOIN project_resources prev"
+            f" ON curr.project_id = prev.project_id"
+            f" AND curr.report_year = prev.report_year + 1"
+            f" AND prev.uncert_level = curr.uncert_level"
+            f" WHERE curr.project_level_previous = '{pl_val}'"
+            f" AND curr.groovy_isactive = {groovy_int}"
+            f" AND curr.project_level != '{req_val}'"
+            f" AND ABS(({sales_curr}) - ({sales_prev})) <= {tolerance}"
+        )
+    ident = ", ".join(IDENTIFIER_COLS)
     return (
         f"SELECT DISTINCT ON (project_id, report_year) {ident},"
         f" project_level AS val_ref, groovy_isactive AS val_cmp"
@@ -619,7 +653,7 @@ def _extract_year_sql(column: str = "onstream_actual") -> str:
 
 
 def build_onstream_before_report_year_sql() -> str:
-    """RE5067: onstream_actual < report_year."""
+    """RE5067: onstream_actual <= report_year."""
     ident = ", ".join(IDENTIFIER_COLS)
     year_expr = _extract_year_sql()
     return (
@@ -629,7 +663,7 @@ def build_onstream_before_report_year_sql() -> str:
         f" WHERE onstream_actual IS NOT NULL"
         f" AND onstream_actual != ''"
         f" AND {year_expr} IS NOT NULL"
-        f" AND {year_expr} >= report_year"
+        f" AND {year_expr} > report_year"
     )
 
 
@@ -637,22 +671,31 @@ def build_level_implies_sales_positive_sql(
     levels: Sequence[str],
     tolerance: float = TOLERANCE,
 ) -> str:
-    """RE5052: Level in {E0,E1,E4,E7} → production increment > 0."""
-    ident = ", ".join(f"curr.{c}" for c in IDENTIFIER_COLS)
+    """RE5052: Level in {E0,E1,E4,E7} → cumulative sales > 0.
+
+    Per spec, ``cprd_sls_*`` are cumulative sales columns. The rule fires
+    when a project's level is in the disallowed set AND the total of all
+    four cumulative sales columns is zero (within tolerance). No self-join
+    is needed: cumulative values are lifetime-to-date and live on a single
+    row.
+
+    DuckDB requires all non-id columns to be aggregated when using
+    GROUP BY, so we wrap each sales value in ``MIN()`` (the cumulative
+    value is the same across the duplicated (project_id, report_year)
+    rows from different ``project_class`` / ``uncert_level`` entries) and
+    the level / name fields in ``ANY_VALUE()``.
+    """
+    sales_min = " + ".join(f"MIN(COALESCE({c}, 0))" for c in SALES_COLUMNS)
+    ident_any = ", ".join(f"ANY_VALUE({c})" for c in IDENTIFIER_COLS)
     level_list = _pl_list(levels)
-    sales_prev = " + ".join(f"COALESCE(prev.{c}, 0)" for c in SALES_COLUMNS)
-    sales_curr = " + ".join(f"COALESCE(curr.{c}, 0)" for c in SALES_COLUMNS)
     return (
-        f"SELECT DISTINCT ON (curr.project_id, curr.report_year) {ident},"
-        f" curr.project_level AS val_ref,"
-        f" ({sales_curr}) - ({sales_prev}) AS val_cmp"
-        f" FROM project_resources curr"
-        f" JOIN project_resources prev"
-        f" ON curr.project_id = prev.project_id"
-        f" AND curr.report_year = prev.report_year + 1"
-        f" AND prev.uncert_level = curr.uncert_level"
-        f" WHERE curr.project_level IN ({level_list})"
-        f" AND ({sales_curr}) - ({sales_prev}) <= {tolerance}"
+        f"SELECT {ident_any},"
+        f" ANY_VALUE(project_level) AS val_ref,"
+        f" ({sales_min}) AS val_cmp"
+        f" FROM project_resources"
+        f" WHERE project_level IN ({level_list})"
+        f" GROUP BY project_id, report_year"
+        f" HAVING ({sales_min}) <= {tolerance}"
     )
 
 
@@ -660,20 +703,27 @@ def build_sales_implies_level_set_sql(
     allowed_levels: Sequence[str],
     tolerance: float = TOLERANCE,
 ) -> str:
-    """RE5041: If any sales > 0, level must be in allowed set."""
-    ident = ", ".join(f"curr.{c}" for c in IDENTIFIER_COLS)
+    """RE5041: If any cumulative sales > 0, level must be in allowed set.
+
+    Per spec, ``cprd_sls_*`` are cumulative sales columns. The rule fires
+    when the total of all four cumulative sales columns exceeds the tolerance
+    AND the project level is NOT in the allowed set. No self-join is needed:
+    cumulative values are lifetime-to-date and live on a single row.
+
+    DuckDB requires all non-id columns to be aggregated when using
+    GROUP BY, so we wrap each sales value in ``MIN()`` and the level /
+    name fields in ``ANY_VALUE()`` (see ``build_level_implies_sales_positive_sql``
+    for rationale).
+    """
+    sales_min = " + ".join(f"MIN(COALESCE({c}, 0))" for c in SALES_COLUMNS)
+    ident_any = ", ".join(f"ANY_VALUE({c})" for c in IDENTIFIER_COLS)
     allowed = _pl_list(allowed_levels)
-    sales_prev = " + ".join(f"COALESCE(prev.{c}, 0)" for c in SALES_COLUMNS)
-    sales_curr = " + ".join(f"COALESCE(curr.{c}, 0)" for c in SALES_COLUMNS)
     return (
-        f"SELECT DISTINCT ON (curr.project_id, curr.report_year) {ident},"
-        f" curr.project_level AS val_ref,"
-        f" ({sales_curr}) - ({sales_prev}) AS val_cmp"
-        f" FROM project_resources curr"
-        f" JOIN project_resources prev"
-        f" ON curr.project_id = prev.project_id"
-        f" AND curr.report_year = prev.report_year + 1"
-        f" AND prev.uncert_level = curr.uncert_level"
-        f" WHERE ({sales_curr}) - ({sales_prev}) > {tolerance}"
-        f" AND curr.project_level NOT IN ({allowed})"
+        f"SELECT {ident_any},"
+        f" ANY_VALUE(project_level) AS val_ref,"
+        f" ({sales_min}) AS val_cmp"
+        f" FROM project_resources"
+        f" WHERE project_level NOT IN ({allowed})"
+        f" GROUP BY project_id, report_year"
+        f" HAVING ({sales_min}) > {tolerance}"
     )

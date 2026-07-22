@@ -34,11 +34,11 @@ from esdc.chat.agent import (
     generate_conversation_tags,
     generate_conversation_title,
 )
+from esdc.chat.event_streamer import astream_agent_events
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
 from esdc.server.constants import SSE_STREAM_TIMEOUT
-from esdc.server.event_streamer import astream_agent_events
 from esdc.server.title_detection import (
     create_ancillary_chat_response,
     create_ancillary_chat_stream_chunks,
@@ -79,6 +79,8 @@ def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
             role = msg.get("role", "")
             content = msg.get("content", "") or ""
             output = msg.get("output")
+            reasoning_content = msg.get("reasoning_content")
+            tool_calls = msg.get("tool_calls")
 
             if role == "assistant" and output and isinstance(output, list):
                 lc_messages.extend(_convert_output_to_langchain_messages(output))
@@ -87,7 +89,18 @@ def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
             elif role == "user":
                 lc_messages.append(HumanMessage(content=content))
             elif role == "assistant":
-                lc_messages.append(AIMessage(content=content))
+                native_tool_calls = (
+                    _convert_native_tool_calls(tool_calls)
+                    if isinstance(tool_calls, list)
+                    else None
+                )
+                lc_messages.append(
+                    _make_ai_message(
+                        content=content,
+                        reasoning_content=reasoning_content,
+                        tool_calls=native_tool_calls,
+                    )
+                )
             elif role == "tool":
                 tool_call_id = msg.get("tool_call_id", "")
                 lc_messages.append(
@@ -95,9 +108,11 @@ def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
                 )
 
         else:
-            role = getattr(msg, "role", "")
-            content = getattr(msg, "content", "") or ""
-            output = getattr(msg, "output", None)
+            role = _get_message_value(msg, "role", "")
+            content = _get_message_value(msg, "content", "") or ""
+            output = _get_message_value(msg, "output", None)
+            reasoning_content = _get_message_value(msg, "reasoning_content")
+            tool_calls = _get_message_value(msg, "tool_calls")
 
             if role == "assistant" and output and isinstance(output, list):
                 lc_messages.extend(_convert_output_to_langchain_messages(output))
@@ -106,14 +121,75 @@ def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
             elif role == "user":
                 lc_messages.append(HumanMessage(content=content))
             elif role == "assistant":
-                lc_messages.append(AIMessage(content=content))
+                native_tool_calls = (
+                    _convert_native_tool_calls(tool_calls)
+                    if isinstance(tool_calls, list)
+                    else None
+                )
+                lc_messages.append(
+                    _make_ai_message(
+                        content=content,
+                        reasoning_content=reasoning_content,
+                        tool_calls=native_tool_calls,
+                    )
+                )
             elif role == "tool":
-                tool_call_id = getattr(msg, "tool_call_id", "")
+                tool_call_id = _get_message_value(msg, "tool_call_id", "")
                 lc_messages.append(
                     ToolMessage(content=content, tool_call_id=tool_call_id)
                 )
 
     return lc_messages
+
+
+def _get_message_value(msg: Any, key: str, default: Any = None) -> Any:
+    """Read a field from either a dict message or Pydantic-like object."""
+    if isinstance(msg, dict):
+        return msg.get(key, default)
+    return getattr(msg, key, default)
+
+
+def _make_ai_message(
+    content: str = "",
+    reasoning_content: str | None = None,
+    tool_calls: list[dict[str, Any]] | None = None,
+) -> AIMessage:
+    """Create an AIMessage while preserving provider-specific reasoning."""
+    kwargs: dict[str, Any] = {"content": content}
+    if reasoning_content:
+        kwargs["additional_kwargs"] = {"reasoning_content": reasoning_content}
+    if tool_calls:
+        kwargs["tool_calls"] = tool_calls
+    return AIMessage(**kwargs)
+
+
+def _convert_native_tool_calls(tool_calls: list[Any]) -> list[dict[str, Any]]:
+    """Convert OpenAI native tool_calls into LangChain tool call dictionaries."""
+    converted: list[dict[str, Any]] = []
+    for tool_call in tool_calls:
+        if isinstance(tool_call, dict):
+            call_id = tool_call.get("id", "")
+            function = tool_call.get("function", {}) or {}
+        else:
+            call_id = getattr(tool_call, "id", "")
+            function = getattr(tool_call, "function", {}) or {}
+
+        if isinstance(function, dict):
+            name = function.get("name", "")
+            args_str = function.get("arguments", "{}")
+        else:
+            name = getattr(function, "name", "")
+            args_str = getattr(function, "arguments", "{}")
+
+        converted.append(
+            {
+                "name": name,
+                "args": get_parsed_json(args_str),
+                "id": call_id,
+            }
+        )
+
+    return converted
 
 
 def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
@@ -151,9 +227,10 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
                     text_parts_str.append(part)
 
             text = "\n".join(text_parts_str) if text_parts_str else ""
+            reasoning_content = item.get("reasoning_content")
 
             if role == "assistant":
-                lc_messages.append(AIMessage(content=text))
+                lc_messages.append(_make_ai_message(text, reasoning_content))
             elif role == "user":
                 lc_messages.append(HumanMessage(content=text))
             elif role == "system":
@@ -163,12 +240,14 @@ def _convert_output_to_langchain_messages(output: list[Any]) -> list[Any]:
             call_id = item.get("call_id", "")
             name = item.get("name", "")
             args_str = item.get("arguments", "{}")
+            reasoning_content = item.get("reasoning_content")
 
             args = get_parsed_json(args_str)
 
             lc_messages.append(
-                AIMessage(
+                _make_ai_message(
                     content="",
+                    reasoning_content=reasoning_content,
                     tool_calls=[{"name": name, "args": args, "id": call_id}],
                 )
             )
@@ -273,7 +352,7 @@ def create_reasoning_chunk(
 async def generate_streaming_response(
     messages: list,
     model: str = "iris",
-    temperature: float = 0.7,
+    temperature: float | None = None,
     request_id: str | None = None,
     reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
@@ -321,6 +400,7 @@ async def generate_streaming_response(
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
             "reasoning_effort": "none",
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
         llm = create_llm_from_config(provider_config_obj)
 
@@ -381,7 +461,11 @@ async def generate_streaming_response(
             "model": provider_model,
             "base_url": base_url,
             "api_key": api_key,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": reasoning_effort
+            if reasoning_effort is not None
+            else provider_config.get("reasoning_effort"),
+            "temperature": temperature,
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
 
         llm = create_llm_from_config(provider_config_obj)
@@ -532,7 +616,7 @@ async def generate_streaming_response(
 async def generate_response(
     messages: list,
     model: str = "iris",
-    temperature: float = 0.7,
+    temperature: float | None = None,
     use_native_format: bool = True,
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
@@ -575,6 +659,7 @@ async def generate_response(
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
             "reasoning_effort": "none",
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
         llm = create_llm_from_config(provider_config_obj)
 
@@ -625,7 +710,11 @@ async def generate_response(
             "model": provider_model,
             "base_url": base_url,
             "api_key": api_key,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": reasoning_effort
+            if reasoning_effort is not None
+            else provider_config.get("reasoning_effort"),
+            "temperature": temperature,
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
 
         llm = create_llm_from_config(provider_config_obj)

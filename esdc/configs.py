@@ -1,9 +1,14 @@
+import contextlib
+import logging
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 # Sensitive key suffixes to mask in the config UI.
 SENSITIVE_KEYS = frozenset({"api_key"})
@@ -19,9 +24,10 @@ ENUM_CHOICES: dict[str, list[str]] = {
 KEY_DESCRIPTIONS: dict[str, str] = {
     "api_url": "Base URL for the ESDC API",
     "api.verify_ssl": "Verify SSL certificates for API requests",
-    "database_path": "Path to the SQLite database file",
+    "database_path": "Path to the DuckDB database file",
     "tool_format": "Format for tool results (native, markdown, or auto)",
     "default_provider": "Default LLM provider name",
+    "provider_order": "Ordered LLM provider failover list",
     "cache.sql_ttl": "SQL cache time-to-live in seconds",
     "logging.level": "Global logging level",
     "logging.file.enabled": "Enable logging to file",
@@ -32,6 +38,36 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "logging.agent.level": "Log level for the agent component",
     "logging.chat.level": "Log level for the chat component",
     "semantic_search.embedding_batch_size": ("Number of embeddings per batch (10-500)"),
+    "embedding_host": "Ollama host URL for embeddings (default: localhost)",
+    "corpus.ocr_model": "Ollama vision model used for OCR of scanned pages",
+    "corpus.metadata_model": (
+        "Text LLM for metadata pre-fill at extract time ('main' = default "
+        "chat provider [default], 'provider:<name>' = a configured provider, "
+        "an Ollama model name to override, or '' = image-based prefill via "
+        "ocr_model)"
+    ),
+    "corpus.cleanup_model": (
+        "LLM for formatting cleanup of native-extracted pages at extract "
+        "time ('main' = default chat provider [default], 'provider:<name>' "
+        "= a configured provider, an Ollama model name to override, or "
+        "'' = off); guarded — original text kept if the model invents "
+        "numbers or changes length grossly"
+    ),
+    "corpus.ollama_host": (
+        "Ollama server URL for corpus OCR and Ollama-named corpus models "
+        "('' = local daemon, e.g. http://gpu-box:11434 for a remote server)"
+    ),
+    "corpus.chunk_size": "Max characters per corpus chunk",
+    "corpus.chunk_overlap": "Characters carried over between corpus chunks",
+    "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
+    "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
+    "corpus.min_chars_per_page": (
+        "Text-layer character threshold below which a page counts as scanned"
+    ),
+    "corpus.min_image_area": (
+        "Minimum embedded-image size (fraction of page area) that gets OCR'd "
+        "on native-text pages; smaller images (logos, signatures) are ignored"
+    ),
 }
 
 
@@ -43,6 +79,8 @@ class Config:
     """ESDC application configuration manager."""
 
     APP_NAME: str = "esdc"
+    DB_FILENAME: str = "esdc.duckdb"
+    LEGACY_DB_FILENAME: str = "esdc.db"
     BASE_API_URL_V2: str = "https://esdc.skkmigas.go.id/"
     _config_cache: dict[str, Any] | None = None
 
@@ -65,6 +103,37 @@ class Config:
         return cls.get_config_dir() / "config.yaml"
 
     @classmethod
+    def _default_db_file(cls) -> Path:
+        """Return the default DuckDB file path."""
+        return cls.get_config_dir() / cls.DB_FILENAME
+
+    @classmethod
+    def _legacy_default_db_file(cls) -> Path:
+        """Return the pre-rename default database file path."""
+        return cls.get_config_dir() / cls.LEGACY_DB_FILENAME
+
+    @classmethod
+    def _migrate_legacy_default_db_file(cls, *, update_config: bool) -> Path:
+        """Rename the old default database file to the new default path once."""
+        default_db_file = cls._default_db_file()
+        legacy_db_file = cls._legacy_default_db_file()
+
+        if not default_db_file.exists() and legacy_db_file.exists():
+            legacy_db_file.rename(default_db_file)
+
+        if update_config:
+            config = cls._load_config() or {}
+            configured_path = config.get("database_path")
+            if (
+                configured_path
+                and Path(configured_path).expanduser() == legacy_db_file
+            ):
+                config["database_path"] = str(default_db_file)
+                cls._save_config(config)
+
+        return default_db_file
+
+    @classmethod
     def _load_config(cls) -> dict[str, Any] | None:
         """Load config from YAML file (cached)."""
         if cls._config_cache is not None:
@@ -74,9 +143,28 @@ class Config:
         if config_file.exists():
             with open(config_file) as f:
                 cls._config_cache = yaml.safe_load(f) or {}
+                cls._normalize_database_config()
                 return cls._config_cache
         cls._config_cache = {}
         return None
+
+    @classmethod
+    def _normalize_database_config(cls) -> None:
+        """Keep legacy chat database.path compatible with database_path."""
+        config = cls._config_cache
+        if not config or "database_path" in config:
+            return
+
+        database_config = config.get("database")
+        if not isinstance(database_config, dict):
+            return
+
+        db_path = database_config.get("path")
+        if not db_path:
+            return
+
+        config["database_path"] = db_path
+        cls._save_config(config)
 
     @classmethod
     def init_config(cls) -> None:
@@ -91,7 +179,7 @@ class Config:
             default_config = {
                 "api_url": cls.BASE_API_URL_V2,
                 "api": {"verify_ssl": True},
-                "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
+                "database_path": str(cls._default_db_file()),
                 "tool_format": "native",  # native, markdown, or auto
                 "cache": {"sql_ttl": 604800},
                 "logging": {
@@ -109,6 +197,7 @@ class Config:
                 "semantic_search": {
                     "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)  # noqa: E501
                 },
+                "corpus": dict(cls.CORPUS_DEFAULTS),
                 "phoenix": {
                     "enabled": False,
                     "collector_endpoint": "http://localhost:4317",
@@ -215,7 +304,7 @@ class Config:
         Priority:
         1. ESDC_DB_FILE environment variable (full file path)
         2. config.yaml database_path
-        3. ~/.esdc/esdc.db (default)
+        3. ~/.esdc/esdc.duckdb (default)
         """
         env_file = os.environ.get("ESDC_DB_FILE")
         if env_file:
@@ -223,9 +312,12 @@ class Config:
 
         config = cls._load_config()
         if config and "database_path" in config:
-            return Path(config["database_path"]).expanduser()
+            db_path = Path(config["database_path"]).expanduser()
+            if db_path == cls._legacy_default_db_file():
+                return cls._migrate_legacy_default_db_file(update_config=True)
+            return db_path
 
-        return cls.get_config_dir() / f"{cls.APP_NAME}.db"
+        return cls._migrate_legacy_default_db_file(update_config=False)
 
     @classmethod
     def get_db_path(cls) -> Path:
@@ -275,24 +367,91 @@ class Config:
         """Set the default provider."""
         config = cls._load_config() or {}
         config["default_provider"] = name
+        provider_order = config.get("provider_order")
+        if isinstance(provider_order, list):
+            remaining = [p for p in provider_order if p != name]
+            config["provider_order"] = [name] + remaining
         cls._save_config(config)
 
     @classmethod
     def get_provider_config(cls) -> dict[str, Any] | None:
         """Get provider configuration from config file.
 
-        Returns the config for the default provider.
+        Returns the config for the default provider. If ``provider_order`` is
+        configured, fallback provider configs are attached under
+        ``fallback_configs`` for downstream LLM creation.
         """
+        configs = cls.get_provider_configs_by_priority()
+        if not configs:
+            return None
+
+        primary = dict(configs[0])
+        fallbacks = configs[1:]
+        if fallbacks:
+            primary["fallback_configs"] = fallbacks
+        return primary
+
+    @classmethod
+    def get_provider_order(cls) -> list[str]:
+        """Return provider names in failover priority order."""
         config = cls._load_config()
         if not config:
-            return None
+            return []
 
         default_provider = config.get("default_provider")
-        if not default_provider:
-            return None
+        configured_order = config.get("provider_order", [])
+        providers = config.get("providers", {})
+
+        ordered: list[str] = []
+        if default_provider and default_provider in providers:
+            ordered.append(default_provider)
+
+        if isinstance(configured_order, list):
+            for provider_name in configured_order:
+                if (
+                    isinstance(provider_name, str)
+                    and provider_name in providers
+                    and provider_name not in ordered
+                ):
+                    ordered.append(provider_name)
+
+        return ordered
+
+    @classmethod
+    def set_provider_order(cls, provider_names: list[str]) -> None:
+        """Set ordered provider failover list."""
+        config = cls._load_config() or {}
+        providers = config.get("providers", {})
+        unknown = [name for name in provider_names if name not in providers]
+        if unknown:
+            raise ValueError(f"Unknown provider(s): {', '.join(unknown)}")
+
+        deduped = list(dict.fromkeys(provider_names))
+        config["provider_order"] = deduped
+        if deduped:
+            config["default_provider"] = deduped[0]
+        cls._save_config(config)
+
+    @classmethod
+    def get_provider_configs_by_priority(cls) -> list[dict[str, Any]]:
+        """Return provider configs ordered for failover."""
+        config = cls._load_config()
+        if not config:
+            return []
 
         providers = config.get("providers", {})
-        return providers.get(default_provider)
+        ordered_names = cls.get_provider_order()
+        configs: list[dict[str, Any]] = []
+        for name in ordered_names:
+            provider_config = providers.get(name)
+            if not isinstance(provider_config, dict):
+                continue
+            cfg = dict(provider_config)
+            cfg.setdefault("name", name)
+            cfg.setdefault("provider_type", cfg.get("type") or name)
+            configs.append(cfg)
+
+        return configs
 
     @classmethod
     def get_default_provider(cls) -> str:
@@ -433,7 +592,7 @@ class Config:
         db_config = config.get("database", {})
         if db_path := db_config.get("path"):
             return Path(db_path).expanduser().resolve()
-        return (cls.get_db_dir() / f"{cls.APP_NAME}.db").resolve()
+        return cls.get_db_file().resolve()
 
     @classmethod
     def set_chat_db_path(cls, path: Path) -> None:
@@ -500,6 +659,82 @@ class Config:
         cls._save_config(config)
 
     @classmethod
+    def persist_provider_oauth(cls, provider_name: str, oauth: dict[str, Any]) -> None:
+        """Persist refreshed OAuth tokens for one provider back to disk.
+
+        OAuth providers may rotate the refresh_token on every refresh. The
+        in-memory ``ProviderConfig.oauth`` dict is updated by the caller
+        immediately after a refresh, but that update is lost on process
+        restart unless it is also written to the config file. This method
+        performs that write.
+
+        Only the named provider's ``oauth`` section is modified; every other
+        key (including other providers) is left untouched. The config file
+        is read fresh from disk (bypassing the in-memory cache) and written
+        back atomically via a temp file + ``os.replace``, with permissions
+        restricted to the owner (0o600) since it may contain access and
+        refresh tokens.
+
+        If the provider is not present in the on-disk config (e.g. it was
+        configured purely via environment variables) or the config file does
+        not exist, this logs a warning and returns without error. Callers
+        should treat persistence failures as non-fatal: refreshing the token
+        in memory must still succeed even if the write to disk fails.
+
+        Args:
+            provider_name: Name of the provider to update (matches
+                ``ProviderConfig.name``).
+            oauth: The refreshed OAuth token dict to store for the provider.
+        """
+        config_file = cls.get_config_file()
+        if not config_file.exists():
+            logger.warning(
+                "Skipping OAuth token persistence for provider '%s': "
+                "config file %s does not exist",
+                provider_name,
+                config_file,
+            )
+            return
+
+        with open(config_file) as f:
+            config = yaml.safe_load(f) or {}
+
+        providers = config.get("providers")
+        if not isinstance(providers, dict) or provider_name not in providers:
+            logger.warning(
+                "Skipping OAuth token persistence: provider '%s' not found "
+                "in config file %s",
+                provider_name,
+                config_file,
+            )
+            return
+
+        provider_entry = providers[provider_name]
+        if not isinstance(provider_entry, dict):
+            provider_entry = {}
+            providers[provider_name] = provider_entry
+        provider_entry["oauth"] = oauth
+
+        config_dir = cls.get_config_dir()
+        fd, tmp_name = tempfile.mkstemp(
+            dir=config_dir, prefix=".config-", suffix=".yaml.tmp"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                yaml.dump(config, f, default_flow_style=False)
+            os.chmod(tmp_name, 0o600)
+            os.replace(tmp_name, config_file)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_name)
+            raise
+
+        # Invalidate rather than assign: _load_config applies
+        # _normalize_database_config() on load, which raw file content
+        # would bypass.
+        cls._config_cache = None
+
+    @classmethod
     def get_verify_ssl(cls) -> bool:
         """Get SSL certificate verification setting.
 
@@ -551,6 +786,60 @@ class Config:
         config = cls._load_config() or {}
         semantic_config = config.get("semantic_search", {})
         return semantic_config.get("embedding_batch_size", 100)
+
+    @classmethod
+    def get_embedding_host(cls) -> str | None:
+        """Get embedding service host URL from config.
+
+        Priority:
+        1. ESDC_EMBEDDING_HOST environment variable
+        2. config.yaml: embedding_host
+        3. None (uses localhost Ollama default)
+
+        Returns:
+            Host URL string or None for localhost default
+        """
+        env_host = os.environ.get("ESDC_EMBEDDING_HOST")
+        if env_host:
+            return env_host
+
+        config = cls._load_config() or {}
+        return config.get("embedding_host") or None
+
+    CORPUS_DEFAULTS = {
+        "chunk_size": 3000,  # max chars per chunk (~750 tokens)
+        "chunk_overlap": 300,  # chars carried over between chunks
+        "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
+        # metadata_model: text LLM for metadata extraction; "main" = default
+        # chat provider, "" = use ocr_model on the rendered first page
+        "metadata_model": "main",
+        # cleanup_model: reformats native-extracted pages before review;
+        # "main" = default chat provider, "" = off
+        "cleanup_model": "main",
+        "ocr_dpi": 200,  # page render resolution; raise to 300 if OCR quality poor
+        "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
+        "min_chars_per_page": 50,  # text-layer chars below which a page counts as scanned  # noqa: E501
+        "min_image_area": 0.05,  # embedded-image area (fraction of page) below which images are ignored  # noqa: E501
+        # ollama_host: Ollama server for corpus OCR + Ollama-named text
+        # models; "" = local daemon (http://127.0.0.1:11434)
+        "ollama_host": "",
+    }
+
+    @classmethod
+    def get_corpus_config(cls) -> dict[str, Any]:
+        """Get corpus ingestion settings merged over defaults.
+
+        Priority:
+        1. config.yaml: corpus.* section
+        2. CORPUS_DEFAULTS
+
+        No environment variable layer and no value validation by design;
+        consumers validate the values they use.
+        """
+        merged = dict(cls.CORPUS_DEFAULTS)
+        config = cls._load_config()
+        merged.update((config or {}).get("corpus", {}))
+        return merged
 
     @classmethod
     def get_phoenix_config(cls) -> dict[str, Any]:
@@ -675,7 +964,7 @@ class Config:
         return {
             "api_url": cls.BASE_API_URL_V2,
             "api": {"verify_ssl": True},
-            "database_path": str(config_dir / f"{cls.APP_NAME}.db"),
+            "database_path": str(config_dir / cls.DB_FILENAME),
             "tool_format": "native",
             "cache": {"sql_ttl": 604800},
             "logging": {
@@ -693,6 +982,8 @@ class Config:
             "semantic_search": {
                 "embedding_batch_size": 100,
             },
+            "embedding_host": None,
+            "corpus": dict(cls.CORPUS_DEFAULTS),
         }
 
     @classmethod

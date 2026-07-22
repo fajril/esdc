@@ -24,7 +24,7 @@ class TestGetOpenterminalTools:
             assert result is None
 
     def test_returns_tools_when_configured(self):
-        """Should return Compute Engine and Code Interpreter when configured."""
+        """Should return Shell Executor and Code Interpreter when configured."""
         mock_config = {
             "url": "http://open-terminal:8000",
             "api_key": "test-key",
@@ -44,7 +44,7 @@ class TestGetOpenterminalTools:
             assert result is not None
             assert len(result) == 2
             tool_names = {t.name for t in result}
-            assert tool_names == {"Compute Engine", "Code Interpreter"}
+            assert tool_names == {"Shell Executor", "Code Interpreter"}
 
     def test_updates_run_command_description_with_packages(self):
         """run_command description should include the configured packages."""
@@ -65,7 +65,7 @@ class TestGetOpenterminalTools:
             result = get_openterminal_tools()
 
             assert result is not None
-            run_cmd = [t for t in result if t.name == "Compute Engine"][0]
+            run_cmd = [t for t in result if t.name == "Shell Executor"][0]
             assert "matplotlib, seaborn, pandas" in run_cmd.description
 
     def test_uses_default_packages_when_not_specified(self):
@@ -87,14 +87,14 @@ class TestGetOpenterminalTools:
             result = get_openterminal_tools()
 
             assert result is not None
-            run_cmd = [t for t in result if t.name == "Compute Engine"][0]
+            run_cmd = [t for t in result if t.name == "Shell Executor"][0]
             assert "matplotlib" in run_cmd.description
             assert "seaborn" in run_cmd.description
             assert "scikit-learn" in run_cmd.description
 
     def test_tool_display_names(self):
         """Tools should have branded display names."""
-        assert run_command.name == "Compute Engine"
+        assert run_command.name == "Shell Executor"
         assert run_python.name == "Code Interpreter"
 
 
@@ -208,7 +208,7 @@ class TestRunCommandTool:
 
     @pytest.mark.asyncio
     async def test_connection_error(self):
-        """Should return error when Compute Engine is unreachable."""
+        """Should return error when Shell Executor is unreachable."""
         import httpx
 
         with patch("esdc.chat.openterminal.httpx.AsyncClient") as mock_client:
@@ -221,7 +221,7 @@ class TestRunCommandTool:
             )
 
             result = await run_command.ainvoke({"command": "echo hello"})
-            assert "Cannot connect to Compute Engine" in result
+            assert "Cannot connect to Shell Executor" in result
 
     @pytest.mark.asyncio
     async def test_timeout_error(self):

@@ -1,0 +1,488 @@
+"""CLI-level UX tests for `esdc corpus` — validation and error paths only.
+
+Pipeline behavior is covered in test_pipeline.py; these tests pin the
+thin-CLI contract: bad flags and pipeline ValueErrors exit 1 with a
+clean "Error:" line instead of a traceback.
+"""
+
+from typer.testing import CliRunner
+
+import esdc.esdc as esdc_cli
+from esdc.esdc import app
+
+runner = CliRunner()
+
+
+def test_commit_rejects_override_flags(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "commit", str(tmp_path), "--wk-name", "Rokan"]
+    )
+    assert result.exit_code == 2
+    assert "no such option" in result.output.lower()
+
+
+def test_extract_invalid_level_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--level", "galaxy"]
+    )
+    assert result.exit_code == 1
+    assert (
+        "Error: --level must be one of wk, field, project, regulation."
+        in result.output
+    )
+
+
+def test_extract_invalid_doc_type_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--doc-type", "invoice"]
+    )
+    assert result.exit_code == 1
+    assert "Error: --doc-type must be one of" in result.output
+
+
+def test_extract_invalid_topic_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--topic", "bogus"]
+    )
+    assert result.exit_code == 1
+    assert "Error: --topic must be one of" in result.output
+
+
+def test_extract_passes_topic_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_extract(paths, **kwargs):
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_extract", fake_run_extract)
+
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--topic", "wpnb"]
+    )
+    assert result.exit_code == 0
+    assert captured["topic"] == "wpnb"
+
+
+def test_extract_level_regulation_with_entity_flag_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "corpus",
+            "extract",
+            str(tmp_path),
+            "--level",
+            "regulation",
+            "--wk-name",
+            "Rokan",
+        ],
+    )
+    assert result.exit_code == 1
+    assert (
+        "regulation documents cannot have wk/field/project entities"
+        in result.output
+    )
+
+
+def test_extract_doc_type_implies_regulation_with_entity_flag_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "corpus",
+            "extract",
+            str(tmp_path),
+            "--doc-type",
+            "uu",
+            "--field-name",
+            "Duri",
+        ],
+    )
+    assert result.exit_code == 1
+    assert (
+        "regulation documents cannot have wk/field/project entities"
+        in result.output
+    )
+
+
+def test_extract_explicit_level_conflicts_with_doc_type_rule_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        ["corpus", "extract", str(tmp_path), "--level", "wk", "--doc-type", "uu"],
+    )
+    assert result.exit_code == 1
+    assert "conflicts" in result.output
+    assert "doc_type 'uu' rule" in result.output
+
+
+def test_extract_explicit_level_conflicts_with_topic_rule_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        ["corpus", "extract", str(tmp_path), "--level", "wk", "--topic", "pod"],
+    )
+    assert result.exit_code == 1
+    assert "conflicts" in result.output
+    assert "doc_topic 'pod' rule" in result.output
+
+
+def test_extract_level_matches_doc_type_rule_no_conflict(tmp_path, monkeypatch):
+    """Explicit --level equal to the implied rule's level is not a conflict."""
+    import esdc.corpus.pipeline as pipeline
+
+    monkeypatch.setattr(
+        pipeline, "run_extract", lambda paths, **kwargs: pipeline.CorpusReport()
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "corpus",
+            "extract",
+            str(tmp_path),
+            "--level",
+            "regulation",
+            "--doc-type",
+            "uu",
+        ],
+    )
+    assert result.exit_code == 0
+
+
+def test_extract_passes_overrides_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_extract(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_extract", fake_run_extract)
+
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--wk-name", "Rokan", "--level", "wk"]
+    )
+    assert result.exit_code == 0
+    assert captured["wk_name"] == "Rokan"
+    assert captured["level"] == "wk"
+
+
+def test_commit_passes_skip_review_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_commit(paths, **kwargs):
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_commit", fake_run_commit)
+    result = runner.invoke(app, ["corpus", "commit", str(tmp_path), "--skip-review"])
+    assert result.exit_code == 0
+    assert captured["skip_review"] is True
+
+
+def test_clear_without_yes_exits_1_with_counts(monkeypatch):
+    class FakeStore:
+        def counts(self):
+            return {"documents": 0, "chunks": 0}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(esdc_cli, "_open_corpus_store", lambda: FakeStore())
+
+    result = runner.invoke(app, ["corpus", "clear"])
+    assert result.exit_code == 1
+    assert "This deletes 0 documents and 0 chunks. Re-run with --yes." in result.output
+
+
+def test_commit_model_mismatch_prints_clean_error(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def raise_mismatch(*args, **kwargs):
+        raise ValueError(
+            "[Corpus] embedding model changed. Run `esdc corpus reembed`."
+        )
+
+    # commit imports run_commit lazily from the pipeline module.
+    monkeypatch.setattr(pipeline, "run_commit", raise_mismatch)
+
+    result = runner.invoke(app, ["corpus", "commit", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "Error: [Corpus] embedding model changed" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_meta_invalid_level_exits_1(tmp_path):
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--level", "bogus"])
+    assert result.exit_code == 1
+    assert (
+        "Error: --level must be one of wk, field, project, regulation."
+        in result.output
+    )
+
+
+def test_meta_invalid_doc_type_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "meta", str(tmp_path), "--doc-type", "bogus"]
+    )
+    assert result.exit_code == 1
+    assert "Error: --doc-type must be one of" in result.output
+
+
+def test_meta_invalid_topic_exits_1(tmp_path):
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--topic", "bogus"])
+    assert result.exit_code == 1
+    assert "Error: --topic must be one of" in result.output
+
+
+def test_meta_topic_passes_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_meta(paths, **kwargs):
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_meta", fake_run_meta)
+
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--topic", "wpnb"])
+    assert result.exit_code == 0
+    assert captured["topic"] == "wpnb"
+
+
+def test_meta_level_regulation_with_entity_flag_exits_1(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "corpus",
+            "meta",
+            str(tmp_path),
+            "--level",
+            "regulation",
+            "--project-name",
+            "POD Duri",
+        ],
+    )
+    assert result.exit_code == 1
+    assert (
+        "regulation documents cannot have wk/field/project entities"
+        in result.output
+    )
+
+
+def test_meta_explicit_level_conflicts_with_topic_rule_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["corpus", "meta", str(tmp_path), "--level", "field", "--topic", "afe"]
+    )
+    assert result.exit_code == 1
+    assert "conflicts" in result.output
+    assert "doc_topic 'afe' rule" in result.output
+
+
+def test_meta_passes_overrides_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_meta(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_meta", fake_run_meta)
+
+    result = runner.invoke(
+        app,
+        ["corpus", "meta", str(tmp_path), "--wk-name", "Rokan", "--reviewed"],
+    )
+    assert result.exit_code == 0
+    assert captured["wk_name"] == "Rokan"
+    assert captured["reviewed"] is True
+
+
+def test_meta_no_flags_shows_table(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def fake_run_meta_show(paths):
+        return [
+            {
+                "file": "a.corpus.md",
+                "doc_type": "contract",
+                "doc_topic": ["wpnb"],
+                "doc_date": "2024-01-01",
+                "doc_level": "wk",
+                "wk_name": ["Rokan"],
+                "field_name": None,
+                "project_name": None,
+                "reviewed": False,
+            },
+            {"file": "bad.corpus.md", "error": "missing YAML frontmatter"},
+        ]
+
+    called = {"run_meta": False}
+
+    def fake_run_meta(paths, **kwargs):
+        called["run_meta"] = True
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_meta_show", fake_run_meta_show)
+    monkeypatch.setattr(pipeline, "run_meta", fake_run_meta)
+
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path)])
+    assert result.exit_code == 0
+    assert called["run_meta"] is False
+    assert "a.corpus.md" in result.output
+    assert "topic" in result.output
+    # An unreadable sidecar's error lands in its own trailing `note`
+    # column — never under doc_type.
+    assert "note" in result.output
+    assert "missing YAML frontmatter" in result.output
+    bad_line = next(
+        line for line in result.output.splitlines() if "bad.corpus.md" in line
+    )
+    bad_cells = [c.strip() for c in bad_line.split("|")]
+    assert bad_cells[2] == ""  # doc_type cell stays clean for error rows
+    good_line = next(
+        line for line in result.output.splitlines() if "a.corpus.md" in line
+    )
+    assert "contract" in good_line
+    assert "wpnb" in good_line
+    assert "missing YAML frontmatter" not in good_line
+
+
+def test_meta_regenerate_alone_is_valid_invocation(tmp_path, monkeypatch):
+    """--regenerate alone (no other flags) must call run_meta, not show-mode."""
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+    called = {"run_meta_show": False}
+
+    def fake_run_meta(paths, **kwargs):
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    def fake_run_meta_show(paths):
+        called["run_meta_show"] = True
+        return []
+
+    monkeypatch.setattr(pipeline, "run_meta", fake_run_meta)
+    monkeypatch.setattr(pipeline, "run_meta_show", fake_run_meta_show)
+
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--regenerate"])
+    assert result.exit_code == 0
+    assert called["run_meta_show"] is False
+    assert captured["regenerate"] is True
+
+
+def test_meta_regenerate_value_error_exits_1(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def raise_no_model(*args, **kwargs):
+        raise ValueError(
+            "--regenerate requires a reachable metadata_model "
+            "(set corpus.metadata_model in config)"
+        )
+
+    monkeypatch.setattr(pipeline, "run_meta", raise_no_model)
+
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--regenerate"])
+    assert result.exit_code == 1
+    assert "Error: --regenerate requires a reachable metadata_model" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_meta_unknown_entity_prints_clean_error(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def raise_not_found(*args, **kwargs):
+        raise ValueError(
+            "--wk-name 'Bogus' not found in database and no close matches"
+        )
+
+    monkeypatch.setattr(pipeline, "run_meta", raise_not_found)
+
+    result = runner.invoke(
+        app, ["corpus", "meta", str(tmp_path), "--wk-name", "Bogus"]
+    )
+    assert result.exit_code == 1
+    assert "not found in database" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_extract_unknown_entity_prints_clean_error(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    def raise_not_found(*args, **kwargs):
+        raise ValueError(
+            "--wk-name 'Bogus' not found in database and no close matches"
+        )
+
+    monkeypatch.setattr(pipeline, "run_extract", raise_not_found)
+
+    result = runner.invoke(
+        app, ["corpus", "extract", str(tmp_path), "--wk-name", "Bogus"]
+    )
+    assert result.exit_code == 1
+    assert "not found in database" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_export_no_paths_no_all_exits_1():
+    result = runner.invoke(app, ["corpus", "export"])
+    assert result.exit_code == 1
+    assert "Nothing to export: pass sidecar path(s) or --all." in result.output
+
+
+def test_export_passes_all_to_pipeline(monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_export(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_export", fake_run_export)
+
+    result = runner.invoke(app, ["corpus", "export", "--all"])
+    assert result.exit_code == 0
+    assert captured["paths"] == []
+    assert captured["all_docs"] is True
+
+
+def test_export_passes_paths_to_pipeline(tmp_path, monkeypatch):
+    import esdc.corpus.pipeline as pipeline
+
+    captured = {}
+
+    def fake_run_export(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        return pipeline.CorpusReport()
+
+    monkeypatch.setattr(pipeline, "run_export", fake_run_export)
+
+    sc = tmp_path / "doc.corpus.md"
+    result = runner.invoke(app, ["corpus", "export", str(sc)])
+    assert result.exit_code == 0
+    assert captured["paths"] == [sc]
+    assert captured["all_docs"] is False
+
+
+def test_entity_display_handles_legacy_plain_string():
+    from esdc.esdc import _entity_display
+
+    # Legacy row: store's suppress-parse left it a plain string.
+    assert _entity_display({"wk_name": "Rokan"}) == "Rokan"
+    # Normal parsed row.
+    assert _entity_display({"wk_name": ["Rokan", "Mahakam"]}) == "Rokan, Mahakam"
+    # Unparsed JSON string.
+    assert _entity_display({"field_name": '["Duri"]'}) == "Duri"
+    # Nothing set.
+    assert _entity_display({}) == ""

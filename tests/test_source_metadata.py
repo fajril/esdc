@@ -33,13 +33,6 @@ class TestBuildSourceMetadata:
         assert source is not None
         assert source["resource_type"] == "spatial_query"
 
-    def test_build_source_metadata_for_cypher(self):
-        from esdc.server.responses_wrapper import _build_source_metadata
-
-        source = _build_source_metadata("execute_cypher")
-        assert source is not None
-        assert source["resource_type"] == "cypher_query"
-
 
 class TestResponseFunctionCallResultModel:
     """Test ResponseFunctionCallResult Pydantic model accepts source field."""
@@ -96,7 +89,6 @@ class TestToolSourceMap:
 
         expected_tools = [
             "execute_sql",
-            "execute_cypher",
             "semantic_search",
             "get_schema",
             "list_tables",

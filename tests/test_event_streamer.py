@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from esdc.server.event_streamer import astream_agent_events
+from esdc.chat.event_streamer import astream_agent_events
 
 
 class AsyncEventIterator:
@@ -421,7 +421,7 @@ class TestAstreamAgentEvents:
 
     def test_default_recursion_limit(self):
         """Test that DEFAULT_RECURSION_LIMIT is 100."""
-        from esdc.server.event_streamer import DEFAULT_RECURSION_LIMIT
+        from esdc.chat.event_streamer import DEFAULT_RECURSION_LIMIT
 
         assert DEFAULT_RECURSION_LIMIT == 100
 
@@ -664,3 +664,33 @@ class TestImageMarkdownFallback:
         assert len(msg_events) == 1
         # Should NOT be modified
         assert msg_events[0]["ai_message"].content == "No images here."
+
+
+class TestCoerceContentToStr:
+    """Tests for _coerce_content_to_str helper."""
+
+    def test_coerce_plain_string(self):
+        from esdc.chat.event_streamer import _coerce_content_to_str
+
+        assert _coerce_content_to_str("hello") == "hello"
+
+    def test_coerce_anthropic_style_blocks(self):
+        from esdc.chat.event_streamer import _coerce_content_to_str
+
+        blocks = [
+            {"type": "text", "text": "hello "},
+            {"type": "text", "text": "world"},
+            {"type": "tool_use", "id": "x"},  # non-text block ignored
+        ]
+        assert _coerce_content_to_str(blocks) == "hello world"
+
+    def test_coerce_list_of_strings(self):
+        from esdc.chat.event_streamer import _coerce_content_to_str
+
+        assert _coerce_content_to_str(["a", "b"]) == "ab"
+
+    def test_coerce_none_and_empty(self):
+        from esdc.chat.event_streamer import _coerce_content_to_str
+
+        assert _coerce_content_to_str(None) == ""
+        assert _coerce_content_to_str([]) == ""

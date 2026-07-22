@@ -24,6 +24,7 @@ from esdc.validate.rule_re5_helpers import (
     build_onstream_before_report_year_sql,
     build_onstream_required_sql,
     build_reserves_implies_not_abandoned_sql,
+    build_sales_implies_level_set_sql,
     build_sales_implies_level_sql,
     build_transition_sql,
 )
@@ -206,7 +207,7 @@ class TestBuildOnstreamBeforeReportYearSql:
     def test_year_extraction_and_comparison(self):
         sql = build_onstream_before_report_year_sql()
         assert "regexp_matches" in sql
-        assert ">= report_year" in sql
+        assert "> report_year" in sql
 
     def test_filters_empty_and_unparseable(self):
         sql = build_onstream_before_report_year_sql()
@@ -234,10 +235,114 @@ class TestExtractYearSql:
 
 
 class TestBuildLevelImpliesSalesPositiveSql:
-    def test_self_join(self):
+    def test_no_self_join(self):
+        """RE5052: SQL is single-table; uses cumulative sales directly."""
         sql = build_level_implies_sales_positive_sql(E0_E1_E4_E7)
-        assert "curr.report_year = prev.report_year + 1" in sql
-        assert "cprd_sls_oil" in sql
+        assert "JOIN project_resources" not in sql
+        assert "prev.report_year" not in sql
+
+    def test_cumulative_having(self):
+        """RE5052: SQL uses HAVING clause for cumulative sales = 0 check."""
+        sql = build_level_implies_sales_positive_sql(E0_E1_E4_E7)
+        assert "HAVING" in sql
+        assert "MIN(COALESCE(cprd_sls_oil, 0))" in sql
+        assert "MIN(COALESCE(cprd_sls_con, 0))" in sql
+        assert "MIN(COALESCE(cprd_sls_ga, 0))" in sql
+        assert "MIN(COALESCE(cprd_sls_gn, 0))" in sql
+        assert f"<= {TOLERANCE}" in sql
+
+    def test_level_set_in_where(self):
+        """RE5052: SQL filters on project_level in disallowed set."""
+        sql = build_level_implies_sales_positive_sql(E0_E1_E4_E7)
+        assert "'E0. On Production'" in sql
+        assert "'E1. Production on Hold'" in sql
+        assert "'E4. Production Pending'" in sql
+        assert "'E7. Production Not Viable'" in sql
+
+    def test_group_by_id_cols(self):
+        """RE5052: SQL groups by (project_id, report_year) to dedupe rows."""
+        sql = build_level_implies_sales_positive_sql(E0_E1_E4_E7)
+        assert "GROUP BY project_id, report_year" in sql
+        assert "ANY_VALUE(project_name)" in sql
+
+
+class TestBuildSalesImpliesLevelSetSql:
+    def test_no_self_join(self):
+        """RE5041: SQL is single-table; uses cumulative sales directly."""
+        sql = build_sales_implies_level_set_sql(E0_E1_E4_E7)
+        assert "JOIN project_resources" not in sql
+        assert "prev.report_year" not in sql
+
+    def test_cumulative_having(self):
+        """RE5041: SQL uses HAVING clause for cumulative sales > 0 check."""
+        sql = build_sales_implies_level_set_sql(E0_E1_E4_E7)
+        assert "HAVING" in sql
+        assert "MIN(COALESCE(cprd_sls_oil, 0))" in sql
+        assert f"> {TOLERANCE}" in sql
+
+    def test_disallowed_levels_in_where(self):
+        """RE5041: SQL filters on project_level NOT IN allowed set."""
+        sql = build_sales_implies_level_set_sql(E0_E1_E4_E7)
+        assert "NOT IN" in sql
+        assert "'E0. On Production'" in sql
+        assert "'E1. Production on Hold'" in sql
+        assert "'E4. Production Pending'" in sql
+        assert "'E7. Production Not Viable'" in sql
+
+    def test_group_by_id_cols(self):
+        """RE5041: SQL groups by (project_id, report_year) to dedupe rows."""
+        sql = build_sales_implies_level_set_sql(E0_E1_E4_E7)
+        assert "GROUP BY project_id, report_year" in sql
+
+
+class TestBuildGroovyTransitionSqlNoProduction:
+    def test_re5003_includes_production_check(self):
+        """RE5003: When require_no_production=True, SQL self-joins and checks sales increment."""
+        sql = build_groovy_transition_sql(
+            ProjectLevel.E1,
+            groovy_value=False,
+            required_level=ProjectLevel.E4,
+            require_no_production=True,
+        )
+        assert "JOIN project_resources prev" in sql
+        assert "prev.report_year + 1" in sql
+        assert "ABS((COALESCE(curr.cprd_sls_oil, 0)" in sql
+        assert "COALESCE(prev.cprd_sls_oil, 0)" in sql
+        assert f"<= {TOLERANCE}" in sql
+
+    def test_re5006_includes_production_check(self):
+        """RE5006: When require_no_production=True, SQL self-joins and checks sales increment."""
+        sql = build_groovy_transition_sql(
+            ProjectLevel.E4,
+            groovy_value=True,
+            required_level=ProjectLevel.E4,
+            require_no_production=True,
+        )
+        assert "JOIN project_resources prev" in sql
+        assert "ABS((COALESCE(curr.cprd_sls_oil, 0)" in sql
+        assert "COALESCE(prev.cprd_sls_oil, 0)" in sql
+        assert f"<= {TOLERANCE}" in sql
+
+    def test_re5013_no_production_check_by_default(self):
+        """RE5013 regression: default (require_no_production=False) does NOT add production check."""
+        sql = build_groovy_transition_sql(
+            ProjectLevel.E7,
+            groovy_value=True,
+            required_level=ProjectLevel.E4,
+        )
+        assert "JOIN project_resources" not in sql
+        assert "prev.report_year" not in sql
+
+    def test_re5013_explicit_false_no_production_check(self):
+        """RE5013 regression: explicit require_no_production=False keeps old behavior."""
+        sql = build_groovy_transition_sql(
+            ProjectLevel.E7,
+            groovy_value=True,
+            required_level=ProjectLevel.E4,
+            require_no_production=False,
+        )
+        assert "JOIN project_resources" not in sql
+        assert "cprd_sls_oil" not in sql
 
 
 class TestBuildLevelMandatorySql:
@@ -558,7 +663,7 @@ class TestRE5066Integration:
 
 
 class TestRE5067Integration:
-    def test_onstream_equals_report_year_fails(self):
+    def test_onstream_equals_report_year_passes(self):
         conn = _make_conn()
         conn.execute(
             "INSERT INTO project_resources VALUES"
@@ -566,6 +671,21 @@ class TestRE5067Integration:
             f"'{ProjectLevel.E0.value}', '{ProjectLevel.E0.value}', '1. Reserves & GRR', '1. Exploitation',"
             "100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,"
             "0, 0, 0, 0, 0, 0, '2024', NULL, 0, 0, 0, 0, 0, 0, 0, 0)"
+        )
+        from esdc.validate.rule_re5 import RE5067
+
+        rule = RE5067()
+        violations = rule.check(conn)
+        assert len(violations) == 0
+
+    def test_onstream_after_report_year_fails(self):
+        conn = _make_conn()
+        conn.execute(
+            "INSERT INTO project_resources VALUES"
+            "(2024, 'P1', 'P1', 'W1', 'F1', '1. Low Value',"
+            f"'{ProjectLevel.E0.value}', '{ProjectLevel.E0.value}', '1. Reserves & GRR', '1. Exploitation',"
+            "100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,"
+            "0, 0, 0, 0, 0, 0, '2026', NULL, 0, 0, 0, 0, 0, 0, 0, 0)"
         )
         from esdc.validate.rule_re5 import RE5067
 

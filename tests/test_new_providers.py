@@ -293,6 +293,108 @@ class TestGroqProvider:
         assert "extra_body" not in call_kwargs
 
 
+class TestDeepSeekProvider:
+    """Tests for DeepSeekProvider."""
+
+    def test_is_configured(self):
+        from esdc.providers.deepseek import DeepSeekProvider
+
+        config = ProviderConfig(name="test", provider_type="deepseek", api_key="sk-xxx")
+        assert DeepSeekProvider.is_configured(config) is True
+
+        config_missing = ProviderConfig(
+            name="test", provider_type="deepseek", api_key=""
+        )
+        assert DeepSeekProvider.is_configured(config_missing) is False
+
+    def test_get_default_model(self):
+        from esdc.providers.deepseek import DeepSeekProvider
+
+        assert DeepSeekProvider.get_default_model() == "deepseek-v4-flash"
+
+    def test_get_context_length(self):
+        from esdc.providers.deepseek import DeepSeekProvider
+
+        assert DeepSeekProvider.get_context_length("deepseek-v4-flash") == 1_000_000
+        assert DeepSeekProvider.get_context_length("deepseek-v4-pro") == 1_000_000
+        assert DeepSeekProvider.get_context_length("deepseek-chat") == 1_000_000
+        assert DeepSeekProvider.get_context_length("deepseek-reasoner") == 1_000_000
+        assert DeepSeekProvider.get_context_length("unknown") == DEFAULT_CONTEXT_LENGTH
+
+    @patch("esdc.providers.deepseek.ChatOpenAI")
+    def test_create_llm(self, mock_chat_cls):
+        from esdc.providers.deepseek import DeepSeekProvider
+
+        mock_instance = MagicMock()
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+            llm = DeepSeekProvider.create_llm(
+                model="deepseek-v4-pro",
+                api_key="sk-xxx",
+                temperature=0.2,
+            )
+
+        mock_chat_cls.assert_called_once_with(
+            model="deepseek-v4-pro",
+            api_key="sk-xxx",
+            base_url=DeepSeekProvider.BASE_URL,
+            temperature=0.2,
+        )
+        assert llm is mock_instance
+
+    @patch("esdc.providers.deepseek.ChatOpenAI")
+    def test_create_llm_reasoning_none_disables_thinking(self, mock_chat_cls):
+        from esdc.providers.deepseek import DeepSeekProvider
+
+        mock_chat_cls.return_value = MagicMock()
+
+        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+            DeepSeekProvider.create_llm(
+                model="deepseek-v4-flash",
+                api_key="sk-xxx",
+                reasoning_effort="none",
+            )
+
+        call_kwargs = mock_chat_cls.call_args.kwargs
+        assert call_kwargs["extra_body"]["thinking"]["type"] == "disabled"
+        assert "reasoning_effort" not in call_kwargs
+
+    @patch("esdc.providers.deepseek.ChatOpenAI")
+    def test_create_llm_reasoning_low_maps_to_high(self, mock_chat_cls):
+        from esdc.providers.deepseek import DeepSeekProvider
+
+        mock_chat_cls.return_value = MagicMock()
+
+        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+            DeepSeekProvider.create_llm(
+                model="deepseek-v4-flash",
+                api_key="sk-xxx",
+                reasoning_effort="low",
+            )
+
+        call_kwargs = mock_chat_cls.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "high"
+        assert call_kwargs["extra_body"]["thinking"]["type"] == "enabled"
+
+    @patch("esdc.providers.deepseek.ChatOpenAI")
+    def test_create_llm_reasoning_xhigh_maps_to_max(self, mock_chat_cls):
+        from esdc.providers.deepseek import DeepSeekProvider
+
+        mock_chat_cls.return_value = MagicMock()
+
+        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+            DeepSeekProvider.create_llm(
+                model="deepseek-v4-flash",
+                api_key="sk-xxx",
+                reasoning_effort="xhigh",
+            )
+
+        call_kwargs = mock_chat_cls.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "max"
+        assert call_kwargs["extra_body"]["thinking"]["type"] == "enabled"
+
+
 class TestOpenAICompatibleCreateLLMNoLeak:
     """Ensure config kwarg doesn't leak into ChatOpenAI constructor."""
 
@@ -397,6 +499,40 @@ class TestGroqCreateLLMNoLeak:
         )
 
 
+class TestDeepSeekCreateLLMNoLeak:
+    """Ensure config kwarg doesn't leak into ChatOpenAI constructor."""
+
+    @patch("esdc.providers.deepseek.ChatOpenAI")
+    def test_create_llm_config_not_passed_to_chatopenai(self, mock_chat_cls):
+        from esdc.providers.base import ProviderConfig
+        from esdc.providers.deepseek import DeepSeekProvider
+
+        mock_instance = MagicMock()
+        mock_instance._esdc_context_length = 0
+        mock_chat_cls.return_value = mock_instance
+
+        with patch.object(
+            DeepSeekProvider,
+            "get_actual_context_length",
+            return_value=0,
+        ):
+            DeepSeekProvider.create_llm(
+                model="deepseek-v4-flash",
+                api_key="sk-test",
+                config=ProviderConfig(
+                    name="test",
+                    provider_type="deepseek",
+                    model="deepseek-v4-flash",
+                    api_key="sk-test",
+                ),
+            )
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        assert "config" not in call_kwargs, (
+            f"'config' leaked into ChatOpenAI kwargs: {call_kwargs.keys()}"
+        )
+
+
 class TestProviderRegistry:
     """Tests for provider registry."""
 
@@ -411,6 +547,7 @@ class TestProviderRegistry:
             "google",
             "azure_openai",
             "groq",
+            "deepseek",
             "ollama_cloud",
         }
         assert set(PROVIDER_CLASSES.keys()) == expected
@@ -423,11 +560,13 @@ class TestProviderRegistry:
         assert PROVIDER_NAMES["google"] == "Google (Gemini)"
         assert PROVIDER_NAMES["azure_openai"] == "Azure OpenAI"
         assert PROVIDER_NAMES["groq"] == "Groq"
+        assert PROVIDER_NAMES["deepseek"] == "DeepSeek"
 
     def test_get_provider(self):
         from esdc.providers import get_provider
         from esdc.providers.anthropic import AnthropicProvider
         from esdc.providers.azure_openai import AzureOpenAIProvider
+        from esdc.providers.deepseek import DeepSeekProvider
         from esdc.providers.google import GoogleProvider
         from esdc.providers.groq import GroqProvider
 
@@ -435,6 +574,7 @@ class TestProviderRegistry:
         assert get_provider("google") is GoogleProvider
         assert get_provider("azure_openai") is AzureOpenAIProvider
         assert get_provider("groq") is GroqProvider
+        assert get_provider("deepseek") is DeepSeekProvider
         assert get_provider("nonexistent") is None
 
     def test_provider_type_literal(self):
@@ -444,6 +584,7 @@ class TestProviderRegistry:
         assert "google" in ProviderType.__args__
         assert "azure_openai" in ProviderType.__args__
         assert "groq" in ProviderType.__args__
+        assert "deepseek" in ProviderType.__args__
 
 
 class TestOpenAICompatibleContextLength:

@@ -120,10 +120,77 @@ class TestDbFile:
             config_file.write_text("database_path: /custom/path/db.db\n")
             assert Config.get_db_file() == Path("/custom/path/db.db")
 
+    def test_get_db_file_copies_chat_database_path_when_missing(self, tmp_path):
+        """Test database.path is copied to database_path when top-level is absent."""
+        db_path = tmp_path / "chat.duckdb"
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(f"database:\n  path: {db_path}\n")
+
+            assert Config.get_db_file() == db_path
+            config_text = config_file.read_text()
+            assert f"database_path: {db_path}" in config_text
+
     def test_get_db_file_default(self, tmp_path):
         """Test default database file path."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
-            assert Config.get_db_file() == tmp_path / "esdc.db"
+            assert Config.get_db_file() == tmp_path / "esdc.duckdb"
+
+    def test_get_db_file_migrates_legacy_default(self, tmp_path):
+        """Test legacy default database is renamed to the new default."""
+        legacy_db = tmp_path / "esdc.db"
+        default_db = tmp_path / "esdc.duckdb"
+        legacy_db.write_text("legacy")
+
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            assert Config.get_db_file() == default_db
+
+        assert default_db.read_text() == "legacy"
+        assert not legacy_db.exists()
+
+    def test_get_db_file_migrates_legacy_default_config(self, tmp_path):
+        """Test generated legacy config path is migrated to the new default."""
+        legacy_db = tmp_path / "esdc.db"
+        default_db = tmp_path / "esdc.duckdb"
+        legacy_db.write_text("legacy")
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(f"database_path: {legacy_db}\n")
+
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            assert Config.get_db_file() == default_db
+
+        assert default_db.read_text() == "legacy"
+        assert not legacy_db.exists()
+        assert f"database_path: {default_db}" in config_file.read_text()
+
+    def test_get_db_file_env_override_does_not_migrate_legacy_default(self, tmp_path):
+        """Test ESDC_DB_FILE prevents default-path migration."""
+        legacy_db = tmp_path / "esdc.db"
+        env_db = tmp_path / "custom.db"
+        legacy_db.write_text("legacy")
+
+        with (
+            patch.object(Config, "get_config_dir", return_value=tmp_path),
+            patch.dict(os.environ, {"ESDC_DB_FILE": str(env_db)}),
+        ):
+            assert Config.get_db_file() == env_db
+
+        assert legacy_db.exists()
+        assert not (tmp_path / "esdc.duckdb").exists()
+
+    def test_get_db_file_custom_config_does_not_migrate_legacy_default(self, tmp_path):
+        """Test explicit database_path prevents default-path migration."""
+        legacy_db = tmp_path / "esdc.db"
+        custom_db = tmp_path / "custom.db"
+        legacy_db.write_text("legacy")
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(f"database_path: {custom_db}\n")
+
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            assert Config.get_db_file() == custom_db
+
+        assert legacy_db.exists()
+        assert not (tmp_path / "esdc.duckdb").exists()
 
     def test_get_db_dir_env_override(self, tmp_path):
         """Test ESDC_DB_DIR environment variable."""

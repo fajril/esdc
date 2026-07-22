@@ -30,20 +30,22 @@ from esdc.chat.agent import (
     generate_conversation_tags,
     generate_conversation_title,
 )
+from esdc.chat.event_streamer import astream_agent_events
 from esdc.chat.external_tools import (
     categorize_tools,
     convert_external_specs_to_langchain,
 )
+from esdc.chat.token_counter import extract_usage_from_message
 from esdc.configs import Config
 from esdc.providers import create_llm_from_config
 from esdc.server.cache import get_parsed_json
 from esdc.server.constants import SSE_STREAM_TIMEOUT
-from esdc.server.event_streamer import astream_agent_events
 from esdc.server.responses_events import (
     create_content_part_added_event,
     create_content_part_done_event,
     create_function_call_arguments_delta_event,
     create_function_call_arguments_done_event,
+    create_function_call_output_item,
     create_output_item_added_event,
     create_output_item_done_event,
     create_output_text_delta_event,
@@ -73,10 +75,6 @@ logger = logging.getLogger("esdc.server.responses")
 # Tool source metadata mapping for OpenWebUI citation rendering
 _TOOL_SOURCE_MAP: dict[str, dict[str, str]] = {
     "execute_sql": {"resource_type": "sql_query", "resource_id": "project_resources"},
-    "execute_cypher": {
-        "resource_type": "cypher_query",
-        "resource_id": "knowledge_graph",
-    },
     "semantic_search": {
         "resource_type": "semantic_search",
         "resource_id": "project_embeddings",
@@ -388,7 +386,7 @@ async def generate_responses_stream(
     model: str = "iris",
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
-    temperature: float = 0.7,
+    temperature: float | None = None,
     reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate Responses API streaming events from LangGraph agent.
@@ -439,6 +437,7 @@ async def generate_responses_stream(
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
             "reasoning_effort": "none",
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
         llm = create_llm_from_config(provider_config_obj)
 
@@ -506,7 +505,11 @@ async def generate_responses_stream(
         "model": provider_model,
         "base_url": base_url,
         "api_key": api_key,
-        "reasoning_effort": reasoning_effort,
+        "reasoning_effort": reasoning_effort
+        if reasoning_effort is not None
+        else provider_config.get("reasoning_effort"),
+        "temperature": temperature,
+        "fallback_configs": provider_config.get("fallback_configs"),
     }
 
     # Categorize tools into internal (ESDC) and external (OpenTerminal etc.)
@@ -890,7 +893,13 @@ async def generate_responses_stream(
                 ai_message = event["ai_message"]
 
                 # Track usage from last LLM response
-                if hasattr(ai_message, "usage_metadata") and ai_message.usage_metadata:
+                normalized_usage = extract_usage_from_message(ai_message)
+                if normalized_usage:
+                    last_usage = normalized_usage.to_dict()
+                elif (
+                    hasattr(ai_message, "usage_metadata")
+                    and ai_message.usage_metadata
+                ):
                     last_usage = ai_message.usage_metadata
 
                 # Close reasoning if still active when message completes
@@ -1120,11 +1129,6 @@ async def generate_responses_stream(
                 tool_call_id = event.get("tool_call_id", "")
 
                 item_id = generate_item_id("fco")
-                content_preview = (
-                    tool_result_content[:100]
-                    if len(tool_result_content) > 100
-                    else tool_result_content
-                )
 
                 logger.debug(
                     "[RESPONSES %s] Tool result: tool=%s, call_id=%s, content_len=%d",
@@ -1134,13 +1138,9 @@ async def generate_responses_stream(
                     len(tool_result_content),
                 )
 
-                function_call_output = {
-                    "id": item_id,
-                    "type": "function_call_output",
-                    "status": "completed",
-                    "call_id": tool_call_id,
-                    "output": [{"type": "input_text", "text": tool_result_content}],
-                }
+                function_call_output = create_function_call_output_item(
+                    item_id, tool_call_id, tool_result_content
+                )
 
                 # Add source metadata for OpenWebUI citation rendering
                 source = _build_source_metadata(event.get("tool_name", ""))
@@ -1363,7 +1363,7 @@ async def generate_responses_sync(
     model: str = "iris",
     instructions: str | None = None,
     tools: list[dict[str, Any]] | None = None,
-    temperature: float = 0.7,
+    temperature: float | None = None,
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Generate non-streaming Responses API response.
@@ -1415,6 +1415,7 @@ async def generate_responses_sync(
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
             "reasoning_effort": "none",
+            "fallback_configs": provider_config.get("fallback_configs"),
         }
         llm = create_llm_from_config(provider_config_obj)
 
@@ -1468,7 +1469,11 @@ async def generate_responses_sync(
         "model": provider_model,
         "base_url": base_url,
         "api_key": api_key,
-        "reasoning_effort": reasoning_effort,
+        "reasoning_effort": reasoning_effort
+        if reasoning_effort is not None
+        else provider_config.get("reasoning_effort"),
+        "temperature": temperature,
+        "fallback_configs": provider_config.get("fallback_configs"),
     }
 
     # Categorize tools into internal and external
@@ -1619,18 +1624,9 @@ async def generate_responses_sync(
                 tool_call_id = event.get("tool_call_id", "")
                 result_text = event.get("result", "")
 
-                fco_item = {
-                    "id": generate_item_id("fco"),
-                    "type": "function_call_output",
-                    "status": "completed",
-                    "call_id": tool_call_id,
-                    "output": [
-                        {
-                            "type": "input_text",
-                            "text": result_text,
-                        }
-                    ],
-                }
+                fco_item = create_function_call_output_item(
+                    generate_item_id("fco"), tool_call_id, result_text
+                )
                 source = _build_source_metadata(tool_name)
                 if source:
                     fco_item["source"] = source

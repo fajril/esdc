@@ -28,6 +28,7 @@ def _create_test_table(conn: duckdb.DuckDBPyConnection) -> None:
             report_year INTEGER,
             project_name TEXT,
             wk_name TEXT,
+            field_name TEXT,
             project_isactive INTEGER,
             rec_oil REAL,
             rec_con REAL,
@@ -49,6 +50,35 @@ def _create_test_table(conn: duckdb.DuckDBPyConnection) -> None:
             res_an REAL,
             prj_ioip REAL,
             prj_igip REAL
+        )
+    """)
+    # Minimal field_resources for RE2 rules that reference it
+    conn.execute("""
+        CREATE TABLE field_resources (
+            report_year INTEGER,
+            field_name TEXT,
+            wk_name TEXT,
+            wk_id TEXT,
+            field_id TEXT,
+            uncert_level TEXT,
+            rec_oil REAL, rec_con REAL, rec_ga REAL, rec_gn REAL,
+            rec_oc REAL, rec_an REAL,
+            res_oil REAL, res_con REAL, res_ga REAL, res_gn REAL,
+            res_oc REAL, res_an REAL,
+            cprd_sls_oil REAL, cprd_sls_con REAL, cprd_sls_ga REAL,
+            cprd_sls_gn REAL, cprd_sls_oc REAL, cprd_sls_an REAL,
+            ioip REAL, igip REAL
+        )
+    """)
+    # Minimal project_timeseries for RE5 rules that reference it
+    conn.execute("""
+        CREATE TABLE project_timeseries (
+            report_year INTEGER,
+            project_name TEXT,
+            wk_name TEXT,
+            field_name TEXT,
+            prd_oil REAL, prd_con REAL, prd_ga REAL, prd_gn REAL,
+            prd_oc REAL, prd_an REAL
         )
     """)
 
@@ -91,19 +121,19 @@ class TestRE9001:
         # Active project with volumes -- NOT a violation
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'ActiveProj', 'WK-1', 1, 100, 0, 0, 0, 0, 0, "
+            "(2024, 'ActiveProj', 'WK-1', 'F-1', 1, 100, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 300)"
         )
         # Inactive project WITH nonzero volume -- SHOULD be a violation
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'InactiveViol', 'WK-1', 0, 150, 0, 0, 0, 0, 0, "
+            "(2024, 'InactiveViol', 'WK-1', 'F-1', 0, 150, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 0)"
         )
         # Inactive project all zero -- NOT a violation
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'CleanInactive', 'WK-1', 0, 0, 0, 0, 0, 0, 0, "
+            "(2024, 'CleanInactive', 'WK-1', 'F-1', 0, 0, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
         )
 
@@ -120,12 +150,12 @@ class TestRE9001:
         _create_test_table(conn)
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2023, 'OldViolation', 'WK-1', 0, 100, 0, 0, 0, 0, 0, "
+            "(2023, 'OldViolation', 'WK-1', 'F-1', 0, 100, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
         )
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'NewViolation', 'WK-1', 0, 200, 0, 0, 0, 0, 0, "
+            "(2024, 'NewViolation', 'WK-1', 'F-1', 0, 200, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
         )
 
@@ -144,7 +174,7 @@ class TestRE9001:
         _create_test_table(conn)
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'ViolProj', 'WK-1', 0, 150, 0, 0, 0, 0, 0, "
+            "(2024, 'ViolProj', 'WK-1', 'F-1', 0, 150, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 0)"
         )
 
@@ -174,12 +204,12 @@ class TestRE9001:
         _create_test_table(conn)
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'GoodProj', 'WK-1', 0, 0, 0, 0, 0, 0, 0, "
+            "(2024, 'GoodProj', 'WK-1', 'F-1', 0, 0, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
         )
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'ActiveProj', 'WK-1', 1, 100, 0, 0, 0, 0, 0, "
+            "(2024, 'ActiveProj', 'WK-1', 'F-1', 1, 100, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 300)"
         )
 
@@ -316,7 +346,7 @@ class TestValidateCommand:
         _create_test_table(conn)
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'Bad', 'WK-1', 0, 150, 0, 0, 0, 0, 0, "
+            "(2024, 'Bad', 'WK-1', 'F-1', 0, 150, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 0)"
         )
         conn.close()
@@ -325,7 +355,9 @@ class TestValidateCommand:
             patch("esdc.validate.rules.Config.get_db_file", return_value=db_path),
             patch("esdc.esdc.input", return_value=""),
         ):
-            result = runner.invoke(app, ["validate", "--force-fix"])
+            result = runner.invoke(
+                app, ["validate", "--force-fix", "--group", "RE9"]
+            )
             assert result.exit_code == 0
             assert "Warning: --force-fix" in result.stdout
 
@@ -349,13 +381,13 @@ class TestRunValidationIntegration:
         _create_test_table(conn)
         conn.execute(
             "INSERT INTO project_resources VALUES "
-            "(2024, 'Bad', 'WK-1', 0, 150, 0, 0, 0, 0, 0, "
+            "(2024, 'Bad', 'WK-1', 'F-1', 0, 150, 0, 0, 0, 0, 0, "
             "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
         )
         conn.close()
 
         with patch("esdc.validate.rules.Config.get_db_file", return_value=db_path):
-            results = run_validation()
+            results = run_validation(groups=["RE9"])
             assert len(results) >= 1
             re9001_result = next((r for r in results if r.rule_id == "RE9001"), None)
             assert re9001_result is not None

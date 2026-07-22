@@ -1,5 +1,37 @@
+import re
+
 import pytest
 from typer.testing import CliRunner
+
+# SGR escape sequences (color/bold). On CI, Typer's Rich help renders in
+# terminal mode and emits these codes even into CliRunner's non-tty buffer,
+# splitting flag strings like "--from-excel" across escape codes and breaking
+# plain substring assertions (they pass locally where color is off).
+_ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# Patch CliRunner.invoke on the class in place so every runner -- the `runner`
+# fixture AND tests that build their own CliRunner() -- yields ANSI-stripped
+# output. All test modules share this one class object via
+# `from typer.testing import CliRunner`, so an in-place method patch reaches
+# them regardless of import order (rebinding the symbol would not).
+_orig_invoke = CliRunner.invoke
+
+
+def _invoke_strip_ansi(self, *args, **kwargs):
+    result = _orig_invoke(self, *args, **kwargs)
+    # Result exposes several byte buffers depending on Click version:
+    # stdout_bytes backs `.stdout`, output_bytes backs `.output` (stdout+stderr
+    # combined), stderr_bytes backs `.stderr`. Strip SGR codes from each so
+    # every accessor is color-agnostic.
+    for attr in ("stdout_bytes", "output_bytes", "stderr_bytes"):
+        raw = getattr(result, attr, None)
+        if raw:
+            stripped = _ANSI_SGR_RE.sub("", raw.decode("utf-8", "replace"))
+            setattr(result, attr, stripped.encode("utf-8"))
+    return result
+
+
+CliRunner.invoke = _invoke_strip_ansi
 
 
 @pytest.fixture
@@ -49,7 +81,7 @@ def isolated_config(tmp_path, monkeypatch):
     to avoid polluting the user's actual ~/.esdc/ directory.
     """
     config_dir = tmp_path / ".esdc"
-    db_file = config_dir / "esdc.db"
+    db_file = config_dir / "esdc.duckdb"
     monkeypatch.setenv("ESDC_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("ESDC_DB_FILE", str(db_file))
     yield tmp_path

@@ -3,13 +3,13 @@
 This module provides functionality for managing data
 related to the ESDC (https://esdc.skkmigas.go.id).
 It includes commands for fetching and displaying data from various resources,
-as well as loading data into a SQLite database.
+as well as loading data into a DuckDB database.
 The module utilizes the Typer library for command-line interface (CLI) interactions
 and Rich for enhanced logging and output formatting.
 
 Key Features:
 - Fetch data from the ESDC API in various formats (CSV, JSON, ZIP).
-- Load data into a SQLite database.
+- Load data into a DuckDB database.
 - Display data from specific tables with filtering options.
 - Save output data to files.
 
@@ -18,7 +18,7 @@ Dependencies:
 - requests: For making HTTP requests to the ESDC API.
 - rich: For enhanced terminal output and logging.
 - pyyaml: For loading configuration from config.yaml.
-- sqlite3: For database operations.
+- duckdb: For database operations.
 
 Commands:
 - init: Initializes the application and fetches data.
@@ -42,13 +42,14 @@ from collections.abc import Iterable
 from contextlib import closing
 from datetime import date
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import pandas as pd
 import requests
 import rich
 import typer
 from rich.logging import RichHandler
+from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -70,7 +71,27 @@ from esdc.dbmanager import (  # noqa: E402
     load_data_to_db,
     run_query,
 )
+from esdc.loaders import (  # noqa: E402
+    LoadSchemaError,
+    SpreadsheetLoadError,
+    copy_pod_schema_template,
+    generate_schema_template_from_excel,
+    load_excel_to_duckdb,
+    load_pod_workbook_to_duckdb,
+    print_load_result,
+)
+from esdc.pod_registry.importer import (  # noqa: E402
+    PodRegistryImportError,
+    import_pod_registry_workbook,
+)
 from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
+from esdc.summarizer import (  # noqa: E402
+    SummaryDependencyError,
+    SummaryLookupError,
+    _strategic_summary_text,
+    get_resource_summary,
+    summarize_resources,
+)
 from esdc.validate import ValidationResult, run_validation
 
 TABLES: tuple[TableName, TableName] = (
@@ -79,7 +100,15 @@ TABLES: tuple[TableName, TableName] = (
 )
 
 app = typer.Typer(no_args_is_help=False)
+schema_app = typer.Typer(invoke_without_command=True, no_args_is_help=True)
+corpus_app = typer.Typer(no_args_is_help=True)
 app.add_typer(configs_app, name="configs")
+app.add_typer(schema_app, name="schema")
+app.add_typer(
+    corpus_app,
+    name="corpus",
+    help="Ingest official PDF documents (surat, MoM) for iris document search.",
+)
 
 
 @app.callback()
@@ -119,6 +148,363 @@ def main(verbose: int = 0):
 
 
 # ... (previous imports remain unchanged)
+
+
+@schema_app.callback()
+def schema_command(
+    generate: Annotated[
+        bool,
+        typer.Option(
+            "--generate",
+            help="Generate a starter YAML schema from an Excel .xlsx file.",
+        ),
+    ] = False,
+    from_excel: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-excel",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Excel .xlsx file to inspect.",
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help=(
+                "Schema YAML output path. Defaults to "
+                "./<excel-stem>.schema.yaml."
+            ),
+        ),
+    ] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--overwrite",
+            help="Replace the output schema file if it already exists.",
+        ),
+    ] = False,
+    schema_pod: Annotated[
+        bool,
+        typer.Option(
+            "--schema-pod",
+            help="Generate the built-in POD workbook template.",
+        ),
+    ] = False,
+) -> None:
+    """Generate and inspect spreadsheet schemas and POD workbook templates."""
+    if schema_pod:
+        try:
+            destination = copy_pod_schema_template(
+                output_path=output,
+                overwrite=overwrite,
+            )
+        except (LoadSchemaError, SpreadsheetLoadError) as e:
+            typer.echo(f"Error: {e}")
+            raise typer.Exit(1) from None
+        typer.echo(f"Generated POD workbook template at {destination}")
+        return
+
+    if not generate:
+        typer.echo("Error: specify --generate or --schema-pod.")
+        raise typer.Exit(1) from None
+    if from_excel is None:
+        typer.echo("Error: --from-excel is required when using --generate.")
+        raise typer.Exit(1) from None
+    try:
+        result = generate_schema_template_from_excel(
+            from_excel,
+            output_path=output,
+            overwrite=overwrite,
+        )
+    except (LoadSchemaError, SpreadsheetLoadError) as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+
+    typer.echo(
+        f"Generated schema template for '{result.table_name}' "
+        f"from sheet '{result.sheet_name}' with {result.column_count:,} columns"
+    )
+    typer.echo(f"Schema: {result.output_path}")
+
+
+@app.command()
+def load(
+    from_excel: Annotated[
+        Path,
+        typer.Option(
+            "--from-excel",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Excel .xlsx file to load.",
+        ),
+    ],
+    schema: Annotated[
+        Path | None,
+        typer.Option(
+            "--schema",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="YAML schema/data dictionary for the Excel table.",
+        ),
+    ] = None,
+    schema_pod: Annotated[
+        bool,
+        typer.Option(
+            "--schema-pod",
+            help="Use the built-in POD schema template.",
+        ),
+    ] = False,
+    pod_registry: Annotated[
+        bool,
+        typer.Option(
+            "--pod-registry",
+            help="Seed the POD master registry (SQLite) from pod-itb-skk workbook.",
+        ),
+    ] = False,
+) -> None:
+    """Load a spreadsheet into DuckDB and register its data dictionary.
+
+    Run `esdc schema --generate --from-excel data.xlsx` to create a starter schema.
+    Use `--schema-pod` to load POD workbook data with the built-in POD template.
+    Use `--pod-registry` to seed the POD master registry from the pod-itb-skk workbook.
+    """
+    modes = sum([schema is not None, schema_pod, pod_registry])
+    if modes != 1:
+        typer.echo(
+            "Error: specify exactly one of --schema, --schema-pod, or --pod-registry."
+        )
+        raise typer.Exit(1) from None
+    try:
+        if pod_registry:
+            counts = import_pod_registry_workbook(from_excel)
+            for table, n in counts.items():
+                typer.echo(f"  {table}: {n} rows")
+            typer.echo("POD registry seeded and published to DuckDB.")
+            return
+        if schema_pod:
+            results = load_pod_workbook_to_duckdb(from_excel)
+            for result in results:
+                print_load_result(result)
+            return
+        schema_path = schema
+        assert schema_path is not None
+        result = load_excel_to_duckdb(from_excel, schema_path)
+    except PodRegistryImportError as e:
+        typer.echo("Error: POD registry import failed:")
+        for msg in e.errors:
+            typer.echo(f"  - {msg}")
+        raise typer.Exit(1) from None
+    except (LoadSchemaError, SpreadsheetLoadError) as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+    print_load_result(result)
+
+
+@app.command()
+def summarize(
+    target: Annotated[
+        str,
+        typer.Argument(help="Target to summarize: all, field, wk, or nkri."),
+    ],
+    name: Annotated[
+        str | None,
+        typer.Argument(help="Field or working area name. Omit for all/nkri."),
+    ] = None,
+    year: Annotated[
+        int | None,
+        typer.Option(
+            "--year",
+            help="Report year to summarize.",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Regenerate summaries even when the source hash is unchanged.",
+        ),
+    ] = False,
+    retry: Annotated[
+        int,
+        typer.Option(
+            "--retry",
+            help="Max LLM attempts (1 = no retry, 2 = one retry, etc). Default 1.",
+        ),
+    ] = 1,
+    from_wk: Annotated[
+        str | None,
+        typer.Option(
+            "--from-wk",
+            help="Only summarize fields belonging to this working area.",
+        ),
+    ] = None,
+) -> None:
+    """Generate LLM executive summaries for Eureka resource dashboards."""
+    if year is None:
+        typer.echo("Error: --year is required.")
+        raise typer.Exit(1) from None
+
+    try:
+        result = summarize_resources(
+            year=year,
+            target=target,
+            name=name,
+            force=force,
+            retry=retry,
+            from_wk=from_wk,
+        )
+    except (FileNotFoundError, ValueError, SummaryDependencyError) as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+
+    typer.echo(
+        "Summary complete: "
+        f"fields {result.fields_created} created/{result.fields_skipped} skipped; "
+        f"working areas {result.working_areas_created} created/"
+        f"{result.working_areas_skipped} skipped; "
+        f"nkri {result.nkri_created} created/{result.nkri_skipped} skipped; "
+        f"tokens {result.total_tokens_processed:,} processed"
+    )
+
+
+@app.command()
+def summary(
+    level: Annotated[
+        str,
+        typer.Argument(help="Summary level: field, wk, working_area, or nkri."),
+    ],
+    name: Annotated[
+        str | None,
+        typer.Argument(help="Field or working area name. Omit for nkri."),
+    ] = None,
+    year: Annotated[
+        int | None,
+        typer.Option(
+            "--year",
+            help="Report year to show.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Print the raw summary JSON payload.",
+        ),
+    ] = False,
+) -> None:
+    """Show a generated executive summary."""
+    if year is None:
+        typer.echo("Error: --year is required.")
+        raise typer.Exit(1) from None
+
+    try:
+        data = get_resource_summary(level=level, year=year, name=name)
+    except (FileNotFoundError, SummaryLookupError, ValueError) as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+
+    if json_output:
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    rich.print(
+        Panel(
+            _format_summary_for_cli(data),
+            title=f"{data['entity_name']} · {data['report_year']}",
+            subtitle=f"{data['entity_level']} summary",
+            border_style="cyan",
+        )
+    )
+
+
+def _format_summary_for_cli(data: dict) -> str:
+    summary_data = data.get("summary") or {}
+    lines: list[str] = []
+
+    if data.get("source_level") == "strategic_analysis":
+        summary_text = _strategic_summary_text(summary_data).strip()
+        if summary_text:
+            lines.append(summary_text)
+        else:
+            strategic_summary = summary_data.get("summary") or {}
+            rendered_findings = _render_summary_value(
+                strategic_summary.get("key_findings")
+            )
+            rendered_recommendations = _render_summary_value(
+                strategic_summary.get("recommendations")
+            )
+            if rendered_findings:
+                lines.extend(["[bold cyan]Key Findings[/bold cyan]", rendered_findings])
+            if rendered_recommendations:
+                lines.extend(
+                    [
+                        "",
+                        "[bold cyan]Recommendations[/bold cyan]",
+                        rendered_recommendations,
+                    ]
+                )
+        meta_parts = [
+            f"source={data.get('source_level') or '-'}",
+            f"provider={data.get('provider') or '-'}",
+            f"model={data.get('model') or '-'}",
+            f"generated={data.get('generated_at') or '-'}",
+        ]
+        lines.extend(["", f"[dim]{' · '.join(meta_parts)}[/dim]"])
+        return "\n".join(lines)
+
+    headline = str(summary_data.get("headline") or "").strip()
+    if headline:
+        lines.append(f"[bold]{headline}[/bold]")
+
+    executive = str(summary_data.get("executive_summary") or "").strip()
+    if executive:
+        lines.extend(["", executive])
+
+    sections = [
+        ("Current Situation", summary_data.get("current_situation")),
+        ("Key Challenges", summary_data.get("key_challenges")),
+        ("Solution Proposals", summary_data.get("solution_proposals")),
+        (
+            "Production / Reserve Opportunities",
+            summary_data.get("production_or_reserve_opportunities"),
+        ),
+        ("Management Attention", summary_data.get("management_attention")),
+        ("Data Quality Notes", summary_data.get("data_quality_notes")),
+    ]
+    for title, value in sections:
+        rendered = _render_summary_value(value)
+        if rendered:
+            lines.extend(["", f"[bold cyan]{title}[/bold cyan]", rendered])
+
+    meta_parts = [
+        f"source={data.get('source_level') or '-'}",
+        f"provider={data.get('provider') or '-'}",
+        f"model={data.get('model') or '-'}",
+        f"generated={data.get('generated_at') or '-'}",
+    ]
+    lines.extend(["", f"[dim]{' · '.join(meta_parts)}[/dim]"])
+    return "\n".join(lines)
+
+
+def _render_summary_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return "\n".join(f"• {item}" for item in items)
+    text = str(value).strip()
+    return text
 
 
 @app.command()
@@ -275,8 +661,8 @@ def reload(
 def _generate_embeddings() -> None:
     """Generate semantic embeddings for project_remarks with progress bar."""
     from esdc.configs import Config
-    from esdc.knowledge_graph.embedding_manager import EmbeddingManager
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+    from esdc.search.embedding_manager import EmbeddingManager
+    from esdc.search.semantic_resolver import SemanticResolver
 
     logger = logging.getLogger(__name__)
 
@@ -521,7 +907,7 @@ def _append_to_table(
         )
 
     with console.status(_status("preparing")) as status:
-        conn = get_duckdb_connection(db_path)
+        conn = get_duckdb_connection(db_path, read_only=False)
         try:
             # Ensure table exists; only create if missing
             status.update(_status("creating schema"))
@@ -947,37 +1333,72 @@ def _read_csv(file: str | Iterable[str]) -> tuple[list[list[str]], list[str]]:
 
 
 @app.command(name="chat")
-def chat(setup: bool = False):
+def chat():
     """Start the interactive chat TUI."""
     from esdc.configs import Config
 
-    if setup or not Config.has_chat_config():
+    if not Config.has_chat_config():
         rich.print(
             "[bold yellow]No provider configured.[/bold yellow] "
-            "Run '[cyan]esdc configs[/cyan]' to set one up."
+            "Run '[cyan]esdc configs[/cyan]' first."
         )
         return
 
-    if Config.has_chat_config():
-        from esdc.chat.app import ESDCChatApp
+    from esdc.chat.app import ESDCChatApp
 
-        app = ESDCChatApp()
-        app.run()
-    else:
-        rich.print("[yellow]Setup incomplete. Chat cannot start.[/yellow]")
+    app_ = ESDCChatApp()
+    app_.run()
 
 
-@app.command(name="status")
-def status(
-    verify: Annotated[
-        bool,
-        typer.Option(
-            "--verify",
-            help="Run functional verification on indexes (slower).",
-        ),
-    ] = False,
-) -> None:
-    """Show database location, configuration, and index status."""
+def _print_cache_subsection(name: str, stats: dict[str, Any]) -> None:
+    """Print a cache subsection in status output."""
+    rich.print()
+    rich.print(f"  [bold]{name}[/bold]")
+    rich.print(f"      Path: {stats['directory']}")
+    rich.print(
+        f"      Entries: {stats['entries']:,} | "
+        f"Size: {_humanize_bytes(stats['size_bytes'])} / "
+        f"{_humanize_bytes(stats['size_limit'])}"
+    )
+    _print_hit_rate(stats.get("hits", 0), stats.get("misses", 0))
+
+
+def _print_hit_rate(hits: int, misses: int) -> None:
+    """Print hit rate line with color coding."""
+    total = hits + misses
+    if total == 0:
+        rich.print("      Hits: 0 | Misses: 0 | Hit rate: N/A (no activity)")
+        return
+    rate = hits / total
+    rate_color = "green" if rate >= 0.8 else "yellow" if rate >= 0.5 else "red"
+    rich.print(
+        f"      Hits: {hits:,} | Misses: {misses:,} | "
+        f"Hit rate: [{rate_color}]{rate:.1%}[/{rate_color}]"
+    )
+
+
+def _humanize_bytes(n: int) -> str:
+    """Convert bytes to human-readable string."""
+    n = max(n, 0)
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024**2:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024**3:
+        return f"{n / (1024 ** 2):.1f} MB"
+    return f"{n / (1024 ** 3):.1f} GB"
+
+
+def _status_fetch_report() -> bool:
+    """Print DB location/env vars, tables + per-year rows, last updated.
+
+    Returns:
+        True if the database file exists and could be read (report
+        printed in full); False if a short "Database exists: No" or
+        error message was printed instead and callers should stop
+        further status reporting (mirrors the pre-split monolith, which
+        returned immediately in both cases).
+    """
     db_dir = Config.get_db_dir()
     db_file = Config.get_db_file()
 
@@ -994,13 +1415,12 @@ def status(
             "[yellow]Database exists: No[/yellow] "
             "(run '[cyan]esdc fetch --save[/cyan]' to create)"
         )
-        return
+        return False
 
     rich.print("[green]Database exists: Yes[/green]")
 
     try:
         from esdc.dbmanager import (
-            check_indexes,
             check_table_stats,
             get_duckdb_connection,
             get_last_updated,
@@ -1008,14 +1428,13 @@ def status(
 
         conn = get_duckdb_connection(db_file)
         try:
-            status = check_indexes(conn)
             table_stats = check_table_stats(conn)
             last_updated = get_last_updated(conn)
         finally:
             conn.close()
     except Exception as e:
         rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
-        return
+        return False
 
     if last_updated:
         rich.print(f"[bold]Last updated:[/bold] {last_updated}")
@@ -1036,6 +1455,37 @@ def status(
         rich.print(f"  {icon} {ts['table']} ({ts['total']:,} rows):")
         for year, count in ts["years"]:
             rich.print(f"      {year}: {count:,} rows")
+
+    return True
+
+
+def _status_index_report(verify: bool) -> None:
+    """Print FTS, B-tree, and embeddings/HNSW index status.
+
+    Args:
+        verify: When True, additionally runs functional verification on
+            the indexes (slower) and prints a Verification section.
+    """
+    from esdc.dbmanager import check_indexes, get_duckdb_connection
+
+    db_file = Config.get_db_file()
+
+    if not db_file.exists():
+        rich.print(
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
+        )
+        return
+
+    try:
+        conn = get_duckdb_connection(db_file)
+        try:
+            status = check_indexes(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
+        return
 
     rich.print()
     rich.print("[bold]FTS Indexes:[/bold]")
@@ -1109,65 +1559,382 @@ def status(
         rich.print(f"  {icon} {bt['name']}: {detail}")
 
 
+def _status_cache_report() -> None:
+    """Print SQL/tool/JSON cache diagnostics and last invalidation time."""
+    rich.print()
+    rich.print("[bold]Cache:[/bold]")
+    cache_dir = Config.get_cache_dir()
+    rich.print(f"  Directory: {cache_dir}")
+
+    try:
+        from esdc.chat.tools import get_sql_cache_stats, get_tool_cache_stats
+        from esdc.dbmanager import get_last_cache_invalidation
+        from esdc.server.cache import get_cache_stats
+
+        sql_stats = get_sql_cache_stats()
+        tool_stats = get_tool_cache_stats()
+        json_stats = get_cache_stats()
+
+        _print_cache_subsection("SQL Results Cache", sql_stats)
+        _print_cache_subsection("Tool Results Cache", tool_stats)
+
+        # JSON cache
+        rich.print()
+        rich.print("  [bold]JSON Parsing Cache (RAM):[/bold]")
+        rich.print(
+            f"      Entries: {json_stats['json_cache_size']} /"
+            f" {json_stats['json_cache_max']}"
+        )
+        _print_hit_rate(
+            json_stats.get("json_cache_hits", 0),
+            json_stats.get("json_cache_misses", 0),
+        )
+        rich.print("      Note: In-memory only, resets on restart")
+
+        # Last invalidated
+        last_invalidated = get_last_cache_invalidation()
+        if last_invalidated:
+            rich.print()
+            rich.print(f"  [bold]Last cache invalidated:[/bold] {last_invalidated}")
+    except Exception as e:
+        rich.print(f"[yellow]  Could not check cache: {e}[/yellow]")
+
+
+_CORPUS_TABLES = ("documents", "document_chunks", "corpus_meta")
+
+
+def _status_corpus_report() -> None:
+    """Print the corpus store section.
+
+    Doc/chunk counts, doc_type breakdown, pinned embedding model/dim,
+    and chunks FTS + HNSW index status.
+
+    Read-only and never instantiates CorpusStore (that would drag in the
+    embedder / require Ollama to be running). Connects directly via
+    get_duckdb_connection and guards every query with an
+    information_schema check, mirroring how dbmanager.check_indexes
+    inspects duckdb_indexes().
+    """
+    from esdc.dbmanager import get_duckdb_connection
+
+    db_file = Config.get_db_file()
+
+    if not db_file.exists():
+        rich.print(
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
+        )
+        return
+
+    try:
+        conn = get_duckdb_connection(db_file)
+        try:
+            existing_tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'main'"
+                ).fetchall()
+            }
+
+            if not set(_CORPUS_TABLES) <= existing_tables:
+                rich.print("[bold]Corpus:[/bold]")
+                rich.print(
+                    "  [yellow]not initialized[/yellow] "
+                    "(run '[cyan]esdc corpus commit[/cyan]')"
+                )
+                return
+
+            doc_count = (
+                conn.execute("SELECT COUNT(*) FROM documents").fetchone() or (0,)
+            )[0]
+            chunk_count = (
+                conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()
+                or (0,)
+            )[0]
+            doc_type_rows = conn.execute(
+                "SELECT COALESCE(doc_type, 'unknown'), COUNT(*) FROM documents "
+                "GROUP BY 1 ORDER BY 1"
+            ).fetchall()
+            meta_row = conn.execute(
+                "SELECT embedding_model, dim FROM corpus_meta LIMIT 1"
+            ).fetchone()
+
+            fts_schemas = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT schema_name FROM information_schema.schemata "
+                    "WHERE schema_name LIKE 'fts_main_%'"
+                ).fetchall()
+            }
+            fts_exists = "fts_main_document_chunks" in fts_schemas
+
+            existing_indexes = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT index_name FROM duckdb_indexes()"
+                ).fetchall()
+            }
+            hnsw_exists = "idx_hnsw_chunks" in existing_indexes
+        finally:
+            conn.close()
+    except Exception as e:
+        rich.print(f"[yellow]Could not check corpus: {e}[/yellow]")
+        return
+
+    rich.print("[bold]Corpus:[/bold]")
+    rich.print(f"  {doc_count:,} documents, {chunk_count:,} chunks")
+    if meta_row:
+        rich.print(f"  Embedding model: {meta_row[0]} (dim={meta_row[1]})")
+    else:
+        rich.print("  [yellow]Embedding model: unknown (corpus_meta empty)[/yellow]")
+
+    rich.print()
+    rich.print("  [bold]Document types:[/bold]")
+    for doc_type, count in doc_type_rows:
+        rich.print(f"      {doc_type}: {count:,}")
+
+    rich.print()
+    fts_icon = "[green]✅[/green]" if fts_exists else "[red]❌[/red]"
+    rich.print(f"  {fts_icon} FTS document_chunks")
+    hnsw_icon = "[green]✅[/green]" if hnsw_exists else "[red]❌[/red]"
+    rich.print(f"  {hnsw_icon} HNSW index idx_hnsw_chunks")
+
+
+def _summary_line_fetch(conn: Any) -> str:
+    """Compact 'Database:'/'Tables:' lines for the bare `esdc status` summary."""
+    from esdc.dbmanager import check_table_stats, get_last_updated
+
+    db_file = Config.get_db_file()
+    last_updated = get_last_updated(conn)
+    updated_suffix = f" (last updated {last_updated})" if last_updated else ""
+    table_stats = check_table_stats(conn)
+    loaded = sum(1 for ts in table_stats if ts["years"])
+    total = len(table_stats)
+    return (
+        f"[bold]Database:[/bold] {db_file} [green]✅[/green]{updated_suffix}\n"
+        f"[bold]Tables:[/bold]   {loaded}/{total} loaded"
+    )
+
+
+def _summary_line_index(conn: Any) -> str:
+    """Compact 'Indexes:' line for the bare `esdc status` summary."""
+    from esdc.dbmanager import check_indexes
+
+    idx = check_indexes(conn)
+    fts_missing = sum(1 for f in idx["fts_indexes"] if not f["exists"])
+    btree_missing = sum(1 for b in idx["btree_indexes"] if not b["exists"])
+    hnsw_ok = idx["embeddings"]["hnsw_exists"]
+
+    fts_part = (
+        "FTS [green]✅[/green]"
+        if fts_missing == 0
+        else f"FTS [red]❌[/red] ({fts_missing} missing)"
+    )
+    btree_part = (
+        "B-tree [green]✅[/green]"
+        if btree_missing == 0
+        else f"B-tree [red]❌[/red] ({btree_missing} missing)"
+    )
+    hnsw_part = "HNSW [green]✅[/green]" if hnsw_ok else "HNSW [red]❌[/red]"
+    return f"[bold]Indexes:[/bold]  {fts_part}  {btree_part}  {hnsw_part}"
+
+
+def _summary_line_corpus(conn: Any) -> str:
+    """Compact 'Corpus:' line for the bare `esdc status` summary."""
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+    if not set(_CORPUS_TABLES) <= existing_tables:
+        return (
+            "[bold]Corpus:[/bold]   [yellow]not initialized[/yellow] "
+            "(run [cyan]esdc corpus commit[/cyan])"
+        )
+
+    doc_count = (conn.execute("SELECT COUNT(*) FROM documents").fetchone() or (0,))[0]
+    chunk_count = (
+        conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone() or (0,)
+    )[0]
+    meta_row = conn.execute(
+        "SELECT embedding_model, dim FROM corpus_meta LIMIT 1"
+    ).fetchone()
+    model = meta_row[0] if meta_row else "unknown"
+    return (
+        f"[bold]Corpus:[/bold]   {doc_count:,} documents, "
+        f"{chunk_count:,} chunks ({model})"
+    )
+
+
+def _hit_rate_str(hits: int, misses: int) -> str:
+    """Compact hit-rate fragment; '–' for RAM-only stats with no activity."""
+    total = hits + misses
+    if total == 0:
+        return "–"
+    return f"{hits / total:.0%} hit"
+
+
+def _summary_line_cache() -> str:
+    """Compact 'Cache:' line for the bare `esdc status` summary."""
+    from esdc.chat.tools import get_sql_cache_stats, get_tool_cache_stats
+
+    sql_stats = get_sql_cache_stats()
+    tool_stats = get_tool_cache_stats()
+    sql_rate = _hit_rate_str(sql_stats.get("hits", 0), sql_stats.get("misses", 0))
+    tool_rate = _hit_rate_str(tool_stats.get("hits", 0), tool_stats.get("misses", 0))
+    return f"[bold]Cache:[/bold]    SQL {sql_rate} · Tool {tool_rate}"
+
+
+status_app = typer.Typer(no_args_is_help=False)
+app.add_typer(
+    status_app,
+    name="status",
+    help="Show database location, configuration, and index status.",
+)
+
+
+@status_app.callback(invoke_without_command=True)
+def status_main(ctx: typer.Context) -> None:
+    """Show a compact one-glance summary of all domains.
+
+    Detail: esdc status fetch|index|corpus|cache.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    db_file = Config.get_db_file()
+    if not db_file.exists():
+        rich.print(
+            "[yellow]Database exists: No[/yellow] "
+            "(run '[cyan]esdc fetch --save[/cyan]' to create)"
+        )
+        return
+
+    from esdc.dbmanager import get_duckdb_connection
+
+    try:
+        conn = get_duckdb_connection(db_file)
+    except Exception as e:
+        rich.print(f"[yellow]Could not open database: {e}[/yellow]")
+        return
+
+    summary_fns = (_summary_line_fetch, _summary_line_index, _summary_line_corpus)
+    try:
+        for summary_fn in summary_fns:
+            try:
+                rich.print(summary_fn(conn))
+            except Exception as e:
+                rich.print(f"[yellow]could not check: {e}[/yellow]")
+    finally:
+        conn.close()
+
+    try:
+        rich.print(_summary_line_cache())
+    except Exception as e:
+        rich.print(f"[yellow]could not check cache: {e}[/yellow]")
+
+    rich.print()
+    rich.print("Detail: esdc status fetch|index|corpus|cache")
+
+
+@status_app.command(name="fetch")
+def status_fetch_cmd() -> None:
+    """DB location/env vars, tables + per-year rows, last updated."""
+    _status_fetch_report()
+
+
+@status_app.command(name="index")
+def status_index_cmd(
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help="Run functional verification on indexes (slower).",
+        ),
+    ] = False,
+) -> None:
+    """FTS, B-tree, and embeddings + HNSW index status."""
+    _status_index_report(verify)
+
+
+@status_app.command(name="corpus")
+def status_corpus_cmd() -> None:
+    """Corpus store summary.
+
+    Doc/chunk counts, doc_type breakdown, pinned embedding model/dim,
+    chunks FTS + HNSW status.
+
+    Per-file pipeline state: esdc corpus status <paths>.
+    """
+    _status_corpus_report()
+
+
+@status_app.command(name="cache")
+def status_cache_cmd() -> None:
+    """SQL/tool/JSON cache stats, last invalidated."""
+    _status_cache_report()
+
+
+@app.command(name="eureka")
+def eureka(
+    port: int = typer.Option(2030, "--port", "-p", help="Dashboard port"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Dashboard host"),
+    log_level: str = typer.Option("info", "--log-level", help="Log level"),
+    year: int | None = typer.Option(None, "--year", "-y", help="Report year"),
+) -> None:
+    """Launch Eureka — Resources Knowledge Pages dashboard."""
+    from esdc.eureka.app import run_eureka
+
+    rich.print(
+        f"[bold green]Starting Eureka dashboard on "
+        f"http://{host}:{port}/eureka/[/bold green]"
+    )
+    run_eureka(host=host, port=port, log_level=log_level, year=year)
+
+
 @app.command(name="serve")
 def serve(
-    web: bool = typer.Option(True, "--web", help="Run web server"),
     port: int = typer.Option(3334, "--port", "-p", help="Server port"),
     host: str = typer.Option("0.0.0.0", "--host", "-h", help="Server host"),
     log_level: str = typer.Option("info", "--log-level", help="Uvicorn log level"),
 ) -> None:
     """Start OpenAI-compatible API server.
 
-    This command starts a web server that provides an OpenAI-compatible API
-    for the ESDC agent. This allows tools like OpenWebUI to connect to ESDC
-    as an external provider.
+    Provides an OpenAI-compatible API for the ESDC agent so tools like
+    OpenWebUI can connect to ESDC as an external provider.
 
     Args:
-        web: Whether to run the web server (default: True)
         port: Port to run the server on (default: 3334)
         host: Host to bind the server to (default: 0.0.0.0)
         log_level: Uvicorn log level (default: info)
     """
     from esdc.server.app import run_server
 
-    if web:
-        rich.print(
-            f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]"
-        )
-        rich.print(
-            f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
-        )
-        run_server(host=host, port=port, log_level=log_level)
+    rich.print(
+        f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]"
+    )
+    rich.print(
+        f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
+    )
+    run_server(host=host, port=port, log_level=log_level)
 
 
-@app.command(name="load-kg")
-def load_kg() -> None:
-    """Build the knowledge graph from the ESDC database.
+@app.command(name="portal")
+def portal(
+    port: int = typer.Option(13334, "--port", "-p", help="Portal port"),
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Portal host"),
+    log_level: str = typer.Option("info", "--log-level", help="Log level"),
+) -> None:
+    """Launch the POD registry portal (Excel-like master data editor)."""
+    from esdc.portal.app import run_portal
 
-    Creates a LadybugDB graph database with nodes and relationships
-    for fields, working areas, projects, operators, and reports.
-    Uses zero-copy ATTACH to DuckDB for data loading.
-    """
-    from esdc.knowledge_graph.ladybug_manager import LadybugDBManager
-
-    db_file = Config.get_db_file()
-    if not db_file.exists():
-        rich.print("[red]Database not found. Run 'esdc fetch --save' first.[/red]")
-        return
-
-    rich.print("[bold cyan]Building knowledge graph...[/bold cyan]")
-    manager = LadybugDBManager()
-    if manager.build_graph(db_file):
-        schema_info = manager.get_schema_info()
-        table_count = len(schema_info.get("tables", []))
-        rich.print(
-            f"[green]Knowledge graph built successfully![/green] ({table_count} tables)"
-        )
-    else:
-        rich.print(
-            "[red]Failed to build knowledge graph. Check logs for details.[/red]"
-        )
-    manager.close()
+    rich.print(
+        f"[bold green]Starting POD portal on http://{host}:{port}/[/bold green]"
+    )
+    run_portal(host=host, port=port, log_level=log_level)
 
 
 @app.command(name="validate")
@@ -1475,6 +2242,566 @@ def _save_violations(results: list[ValidationResult], fmt: str) -> None:
         df.to_json(filename, orient="records", indent=2)
 
     rich.print(f"[green]Saved {len(rows)} violations to {filename}[/green]")
+
+
+def _print_corpus_report(report) -> None:
+    """Print a processed/skipped/failed summary + warnings; exit 1 on total failure.
+
+    Partial failure exits 0 by design: batch progress is preserved and each
+    failure is listed per file, so scripts that need stricter semantics should
+    parse the FAILED lines rather than rely on the exit code.
+    """
+    rows = [
+        ("processed", len(report.processed)),
+        ("skipped", len(report.skipped)),
+        ("failed", len(report.failed)),
+    ]
+    rich.print(tabulate(rows, headers=["", "count"], tablefmt="psql"))
+    for name, error in report.failed.items():
+        typer.echo(f"  FAILED {name}: {error}", err=True)
+    for warning in report.warnings:
+        typer.echo(f"  Warning: {warning}", err=True)
+    if report.failed and not report.processed:
+        raise typer.Exit(1)
+
+
+def _validate_corpus_overrides(
+    level: str | None,
+    doc_type: str | None,
+    topic: str | None = None,
+    wk_name: str | None = None,
+    field_name: str | None = None,
+    project_name: str | None = None,
+) -> None:
+    from esdc.corpus.metadata import DOC_LEVELS, DOC_TOPICS, DOC_TYPES, doc_level_rule
+
+    allowed_levels = tuple(lv for lv in DOC_LEVELS if lv != "unknown")
+    if level is not None and level not in allowed_levels:
+        typer.echo(
+            f"Error: --level must be one of {', '.join(allowed_levels)}.", err=True
+        )
+        raise typer.Exit(1)
+    if doc_type is not None and doc_type not in DOC_TYPES:
+        typer.echo(
+            f"Error: --doc-type must be one of {', '.join(DOC_TYPES)}.", err=True
+        )
+        raise typer.Exit(1)
+    if topic is not None and topic not in DOC_TOPICS:
+        typer.echo(
+            f"Error: --topic must be one of {', '.join(DOC_TOPICS)}.", err=True
+        )
+        raise typer.Exit(1)
+
+    rule = doc_level_rule(doc_type, [topic] if topic is not None else None)
+    implied_level = rule[2] if rule is not None else None
+
+    entity_given = any(v is not None for v in (wk_name, field_name, project_name))
+    effective_level = level or implied_level
+    if effective_level == "regulation" and entity_given:
+        typer.echo(
+            "Error: regulation documents cannot have wk/field/project entities.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if level is not None and implied_level is not None and level != implied_level:
+        kind, key, _ = rule
+        typer.echo(
+            f"Error: --level {level} conflicts with the {kind} '{key}' rule "
+            f"(implies {implied_level}).",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+
+def _open_corpus_store():
+    """Open a CorpusStore with tables ensured, or exit 1 with a clear error."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore()
+    try:
+        store.ensure_tables()
+    except ValueError as e:
+        store.close()
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+    return store
+
+
+@corpus_app.command()
+def extract(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(
+            exists=True, help="Source file(s) (.pdf, .docx, .md) or folder(s)."
+        ),
+    ],
+    level: Annotated[
+        str | None,
+        typer.Option(
+            "--level", help="Override doc_level: wk, field, project, regulation."
+        ),
+    ] = None,
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Override doc_type.")
+    ] = None,
+    topic: Annotated[
+        str | None,
+        typer.Option("--topic", help="Set doc_topic (single value)."),
+    ] = None,
+    wk_name: Annotated[
+        str | None, typer.Option("--wk-name", help="Override wk_name.")
+    ] = None,
+    field_name: Annotated[
+        str | None, typer.Option("--field-name", help="Override field_name.")
+    ] = None,
+    project_name: Annotated[
+        str | None, typer.Option("--project-name", help="Override project_name.")
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Re-extract even if a sidecar already exists."),
+    ] = False,
+) -> None:
+    """Parse .pdf/.docx/.md sources to reviewable .corpus.md sidecars (step 1 of 2)."""
+    from esdc.corpus.pipeline import run_extract
+
+    _validate_corpus_overrides(
+        level, doc_type, topic, wk_name, field_name, project_name
+    )
+
+    try:
+        report = run_extract(
+            paths,
+            level=level,
+            doc_type=doc_type,
+            topic=topic,
+            wk_name=wk_name,
+            field_name=field_name,
+            project_name=project_name,
+            force=force,
+        )
+    except ValueError as e:  # e.g. --wk-name value not in canonical tables
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+    _print_corpus_report(report)
+    if report.processed:
+        typer.echo("Review the .corpus.md files, then run: esdc corpus commit <folder>")
+
+
+@corpus_app.command()
+def commit(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(exists=True, help="Sidecar .corpus.md file(s) or folder(s)."),
+    ],
+    skip_review: Annotated[
+        bool,
+        typer.Option(
+            "--skip-review",
+            help="Ingest sidecars still pending review; marks reviewed on success.",
+        ),
+    ] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="Re-ingest even if already committed.")
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Validate and report without writing.")
+    ] = False,
+) -> None:
+    """Ingest reviewed .corpus.md sidecars into the searchable corpus (step 2 of 2)."""
+    from esdc.corpus.pipeline import run_commit
+
+    try:
+        report = run_commit(
+            paths,
+            skip_review=skip_review,
+            force=force,
+            dry_run=dry_run,
+        )
+    except ValueError as e:  # e.g. embedding-model mismatch -> `corpus reembed`
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+    _print_corpus_report(report)
+
+
+@corpus_app.command(name="status")
+def corpus_status(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(exists=True, help="PDF/sidecar file(s) or folder(s) to check."),
+    ],
+) -> None:
+    """Show each PDF/sidecar's place in the extract -> review -> commit pipeline.
+
+    Store-level summary: esdc status corpus.
+    """
+    from esdc.corpus.pipeline import run_status
+
+    rows = run_status(paths)
+    rich.print(
+        tabulate(
+            [(r["file"], r["state"]) for r in rows],
+            headers=["file", "state"],
+            tablefmt="psql",
+        )
+    )
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["state"]] = counts.get(r["state"], 0) + 1
+    for state, n in sorted(counts.items()):
+        typer.echo(f"  {state}: {n}")
+
+
+@corpus_app.command(name="meta")
+def corpus_meta(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(exists=True, help="Sidecar .corpus.md file(s) or folder(s)."),
+    ],
+    level: Annotated[
+        str | None,
+        typer.Option(
+            "--level", help="Set doc_level: wk, field, project, regulation."
+        ),
+    ] = None,
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Set doc_type.")
+    ] = None,
+    topic: Annotated[
+        str | None,
+        typer.Option("--topic", help="Set doc_topic (single value)."),
+    ] = None,
+    wk_name: Annotated[
+        str | None, typer.Option("--wk-name", help="Set wk_name.")
+    ] = None,
+    field_name: Annotated[
+        str | None, typer.Option("--field-name", help="Set field_name.")
+    ] = None,
+    project_name: Annotated[
+        str | None, typer.Option("--project-name", help="Set project_name.")
+    ] = None,
+    reviewed: Annotated[
+        bool | None,
+        typer.Option("--reviewed/--no-reviewed", help="Set the reviewed flag."),
+    ] = None,
+    regenerate: Annotated[
+        bool,
+        typer.Option(
+            "--regenerate",
+            help=(
+                "Re-run LLM metadata analysis on each sidecar's existing body "
+                "(requires a reachable metadata_model); resets reviewed to "
+                "false unless --reviewed/--no-reviewed is also passed."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Show or bulk-set .corpus.md frontmatter metadata.
+
+    Without flags: print a metadata table. With flags: write the values
+    into each sidecar's frontmatter (re-running entity resolution).
+    """
+    from esdc.corpus.pipeline import run_meta, run_meta_show
+
+    _validate_corpus_overrides(
+        level, doc_type, topic, wk_name, field_name, project_name
+    )
+
+    values = (level, doc_type, topic, wk_name, field_name, project_name, reviewed)
+    if not regenerate and all(v is None for v in values):
+        rows = run_meta_show(paths)
+        table = [
+            (
+                r["file"],
+                r.get("doc_type"),
+                _topic_display(r.get("doc_topic")),
+                r.get("doc_date"),
+                r.get("doc_level"),
+                _entity_display(r),
+                r.get("reviewed"),
+                r.get("error") or "",
+            )
+            for r in rows
+        ]
+        headers = [
+            "file", "doc_type", "topic", "doc_date", "doc_level", "entity",
+            "reviewed", "note",
+        ]
+        rich.print(tabulate(table, headers=headers, tablefmt="psql"))
+        return
+
+    try:
+        report = run_meta(
+            paths,
+            level=level,
+            doc_type=doc_type,
+            topic=topic,
+            wk_name=wk_name,
+            field_name=field_name,
+            project_name=project_name,
+            reviewed=reviewed,
+            regenerate=regenerate,
+        )
+    except ValueError as e:  # e.g. --wk-name value not in canonical tables, or
+        # --regenerate with no reachable metadata_model
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+    _print_corpus_report(report)
+
+
+def _topic_display(topic: Any) -> str:
+    """Join a doc_topic list for table display; blank for None/empty."""
+    if not topic:
+        return ""
+    if isinstance(topic, list):
+        return ", ".join(str(t) for t in topic)
+    return str(topic)
+
+
+def _entity_display(d: dict) -> str:
+    """Join first non-empty entity field for display."""
+    for key in ("wk_name", "field_name", "project_name"):
+        val = d.get(key)
+        if not val:
+            continue
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                return val  # legacy plain-text value — show as-is
+        if isinstance(val, list):
+            return ", ".join(str(v) for v in val)
+        return str(val)
+    return ""
+
+
+@corpus_app.command(name="list")
+def list_documents() -> None:
+    """List all documents committed to the corpus."""
+    store = _open_corpus_store()
+    try:
+        docs = store.list_documents()
+    finally:
+        store.close()
+
+    rows = [
+        (
+            d["doc_id"],
+            d["file_name"],
+            d["doc_type"],
+            d["doc_date"],
+            d["doc_level"],
+            _entity_display(d),
+            d["n_chunks"],
+        )
+        for d in docs
+    ]
+    headers = [
+        "doc_id", "file_name", "doc_type", "doc_date",
+        "doc_level", "entity", "n_chunks",
+    ]
+    rich.print(tabulate(rows, headers=headers, tablefmt="psql"))
+
+
+@corpus_app.command()
+def remove(
+    doc_ids: Annotated[
+        list[str] | None, typer.Argument(help="Document ID(s) to remove.")
+    ] = None,
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Remove all docs of this type.")
+    ] = None,
+    year: Annotated[
+        int | None, typer.Option("--year", help="Filter by document year.")
+    ] = None,
+    wk_name: Annotated[
+        str | None, typer.Option("--wk-name", help="Filter by working area name.")
+    ] = None,
+    field_name: Annotated[
+        str | None, typer.Option("--field-name", help="Filter by field name.")
+    ] = None,
+    project_name: Annotated[
+        str | None, typer.Option("--project-name", help="Filter by project name.")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="List matches without deleting.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Confirm filter-based deletion.")
+    ] = False,
+) -> None:
+    """Remove document(s) from the corpus (does not touch files on disk).
+
+    Sidecars are untouched: a later `esdc corpus commit` re-ingests them.
+    """
+    filters = {
+        k: v
+        for k, v in {
+            "doc_type": doc_type,
+            "year": year,
+            "wk_name": wk_name,
+            "field_name": field_name,
+            "project_name": project_name,
+        }.items()
+        if v is not None
+    }
+    explicit = list(doc_ids or [])
+    if not explicit and not filters:
+        typer.echo(
+            "Nothing to remove: pass doc id(s) or a filter "
+            "(--doc-type/--year/--wk-name/--field-name/--project-name). "
+            "To delete everything, use `esdc corpus clear`.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    store = _open_corpus_store()
+    removed = 0
+    try:
+        targets: list[tuple[str, str]] = []
+        if filters:
+            matched = store.find_doc_ids(filters)
+            typer.echo(f"Matched {len(matched)} document(s):")
+            for _doc_id, file_name in matched:
+                typer.echo(f"  {file_name}")
+            targets.extend(matched)
+        for doc_id in explicit:
+            if all(doc_id != t[0] for t in targets):
+                targets.append((doc_id, doc_id))
+
+        if dry_run:
+            typer.echo(f"Dry run — {len(targets)} document(s) would be removed.")
+            return
+        if filters and not yes:
+            typer.echo(
+                f"This deletes {len(targets)} document(s). Re-run with --yes.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        _warn_pod_links([t[0] for t in targets])
+
+        for doc_id, _name in targets:
+            if store.get_document(doc_id) is None:
+                typer.echo(f"Not found: {doc_id}", err=True)
+                continue
+            store.delete_document(doc_id)
+            removed += 1
+        if removed:
+            store.rebuild_indexes()
+    finally:
+        store.close()
+    typer.echo(
+        f"Removed {removed} document(s). Sidecars kept — "
+        "`esdc corpus commit` would re-ingest them."
+    )
+
+
+def _warn_pod_links(doc_ids: list[str]) -> None:
+    """Warn when removed docs are linked in the registry's pod_document table.
+
+    Links are kept: doc_id is derived from source bytes, so a re-committed
+    document returns under the same id. Tolerates the table (or the whole
+    registry db) not existing.
+    """
+    if not doc_ids:
+        return
+    try:
+        from esdc.pod_registry.store import get_sqlite_connection
+
+        conn = get_sqlite_connection()
+        try:
+            placeholders = ", ".join("?" for _ in doc_ids)
+            rows = conn.execute(
+                "SELECT DISTINCT doc_id FROM pod_document "
+                f"WHERE doc_id IN ({placeholders})",
+                doc_ids,
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return
+    linked = [r["doc_id"] for r in rows]
+    if linked:
+        typer.echo(
+            f"Warning: {len(linked)} removed document(s) are linked to PODs "
+            "in the registry (links kept; re-commit restores the same doc_id): "
+            + ", ".join(linked),
+            err=True,
+        )
+
+
+@corpus_app.command()
+def clear(
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Confirm deletion of the entire corpus.")
+    ] = False,
+) -> None:
+    """Delete all documents and chunks from the corpus."""
+    store = _open_corpus_store()
+    try:
+        counts = store.counts()
+        if not yes:
+            typer.echo(
+                f"This deletes {counts['documents']} documents and "
+                f"{counts['chunks']} chunks. Re-run with --yes."
+            )
+            raise typer.Exit(1)
+        removed = store.clear()
+        store.rebuild_indexes()
+    finally:
+        store.close()
+    typer.echo(
+        f"Removed {removed['documents']} documents and {removed['chunks']} chunks."
+    )
+
+
+@corpus_app.command()
+def export(
+    paths: Annotated[
+        list[Path] | None,
+        typer.Argument(help="Sidecar .corpus.md file(s) to regenerate from the DB."),
+    ] = None,
+    all_docs: Annotated[
+        bool,
+        typer.Option("--all", help="Regenerate every committed document's sidecar."),
+    ] = False,
+) -> None:
+    """Regenerate .corpus.md sidecars from the DB (documents table is truth).
+
+    Rebuilds each sidecar's frontmatter + body from its committed row —
+    including portal edits and Task-4 commit-time entity merges — so a
+    deleted or stale sidecar can be reconstructed. Overwrites the file(s)
+    at their DB-recorded file_path; run `esdc corpus commit` afterward
+    only if you want to re-ingest (a matching hash is already committed,
+    so a plain re-commit is a no-op).
+    """
+    from esdc.corpus.pipeline import run_export
+
+    if not all_docs and not paths:
+        typer.echo(
+            "Nothing to export: pass sidecar path(s) or --all.", err=True
+        )
+        raise typer.Exit(1)
+
+    report = run_export(paths or [], all_docs=all_docs)
+    _print_corpus_report(report)
+
+
+@corpus_app.command()
+def reembed() -> None:
+    """Rebuild chunk embeddings for the whole corpus after an embedding-model change."""
+    from esdc.corpus.pipeline import run_reembed
+
+    report = run_reembed()
+    _print_corpus_report(report)
+    typer.echo(
+        f"Re-embedded {len(report.processed)} document(s) "
+        f"with model '{report.embedding_model}'."
+    )
+
+
 
 
 if __name__ == "__main__":

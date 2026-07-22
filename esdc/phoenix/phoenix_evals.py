@@ -31,15 +31,16 @@ ESDC_TOOLS_DESCRIPTION = (
     "for static resource queries.\n"
     "Problem Cluster Search: Search for problem cluster definitions "
     "when user asks about project issues.\n"
-    "Knowledge Traversal: Resolve entities and match query patterns "
+    "Entity Resolver: Resolve entity names and match query patterns "
     "from the ESDC knowledge graph.\n"
+    "Knowledge Traversal: Retrieve KSMI domain knowledge — "
+    "definitions, transitions, formulas, hierarchy.\n"
     "Cypher Executor: Execute a Cypher query against the ESDC knowledge graph.\n"
     "Spatial Resolver: Execute spatial queries using DuckDB's "
     "native spatial capabilities.\n"
     "Semantic Search: Search for documents by semantic similarity to the query.\n"
-    "Compute Engine: Execute a shell command in a sandboxed environment.\n"
-    "File Processing: Write text content to a file in the sandboxed environment.\n"
-    "View File: Display a file from the sandbox inline in the chat."
+    "Shell Executor: Execute a shell command in a sandboxed environment.\n"
+    "Code Interpreter: Execute Python code for data analysis and visualization.\n"
 )
 
 
@@ -69,7 +70,7 @@ def _create_judge_llm() -> PhoenixLLM:
     if not provider_config:
         raise RuntimeError(
             "Cannot create judge LLM: no provider configured. "
-            "Run 'esdc chat --setup' or configure provider first."
+            "Run 'esdc configs' first."
         )
 
     provider_type: str = provider_config["provider_type"]

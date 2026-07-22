@@ -12,6 +12,9 @@ import diskcache
 import duckdb
 from langchain.tools import tool
 
+# First-party (no circular deps — doc_schema.py only imports yaml/stdlib)
+from esdc.chat.domain_knowledge.doc_schema import enum_values, render_tool_context
+
 logger = logging.getLogger("esdc.chat.tools")
 
 # Maximum rows to return to prevent context window overflow
@@ -136,7 +139,9 @@ def _get_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "sql_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _sql_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
+        _sql_cache = diskcache.Cache(
+            str(cache_dir), size_limit=500_000_000, statistics=True
+        )
     return _sql_cache
 
 
@@ -155,8 +160,120 @@ def _get_tool_cache() -> diskcache.Cache:
 
         cache_dir = Config.get_cache_dir() / "tool_results"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _tool_cache = diskcache.Cache(str(cache_dir), size_limit=500_000_000)
+        _tool_cache = diskcache.Cache(
+            str(cache_dir), size_limit=500_000_000, statistics=True
+        )
     return _tool_cache
+
+
+_corpus_embedder = None
+
+
+def _get_corpus_embedder():
+    """Lazily create and reuse one EmbeddingManager for corpus tools.
+
+    The embedder is a stateless HTTP client; recreating it per tool call
+    wasted setup time. The CorpusStore/DuckDB connection is deliberately
+    NOT cached (short-lived connections avoid file-lock conflicts with
+    the corpus CLI).
+    """
+    global _corpus_embedder
+    if _corpus_embedder is None:
+        from esdc.search.embedding_manager import EmbeddingManager
+
+        _corpus_embedder = EmbeddingManager()
+    return _corpus_embedder
+
+
+def _get_disk_cache_stats(
+    cache: diskcache.Cache | None,
+    cache_dir_name: str,
+    size_limit: int = 500_000_000,
+) -> dict[str, Any]:
+    """Get statistics from a diskcache.Cache instance.
+
+    Opens a temporary read-only handle (without statistics=True) so that
+    esdc status does not interfere with the live cache's hit/miss counters.
+    Stats are persisted by diskcache in its internal SQLite database, so
+    hits/misses are readable even from a separate process.
+
+    Args:
+        cache: The global cache handle, or None if not yet initialized.
+        cache_dir_name: Subdirectory name (e.g. "sql_results" or "tool_results").
+        size_limit: Maximum cache size in bytes.
+
+    Returns:
+        Dict with cache diagnostics.
+    """
+    from esdc.configs import Config
+
+    cache_dir = Config.get_cache_dir() / cache_dir_name
+
+    if not cache_dir.exists():
+        return {
+            "directory": str(cache_dir),
+            "entries": 0,
+            "size_bytes": 0,
+            "size_limit": size_limit,
+            "hits": 0,
+            "misses": 0,
+            "hit_rate": None,
+        }
+
+    # Open a temporary handle to read stats from disk.
+    # Use statistics=False (default) to avoid incrementing counters
+    # in this process — we only want to read what the live process wrote.
+    try:
+        temp_cache = diskcache.Cache(str(cache_dir))
+    except (FileNotFoundError, OSError):
+        return {
+            "directory": str(cache_dir),
+            "entries": 0,
+            "size_bytes": 0,
+            "size_limit": size_limit,
+            "hits": 0,
+            "misses": 0,
+            "hit_rate": None,
+        }
+    try:
+        stats = temp_cache.stats()  # type: ignore[union-attr]
+        hits: int = stats[0]  # type: ignore[assignment]
+        misses: int = stats[1]  # type: ignore[assignment]
+        entries = len(temp_cache)  # type: ignore[arg-type]
+        volume = temp_cache.volume()  # type: ignore[union-attr]
+        limit = temp_cache.size_limit  # type: ignore[attr-defined]
+    except (FileNotFoundError, OSError):
+        hits, misses, entries, volume, limit = 0, 0, 0, 0, size_limit
+    finally:
+        temp_cache.close()
+    total = hits + misses
+    return {
+        "directory": str(cache_dir),
+        "entries": entries,
+        "size_bytes": volume,
+        "size_limit": limit,
+        "hits": hits,
+        "misses": misses,
+        "hit_rate": hits / total if total > 0 else None,
+    }
+
+
+def get_sql_cache_stats() -> dict[str, Any]:
+    """Get SQL cache statistics for diagnostics.
+
+    Returns:
+        Dict with cache size, entries, hits, misses, and hit rate.
+    """
+    return _get_disk_cache_stats(_sql_cache, "sql_results")
+
+
+def get_tool_cache_stats() -> dict[str, Any]:
+    """Get tool cache statistics for diagnostics.
+
+    Returns:
+        Dict with cache size, entries, hits, misses, and hit rate.
+    """
+    return _get_disk_cache_stats(_tool_cache, "tool_results")
 
 
 def _tool_cache_key(tool_name: str, **kwargs: Any) -> str:
@@ -172,11 +289,13 @@ def invalidate_tool_cache() -> None:
         _tool_cache.clear()
         _tool_cache = None
     from esdc.configs import Config
+    from esdc.dbmanager import _record_cache_invalidation
 
     cache_dir = Config.get_cache_dir() / "tool_results"
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
         logger.info("Tool cache invalidated: %s", cache_dir)
+    _record_cache_invalidation(cache_dir)
 
 
 def reset_sql_cache() -> None:
@@ -251,6 +370,9 @@ async def execute_sql(
     Returns results as a formatted table. Use this tool when the user wants
     to query data from the database.
     Only SELECT queries are allowed for safety.
+
+    For domain context about KSMI levels, entities, or transitions,
+    call knowledge_traversal first.
 
     This is an async tool that runs the query in a thread pool to avoid blocking
     the event loop, keeping the UI responsive during database operations.
@@ -1035,8 +1157,8 @@ def search_problem_cluster(
         )
 
 
-@tool("Knowledge Traversal")
-def knowledge_traversal(
+@tool("Entity Resolver")
+def entity_resolver(
     query: Annotated[
         str,
         "Natural language query to resolve entities and match patterns "
@@ -1046,17 +1168,16 @@ def knowledge_traversal(
     return_multiple: Annotated[
         bool,
         "If True, return all matching entities instead of single best match. "
-        "Use when user asks for multiple matches "
-        "(e.g., 'lapangan yang ada kata duri apa saja').",
-    ] = False,
+        "Defaults to True so ambiguous or partial entity names surface all "
+        "matches. Set False only when a single best match is required.",
+    ] = True,
 ) -> str:
     """Resolve entities and match query patterns from the ESDC knowledge graph.
 
-    This tool traverses the knowledge graph to identify entities
-    (fields, working areas, operators, years, uncertainty levels) and match
-    query patterns from natural language. It returns structured context that
-    enables single-shot SQL generation, reducing multi-round tool calling
-    to 1-2 calls.
+    This tool resolves entity names (fields, working areas, operators, years)
+    and matches query patterns from natural language. It returns structured
+    context that enables single-shot SQL generation, reducing multi-round
+    tool calling to 1-2 calls.
 
     WHEN TO USE:
     - Call this BEFORE writing SQL queries to resolve entity names
@@ -1079,44 +1200,39 @@ def knowledge_traversal(
     - confidence: Overall confidence score (0.0-1.0)
 
     Examples:
-    - knowledge_traversal("cadangan Duri 2024")
+    - entity_resolver("cadangan Duri 2024")
       → Entity: Field=Duri, Year=2024, Pattern: cadangan, Table: field_resources
-    - knowledge_traversal("profil produksi Abadi")
+    - entity_resolver("profil produksi Abadi")
       → Entity: Field=Abadi, Pattern: profil_produksi, Table: field_timeseries
-    - knowledge_traversal("isu water cut di lapangan Duri")
+    - entity_resolver("isu water cut di lapangan Duri")
       → Entity: Field=Duri, Pattern: issues_remarks, Table: field_resources
     """
     import json
 
-    from esdc.knowledge_graph.resolver import KnowledgeTraversalResolver
+    from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 
     cache = _get_tool_cache()
     cache_key = _tool_cache_key(
-        "knowledge_traversal", query=query, return_multiple=return_multiple
+        "entity_resolver", query=query, return_multiple=return_multiple
     )
     if cache_key in cache:
-        logger.debug("[CACHE] hit | tool=knowledge_traversal key=%s", cache_key[:16])
+        logger.debug("[CACHE] hit | tool=entity_resolver key=%s", cache_key[:16])
         return str(cache[cache_key])
 
-    logger.debug("[CACHE] miss | tool=knowledge_traversal key=%s", cache_key[:16])
+    logger.debug("[CACHE] miss | tool=entity_resolver key=%s", cache_key[:16])
 
     try:
         conn = get_db_connection()
         try:
-            resolver = KnowledgeTraversalResolver(db=conn)
+            resolver = EntityResolver(db=conn)
             result = resolver.resolve(query=query, return_multiple=return_multiple)
             result["query"] = query
-
-            if result.get("pattern") and result["pattern"].get("cypher_template"):
-                result["cypher_available"] = True
-            else:
-                result["cypher_available"] = False
 
             result_str = json.dumps(result, indent=2, ensure_ascii=False)
             if result.get("status") in ("success", "ambiguous"):
                 cache.set(cache_key, result_str)
                 logger.debug(
-                    "[CACHE] stored | tool=knowledge_traversal key=%s", cache_key[:16]
+                    "[CACHE] stored | tool=entity_resolver key=%s", cache_key[:16]
                 )
             return result_str
         finally:
@@ -1137,83 +1253,10 @@ def knowledge_traversal(
             {
                 "status": "failed",
                 "fallback": "multi_round",
-                "message": f"Knowledge traversal error: {str(e)}",
+                "message": f"Entity resolver error: {str(e)}",
                 "query": query,
             }
         )
-
-
-@tool("Cypher Executor")
-async def execute_cypher(
-    query: Annotated[
-        str,
-        "A valid Cypher query to execute against the ESDC knowledge graph. "
-        "Use this for graph traversal queries like finding nearby fields, "
-        "tracing relationships, or multi-hop entity resolution.",
-    ],
-) -> str:
-    """Execute a Cypher query against the ESDC knowledge graph.
-
-    Use this tool when knowledge_traversal indicates cypher_available=True
-    or when you need graph traversal (spatial proximity, relationships).
-
-    Supports parameterized queries using $param_name syntax.
-
-    Returns:
-    JSON string with:
-    - status: "success" or "error"
-    - results: List of result rows as dictionaries
-    - row_count: Number of rows returned
-
-    Examples:
-    - execute_cypher("MATCH (f:Field {field_name: 'Duri'})
-      RETURN f.field_name, f.field_lat")
-    - execute_cypher(
-        "MATCH (f1:Field)-[:LOCATED_NEAR]->(f2:Field) "
-        "WHERE f1.field_name = 'Duri' AND f2.distance_km < 20 "
-        "RETURN f2.field_name, f2.distance_km"
-    )
-    """
-    import json
-
-    try:
-        return await asyncio.get_running_loop().run_in_executor(
-            None, _execute_cypher_sync, query
-        )
-    except Exception as e:
-        return json.dumps({"status": "error", "message": str(e)})
-
-
-def _execute_cypher_sync(query: str) -> str:
-    """Synchronous Cypher execution."""
-    import json
-
-    from esdc.knowledge_graph.ladybug_manager import LadybugDBManager
-
-    manager = LadybugDBManager()
-    if not manager.initialize():
-        return json.dumps(
-            {
-                "status": "error",
-                "message": "Knowledge graph not available. Run 'esdc load --kg' first.",
-            }
-        )
-
-    try:
-        results = manager.execute_cypher(query)
-        return json.dumps(
-            {
-                "status": "success",
-                "results": results,
-                "row_count": len(results),
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-    except Exception as e:
-        return json.dumps({"status": "error", "message": str(e)})
-    finally:
-        manager.close()
 
 
 @tool("Spatial Resolver")
@@ -1281,7 +1324,7 @@ def resolve_spatial(
     """
     import json
 
-    from esdc.knowledge_graph.spatial_resolver import SpatialResolver
+    from esdc.search.spatial_resolver import SpatialResolver
 
     logger.debug(
         "[SPATIAL_START] query_type=%s | target=%s | radius_km=%s | wk_name=%s",
@@ -1534,7 +1577,11 @@ def semantic_search(
         "Filter by SKK Migas region (ILIKE pattern, e.g., '%Duri%'). Optional.",
     ] = None,
 ) -> str:
-    """Search for documents by semantic similarity to the query.
+    """Search project remarks AND official documents by semantic similarity.
+
+    Every call fans out to two sources and returns both:
+    - project_remarks (via hybrid semantic + FTS search)
+    - the ingested document corpus (surat, MoM, berita acara)
 
     Use this tool when:
     - User asks about concepts, meanings, or topics (not exact keywords)
@@ -1543,11 +1590,15 @@ def semantic_search(
     - User wants to filter by year, field, working area, etc.
 
     Returns:
-    JSON string with:
-    - status: "success", "no_results", "not_available", "fallback_to_fts", or "error"
-    - results: List of similar documents with similarity scores and contextual columns
-    - count: Number of results
-    - message: Additional information (e.g., fallback explanation)
+    JSON string with two top-level sections:
+    - remarks: {status, results, count, message} — same shape as before,
+      status is "success", "no_results", "not_available", "fallback_to_fts",
+      or "error"
+    - documents: {status, results, count, message} — hits from the document
+      corpus, or status="not_available"/"error" if no corpus is ingested or
+      the corpus lookup failed. A corpus failure never affects the remarks
+      section. If documents is "not_available", do not mention documents in
+      the answer unless the user specifically asked about them.
 
     Examples:
     - semantic_search("proyek dengan reservoir kompleks") ->
@@ -1559,7 +1610,7 @@ def semantic_search(
     """
     import json
 
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+    from esdc.search.semantic_resolver import SemanticResolver
 
     # Build filters dict from optional parameters
     filters: dict[str, Any] = {}
@@ -1593,7 +1644,12 @@ def semantic_search(
         filters["wk_area_perwakilan_skkmigas"] = wk_area_perwakilan_skkmigas
 
     cache = _get_tool_cache()
-    cache_key = _tool_cache_key("semantic_search", query=query, limit=limit, **filters)
+    # v2 key: the return envelope changed from flat {status, ...} to
+    # {remarks, documents}. The tool cache is permanent on disk, so old
+    # flat-shape entries must never hit.
+    cache_key = _tool_cache_key(
+        "semantic_search_v2", query=query, limit=limit, **filters
+    )
     if cache_key in cache:
         logger.debug("[CACHE] hit | tool=semantic_search key=%s", cache_key[:16])
         return str(cache[cache_key])
@@ -1603,42 +1659,62 @@ def semantic_search(
     resolver = SemanticResolver()
 
     try:
-        result = resolver.hybrid_search(
+        remarks_result = resolver.hybrid_search(
             query=query,
             limit=limit,
             filters=filters if filters else None,
         )
 
         # If embeddings not available, fallback to FTS search
-        if result.get("status") == "not_available":
+        if remarks_result.get("status") == "not_available":
             logger.info("[Semantic] embeddings not available, falling back to FTS")
-            fallback_result = _search_remarks_via_fts(query, limit, "project_resources")
-            fallback_str = json.dumps(fallback_result, indent=2, ensure_ascii=False)
-            if fallback_result.get("status") in ("success", "no_results"):
-                cache.set(cache_key, fallback_str)
-                logger.debug(
-                    "[CACHE] stored | tool=semantic_search key=%s (fts fallback)",
-                    cache_key[:16],
-                )
-            return fallback_str
-
-        result_str = json.dumps(result, indent=2, ensure_ascii=False)
-        if result.get("status") in ("success", "no_results"):
-            cache.set(cache_key, result_str)
-            logger.debug("[CACHE] stored | tool=semantic_search key=%s", cache_key[:16])
-        return result_str
+            remarks_result = _search_remarks_via_fts(query, limit, "project_resources")
 
     except Exception as e:
         logger.error("[Semantic] tool failed | query=%s error=%s", query, e)
-        return json.dumps(
-            {
-                "status": "error",
-                "message": str(e),
-                "query": query,
-            }
-        )
+        remarks_result = {
+            "status": "error",
+            "message": str(e),
+            "query": query,
+        }
     finally:
         resolver.close()
+
+    # Fan out to the document corpus so issue/topic queries surface official
+    # documents too. A corpus failure must never break the remarks result.
+    documents_result: dict[str, Any] = {"status": "not_available"}
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        store = CorpusStore(embedder=_get_corpus_embedder())
+        try:
+            documents_result = store.search(
+                query=query,
+                limit=5,
+                filters=_map_remarks_filters_to_corpus(filters),
+            )
+        finally:
+            store.close()
+    except Exception as e:
+        logger.warning("[SemanticSearch] corpus fan-out failed: %s", e)
+        documents_result = {"status": "error", "message": str(e)}
+
+    result_str = json.dumps(
+        {"remarks": remarks_result, "documents": documents_result},
+        indent=2,
+        ensure_ascii=False,
+        default=str,
+    )
+    # Cache only when BOTH sections are definitive. The cache is not
+    # invalidated by `esdc corpus commit`, so caching a not_available/error
+    # documents section would freeze it even after a corpus is ingested.
+    if remarks_result.get("status") in (
+        "success",
+        "no_results",
+    ) and documents_result.get("status") in ("success", "no_results"):
+        cache.set(cache_key, result_str)
+        logger.debug("[CACHE] stored | tool=semantic_search key=%s", cache_key[:16])
+    return result_str
 
 
 def _search_remarks_via_fts(
@@ -1738,3 +1814,437 @@ def _search_remarks_via_fts(
             "results": [],
             "count": 0,
         }
+
+
+def _map_remarks_filters_to_corpus(filters: dict[str, Any]) -> dict[str, Any]:
+    """Map semantic_search's remarks filters to CorpusStore's filter schema.
+
+    Only wk_name, field_name, project_name, and report_year (-> year) have
+    equivalents in the document corpus; the rest (pod_name, province,
+    basin128, project_class/stage/level, operator_*, wk_subgroup,
+    wk_regionisasi_ngi, wk_area_perwakilan_skkmigas) are remarks-only and
+    are dropped.
+    """
+    corpus_filters: dict[str, Any] = {}
+    if "wk_name" in filters:
+        corpus_filters["wk_name"] = filters["wk_name"]
+    if "field_name" in filters:
+        corpus_filters["field_name"] = filters["field_name"]
+    if "project_name" in filters:
+        corpus_filters["project_name"] = filters["project_name"]
+    if "report_year" in filters:
+        corpus_filters["year"] = filters["report_year"]
+    return corpus_filters
+
+
+_DOC_TYPE_VALUES = enum_values("doc_type")
+_DOC_TOPIC_VALUES = enum_values("doc_topic")
+_DOC_SCHEMA_CONTEXT = render_tool_context()
+
+
+@tool("Document Search")
+def search_documents(
+    query: Annotated[
+        str,
+        "Bilingual Indonesian/English query about official documents "
+        "(surat, minutes of meeting, berita acara). "
+        "Example: 'persetujuan POD lapangan Duri 2025'.",
+    ],
+    limit: Annotated[int, "Maximum results (default 5)."] = 5,
+    doc_type: Annotated[
+        str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."
+    ] = None,
+    doc_topic: Annotated[
+        str | None, f"Filter by business topic: {', '.join(_DOC_TOPIC_VALUES)}."
+    ] = None,
+    year: Annotated[int | None, "Filter by document year."] = None,
+    wk_name: Annotated[str | None, "Filter by working area (ILIKE pattern)."] = None,
+    field_name: Annotated[str | None, "Filter by field name (ILIKE pattern)."] = None,
+    project_name: Annotated[
+        str | None, "Filter by project name (ILIKE pattern)."
+    ] = None,
+) -> str:
+    """Search ingested official documents by meaning.
+
+    Use this tool when:
+    - User asks about official documents: surat, minutes of meeting (MoM),
+      berita acara ingested via `esdc corpus`
+    - User references correspondence, approvals, or meeting decisions:
+      "surat tentang X", "MoM pembahasan Y", "dokumen persetujuan Z"
+    - User wants document hits filtered by type, topic (POD, WP&B, PSC,
+      ...), year, working area, field, or project
+
+    Use this tool directly when the user asks about a specific document or
+    document type (surat, MoM, berita acara, "POD I Revisi 2") — its
+    doc_type/doc_topic/year filters give precise hits. For broad issue/topic
+    exploration, semantic_search already includes a documents section.
+    DO NOT use for reserves/production numbers (use execute_sql).
+    DO NOT call entity_resolver first — this tool takes free-text names
+    directly.
+
+    Returns:
+    JSON string with:
+    - status: "success", "no_results", "not_available", or "error"
+    - results: List of matching chunks with doc_id, file_name, doc_type,
+      doc_topic, doc_date, subject, wk_name, field_name, project_name, section,
+      chunk_text, and relevance score (RRF fusion, small magnitudes
+      ~0.01-0.03 are normal)
+    - count: Number of results
+    - message: Additional information (e.g., how to ingest documents)
+
+    Use read_document(doc_id) to fetch the full text of a hit.
+
+    Examples:
+    - search_documents("persetujuan POD lapangan Duri") -> POD approval letters
+    - search_documents("pembahasan work program", doc_type="mom") -> MoM hits
+    - search_documents("rencana kerja", doc_topic="wpnb") -> WP&B documents
+    - search_documents("berita acara serah terima", year=2025) -> 2025 BA docs
+    """
+    # Build filters dict from optional parameters
+    filters: dict[str, Any] = {}
+    if doc_type is not None:
+        filters["doc_type"] = doc_type
+    if doc_topic is not None:
+        filters["doc_topic"] = doc_topic
+    if year is not None:
+        filters["year"] = year
+    if wk_name is not None:
+        filters["wk_name"] = wk_name
+    if field_name is not None:
+        filters["field_name"] = field_name
+    if project_name is not None:
+        filters["project_name"] = project_name
+
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "search_documents", query=query, limit=limit, **filters
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=search_documents key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    logger.debug("[CACHE] miss | tool=search_documents key=%s", cache_key[:16])
+
+    store = None
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        store = CorpusStore(embedder=_get_corpus_embedder())
+        result = store.search(
+            query=query,
+            limit=limit,
+            filters=filters if filters else None,
+        )
+
+        if result.get("status") == "not_available":
+            # Keep the store's diagnostic and append the actionable steps.
+            hint = (
+                "Run: esdc corpus extract <folder>, review the sidecars, "
+                "then esdc corpus commit <folder>"
+            )
+            store_msg = result.get("message")
+            result["message"] = f"{store_msg} {hint}" if store_msg else hint
+
+        result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        if result.get("status") in ("success", "no_results"):
+            cache.set(cache_key, result_str)
+            logger.debug(
+                "[CACHE] stored | tool=search_documents key=%s", cache_key[:16]
+            )
+        return result_str
+
+    except Exception as e:
+        logger.error("[DocSearch] tool failed | query=%s error=%s", query, e)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": str(e),
+                "query": query,
+            }
+        )
+    finally:
+        if store is not None:
+            store.close()
+
+
+# search_documents is a langchain StructuredTool; the LLM-facing text used
+# for tool-calling is `.description` (captured from the function docstring
+# at decoration time), not `.__doc__` (which on the StructuredTool instance
+# resolves to the wrapper class's own docstring). Append the schema-derived
+# field guide the same way esdc/chat/openterminal.py's
+# `run_command.description = ...` does.
+search_documents.description = (
+    search_documents.description
+    + "\n\nDocument metadata schema:\n"
+    + _DOC_SCHEMA_CONTEXT
+)
+
+
+@tool("Document Reader")
+def read_document(
+    doc_id: Annotated[str, "doc_id returned by search_documents."],
+    max_chars: Annotated[
+        int, "Truncate markdown to this many chars (default 20000)."
+    ] = 20000,
+) -> str:
+    """Fetch full markdown + metadata of one ingested document as JSON.
+
+    Use this tool when:
+    - search_documents returned a hit and the user needs the full document
+      text (quotes, summaries, detailed answers)
+    - User asks to read a specific ingested document by its doc_id
+
+    Returns:
+    JSON string with:
+    - status: "success", "not_found", or "error"
+    - document: Full metadata row (file_name, doc_type, doc_date, subject,
+      sender, recipient, wk_name, field_name, project_name, ...) with
+      markdown truncated to max_chars
+    - document.truncated: true when markdown was cut at max_chars
+
+    Examples:
+    - read_document("a1b2c3") -> full text of document a1b2c3
+    - read_document("a1b2c3", max_chars=5000) -> first 5000 chars only
+    """
+    store = None
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        store = CorpusStore(embedder=_get_corpus_embedder())
+        doc = store.get_document(doc_id)
+        if doc is None:
+            logger.debug("[DocRead] not_found | doc_id=%s", doc_id)
+            return json.dumps({"status": "not_found", "doc_id": doc_id})
+
+        # Drop fields that are noise for the chat agent: embedding
+        # bookkeeping and raw JSON-string blobs (raw_entities, metadata)
+        # whose useful parts are already promoted to top-level columns.
+        for noise_field in ("embedding_model", "raw_entities", "metadata"):
+            doc.pop(noise_field, None)
+        markdown = doc.get("markdown") or ""
+        doc["truncated"] = len(markdown) > max_chars
+        doc["markdown"] = markdown[:max_chars]
+        logger.debug(
+            "[DocRead] success | doc_id=%s truncated=%s", doc_id, doc["truncated"]
+        )
+        return json.dumps(
+            {"status": "success", "document": doc},
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        )
+
+    except Exception as e:
+        logger.error("[DocRead] tool failed | doc_id=%s error=%s", doc_id, e)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": str(e),
+                "doc_id": doc_id,
+            }
+        )
+    finally:
+        if store is not None:
+            store.close()
+
+
+def _format_find_results(
+    results: list[dict[str, Any]],
+) -> str:
+    """Format FTS find results into readable text."""
+    if not results:
+        return "No matching entities found."
+    lines = []
+    for i, r in enumerate(results, 1):
+        lines.append(f"### {i}. {r.get('code', 'N/A')} — {r.get('name', 'N/A')}")
+        lines.append(f"   Type: {r.get('source_table', r.get('entity_type', 'N/A'))}")
+        if r.get("definition"):
+            defn = r["definition"]
+            if len(defn) > 300:
+                defn = defn[:300] + "..."
+            lines.append(f"   Definition: {defn}")
+        if r.get("aliases"):
+            aliases = r["aliases"]
+            if isinstance(aliases, str):
+                aliases = aliases.split("||")
+            lines.append(f"   Aliases: {', '.join(str(a) for a in aliases[:5])}")
+        lines.append(f"   Relevance: {r.get('score', 0):.4f}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_traverse_results(
+    entity_code: str,
+    relationship: str,
+    results: list[dict[str, Any]],
+) -> str:
+    """Format graph traversal results into readable text."""
+    rel_labels = {
+        "CLASSIFIED_AS": "classified as",
+        "REPORTED_AS": "reported as",
+        "CAN_TRANSITION_TO": "can transition to",
+        "HAS_LEVEL": "has level",
+        "BELONGS_TO_FRAMEWORK": "belongs to framework",
+        "HAS_SUBSTANCE": "has substance",
+    }
+    rel_label = rel_labels.get(relationship, relationship)
+    if not results:
+        return f"Entity '{entity_code}' has no {rel_label} relationships."
+    lines = [f"Entity '{entity_code}' {rel_label}:"]
+    for r in results:
+        code = r.get("code", "N/A")
+        name = r.get("name", "N/A")
+        rtype = r.get("type", "")
+        lines.append(f"  - {code}: {name} ({rtype})")
+    return "\n".join(lines)
+
+
+@tool("Knowledge Traversal")
+def knowledge_traversal(
+    topic: Annotated[
+        str,
+        "Knowledge topic to retrieve. "
+        "One of: 'definition' (concept definitions), "
+        "'level' (project maturity levels E0-X6, A1-A2), "
+        "'transition' (level transition rules, reachability matrix, WAP constraints), "
+        "'formula' (volume formulas, GRR, EUR, Gross/Net/Sales), "
+        "'hierarchy' (classification hierarchy tree), "
+        "'entity' (entities: WAP, PSE, GROOVY, etc.), "
+        "'document' (PSE, GROOVY, izin berproduksi), "
+        "'commercial' (commercial factors), "
+        "'all' (entire knowledge base).",
+    ],
+    entity: Annotated[
+        str | None,
+        "Optional entity name to narrow results. "
+        "Examples: 'E0', 'GRR', 'PSE', 'GROOVY', "
+        "'DokumenPenentuanStatusEksplorasi', 'SalesPotentialResources', 'TBS'. "
+        "If provided, returns only that entity regardless of topic.",
+    ] = None,
+    relationship: Annotated[
+        str | None,
+        "Optional relationship type for graph traversal. "
+        "Use to find related entities. Examples: "
+        "'CLASSIFIED_AS' (what classification a level belongs to), "
+        "'REPORTED_AS' (what volume types a classification reports as), "
+        "'CAN_TRANSITION_TO' (what levels a level can transition to), "
+        "'HAS_LEVEL' (what levels belong to the KSMI framework), "
+        "'BELONGS_TO_FRAMEWORK' (what entities belong to KSMI). "
+        "Only effective when entity is also provided.",
+    ] = None,
+    include_reachability: Annotated[
+        bool,
+        "If True and topic is 'transition' or 'level', auto-append the full "
+        "reachability matrix (Level → Allowed Targets) to the output. The "
+        "queried entity, if any, is highlighted with a marker. Prevents "
+        "common reasoning errors like claiming E3 can transition to E4 "
+        "(only E0, E2, E5 are valid targets for E3). Default: True.",
+    ] = True,
+) -> str:
+    """Retrieve domain knowledge — definitions, rules, transitions, formulas.
+
+    Traverses the KSMI knowledge schema to provide detailed information about:
+    - Project maturity levels (E0-On Production, E1-Production on Hold, etc.)
+    - Level transition rules (which levels can transition to which)
+    - WAP constraints (max WAP duration, GROOVY dispensation)
+    - Volume formulas (EUR, GRR, Gross/Net/Sales relationships)
+    - Document semantics (PSE vs Izin Berproduksi, GROOVY)
+    - is_pod_approved / is_pse_approved logic per level
+    - Classification hierarchy (Reserves > GRR, Contingent, Prospective)
+
+    The short table in the system prompt covers level codes and basic rules.
+    Use this tool for ANY detailed question about KSMI concepts.
+
+    When 'relationship' is provided with 'entity', performs a graph traversal
+    to find related entities. For example:
+    - entity='Reserves', relationship='REPORTED_AS' → returns gross, net, sales
+    - entity='E0', relationship='CAN_TRANSITION_TO' → returns E1, E4, E7
+
+    When 'include_reachability' is True (default) and topic is 'transition'
+    or 'level', the output is automatically extended with a compact
+    reachability matrix covering all 18 levels (E0-E8, X0-X6, A1, A2).
+    The queried entity, if provided, is visually highlighted.
+
+    Entity lookup also consults a general oil & gas glossary of non-KSMI
+    commercial/financing terms (e.g. TBS = Trustee Borrowing Scheme) that
+    may appear in document text but are not part of the KSMI framework.
+
+    Returns formatted text with definitions, key concepts, and rules.
+    """
+    if entity:
+        try:
+            from esdc.loaders import lookup_loaded_schema
+
+            loaded_schema_result = lookup_loaded_schema(entity)
+            if loaded_schema_result:
+                return loaded_schema_result
+        except Exception as e:
+            logger.warning("[LoadedSchema-KG] lookup_failed | error=%s", e)
+
+        try:
+            from esdc.chat.domain_knowledge.glossary import glossary_lookup
+
+            glossary_result = glossary_lookup(entity)
+            if glossary_result:
+                return glossary_result
+        except Exception as e:
+            logger.warning("[Glossary] lookup_failed | error=%s", e)
+
+    base_output, matrix_text = _query_graph(
+        entity, relationship, topic, include_reachability
+    )
+
+    if base_output is not None:
+        if matrix_text and matrix_text not in base_output:
+            return f"{base_output}\n\n---\n\n{matrix_text}"
+        return base_output
+
+    if matrix_text is not None:
+        return matrix_text
+
+    from esdc.chat.domain_knowledge.ksmi_loader import ksmi_retrieve
+
+    return ksmi_retrieve(topic=topic, entity=entity)
+
+
+_REACHABILITY_TOPICS = frozenset({"transition", "level"})
+
+
+def _query_graph(
+    entity: str | None,
+    relationship: str | None,
+    topic: str,
+    include_reachability: bool,
+) -> tuple[str | None, str | None]:
+    """Query the KSMI graph for entity info and reachability matrix.
+
+    Returns:
+        Tuple of (base_output, matrix_text). Either or both may be None
+        if the graph is unavailable or the queries return no results.
+    """
+    from esdc.chat.domain_knowledge.ksmi_graph_manager import KSMIGraphManager
+
+    base_output: str | None = None
+    matrix_text: str | None = None
+    try:
+        mgr = KSMIGraphManager()
+        if entity and relationship:
+            results = mgr.traverse(entity, relationship)
+            if results:
+                base_output = _format_traverse_results(
+                    entity, relationship, results
+                )
+        if base_output is None and entity:
+            results = mgr.find_all(entity)
+            if results:
+                base_output = _format_find_results(results)
+        if include_reachability and topic.lower() in _REACHABILITY_TOPICS:
+            try:
+                matrix_text = mgr.format_reachability(highlight=entity)
+            except Exception as e:
+                logger.warning(
+                    "[KSMI-KG] reachability_format_error | %s", e
+                )
+    except Exception as e:
+        logger.warning("[KSMI-KG] graph_fallback | error=%s", e)
+    return base_output, matrix_text

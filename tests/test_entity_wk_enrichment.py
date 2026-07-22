@@ -1,6 +1,6 @@
 """Tests for entity resolution WK enrichment."""
 
-from esdc.knowledge_graph.resolver import KnowledgeTraversalResolver
+from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 
 
 class TestWKEnrichment:
@@ -11,18 +11,20 @@ class TestWKEnrichment:
         entities = [
             {
                 "type": "Field",
+                "entity_type": "field_name",
                 "filter_column": "field_name",
                 "name": "Tambora",
                 "confidence": 0.9,
             },
             {
                 "type": "WorkingArea",
+                "entity_type": "wk_name",
                 "filter_column": "wk_name",
                 "name": "Mahakam",
                 "confidence": 1.0,
             },
         ]
-        resolver = KnowledgeTraversalResolver.__new__(KnowledgeTraversalResolver)
+        resolver = EntityResolver.__new__(EntityResolver)
         conditions = resolver._build_where_conditions(entities)
 
         has_field = any("field_name" in c for c in conditions)
@@ -35,12 +37,13 @@ class TestWKEnrichment:
         entities = [
             {
                 "type": "Field",
+                "entity_type": "field_name",
                 "filter_column": "field_name",
                 "name": "Duri",
                 "confidence": 0.9,
             },
         ]
-        resolver = KnowledgeTraversalResolver.__new__(KnowledgeTraversalResolver)
+        resolver = EntityResolver.__new__(EntityResolver)
         conditions = resolver._build_where_conditions(entities)
 
         has_field = any("field_name" in c for c in conditions)
@@ -58,7 +61,7 @@ class TestWKEnrichment:
                 "confidence": 1.0,
             },
         ]
-        resolver = KnowledgeTraversalResolver.__new__(KnowledgeTraversalResolver)
+        resolver = EntityResolver.__new__(EntityResolver)
         conditions = resolver._build_where_conditions(entities)
 
         assert any("report_year" in c for c in conditions), (

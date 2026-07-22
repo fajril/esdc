@@ -1,0 +1,71 @@
+# esdc/chat/domain_knowledge/pod_registry_schema.yaml
+tables:
+  - table_name: pod_registry
+    description: "Master registry of approved PODs (Plan of Development) and related approvals (POD I, POFD/OPL/OPLL, POP): identity, approval date, approving institution, type, and revision lineage. Join to pod_plan and pod_project via pod_id."
+    columns:
+      - name: id
+        type: integer
+        description: "Legacy ITB numeric POD identifier."
+        aliases: ["pod id itb", "nomor pod itb"]
+      - name: pod_id
+        type: string
+        description: "Canonical POD identifier, format PL-YYYY-XXXX-A-B-R (YYYY approval year, XXXX approval sequence, A institution code, B POD type code, R revision number)."
+        aliases: ["ID POD", "POD ID", "pod id skk"]
+      - name: pod_name
+        type: string
+        description: "Name of the POD document."
+        aliases: ["nama POD", "judul POD"]
+      - name: pod_letter_num
+        type: string
+        description: "POD approval letter number."
+        aliases: ["nomor surat POD", "POD letter number"]
+      - name: approval_date
+        type: date
+        description: "Date the POD was approved."
+        aliases: ["tanggal persetujuan", "approval date"]
+      - name: institution
+        type: string
+        description: "Approving institution: MESDM, BPPKA, BP Migas, SKK Migas, or BPMA."
+        aliases: ["institusi", "lembaga"]
+      - name: pod_type
+        type: string
+        description: "POD type: POD I, POD/Waterflood/EOR, POFD/OPL/OPLL, or POP."
+        aliases: ["tipe POD", "jenis POD"]
+      - name: rev_num
+        type: integer
+        description: "Revision number, 0 for original."
+        aliases: ["revisi", "revision"]
+      - name: approval_seq
+        type: integer
+        description: "Global incremental approval sequence number (XXXX in pod_id)."
+        aliases: ["urutan persetujuan"]
+      - name: preceded_by
+        type: string
+        description: "pod_id(s) this POD revises (semicolon separated). Derived from revision links."
+        aliases: ["pendahulu", "predecessor"]
+      - name: superseded_by
+        type: string
+        description: "pod_id(s) that supersede this POD (semicolon separated). Non-empty means this POD is obsolete."
+        aliases: ["digantikan oleh", "successor"]
+  - table_name: pod_project
+    description: "Many-to-many mapping between PODs and esdc projects. Join pod_id to pod_registry.pod_id and project_id to project_resources.project_id."
+    columns:
+      - name: pod_id
+        type: string
+        description: "Canonical POD identifier (PL-YYYY-XXXX-A-B-R)."
+        aliases: ["ID POD", "POD ID"]
+      - name: project_id
+        type: string
+        description: "esdc project identifier."
+        aliases: ["kode proyek", "project code"]
+  - table_name: pod_document
+    description: "Many-to-many mapping between PODs and corpus documents (approval letters, POD documents). Join pod_id to pod_registry.pod_id and doc_id to documents.doc_id; from there pod_project links to project_resources for reserves comparison."
+    columns:
+      - name: pod_id
+        type: string
+        description: "Canonical POD identifier (PL-YYYY-XXXX-A-B-R)."
+        aliases: ["ID POD", "POD ID"]
+      - name: doc_id
+        type: string
+        description: "Corpus document identifier (16-hex prefix of the source file hash); joins documents.doc_id."
+        aliases: ["dokumen", "document id", "surat"]

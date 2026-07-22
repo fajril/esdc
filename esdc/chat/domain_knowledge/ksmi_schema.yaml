@@ -1,6 +1,44 @@
 # KSMI Schema Definitions
+# KSMI = Kerangka Sumber Daya Migas Indonesia
 # Standar Klasifikasi Sumber Daya dan Cadangan Indonesia
 # https://github.com/fajril/esdc
+
+# =============================================================================
+# KSMI Framework Definition
+# =============================================================================
+KSMIFramework:
+  name: Kerangka Sumber Daya Migas Indonesia
+  code: KSMI
+  aliases:
+    - KSMI
+    - Kerangka Sumber Daya Migas
+    - Kerangka Sumber Daya Migas Indonesia
+    - Indonesia Framework of Petroleum Resources
+    - Kerangka Klasifikasi Sumber Daya
+  full_name: Kerangka Sumber Daya Migas Indonesia
+  definition: >-
+    KSMI (Kerangka Sumber Daya Migas Indonesia) adalah kerangka klasifikasi
+    sumber daya dan cadangan migas Indonesia yang disusun berdasarkan Petroleum
+    Resources Management System (PRMS) 2018 dan disesuaikan dengan regulasi
+    serta proses bisnis industri hulu migas di Indonesia. KSMI
+    mengkategorikan proyek migas berdasarkan level kematangan proyek (Project
+    Maturity Level) yang merefleksikan peluang keberhasilan komersial.
+  source: >-
+    Sub Tim Standardisasi Kerangka Sumber Daya Migas Indonesia.
+    Ketua: Ir. Wilson Robert Pariangan, M.T., SPEC.
+    Penyusun Naskah: Dr. Ir. Fajril Ambia, PMP, SPEC.
+  key_concepts:
+    - KSMI = Kerangka Sumber Daya Migas Indonesia (bukan "Klasifikasi")
+    - Kerangka (framework) yang berisi sistem klasifikasi
+    - Berbasis PRMS 2018 (Petroleum Resources Management System)
+    - Disesuaikan dengan regulasi dan proses bisnis industri hulu migas Indonesia
+    - Tiga kelas: Reserves & GRR, Contingent Resources, Prospective Resources
+    - Level kematangan proyek (E0-X6, A1-A2) merefleksikan peluang komersial
+    - Standar Klasifikasi Sumber Daya dan Cadangan Indonesia adalah nama standar/dokumennya
+    - KSMI adalah nama kerangka/framework-nya
+    - Setiap proyek hanya dapat memiliki satu kategori kelas
+    - Cadangan dan GRR berada dalam kelas yang sama (Reserves & GRR)
+    - GRR tidak dapat dilaporkan sendiri tanpa nilai cadangan
 
 # =============================================================================
 # Waktu Acuan Pelaporan (WAP)
@@ -27,6 +65,587 @@ WaktuAcuanPelaporan:
     - Merupakan acuan resmi
     - Dikenal juga sebagai waktu referensi official report
     - Data "tahun 2024" = WAP 31.12.2024
+
+# =============================================================================
+# Fundamental Concepts
+# =============================================================================
+Risk:
+  name: Risiko
+  code: RISK
+  definition: >-
+    Risiko (risk) merupakan probabilitas atas suatu kejadian (event) yang memiliki
+    keluaran (outcomes) bersifat dapat dicacah (countable). Risiko dapat berupa
+    risiko teknis maupun risiko komersial. Risiko teknis umumnya lebih dominan
+    pada kegiatan eksplorasi, sedangkan risiko komersial umumnya lebih dominan
+    pada kegiatan pengembangan.
+  definition_code: "II.3"
+  key_concepts:
+    - Risiko = probabilitas kejadian dengan outcomes countable
+    - Risiko teknis dominan di eksplorasi (risiko geologi)
+    - Risiko komersial dominan di pengembangan
+    - Pada eksplorasi: dua kemungkinan = berhasil atau gagal menemukan akumulasi
+
+Uncertainty:
+  name: Ketidakpastian
+  code: UNCERTAINTY
+  definition: >-
+    Ketidakpastian (uncertainty) merupakan probabilitas atas suatu kejadian (event)
+    yang memiliki keluaran (outcomes) bersifat tidak dapat dicacah (uncountable).
+    Ketidakpastian terdapat pada angka sumber daya yang diperoleh apabila keberadaan
+    akumulasi petroleum sudah dikonfirmasi.
+  definition_code: "II.4"
+  key_concepts:
+    - Ketidakpastian = probabilitas dengan outcomes uncountable
+    - Terdapat pada angka sumber daya SETELAH akumulasi dikonfirmasi
+    - Direfleksikan dalam estimasi bawah (P90), terbaik (P50), dan atas (P10)
+    - Klasifikasi project level merefleksikan tingkat ketidakpastian komersial
+
+Petroleum:
+  name: Petroleum
+  code: PETROLEUM
+  definition: >-
+    Petroleum didefinisikan sebagai campuran yang umumnya didominasi oleh komponen
+    hidrokarbon yang secara alami terbentuk dalam fase padat, cair, maupun gas.
+    Petroleum dapat mengandung komponen non-hidrokarbon yang biasa menyertai dalam
+    akumulasi tersebut, seperti karbon dioksida, nitrogen, hidrogen sulfida, dan
+    sulfur. Dalam beberapa kasus khusus, komponen non-hidrokarbon dapat menjadi
+    komponen yang paling dominan.
+  definition_code: "II.6"
+  key_concepts:
+    - Campuran dominan hidrokarbon (fase padat, cair, gas)
+    - Dapat mengandung non-hidrokarbon (CO2, N2, H2S, sulfur)
+    - Pengecualian: volume sangat besar meski hidrokarbon tidak dominan masih berpotensi komersial
+
+InitialPetroleumInPlace:
+  name: Initial Petroleum in Place
+  code: IPIP
+  aliases:
+    - IPIP
+  definition: >-
+    Initial Petroleum in Place (IPIP) adalah akumulasi petroleum yang secara alami
+    terdapat pada reservoir dalam kondisi awal sebelum adanya produksi. Akumulasi
+    ini dihitung secara keseluruhan sehingga termasuk baik yang dapat diambil maupun
+    yang tidak dapat diambil. IPIP merupakan istilah generik yang terdiri atas
+    Initial Oil in Place (IOIP) dan Initial Gas in Place (IGIP).
+  definition_code: "II.7"
+  key_concepts:
+    - Volume total akumulasi petroleum di reservoir sebelum produksi
+    - Termasuk yang dapat dan tidak dapat diambil
+    - IPIP terdiri atas IOIP (minyak) dan IGIP (gas), bukan sinonim
+    - Retrograde condensate reservoir: volume kondensat awal masuk IOIP
+    - Saturated reservoir dengan gas tudung: volume gas tudung masuk IGIP
+  sub_types:
+    - name: Initial Oil in Place
+      code: IOIP
+      aliases:
+        - IOIP
+        - OOIP
+        - STOIIP
+      description: Volume petroleum cair (minyak) awal di tempat
+      unit: MSTB
+    - name: Initial Gas in Place
+      code: IGIP
+      aliases:
+        - IGIP
+        - OGIP
+        - STGIIP
+      description: Volume petroleum gas awal di tempat
+      unit: BSCF
+
+SumberDaya:
+  name: Sumber Daya
+  code: RESOURCES
+  aliases:
+    - Resources
+    - Sumber Daya Migas
+  definition: >-
+    Sumber daya adalah bagian dari Initial Petroleum in Place (IPIP) yang berpotensi
+    untuk diambil ke permukaan melalui kegiatan pengeboran atau mekanisme lain yang
+    didukung oleh fasilitas produksi yang diperlukan. Sumber daya dapat dievaluasi
+    pada IPIP yang belum maupun yang sudah ditemukan. Seluruh kelas dalam klasifikasi
+    disebut sebagai sumber daya.
+  definition_code: "II.8"
+  key_concepts:
+    - Bagian dari IPIP yang berpotensi diambil ke permukaan
+    - Dapat dievaluasi pada IPIP yang belum maupun sudah ditemukan
+    - SELURUH kelas (Cadangan, CR, PR) = sumber daya
+    - Cadangan = kasus khusus dari sumber daya yang sudah memenuhi syarat komersial
+    - Faktor komersial: teknis, keekonomian, regulasi & legal, sosial & lingkungan
+
+CumulativeProduction:
+  name: Cumulative Production
+  code: CUMPROD
+  aliases:
+    - Produksi Kumulatif
+    - Cumulative
+  definition: >-
+    Cumulative Production atau Produksi Kumulatif adalah angka produksi aktual yang
+    diakumulasi dari saat awal produksi hingga WAP.
+  definition_code: "II.13"
+  key_concepts:
+    - Produksi aktual kumulatif dari awal produksi hingga WAP
+    - Dilaporkan dalam Gross dan Sales
+    - Dapat terdiri dari: Oil, Condensate, Associated Gas, Non-associated Gas
+  units:
+    gross_oil: MSTB
+    sales_oil: MSTB
+    gross_condensate: MSTB
+    sales_condensate: MSTB
+    gross_associated_gas: BSCF
+    sales_associated_gas: BSCF
+    gross_non_associated_gas: BSCF
+    sales_non_associated_gas: BSCF
+
+Unrecoverable:
+  name: Unrecoverable
+  code: UNREC
+  aliases:
+    - Tidak Dapat Diambil
+  definition: >-
+    Unrecoverable merupakan bagian volume IPIP yang ketika dievaluasi pada status
+    waktu acuan, tidak dapat diambil akibat terkendala dari sisi teknologi maupun
+    batasan fisika yang dihadapi oleh proyek. Sebagian dari volume yang tidak dapat
+    diambil ini di masa datang dapat menjadi terambil apabila ada proyek pengembangan
+    lanjut yang dapat menyelesaikan kendala-kendala tersebut.
+  definition_code: "II.14"
+  key_concepts:
+    - Volume IPIP yang tidak dapat diambil dengan teknologi/batasan fisika saat ini
+    - Dapat berubah jika ada proyek pengembangan lanjut (EOR, IOR)
+    - Ini adalah volume yang menjadi target proyek E6 (Further Development)
+
+EstimatedUltimateRecovery:
+  name: Estimated Ultimate Recovery
+  code: EUR
+  aliases:
+    - EUR
+    - Perkiraan Pengambilan Maksimum
+  definition: >-
+    Estimated Ultimate Recovery (EUR) atau Perkiraan Pengambilan Maksimum adalah
+    volume petroleum yang bisa diambil secara keseluruhan dari awal hingga akhir
+    masa produksi. Volume EUR bergantung pada konteks batasan yang diambil.
+  definition_code: "II.15"
+  formulas:
+    reserves_eur: "EUR = Ultimate Reserves = Cumulative Production + Reserves"
+    grr_eur: "EUR = Ultimate GRR = Cumulative Production + GRR"
+    cr_eur: "EUR = Cumulative Production + Contingent Resources"
+    pr_eur: "EUR = Prospective Resources"
+  key_concepts:
+    - Volume total yang bisa diambil dari awal hingga akhir masa produksi
+    - Konteks tergantung batasan (cadangan vs GRR vs CR vs PR)
+    - EUR_Reserves = CumProd + Reserves
+    - EUR_GRR = CumProd + GRR
+
+Abandoned:
+  name: Abandoned
+  code: ABANDONED
+  aliases:
+    - Ditinggalkan
+    - Abandon
+  definition: >-
+    Abandoned merupakan kategori yang menampung proyek yang tadinya diidentifikasi
+    memiliki potensi adanya akumulasi petroleum. Namun setelah didapat data yang lebih
+    lengkap, proyek tersebut dinyatakan tidak memiliki potensi akumulasi petroleum.
+    Karena proyek pada kategori ini tidak memiliki potensi yang teridentifikasi,
+    maka kategori abandoned tidak termasuk dalam klasifikasi sumber daya.
+  definition_code: "II.17"
+  sub_categories:
+    A1_Dry:
+      code: A1
+      name: Dry
+      aliases:
+        - A1
+        - Dry
+        - Kering
+      definition: >-
+        Hasil pengeboran eksplorasi menunjukkan tidak ada akumulasi petroleum yang ditemukan.
+      definition_code: "II.34"
+    A2_Dissolved:
+      code: A2
+      name: Dissolved
+      aliases:
+        - A2
+        - Dissolved
+        - Terlarut
+      definition: >-
+        Hasil studi evaluasi seismik 3D menunjukkan tidak ada bentukan struktur yang
+        memungkinkan terjadinya akumulasi petroleum.
+      definition_code: "II.35"
+  key_concepts:
+    - Tidak termasuk dalam klasifikasi sumber daya
+    - Volume sumber daya = nol
+    - A1 (Dry) = tidak ada akumulasi dari pengeboran
+    - A2 (Dissolved) = tidak ada struktur dari seismik
+    - Peluang keberhasilan komersial = 0 (tidak ada potensi akumulasi petroleum)
+  commerciality_rank: 0
+  peluang_keberhasilan_komersial: nol
+  is_pod_approved: false   # Tidak ada izin berproduksi untuk proyek tanpa akumulasi
+  is_pse_approved: false   # PSE tidak relevan untuk proyek tanpa akumulasi
+
+DokumenPenentuanStatusEksplorasi:
+  name: Dokumen Penentuan Status Eksplorasi
+  code: PSE
+  aliases:
+    - PSE
+    - Penentuan Status Eksplorasi
+    - Dokumen PSE
+  definition: >-
+    Dokumen Penentuan Status Eksplorasi (PSE) adalah dokumen yang menandakan
+    bahwa kegiatan eksplorasi telah selesai. PSE BUKAN merupakan Izin Berproduksi.
+    PSE diperlukan untuk transisi proyek ke level X0 (Development Pending).
+    Transisi dari X-level ke E-level memerlukan Izin Berproduksi, bukan PSE.
+  key_concepts:
+    - PSE ≠ Izin Berproduksi
+    - PSE menandai selesainya kegiatan eksplorasi
+    - PSE hanya diperlukan untuk transisi ke X0 (Development Pending)
+    - Izin Berproduksi (POD/POP/POFD/OPL/OPLL) diperlukan untuk transisi ke E-level
+    - Kolom database is_pse_approved menandakan apakah PSE sudah disetujui
+  db_column: is_pse_approved
+
+# =============================================================================
+# Classification Hierarchy
+# =============================================================================
+ClassificationHierarchy:
+  name: Kerangka Klasifikasi Sumber Daya
+  description: >-
+    Sistem klasifikasi yang mengkategorikan proyek migas di Indonesia. Dengan klasifikasi
+    ini, para pemangku kepentingan dapat membuat berbagai strategi untuk meningkatkan
+    level proyek dari sumber daya hingga mencapai kelas cadangan.
+  tree:
+    Initial_Petroleum_In_Place:
+      Discovered_Initial_Petroleum_In_Place:
+        Commercial:
+          Cumulative_Production: null
+          Reserves_and_GRR:
+            uncertainty_levels:
+              - code: 3P
+                name: Proved + Probable + Possible
+                percentile: P10
+                description: Estimasi atas (high estimate)
+              - code: 2P
+                name: Proved + Probable
+                percentile: P50
+                description: Estimasi terbaik (best estimate)
+              - code: 1P
+                name: Proved
+                percentile: P90
+                description: Estimasi bawah (low estimate)
+            incremental_levels:
+              P1: "Proven = 1P (volume pada P90)"
+              P2: "Probable = 2P - 1P"
+              P3: "Possible = 3P - 2P"
+            grr_uncertainty:
+              - code: 3R
+                name: GRR High Estimate
+                percentile: P10
+              - code: 2R
+                name: GRR Best Estimate
+                percentile: P50
+              - code: 1R
+                name: GRR Low Estimate
+                percentile: P90
+            grr_incremental_levels:
+              R1: "Proved GRR = 1R (volume pada P90)"
+              R2: "Probable GRR = 2R - 1R"
+              R3: "Possible GRR = 3R - 2R"
+        Sub_Commercial:
+          Contingent_Resources:
+            uncertainty_levels:
+              - code: 3C
+                name: Contingent Resources High Estimate
+                percentile: P10
+              - code: 2C
+                name: Contingent Resources Best Estimate
+                percentile: P50
+              - code: 1C
+                name: Contingent Resources Low Estimate
+                percentile: P90
+            incremental_levels:
+              C1: "Contingent Low = 1C"
+              C2: "Contingent Probable = 2C - 1C"
+              C3: "Contingent Possible = 3C - 2C"
+          Unrecoverable_Discovered: null
+      Undiscovered_Initial_Petroleum_In_Place:
+        Prospective_Resources:
+          uncertainty_levels:
+            - code: 3U
+              name: Prospective Resources High Estimate
+              percentile: P10
+            - code: 2U
+              name: Prospective Resources Best Estimate
+              percentile: P50
+            - code: 1U
+              name: Prospective Resources Low Estimate
+              percentile: P90
+          risked_values:
+            description: >-
+              Volume Prospective Resources dikalikan dengan Geological Chance Factor (GCF)
+              untuk mendapatkan nilai risked. Risked volume = volume × GCF.
+          incremental_levels:
+            U1: "Prospective Low = 1U (volume pada P90)"
+            U2: "Prospective Probable = 2U - 1U"
+            U3: "Prospective Possible = 3U - 2U"
+        Unrecoverable_Undiscovered: null
+
+# =============================================================================
+# Volume Formulas & Relationships
+# =============================================================================
+VolumeFormulas:
+  name: Hubungan Volume Sumber Daya
+  description: >-
+    Formula matematika yang menghubungkan berbagai besaran volume dalam klasifikasi
+    sumber daya migas Indonesia.
+  relationships:
+    discovered_ipip:
+      formula: "Discovered IPIP = Cumulative Production + Reserves + Contingent Resources + Unrecoverable"
+      description: >-
+        Hubungan volume untuk akumulasi yang sudah ditemukan. Perlu ditekankan bahwa
+        jika hanya terdapat satu proyek, maka persamaan hanya dapat memiliki cadangan
+        ATAU contingent resources, tidak keduanya secara bersamaan.
+      constraint: >-
+        Satu proyek hanya dapat memiliki cadangan ATAU contingent resources,
+        tidak keduanya secara bersamaan.
+    undiscovered_ipip:
+      formula: "Undiscovered IPIP = Prospective Resources + Unrecoverable"
+      description: Hubungan volume untuk akumulasi yang belum ditemukan.
+    eur_reserves:
+      formula: "EUR = Ultimate Reserves = Cumulative Production + Reserves"
+      description: EUR dengan batasan cadangan (komersial).
+    eur_grr:
+      formula: "EUR = Ultimate GRR = Cumulative Production + GRR"
+      description: EUR dengan batasan GRR (teknis).
+    eur_contingent:
+      formula: "EUR = Cumulative Production + Contingent Resources"
+      description: >-
+        EUR untuk proyek contingent resources. Hanya berlaku jika proyek tersebut
+        akhirnya mencapai produksi.
+    eur_prospective:
+      formula: "EUR = Prospective Resources"
+      description: >-
+        EUR untuk prospective resources. Belum ada produksi kumulatif karena
+        akumulasi belum ditemukan.
+    grr_vs_reserves:
+      formula: "GRR - Reserves = Sales Potential Resources"
+      description: >-
+        Sales Potential Resources merupakan volume yang memiliki potensi untuk
+        menjadi cadangan apabila seluruh batasan komersial (keekonomian, regulasi/legal,
+        sosial/lingkungan) dapat diatasi. Dalam konteks gas, Sales Potential Resources
+        merupakan potensi uncommitted gas yang dapat dijual. Jika seluruh batasan
+        komersial teratasi, maka volume GRR = volume Reserves dan Sales Potential
+        Resources = 0.
+
+  uncertainty_definitions:
+    P90:
+      definition: >-
+        Estimasi bawah (low estimate). Ada peluang 90% bahwa besaran akumulasi
+        petroleum akan lebih besar atau sama dengan estimasi bawah.
+      description: "90% peluang volume aktual >= P90"
+    P50:
+      definition: >-
+        Estimasi terbaik (best estimate). Ada peluang 50% bahwa besaran akumulasi
+        petroleum akan lebih besar atau sama dengan estimasi terbaik.
+      description: "50% peluang volume aktual >= P50"
+    P10:
+      definition: >-
+        Estimasi atas (high estimate). Ada peluang 10% bahwa besaran akumulasi
+        petroleum akan lebih besar atau sama dengan estimasi atas.
+      description: "10% peluang volume aktual >= P10"
+    deterministic_scenario:
+      definition: >-
+        Metode deterministik skenario tunggal memiliki 80% peluang berada di antara
+        estimasi bawah dan estimasi atas. Skenario tunggal ini dalam pelaporan
+        dapat menjadi estimasi terbaik.
+      description: "Skenario tunggal = P50 dalam pelaporan"
+
+# =============================================================================
+# Commercial Factors
+# =============================================================================
+CommercialFactors:
+  name: Faktor Komersial
+  description: >-
+    Faktor komersial yang menjadi pertimbangan dalam penentuan klasifikasi didasarkan
+    pada faktor teknis, keekonomian, regulasi dan legal, serta sosial dan lingkungan.
+    Perlu ditekankan bahwa faktor teknis merupakan bagian dari komersial.
+  factors:
+    technical:
+      definition: Kemampuan teknis untuk memproduksikan (kemampuan sumur dan fasilitas)
+      applies_to: GRR dan Reserves
+    economic:
+      definition: Kelayakan keekonomian (revenue vs cost, IRR vs MARR)
+      applies_to: Reserves (membedakan dari GRR)
+    regulatory_legal:
+      definition: Perizinan, kontrak PSC, regulasi pemerintah
+      applies_to: Reserves (Izin Berproduksi)
+    social_environmental:
+      definition: Dampak sosial dan lingkungan
+      applies_to: Reserves
+
+  volume_attributes:
+    Gross:
+      definition: >-
+        Gross didefinisikan sebagai keseluruhan volume petroleum.
+      definition_code: "IV.4"
+      formula: "Gross = Net + Impurities + Fuel + Flare + Shrinkage"
+      components:
+        Net: Volume hidrokarbon dikurangi komponen non-sales
+        Impurities: Komponen non-hidrokarbon (CO2, N2, H2S, sulfur) dalam stream produksi
+        Fuel: Volume petroleum yang digunakan untuk operasi produksi (own use / fuel gas)
+        Flare: Volume petroleum yang dibakar (flared) dan tidak dimanfaatkan secara komersial
+        Shrinkage: Volume hilang akibat proses fisik (loss production), termasuk penurunan volume akibat perubahan tekanan dan suhu
+      description: >-
+        Gross merupakan keseluruhan volume petroleum yang mencakup Net ditambah
+        komponen non-sales: impurities, fuel (own use), flare, dan shrinkage (loss production).
+    Net:
+      definition: >-
+        Net merupakan volume hidrokarbon yang tidak termasuk volume non-sales seperti
+        impurities, flare, loss production, dan own use. Volume ini masih dapat mengandung
+        impurities selama besaran impurities tersebut diperkirakan dapat diserap dalam
+        kontrak jual beli.
+      definition_code: "IV.5"
+      formula: "Net = Gross - Impurities - Fuel - Flare - Shrinkage"
+      description: >-
+        Net adalah volume setelah mengurangi seluruh komponen non-sales dari Gross.
+        Net masih dapat mengandung impurities yang diperkirakan dapat diserap dalam kontrak
+        jual beli (Perjanjian Jual Beli Gas / PJBG).
+    Sales:
+      definition: >-
+        Sales merupakan volume Net yang dijual sesuai dengan kontrak jual beli.
+        Volume ini juga dapat mengandung impurities sesuai dengan kontrak jual beli
+        yang ada.
+      definition_code: "IV.6"
+      formula: "Sales = Net + Accepted Impurities (dalam Perjanjian Jual Beli Gas / PJBG)"
+      description: >-
+        Sales bukan subset dari Net, melainkan Net ditambah impurities yang diterima (accepted)
+        dalam kontrak jual beli (PJBG). Dalam kontrak gas, sebagian impurities mungkin
+        masih diterima pembeli sesuai spesifikasi kontrak, sehingga Sales bisa lebih besar
+        dari Net murni. Untuk minyak, umumnya Sales mendekati Net karena impurities telah
+        dikurangi sebelum penjualan.
+      key_distinction: >-
+        Sales bukan subset Net. Sales = Net + impurities yang diterima dalam PJBG.
+        Ini berarti Sales bisa >= Net tergantung spesifikasi kontrak jual beli.
+    TotalPotential:
+      definition: >-
+        Total Potential merupakan total volume dari potensi kemampuan maksimal reservoir
+        dan fasilitas produksi yang ada dengan tetap memperhatikan prinsip good engineering
+        practices.
+      definition_code: "IV.7"
+      description: >-
+        Volume Total Potential bisa mengandung volume non-sales atau tidak.
+        Gross Total Potential = volume yang mengandung non-sales
+        Net Total Potential = volume yang tidak mengandung volume non-sales
+        Net Total Potential harus konsisten dengan GRR
+  volume_components:
+    description: >-
+      Komponen volume yang membedakan Gross, Net, dan Sales dalam pelaporan sumber daya.
+    Impurities:
+      definition: >-
+        Komponen non-hidrokarbon dalam stream produksi seperti CO2, N2, H2S, dan sulfur.
+        Sebagian impurities dapat diterima dalam kontrak jual beli (accepted impurities).
+    Fuel:
+      definition: >-
+        Volume petroleum yang digunakan untuk operasi produksi (own use / fuel gas).
+        Termasuk gas yang digunakan sebagai bahan bakar fasilitas produksi.
+      aliases:
+        - Own Use
+        - Fuel Gas
+    Flare:
+      definition: >-
+        Volume petroleum yang dibakar (flared) dan tidak dimanfaatkan secara komersial.
+    Shrinkage:
+      definition: >-
+        Volume hilang (loss production) akibat proses fisik termasuk penurunan volume
+        karena perubahan tekanan dan suhu selama proses produksi dan pengolahan.
+      aliases:
+        - Loss Production
+        - Loss
+
+  key_concepts:
+    - Faktor teknis adalah bagian dari komersial BUKAN terpisah
+    - GRR dibatasi hanya faktor teknis
+    - Reserves dibatasi semua faktor komersial (teknis + keekonomian + regulasi + sosial)
+    - "Selisih GRR - Reserves = Sales Potential Resources: volume yang bisa menjadi cadangan jika batasan komersial teratasi"
+    - Selisih GRR - Reserves muncul karena batasan keekonomian, regulasi/legal (termasuk kontrak PSC dan PJBG), serta sosial/lingkungan
+    - Gross = Net + Impurities + Fuel + Flare + Shrinkage (komposisi)
+    - Net = Gross - Impurities - Fuel - Flare - Shrinkage
+    - Sales = Net + Accepted Impurities (bukan subset Net)
+    - Shrinkage = Loss Production (istilah yang sama)
+    - Net Total Potential = GRR (konsisten)
+
+  SalesPotentialResources:
+    name: Sales Potential Resources
+    definition: >-
+      Sales Potential Resources merupakan selisih antara volume GRR dan volume
+      Reserves pada proyek yang sama pada WAP yang sama. Volume ini merepresentasikan
+      potensi yang dapat menjadi cadangan apabila seluruh batasan komersial
+      (keekonomian, regulasi/legal, dan sosial/lingkungan) teratasi.
+    formula: "Sales Potential Resources = GRR - Reserves"
+    key_concepts:
+      - Hanya ada pada proyek dengan kelas Reserves & GRR
+      - Nilai positif menandakan ada potensi komersial yang belum dimanfaatkan
+      - Jika batasan komersial teratasi sepenuhnya, maka Sales Potential Resources = 0 (karena GRR = Reserves)
+      - "Dalam konteks gas: potensi uncommitted gas yang dapat dijual"
+      - Sales Potential Resources bukan kelas klasifikasi tersendiri, melainkan selisih antara GRR dan Reserves
+  return_petroleum:
+    description: >-
+      Pada beberapa kasus khusus, kontrak jual beli menyatakan bahwa pembeli
+      dapat mengembalikan elemen hidrokarbon kepada penjual. Dalam pencatatan volume,
+      komponen ini dapat termasuk dalam volume cadangan dan GRR. Profil perkiraan
+      produksi yang dibangun harus konsisten dengan faktor elemen hidrokarbon yang
+      dikembalikan agar tidak terjadi perhitungan ganda.
+    key_concept: >-
+      Volume petroleum yang diperoleh untuk digunakan dalam operasi dan tidak
+      dikomersialkan tidak masuk dalam volume cadangan dan GRR. Akumulasi petroleum
+      dalam lapangan yang seluruhnya didedikasikan untuk keperluan operasional dan
+      tidak memiliki potensi komersial juga tidak termasuk.
+
+# =============================================================================
+# Proven, Probable, Possible (Incremental Definitions)
+# =============================================================================
+UncertaintyIncremental:
+  name: Terbukti, Mungkin, Harapan
+  description: >-
+    Istilah terbukti (proven), mungkin (probable), dan harapan (possible) merujuk
+    pada selisih persentil saat pembuatan estimasi terkait cadangan. Istilah ini
+    hanya digunakan dalam kelas cadangan.
+  definitions:
+    Proven:
+      definition: >-
+        Cadangan terbukti merupakan perkiraan volume petroleum yang bisa diambil dengan
+        tingkat keyakinan yang tinggi. Secara probabilistik, tingkat keyakinan yang
+        tinggi ini diterjemahkan sebagai ada 90% peluang bahwa volume yang terambil
+        akan lebih besar dari yang dicantumkan sebagai cadangan terbukti.
+      definition_code: "III.2"
+      aliases:
+        - Proven
+        - Terbukti
+        - P1
+      formula: "P1 = 1P (volume pada P90)"
+      key_concept: "90% peluang volume aktual >= P1"
+    Probable:
+      definition: >-
+        Cadangan mungkin merupakan volume inkremental yang berpeluang diproduksikan
+        jika dilihat dari acuan volume cadangan terbukti. Volume inkremental ini
+        perlu dipandang sebagai objek statistik dan bukan tambahan volume cadangan
+        secara langsung.
+      definition_code: "III.3"
+      aliases:
+        - Probable
+        - Mungkin
+        - P2
+      formula: "P2 = 2P - 1P"
+      key_concept: "40% peluang volume aktual berada di antara 2P dan 1P"
+    Possible:
+      definition: >-
+        Cadangan harapan merupakan volume inkremental yang berpeluang diproduksikan
+        jika dilihat dari acuan volume cadangan terbukti + mungkin. Volume inkremental
+        ini perlu dipandang sebagai objek statistik dan bukan tambahan volume cadangan
+        secara langsung.
+      definition_code: "III.4"
+      aliases:
+        - Possible
+        - Harapan
+        - P3
+      formula: "P3 = 3P - 2P"
+      key_concept: "40% peluang volume aktual berada di antara 3P dan 2P"
 
 # =============================================================================
 # Project Classification
@@ -67,9 +686,10 @@ ProjectClassification:
         Faktor teknis didasarkan pada kemampuan maksimal sumur dan fasilitas
         produksi yang sudah terpasang sesuai dengan skenario teknis yang digunakan
         pada definisi cadangan dengan tetap memperhatikan prinsip-prinsip good
-        engineering practices. Selisih volume GRR dan cadangan merupakan volume
-        yang memiliki potensi untuk menjadi cadangan apabila kendala komersial
-        dapat diatasi.
+        engineering practices. GRR menghitung volume dari proyek yang sama dengan
+        Reserves namun tanpa membatasi oleh faktor keekonomian, regulasi/legal
+        (termasuk kontrak PSC dan PJBG), serta sosial dan lingkungan. Selisih
+        volume GRR dan cadangan disebut Sales Potential Resources.
     definition_code: "II.9 and II.10"
     description: >-
       Konsep GRR analog dengan konsep Technically Recoverable Resources (TRR)
@@ -81,6 +701,10 @@ ProjectClassification:
       - GRR dibatasi oleh faktor teknis (batas kemampuan reservoir dan fasilitas)
       - GRR analog dengan TRR (Technically Recoverable Resources) di PRMS 2018
       - Tidak bisa melaporkan GRR tanpa Reserves
+      - GRR dan Reserves menghitung volume dari proyek yang sama pada WAP yang sama, tetapi dengan batasan berbeda
+      - GRR hanya dibatasi faktor teknis; Reserves dibatasi keempat faktor komersial (teknis + keekonomian + regulasi/legal + sosial/lingkungan)
+      - Jika seluruh batasan komersial teratasi, maka volume GRR = volume Reserves
+      - "GRR merupakan perspektif pemerintah: potensi penuh proyek terlepas dari kendala kontraktual dan komersial"
 
   # ---------------------------------------------------------------------------
   # Contingent Resources
@@ -93,14 +717,16 @@ ProjectClassification:
       - Sumber Daya Kontingen
     definition: >-
       Contingent Resources merupakan bagian volume IPIP yang diperkirakan dapat
-      diambil berdasarkan proyek yang ditetapkan dengan dibatasi oleh faktor teknis.
-      Proyek yang berada dalam kelas contingent resources mengalami kendala dari
-      sisi komersial. Umumnya, masalah utama terletak pada faktor keekonomian,
+      diambil berdasarkan proyek yang ditetapkan. Dalam konteks perhitungan volume,
+      estimasi dibatasi oleh faktor teknis (abandonment pressure, facility limit, dll).
+      Namun proyek berada di kelas ini karena kendala dari sisi komersial
+      (keekonomian, regulasi/legal, sosial/lingkungan) yang menghalangi produksi
+      komersial. Umumnya, masalah utama terletak pada faktor keekonomian,
       regulasi dan legal.
     definition_code: "II.11"
     key_concepts:
-      - Kendala dari sisi komersial (bukan teknis)
-      - Masalah utama: keekonomian, regulasi, legal
+      - Volume diestimasi dengan batasan teknis (abandonment pressure, facility limit)
+      - Status CR karena kendala komersial (keekonomian, regulasi/legal, sosial/lingkungan)
       - Bisa naik ke Reserves jika kendala komersial teratasi
 
   # ---------------------------------------------------------------------------
@@ -128,13 +754,19 @@ ProjectClassification:
 # =============================================================================
 ProjectLevel:
   name: Project Maturity Level
+  definition_code: "II.16"
   aliases:
     - Project Maturity Level
     - Maturity Level
     - Level Kematangan Proyek
   description: >-
     Level Kematangan Proyek adalah sub klasifikasi dalam kelas yang menggambarkan
-    kematangan proyek dari sisi komersial. Untuk tiap level kematangan proyek
+    kematangan proyek dari sisi komersial. Urutan level E0 → X6 merepresentasikan
+    peluang keberhasilan komersial yang menurun: E0 (On Production) memiliki
+    peluang tertinggi, X6 (Lead) memiliki peluang terendah sebelum Abandoned.
+    Abandoned (A1/A2) memiliki peluang keberhasilan komersial = 0 karena tidak
+    ada potensi akumulasi petroleum. Urutan ini bersifat ordinal, bukan skala
+    probabilitas numerik kuantitatif. Untuk tiap level kematangan proyek
     terdapat risiko komersial yang berbeda-beda. Evaluasi dilakukan pada WAP.
 
   # ===========================================================================
@@ -162,10 +794,15 @@ ProjectLevel:
       berproduksi secara komersial walau tidak berproduksi secara penuh sepanjang tahun.
     key_concepts:
       - Sedang berproduksi secara komersial
-      - rate_sls > 0 (ada produksi sales)
-    rule: "IF rate_sls_oil + rate_sls_con + rate_sls_ga + rate_sls_gn > 0 THEN True ELSE False"
-    is_pod_approved: null  # Can be True or False
-    is_pse_approved: null  # Can be True or False
+      - Grace period: proyek yang berhenti produksi sebelum WAP masih boleh menyandang level E0 pada WAP tersebut
+      - Jika pada WAP berikutnya masih tidak berproduksi, proyek harus pindah ke E1 atau level lain
+    rule_note: >-
+      Kriteria utama: ada produksi sales (rate_sls > 0). Namun terdapat grace period:
+      jika proyek berhenti produksi sebelum WAP, proyek masih boleh diberikan level E0
+      pada WAP tersebut. Evaluasi berikutnya akan menentukan apakah proyek tetap E0
+      atau harus pindah ke level lain.
+    is_pod_approved: null   # Bisa aktif/tidak, DB: boolean
+    is_pse_approved: true   # Sudah melewati X0
 
   E1_ProductionOnHold:
     code: E1
@@ -178,15 +815,16 @@ ProjectLevel:
     definition: >-
       Proyek memiliki level On Production pada WAP sebelumnya. Namun sama sekali
       tidak berproduksi secara komersial hingga evaluasi di WAP. Pada WAP selanjutnya,
-      proyek harus pindah ke level lain kecuali jika proyek aktif terdaftar dalam dokumen
-      rencana kerja pengembangan lapangan jangka panjang 3 tahun ke depan.
+      proyek harus pindah ke level lain KECUALI jika proyek terdaftar dalam GROOVY
+      (Long Term Exploration and Development Strategy). Jika memiliki GROOVY,
+      proyek mendapat dispensasi hingga maksimal 3 WAP di level ini.
     definition_code: "II.19"
     key_concepts:
-      - Setahun tidak berproduksi secara komersial, atau
-      - 1-3 tahun tidak berproduksi tapi masih ada rencana jangka panjang
-    rule: null
-    is_pod_approved: null
-    is_pse_approved: null
+      - Setahun tidak berproduksi secara komersial
+      - Maksimal 1 WAP tanpa GROOVY
+      - Dengan GROOVY: dispensasi hingga 3 WAP
+    is_pod_approved: true   # Pernah punya izin berproduksi
+    is_pse_approved: true   # Sudah melewati X0
 
   E2_UnderDevelopment:
     code: E2
@@ -209,10 +847,10 @@ ProjectLevel:
     key_concepts:
       - Memiliki Final Investment Decision (FID)
       - Fase EPCI (Engineering, Procurement, Construction, Installation)
-      - Maksimal 3 WAP
-    rule: null
-    is_pod_approved: true
-    is_pse_approved: true
+      - Maksimal 3 WAP tanpa GROOVY
+      - Dengan GROOVY: tidak ada batasan WAP
+    is_pod_approved: true   # Membutuhkan izin berproduksi
+    is_pse_approved: true   # Sudah melewati X0
 
   E3_JustifiedForDevelopment:
     code: E3
@@ -232,12 +870,13 @@ ProjectLevel:
       Untuk proyek yang berasal dari eksplorasi, setelah mendapatkan level ini proyek
       mengalami perubahan dari fase eksplorasi menjadi fase eksploitasi.
     key_concepts:
-      - Memiliki Plan of Development (POD) approved
+      - Memiliki izin berproduksi yang disetujui (POD/POP/POFD/OPL/OPLL)
       - Fase Front End Engineering Design (FEED)
       - Transisi dari eksplorasi ke eksploitasi
-    rule: null
-    is_pod_approved: true
-    is_pse_approved: true
+      - Maksimal 3 WAP tanpa GROOVY
+      - Dengan GROOVY: tidak ada batasan WAP
+    is_pod_approved: true   # Membutuhkan izin berproduksi
+    is_pse_approved: true   # Sudah melewati X0
 
   E4_ProductionPending:
     code: E4
@@ -260,9 +899,10 @@ ProjectLevel:
       - Turun kelas ke Contingent Resources
       - Tidak berproduksi 3-6 WAP, atau >6 WAP tapi masih ada rencana
       - Risiko komersial sangat tinggi
-    rule: null
-    is_pod_approved: null
-    is_pse_approved: null
+      - Maksimal 3 WAP tanpa GROOVY
+      - Dengan GROOVY: tidak ada batasan WAP
+    is_pod_approved: null   # Izin berproduksi bisa aktif/tidak
+    is_pse_approved: true   # Sudah melewati X0
 
   E5_DevelopmentUnclarified:
     code: E5
@@ -278,9 +918,13 @@ ProjectLevel:
       tidak tercapai pada WAP sebelumnya sehingga mengakibatkan rencana kerja
       pengembangan lapangan jangka panjang tidak berlaku lagi.
     definition_code: "II.23"
-    rule: null
-    is_pod_approved: true
-    is_pse_approved: true
+    key_concepts:
+      - Tidak mendapatkan Final Investment Decision (FID)
+      - FEED (Front End Engineering Design) tidak dikerjakan atau tidak menjadi prioritas
+      - Proyek masih memiliki izin berproduksi tapi tidak diprioritaskan
+      - Durasi tidak terbatas (tanpa batasan WAP)
+    is_pod_approved: true   # Membutuhkan izin berproduksi
+    is_pse_approved: true   # Sudah melewati X0
 
   E6_FurtherDevelopment:
     code: E6
@@ -303,12 +947,13 @@ ProjectLevel:
       Volume perkiraan yang bisa diambil dari proyek ini berasal dari bagian Unrecoverable.
     key_concepts:
       - Pengembangan lanjut (infill drilling, EOR, IOR)
-      - Hanya 1 WAP
+      - Hanya 1 WAP (tanpa dispensasi GROOVY)
       - Volume berasal dari Unrecoverable
-      - Harus memiliki izin berproduksi terpisah
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+      - Merupakan proyek BARU, bukan kelanjutan proyek yang sudah ada
+      - Memerlukan izin berproduksi terpisah dari proyek utama (bukan revisi)
+      - Satu proyek tidak boleh memiliki dua atau lebih project level
+    is_pod_approved: null   # Proyek BARU, memerlukan izin berproduksi terpisah
+    is_pse_approved: true   # Sudah melewati X0
 
   E7_ProductionNotViable:
     code: E7
@@ -334,9 +979,9 @@ ProjectLevel:
       - Uneconomic: revenue < cost
       - Marginal: IRR < Minimum Attractive Rate of Return (MARR)
       - Level terendah dari sisi komersial
-    rule: null
-    is_pod_approved: null
-    is_pse_approved: null
+      - Dapat direaktivasi dengan izin berproduksi baru
+    is_pod_approved: null   # Bisa reaktivasi
+    is_pse_approved: true   # Sudah melewati X0
 
   E8_FurtherDevelopmentNotViable:
     code: E8
@@ -356,9 +1001,9 @@ ProjectLevel:
       Level ini merupakan level terendah dari sisi komersial dalam fase pengembangan.
       Proyek dalam level ini merupakan proyek konseptual yang bisa jadi tidak dapat
       direalisasikan karena faktor komersial.
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+
+    is_pod_approved: null   # Bisa reaktivasi
+    is_pse_approved: true   # Sudah melewati X0
 
   # ===========================================================================
   # X Levels: Exploration
@@ -377,11 +1022,11 @@ ProjectLevel:
     definition_code: "II.27"
     description: null
     key_concepts:
-      - Pengakhiran kegiatan eksplorasi approved
+      - Pengakhiran kegiatan eksplorasi approved (PSE)
       - Penyusunan strategi pengembangan sedang dilakukan
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: true
+      - PSE diperlukan untuk transisi ke level ini
+    is_pod_approved: false   # Belum memiliki Izin Berproduksi
+    is_pse_approved: true   # PSE required untuk X0
 
   X1_DiscoveryUnderEvaluation:
     code: X1
@@ -406,9 +1051,8 @@ ProjectLevel:
       - Discovery (ditemukan)
       - Pengeboran delineasi untuk konfirmasi batasan
       - Maksimal 2 WAP
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki Izin Berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X2_DevelopmentUndetermined:
     code: X2
@@ -426,9 +1070,9 @@ ProjectLevel:
     description: >-
       Pada level ini biasanya evaluasi untuk penyusunan strategi pengembangan lapangan
       sudah dilakukan. Dari evaluasi tersebut dinyatakan ada kebutuhan tambahan data baru.
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+
+    is_pod_approved: false   # Belum memiliki Izin Berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X3_DevelopmentNotViable:
     code: X3
@@ -447,9 +1091,8 @@ ProjectLevel:
     key_concepts:
       - Pengembangan ditolak
       - Uneconomic atau marginal
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki izin berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X4_InconclusiveFlow:
     code: X4
@@ -471,9 +1114,8 @@ ProjectLevel:
       - Ditemukan tapi tidak pasti bisa mengalir
       - Butuh uji sumur lebih lanjut
       - Untuk heavy oil perlu evaluasi teknologi
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki izin berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X5_Prospect:
     code: X5
@@ -495,9 +1137,8 @@ ProjectLevel:
       - Belum pernah dibor, atau ada ada sumur eksplorasi namun tidak ada data yang diambil di zona dalam lingkup proyek
       - siap untuk dilakukan pengeboran eksplorasi
       - studi subsurface sudah dilakukan secara tuntas untuk menentukan target pengeboran, perkiraan akumulasi petroleum, dan risiko geologis
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki izin berproduksi
+    is_pse_approved: false   # PSE belum selesai
 
   X6_Lead:
     code: X6
@@ -520,9 +1161,302 @@ ProjectLevel:
       - Belum ada data cukup untuk target pengeboran
       - Entrypoint eksplorasi
       - Level terendah
-    rule: null
-    is_pod_approved: false
-    is_pse_approved: false
+    is_pod_approved: false   # Belum memiliki izin berproduksi
+    is_pse_approved: false   # PSE belum selesai
+
+# =============================================================================
+# Level Transition Rules
+# =============================================================================
+LevelTransitionRules:
+  name: Aturan Transisi Level Proyek
+  description: >-
+    Aturan transisi level proyek menentukan ke mana sebuah proyek dapat berpindah
+    dari level saat ini. Transisi dievaluasi pada setiap Waktu Acuan Pelaporan (WAP).
+    Reachability menunjukkan semua level yang dapat dicapai dari level saat ini,
+    baik naik maupun turun. WAP constraints membatasi transisi tertentu pada
+    kondisi khusus.
+
+    Catatan tentang is_pod_approved:
+    - true: proyek memiliki izin berproduksi yang sudah disetujui
+    - false: proyek belum memiliki izin berproduksi
+    - null: tidak dapat ditentukan secara rule — bisa true atau false
+      tergantung konteks (misalnya izin bisa aktif/tidak, atau bisa reaktivasi)
+
+  reachability_matrix:
+    description: >-
+      Matriks reachability: dari level baris, level kolom yang tercantum
+      adalah level yang dapat dituju. Level yang tidak tercantum tidak dapat
+      dituju secara langsung maupun tidak langsung. Abandoned (A1/A2) merupakan
+      absorbing state — proyek yang masuk ke level ini tidak dapat keluar.
+      Transisi ke A1 (Dry) berasal dari X4, X5, X6 (dry well).
+      Transisi ke A2 (Dissolved) berasal dari X5, X6 (no structure from seismic).
+      Abandoned tidak termasuk dalam klasifikasi sumber daya — volume sumber daya = nol.
+    E0:
+      reachable: [E0, E1, E4, E7]
+    E1:
+      reachable: [E0, E1, E4, E7]
+    E2:
+      reachable: [E0, E5]
+    E3:
+      reachable: [E0, E2, E5]
+    E4:
+      reachable: [E0, E4, E7]
+    E5:
+      reachable: [E0, E2, E3]
+    E6:
+      reachable: [E0, E2, E3, E8]
+    E7:
+      reachable: [E0, E4, E7]
+    E8:
+      reachable: [E0, E2, E3, E8]
+    X0:
+      reachable: [E0, E2, E3, X0]
+    X1:
+      reachable: [E0, E2, E3, X0, X2, X3]
+    X2:
+      reachable: [E0, E2, E3, X0, X2, X3]
+    X3:
+      reachable: [E0, E2, E3, X0, X2, X3]
+    X4:
+      reachable: [E0, E2, E3, X0, X1, X4, A1]
+    X5:
+      reachable: [E0, E2, E3, X0, X1, X4, X5, X6, A1, A2]
+    X6:
+      reachable: [E0, E2, E3, X0, X1, X4, X5, X6, A1, A2]
+    A1:
+      reachable: [A1]
+    A2:
+      reachable: [A2]
+
+  wap_constraints:
+    description: >-
+      Batasan durasi WAP untuk setiap project maturity level, diurutkan berdasarkan
+      peluang keberhasilan komersial dari tinggi ke rendah. Semua 16 level tercantum
+      di sini; level dengan max_wap: null tidak memiliki batasan durasi WAP dan dapat
+      berada pada level tersebut selamanya. GROOVY (Long Term Exploration and
+      Development Strategy) merupakan dokumen rencana kerja jangka panjang yang
+      berisi bab executive summary, current situation, key challenges, solution
+      proposal, dan timeline. GROOVY memberikan dispensasi tambahan durasi WAP
+      pada level tertentu (E1, E2, E3, E4).
+    constraints:
+      - id: WAP-C01
+        from_level: E0
+        name: On Production
+        max_wap: null
+        description: >-
+          On Production tidak memiliki batasan durasi WAP. Proyek dapat berada pada
+          level ini selamanya selama masih berproduksi secara komersial.
+      - id: WAP-C02
+        from_level: E1
+        name: Production on Hold
+        max_wap: 1
+        groovy_max_wap: 3
+        description: >-
+          Production on Hold maksimal 1 WAP. Jika proyek memiliki GROOVY
+          (Long Term Exploration and Development Strategy), diberikan dispensasi
+          hingga maksimal 3 WAP. Setelah batas tersebut, proyek harus pindah ke
+          level lain (E0, E4, atau E7).
+      - id: WAP-C03
+        from_level: E2
+        name: Under Development
+        max_wap: 3
+        groovy_max_wap: null
+        description: >-
+          Under Development maksimal 3 WAP. Jika proyek memiliki GROOVY, tidak
+          ada batasan durasi WAP (dapat berada selamanya selama ada rencana kerja
+          jangka panjang). Setelah batas WAP tanpa GROOVY, proyek harus pindah
+          ke E0 atau E5.
+      - id: WAP-C04
+        from_level: E3
+        name: Justified for Development
+        max_wap: 3
+        groovy_max_wap: null
+        description: >-
+          Justified for Development maksimal 3 WAP. Jika proyek memiliki GROOVY,
+          tidak ada batasan durasi WAP. Setelah batas WAP tanpa GROOVY, proyek
+          harus pindah ke E0, E2, atau E5.
+      - id: WAP-C05
+        from_level: E4
+        name: Production Pending
+        max_wap: 3
+        groovy_max_wap: null
+        description: >-
+          Production Pending maksimal 3 WAP. Jika proyek memiliki GROOVY, tidak
+          ada batasan durasi WAP. Setelah batas WAP tanpa GROOVY, proyek harus
+          pindah ke E0 (jika kembali berproduksi) atau E7 (jika masih tidak berproduksi).
+      - id: WAP-C06
+        from_level: E6
+        name: Further Development
+        max_wap: 1
+        description: >-
+          Further Development hanya dapat berada pada level ini selama 1 WAP.
+          E6 merupakan proyek BARU (bukan kelanjutan proyek yang sudah ada),
+          sehingga memerlukan izin berproduksi terpisah. Setelah 1 WAP, proyek
+          harus pindah ke E0, E2, E3, atau E8.
+      - id: WAP-C07
+        from_level: X1
+        name: Discovery under Evaluation
+        max_wap: 2
+        description: >-
+          Discovery under Evaluation maksimal 2 WAP. Setelah batas tersebut,
+          proyek harus pindah ke X2 atau level lain yang sesuai.
+      - id: WAP-C08
+        from_level: E5
+        name: Development Unclarified
+        max_wap: null
+        description: >-
+          Development Unclarified tidak memiliki batasan durasi WAP. Proyek
+          dapat berada pada level ini selamanya.
+      - id: WAP-C09
+        from_level: E7
+        name: Production Not Viable
+        max_wap: null
+        description: >-
+          Production Not Viable tidak memiliki batasan durasi WAP. Proyek
+          dapat berada pada level ini selamanya.
+      - id: WAP-C10
+        from_level: E8
+        name: Further Development Not Viable
+        max_wap: null
+        description: >-
+          Further Development Not Viable tidak memiliki batasan durasi WAP.
+          Proyek dapat berada pada level ini selamanya.
+      - id: WAP-C11
+        from_level: X0
+        name: Development Pending
+        max_wap: null
+        description: >-
+          Development Pending tidak memiliki batasan durasi WAP. Proyek dapat
+          berada pada level ini selamanya.
+      - id: WAP-C12
+        from_level: X2
+        name: Development Undetermined
+        max_wap: null
+        description: >-
+          Development Undetermined tidak memiliki batasan durasi WAP. Proyek
+          dapat berada pada level ini selamanya.
+      - id: WAP-C13
+        from_level: X3
+        name: Development Not Viable
+        max_wap: null
+        description: >-
+          Development Not Viable tidak memiliki batasan durasi WAP. Proyek
+          dapat berada pada level ini selamanya.
+      - id: WAP-C14
+        from_level: X4
+        name: Inconclusive Flow
+        max_wap: null
+        description: >-
+          Inconclusive Flow tidak memiliki batasan durasi WAP. Proyek dapat
+          berada pada level ini selamanya.
+      - id: WAP-C15
+        from_level: X5
+        name: Prospect
+        max_wap: null
+        description: >-
+          Prospect tidak memiliki batasan durasi WAP. Proyek dapat berada pada
+          level ini selamanya.
+      - id: WAP-C16
+        from_level: X6
+        name: Lead
+        max_wap: null
+        description: >-
+          Lead tidak memiliki batasan durasi WAP. Proyek dapat berada pada level
+          ini selamanya.
+
+  transition_rules:
+    description: >-
+      Prasyarat dokumen untuk transisi level proyek. Terdapat dua jenis dokumen
+      yang berbeda: Izin Berproduksi dan PSE (Dokumen Penentuan Status Eksplorasi).
+      Kedua dokumen ini tidak saling menggantikan. Izin Berproduksi diperlukan
+      untuk transisi ke E-level, sedangkan PSE diperlukan untuk transisi ke X0.
+    rules:
+      - id: TR-01
+        description: >-
+          Transisi dari X-level ke E-level memerlukan Izin Berproduksi
+          (POD/POP/POFD/OPL/OPLL).
+        from_levels: [X0, X1, X2, X3, X4]
+        to_levels: [E0, E2, E3]
+        requires: Izin Berproduksi
+        db_column: is_pod_approved
+      - id: TR-02
+        description: >-
+          Transisi ke X0 (Development Pending) memerlukan PSE
+          (Dokumen Penentuan Status Eksplorasi). PSE BUKAN Izin Berproduksi.
+          PSE menandai selesainya kegiatan eksplorasi.
+        from_levels: [X1, X2, X3, X4, X5, X6]
+        to_levels: [X0]
+        requires: PSE
+        db_column: is_pse_approved
+      - id: TR-03
+        description: >-
+          E6 (Further Development) merupakan proyek baru yang memerlukan
+          izin berproduksi terpisah dari proyek utama. Satu proyek tidak boleh
+          memiliki dua atau lebih project level.
+        from_levels: []
+        to_levels: [E6]
+        requires: Izin Berproduksi terpisah
+        db_column: is_pod_approved
+      - id: TR-04
+        description: >-
+          E7 (Production Not Viable) dan E8 (Further Development Not Viable)
+          dapat direaktivasi jika memperoleh izin berproduksi baru yang disetujui.
+          Tujuan reaktivasi mengikuti reachability_matrix: E7 dapat ke E0/E4/E7,
+          E8 dapat ke E0/E2/E3/E8.
+        from_levels: [E7, E8]
+        to_levels: []
+        requires: Izin Berproduksi baru
+        db_column: is_pod_approved
+
+  universal_rules:
+    - id: KSMI-R01
+      description: >-
+        Satu proyek hanya dapat memiliki SATU level pada SATU WAP.
+        Tidak boleh memiliki beberapa level sekaligus.
+    - id: KSMI-R02
+      description: >-
+        Volume pada satu level proyek hanya dapat diklasifikasikan sebagai
+        cadangan ATAU contingent resources, tidak keduanya secara bersamaan.
+    - id: KSMI-R03
+      description: >-
+        Evaluasi level proyek dilakukan pada setiap WAP (31 Desember 23:59).
+    - id: KSMI-R04
+      description: >-
+        E6 (Further Development) merupakan proyek BARU, bukan kelanjutan proyek
+        yang sudah ada. Satu proyek tidak boleh memiliki dua atau lebih level.
+
+Play:
+  name: Play
+  definition_code: III.5
+  definition: >-
+    Play merupakan integrasi elemen sistem petroleum pada area tertentu. Penamaan play
+    diawali dengan nama basin, kemudian disusul dengan elemen reservoir, jebakan, penyekat,
+    batuan induk, dan migrasi.
+  description: >-
+    Elemen reservoir terdiri dari umur geologi, lingkungan pengendapan, dan litologi.
+    Elemen jebakan berupa jenis struktural, stratigrafi, atau kombinasi. Elemen penyekat
+    terdiri dari umur geologi, lingkungan pengendapan, dan litologi. Elemen batuan induk
+    terdiri dari umur geologi, lingkungan pengendapan, dan litologi. Elemen migrasi
+    terdiri dari umur geologi.
+  naming_convention: >-
+    Format: {Basin} | Reservoir: {Age} - {DepEnv} - {Lithology} | Trap: {TrapType} |
+    Seal: {Age} - {DepEnv} - {Lithology} | Source Rock: {Age} - {DepEnv} - {Lithology} |
+    Migration: {Age}
+  naming_example: >-
+    North Sumatera | Reservoir: Oligocene - fluvial - sandstone | Trap: faulted anticline trap |
+    Seal: Miocene - marine - shale | Source Rock: Oligocene - fluvial - shale | Migration: Miocene
+  elements:
+    - name: Reservoir
+      components: [age, depositional_environment, lithology]
+    - name: Trap
+      components: [trap_type]
+      trap_types: [structural, stratigraphic, combination]
+    - name: Seal
+      components: [age, depositional_environment, lithology]
+    - name: Source Rock
+      components: [age, depositional_environment, lithology]
+    - name: Migration
+      components: [age]
 
 GeologicalChanceFactor:
   name: Geological Chance Factor
@@ -552,15 +1486,62 @@ GeologicalChanceFactor:
     tidak selalu berarti probabilitas sistem petroleum menjadi bertambah besar. Bisa saja
     data yang semakin banyak justru malah mengkonfirmasi bahwa elemen sistem
     petroleum tidak tersedia pada area tersebut.
+  formula: "P_ps = P_source × P_reservoir × P_trap_seal × P_migration"
   elements:
-     - source rock
-     - reservoir
-     - trap and seal
-     - migration
-     - 
+    - name: Source Rock (Batuan Induk)
+      probability_range: "0% - 100%"
+      default_no_data: 50%
+      db_column: gcf_source_rock
+      description: >-
+        Batuan induk yang menghasilkan hidrokarbon. Evaluasi berdasarkan
+        umur geologi, lingkungan pengendapan, dan litologi.
+    - name: Reservoir
+      probability_range: "0% - 100%"
+      default_no_data: 50%
+      db_column: gcf_reservoir
+      description: >-
+        Batuan reservoir yang dapat menyimpan dan mengalirkan hidrokarbon.
+        Evaluasi berdasarkan porositas, permeabilitas, dan saturasi.
+    - name: Trap and Seal (Jebakan dan Penyekat)
+      probability_range: "0% - 100%"
+      default_no_data: 50%
+      db_column: gcf_trap_seal
+      description: >-
+        Struktur geologi yang menjebak hidrokarbon dan lapisan penyekat
+        yang mencegah migrasi lebih lanjut.
+    - name: Migration (Migrasi)
+      probability_range: "0% - 100%"
+      default_no_data: 50%
+      db_column: gcf_migration
+      description: >-
+        Proses pergerakan hidrokarbon dari batuan induk ke reservoir.
+        Evaluasi berdasarkan umur geologi dan jalur migrasi.
+  special_cases:
+    producing:
+      description: >-
+        Pada kondisi sudah berproduksi, seluruh elemen sistem petroleum memiliki
+        probabilitas 100%. GCF = 100%.
+      gcf_value: 100%
+    no_data:
+      description: >-
+        Pada kondisi awal tanpa data, setiap elemen diasumsikan memiliki
+        probabilitas 50%. GCF = 50% × 50% × 50% × 50% = 6.25%.
+      gcf_value: 6.25%
+      calculation: "0.5 × 0.5 × 0.5 × 0.5 = 0.0625"
+    risked_volume:
+      description: >-
+        Volume Prospective Resources dikalikan dengan GCF untuk mendapatkan
+        nilai risked. Risked volume = volume × GCF.
+      formula: "Risked Volume = Prospective Resources Volume × GCF"
+  db_columns:
+    - gcf_source_rock
+    - gcf_reservoir
+    - gcf_trap_seal
+    - gcf_migration
 
 WorkingArea:
   code: WK
+  definition_code: "IV.1"
   aliases: 
     - Wilayah Kerja
     - Working Area
@@ -579,7 +1560,19 @@ Field:
     dibatasi secara konseptual berdasarkan perangkap geologi, wilayah
     administratif, atau area yang dilingkupi oleh rencana kerja dalam proyek. Istilah
     lapangan digunakan dalam fase eksplorasi dan eksploitasi.
-    
+  definition_code: IV.2
+
+Zone:
+  code: ZONE
+  aliases:
+    - Zona
+  definition: >-
+    Zona merupakan lapisan yang mengandung akumulasi hidrokarbon
+    yang terhubung secara hidrostatik dalam sistem tekanan yang sama.
+    Pada kasus reservoir yang memiliki akumulasi yang sedikit namun sangat banyak,
+    zona dapat merujuk pada kompartemen yang ditentukan.
+  definition_code: IV.3
+
 Project:
   code: PROJECT
   aliases:
@@ -651,3 +1644,514 @@ ProducingLicense:
     berujung pada permintaan izin berproduksi yang baru. Apabila kerangka kegiatan
     tersebut tidak membutuhkan izin berproduksi yang baru, maka cukup merevisi proyek
     yang sudah ada.
+  note: >-
+    PSE (Dokumen Penentuan Status Eksplorasi) BUKAN merupakan Izin Berproduksi.
+    PSE menandai selesainya kegiatan eksplorasi dan diperlukan untuk transisi ke X0.
+    Izin Berproduksi (POD/POP/POFD/OPL/OPLL) diperlukan untuk transisi ke E-level.
+    Kolom database is_pod_approved merepresentasikan apakah proyek memiliki
+    Izin Berproduksi, bukan hanya POD saja.
+  db_column: is_pod_approved
+
+GROOVY:
+  name: Long Term Exploration and Development Strategy
+  code: GROOVY
+  aliases:
+    - GROOVY
+    - LTEDS
+    - Rencana Kerja Jangka Panjang
+  definition: >-
+    GROOVY (Long Term Exploration and Development Strategy) adalah dokumen rencana
+    kerja jangka panjang yang berisi bab executive summary, current situation,
+    key challenges, solution proposal, dan timeline. Proyek yang memiliki GROOVY
+    mendapat dispensasi tambahan durasi WAP pada level tertentu (E1, E2, E3, E4).
+  key_concepts:
+    - GROOVY memberikan dispensasi durasi WAP
+    - "E1 dengan GROOVY: dispensasi hingga 3 WAP (tanpa GROOVY: maks 1 WAP)"
+    - "E2 dengan GROOVY: tanpa batas WAP (tanpa GROOVY: maks 3 WAP)"
+    - "E3 dengan GROOVY: tanpa batas WAP (tanpa GROOVY: maks 3 WAP)"
+    - "E4 dengan GROOVY: tanpa batas WAP (tanpa GROOVY: maks 3 WAP)"
+    - E6, X1 tidak memiliki dispensasi GROOVY
+  db_column: groovy_isactive
+
+# =============================================================================
+# Volume Reporting Specification
+# =============================================================================
+VolumeReporting:
+  name: Spesifikasi Pelaporan Volume
+  description: >-
+    Spesifikasi volume yang dilaporkan dalam sistem KSMI berdasarkan kelas sumber daya,
+    level entitas, dan jenis volume.
+  section_code: "Section IV.2"
+
+  in_place_volumes:
+    name: Volume Awal di Tempat (In Place)
+    entity_level: Lapangan dan Zona
+    definition_code: IV.2.1
+    items:
+      - name: Initial Oil in Place
+        code: IOIP
+        unit: MSTB
+        description: Volume minyak awal di tempat
+      - name: Initial Gas in Place
+        code: IGIP
+        unit: BSCF
+        description: Volume gas awal di tempat
+    uncertainty: [low_estimate, best_estimate, high_estimate]
+    note: "Volume estimasi terbaik digunakan sebagai referensi perhitungan Recovery Factor (RF). Lihat Definisi II.7."
+
+  cumulative_production:
+    name: Produksi Kumulatif
+    entity_level: Proyek
+    definition_code: IV.2.2
+    items:
+      - name: Gross Oil Cumulative Production
+        code: GROSS_OIL_CUM
+        unit: MSTB
+        volume_type: gross
+        substance: oil
+      - name: Sales Oil Cumulative Production
+        code: SALES_OIL_CUM
+        unit: MSTB
+        volume_type: sales
+        substance: oil
+      - name: Gross Condensate Cumulative Production
+        code: GROSS_CON_CUM
+        unit: MSTB
+        volume_type: gross
+        substance: condensate
+      - name: Sales Condensate Cumulative Production
+        code: SALES_CON_CUM
+        unit: MSTB
+        volume_type: sales
+        substance: condensate
+      - name: Gross Associated Gas Cumulative Production
+        code: GROSS_GA_CUM
+        unit: BSCF
+        volume_type: gross
+        substance: associated_gas
+      - name: Sales Associated Gas Cumulative Production
+        code: SALES_GA_CUM
+        unit: BSCF
+        volume_type: sales
+        substance: associated_gas
+      - name: Gross Non-associated Gas Cumulative Production
+        code: GROSS_GN_CUM
+        unit: BSCF
+        volume_type: gross
+        substance: non_associated_gas
+      - name: Sales Non-associated Gas Cumulative Production
+        code: SALES_GN_CUM
+        unit: BSCF
+        volume_type: sales
+        substance: non_associated_gas
+    references: ["Definisi II.13", "Definisi IV.4", "Definisi IV.6"]
+
+  reserves:
+    name: Cadangan
+    entity_level: Proyek
+    definition_code: IV.2.3
+    items:
+      - name: Oil Reserves
+        code: OIL_RES
+        unit: MSTB
+        substance: oil
+      - name: Condensate Reserves
+        code: CON_RES
+        unit: MSTB
+        substance: condensate
+      - name: Associated Gas Reserves
+        code: GA_RES
+        unit: BSCF
+        substance: associated_gas
+      - name: Non-associated Gas Reserves
+        code: GN_RES
+        unit: BSCF
+        substance: non_associated_gas
+    uncertainty: [1P, 2P, 3P]
+    consistency: "Volume harus konsisten dengan profil produksi sales"
+    note: "Volume pengembalian petroleum dapat dihitung sebagai cadangan apabila belum dihitung sebagai sales. Lihat Definisi II.9."
+
+  grr:
+    name: GOI Recoverable Resources
+    entity_level: Proyek
+    definition_code: IV.2.4
+    items:
+      - name: Oil GRR
+        code: OIL_GRR
+        unit: MSTB
+        substance: oil
+      - name: Condensate GRR
+        code: CON_GRR
+        unit: MSTB
+        substance: condensate
+      - name: Associated Gas GRR
+        code: GA_GRR
+        unit: BSCF
+        substance: associated_gas
+      - name: Non-associated Gas GRR
+        code: GN_GRR
+        unit: BSCF
+        substance: non_associated_gas
+    uncertainty: [1R, 2R, 3R]
+    consistency: "Volume harus konsisten dengan profil produksi Net Total Potential"
+    note: "Dalam konteks gas, selisih antara GRR dan cadangan merupakan potensi uncommitted gas. Lihat Definisi II.10."
+
+  contingent_resources:
+    name: Contingent Resources
+    entity_level: Proyek
+    definition_code: IV.2.5
+    items:
+      - name: Oil Contingent Resources
+        code: OIL_CR
+        unit: MSTB
+        substance: oil
+      - name: Condensate Contingent Resources
+        code: CON_CR
+        unit: MSTB
+        substance: condensate
+      - name: Associated Gas Contingent Resources
+        code: GA_CR
+        unit: BSCF
+        substance: associated_gas
+      - name: Non-associated Gas Contingent Resources
+        code: GN_CR
+        unit: BSCF
+        substance: non_associated_gas
+    uncertainty: [1C, 2C, 3C]
+    consistency: "Volume harus konsisten dengan produksi Net Total Potential"
+    note: "Lihat Definisi II.11."
+
+  prospective_resources:
+    name: Prospective Resources
+    entity_level: Proyek
+    definition_code: IV.2.6
+    items:
+      - name: Oil Prospective Resources
+        code: OIL_PR
+        unit: MSTB
+        substance: oil
+      - name: Non-associated Gas Prospective Resources
+        code: GN_PR
+        unit: BSCF
+        substance: non_associated_gas
+    uncertainty: [1U, 2U, 3U]
+    note: >-
+      Pada tahapan ini satu lapangan biasanya hanya memiliki satu proyek eksplorasi.
+      Jenis fluida dapat didasari atas tipe kerogen atau data pendukung lainnya.
+      Jika jenis fluida tidak dapat diperkirakan, dapat diambil dari analog lapangan sekitar.
+      Lihat Definisi II.12.
+
+  production_profiles:
+    name: Perkiraan Profil Produksi
+    entity_level: Proyek
+    definition_code: IV.2.7
+    reserves_profile:
+      - name: Sales Oil Production Profile
+        unit: MSTBY
+        volume_type: sales
+        substance: oil
+      - name: Sales Condensate Production Profile
+        unit: MSTBY
+        volume_type: sales
+        substance: condensate
+      - name: Sales Associated Gas Production Profile
+        unit: BSCFY
+        volume_type: sales
+        substance: associated_gas
+      - name: Sales Non-associated Gas Production Profile
+        unit: BSCFY
+        volume_type: sales
+        substance: non_associated_gas
+    contingent_grr_profile:
+      - name: Net Total Potential Oil Production Profile
+        unit: MSTBY
+        volume_type: net_total_potential
+        substance: oil
+      - name: Net Total Potential Condensate Sales Production Profile
+        unit: MSTBY
+        volume_type: net_total_potential
+        substance: condensate
+      - name: Net Total Potential Associated Gas Production Profile
+        unit: BSCFY
+        volume_type: net_total_potential
+        substance: associated_gas
+      - name: Net Total Potential Non-associated Gas Production Profile
+        unit: BSCFY
+        volume_type: net_total_potential
+        substance: non_associated_gas
+    prospective_profile:
+      - name: Gross Total Potential Oil Production Profile
+        unit: MSTBY
+        volume_type: gross_total_potential
+        substance: oil
+      - name: Gross Total Potential Non-associated Gas Production Profile
+        unit: BSCFY
+        volume_type: gross_total_potential
+        substance: non_associated_gas
+    note: >-
+      Total volume dari perkiraan profil produksi harus konsisten dengan nilai
+      estimasi terbaik (best estimate) sesuai kelas proyek.
+
+  substance_types:
+    - code: oil
+      name: Minyak
+      unit: MSTB
+    - code: condensate
+      name: Kondensat
+      unit: MSTB
+    - code: associated_gas
+      name: Gas Asosiasi
+      unit: BSCF
+    - code: non_associated_gas
+      name: Gas Non-Asosiasi
+      unit: BSCF
+
+  volume_type_hierarchy:
+    - code: gross
+      name: Gross
+      description: "Keseluruhan volume petroleum, termasuk impurities, flare, loss production, own use (Def IV.4)"
+    - code: net
+      name: Net
+      description: "Volume hidrokarbon tanpa volume non-sales (impurities, flare, loss, own use) (Def IV.5)"
+    - code: sales
+      name: Sales
+      description: "Volume Net yang dijual sesuai kontrak jual beli (Def IV.6)"
+    - code: total_potential
+      name: Total Potential
+      description: "Potensi kemampuan maksimal reservoir dan fasilitas produksi"
+      sub_types:
+        - code: gross_total_potential
+          name: Gross Total Potential
+          description: "Total Potential yang mengandung volume non-sales"
+        - code: net_total_potential
+          name: Net Total Potential
+          description: "Total Potential tanpa volume non-sales, harus konsisten dengan GRR"
+
+# =============================================================================
+# Kodifikasi Entitas Bawah Permukaan
+# =============================================================================
+Kodifikasi:
+  name: Kodifikasi Entitas Bawah Permukaan
+  description: >-
+    Sistem kodifikasi untuk entitas bawah permukaan menggunakan grid spasial berdasarkan
+    koordinat WGS 1984. Grid menggunakan bilangan hexadecimal 1 digit X (0-F) dan 1 digit Y (0-F)
+    dengan patokan titik 0,0 pada koordinat (93.00000, 8.00000). Pergeseran antar grid:
+    X = 3.046875°, Y = 1.312500°. Referensi: SRGI 2013 (Peraturan Kepala BIG No. 15/2013).
+  section_code: "Section IV.3"
+
+  grid_system:
+    name: Sistem Grid Kodifikasi
+    origin: "0,0 = (93.00000, 8.00000) dalam Sistem Koordinat Geografis Datum WGS 1984"
+    x_increment: 3.046875
+    y_increment: 1.312500
+    x_range: "0-F (hexadecimal, 16 nilai)"
+    y_range: "0-F (hexadecimal, 16 nilai)"
+    datum: WGS 1984
+    reference: "SRGI 2013 - Peraturan Kepala BIG No. 15 Tahun 2013"
+
+  entities:
+    field:
+      name: Lapangan (Field)
+      definition_code: IV.3.1
+      structure:
+        - position: 1
+          field: HEADER
+          value: "F"
+          description: "Header kode lapangan"
+        - position: "2-3"
+          field: GRID
+          value: "0-F (HEX)"
+          description: "Kode grid berdasarkan lokasi centroid lapangan"
+        - position: "4-7"
+          field: UNIQUE_NON_REPEATING_DIGIT
+          value: "0-9 (DEC)"
+          description: "Kode lapangan unik dalam grid yang sama, digit tidak berulang"
+        - position: 8
+          field: CHKSUM
+          value: "0-F (HEX)"
+          description: "Digit integritas kode menggunakan algoritma Luhn mod 16"
+      example: "FA3B2345C"
+      pattern: "F[0-F]{2}[0-9]{4}[0-F]"
+
+    project:
+      name: Proyek (Project)
+      definition_code: IV.3.2
+      structure:
+        - position: 1
+          field: HEADER
+          value: "P"
+          description: "Header kode proyek"
+        - position: "2-8"
+          field: FIELD_ID
+          value: "HEX/DEC"
+          description: "ID lapangan tempat proyek berada (tanpa header)"
+        - position: "9-10"
+          field: SEQUENCE
+          value: "01-99 (DEC)"
+          description: "Nomor urut proyek pada lapangan yang sama"
+      example: "PA3B234501"
+      pattern: "P[0-9A-F]{7}[0-9]{2}"
+
+    zone:
+      name: Zona
+      definition_code: IV.3.3
+      structure:
+        - position: 1
+          field: HEADER
+          value: "Z"
+          description: "Header kode zona"
+        - position: "2-8"
+          field: FIELD_ID
+          value: "HEX/DEC"
+          description: "ID lapangan tempat zona berada (tanpa header)"
+        - position: "9-11"
+          field: UNIQUE_NR_DIGIT
+          value: "0-9 (DEC)"
+          description: "Kode zona unik dalam lapangan yang sama, digit tidak berulang"
+        - position: 12
+          field: CHKSUM
+          value: "0-F (HEX)"
+          description: "Digit integritas kode menggunakan algoritma Luhn mod 16"
+      example: "ZA3B2345234C"
+      pattern: "Z[0-9A-F]{7}[0-9]{3}[0-9A-F]"
+
+    wellhead:
+      name: Kepala Sumur (Wellhead)
+      definition_code: IV.3.4
+      structure:
+        - position: "1-2"
+          field: HEADER
+          value: "WH"
+          description: "Header kode kepala sumur"
+        - position: "3-11"
+          field: PROJECT_ID
+          value: "HEX/DEC"
+          description: "ID proyek yang menjadi acuan sumur (tanpa header)"
+        - position: "12-15"
+          field: SEQUENCE
+          value: "0001-9999 (DEC)"
+          description: "Nomor urut kepala sumur pada proyek yang sama"
+      example: "WHA3B23450100123"
+      pattern: "WH[0-9A-F]{9}[0-9]{4}"
+
+    wellbore:
+      name: Wellbore
+      definition_code: IV.3.5
+      structure:
+        - position: "1-2"
+          field: HEADER
+          value: "WB"
+          description: "Header kode wellbore"
+        - position: "3-15"
+          field: WELLHEAD_ID
+          value: "HEX/DEC"
+          description: "ID kepala sumur dari wellbore (tanpa header)"
+        - position: 16
+          field: TRACK
+          value: "1-9 (DEC)"
+          description: "Nomor urut lintasan sumur termasuk side-track"
+        - position: 17
+          field: SEQ
+          value: "1-9 (DEC)"
+          description: "Nomor urut lintasan sumur pada kepala sumur yang sama"
+      pattern: "WB[0-9A-F]{13}[0-9]{2}"
+
+    well_completion:
+      name: Well Completion
+      definition_code: IV.3.6
+      structure:
+        - position: "1-2"
+          field: HEADER
+          value: "WC"
+          description: "Header kode well completion"
+        - position: "3-11"
+          field: WELLBORE_ID
+          value: "HEX/DEC"
+          description: "ID lintasan sumur tempat Well Completion berada (tanpa header)"
+        - position: "12-15"
+          field: SEQUENCE
+          value: "01-99 (DEC)"
+          description: "Nomor urut Well Completion pada Wellbore yang sama"
+      pattern: "WC[0-9A-F]{9}[0-9]{2}"
+
+    producing_license_code:
+      name: Izin Berproduksi (Producing License Code)
+      definition_code: IV.3.7
+      structure:
+        - position: "1-2"
+          field: HEADER
+          value: "PL"
+          description: "Header kode izin berproduksi"
+        - position: "3-4"
+          field: SIGNED_YEAR
+          value: "00-99 (DEC, 2 digit terakhir tahun)"
+          description: "Tahun izin ditandatangani"
+        - position: "5-7"
+          field: SEQUENCE
+          value: "001-999 (DEC)"
+          description: "Nomor urut izin yang diberikan pada tahun tersebut"
+        - position: 8
+          field: INST
+          value: "0-9 (DEC)"
+          description: "Kode institusi yang memberikan izin"
+        - position: 9
+          field: TYPE
+          value: "0-9 (DEC)"
+          description: "Kode tipe izin yang diberikan"
+        - position: 10
+          field: VER
+          value: "0-9 (DEC)"
+          description: "Nomor urut revisi atas izin yang pernah dikeluarkan"
+      pattern: "PL[0-9]{2}[0-9]{3}[0-9]{3}[0-9]"
+
+# =============================================================================
+# Entity Relationships
+# =============================================================================
+EntityRelationships:
+  name: Relasi Antar Entitas
+  description: >-
+    Relasi antar entitas bawah permukaan dalam sistem pelaporan KSMI.
+    Pelaporan sumber daya dicatat dalam level proyek. Dalam satu lapangan
+    dapat memiliki beberapa proyek, namun dalam satu proyek hanya bisa
+    berada pada satu lapangan. Dalam kasus proyek terintegrasi yang terdiri
+    dari beberapa lapangan, perlu dibuat proyek masing-masing untuk tiap
+    lapangan sehingga sumber daya pada tiap lapangan dapat diketahui.
+  relationships:
+    - from: WorkingArea
+      to: Field
+      cardinality: many_to_many
+      description: >-
+        Satu wilayah kerja dapat memiliki banyak lapangan, dan
+        satu lapangan dapat berada di lebih dari satu wilayah kerja
+        (overlap area).
+      mermaid: "WORKING_AREA }|--|{ FIELD"
+    - from: Field
+      to: Zone
+      cardinality: one_to_many
+      description: >-
+        Satu lapangan dapat memiliki banyak zona.
+        Zona merupakan lapisan yang mengandung akumulasi hidrokarbon
+        yang terhubung secara hidrostatik dalam sistem tekanan yang sama.
+      mermaid: "FIELD ||--o{ ZONE"
+    - from: Field
+      to: Project
+      cardinality: one_to_many
+      description: >-
+        Satu lapangan dapat memiliki banyak proyek.
+        Satu proyek hanya dapat berada pada satu lapangan.
+        Untuk proyek terintegrasi multi-lapangan, buat proyek terpisah per lapangan.
+      mermaid: "FIELD ||--o{ PROJECT"
+    - from: Project
+      to: ProducingLicense
+      cardinality: many_to_many
+      description: >-
+        Satu proyek dapat memiliki banyak izin berproduksi (revisi, tipe berbeda).
+        Satu izin berproduksi dapat mencakup lebih dari satu proyek (OPLL).
+      mermaid: "PROJECT }|--|{ PRODUCING_LICENSE"
+  key_rules:
+    - "Satu proyek hanya dapat memiliki satu level pada satu WAP"
+    - "Satu proyek hanya dapat berada di satu lapangan"
+    - "Satu lapangan dapat memiliki banyak proyek"
+    - "Volume pada level proyek hanya dapat diklasifikasikan sebagai cadangan ATAU contingent resources"
+    - "Proyek terintegrasi multi-lapangan: buat proyek terpisah per lapangan"
+    - "Pelaporan sumber daya dicatat pada level proyek"

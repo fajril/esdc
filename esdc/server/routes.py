@@ -212,7 +212,7 @@ async def chat_completions(
                     async for chunk in generate_streaming_response(
                         messages=request.messages,
                         model=request.model,
-                        temperature=request.temperature or 0.7,
+                        temperature=request.temperature,
                         request_id=request_id,
                         reasoning_effort=request.reasoning_effort,
                     ):
@@ -256,7 +256,7 @@ async def chat_completions(
                 result = await generate_response(
                     messages=request.messages,
                     model=request.model,
-                    temperature=request.temperature or 0.7,
+                    temperature=request.temperature,
                     use_native_format=use_native,
                     reasoning_effort=request.reasoning_effort,
                 )
@@ -369,7 +369,7 @@ async def create_response(
                         model=request.model,
                         instructions=request.instructions,
                         tools=request.tools,
-                        temperature=request.temperature or 0.7,
+                        temperature=request.temperature,
                         reasoning_effort=request.reasoning_effort,
                     ):
                         yield event
@@ -400,7 +400,7 @@ async def create_response(
                     model=request.model,
                     instructions=request.instructions,
                     tools=request.tools,
-                    temperature=request.temperature or 0.7,
+                    temperature=request.temperature,
                     reasoning_effort=request.reasoning_effort,
                 )
 

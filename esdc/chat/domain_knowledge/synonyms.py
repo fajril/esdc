@@ -42,6 +42,10 @@ SYNONYMS: dict[str, str] = {
     "pod i": "POD_I",
     "pse": "PSE",
     "penentuan status eksplorasi": "PSE",
+    # Commercial term synonyms
+    "tbs": "TBS",
+    "trustee borrowing scheme": "TBS",
+    "trustee borrowing": "TBS",
     "grr": "grr",
     "government recoverable": "grr",
     "contingent": "contingent",

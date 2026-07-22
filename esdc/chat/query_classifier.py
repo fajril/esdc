@@ -20,6 +20,7 @@ class QueryType(Enum):
     SPATIAL = auto()
     YEAR_TRANSITION = auto()
     AMBIGUOUS = auto()
+    DOCUMENT = auto()
 
 
 @dataclass
@@ -124,15 +125,18 @@ class QueryClassifier:
 
     # Entity detection patterns
     ENTITY_PATTERNS = {
+        "project_name": [
+            r"(?:proyek|project)\s+(.+?)(?=\s+(?:tahun|year|di|pada|oleh|operator|untuk|dengan|dan)\b|$)",
+        ],
         "field_name": [
-            r"lapangan\s+(\w+)",
-            r"field\s+(\w+)",
+            r"(?:lapangan|field)\s+(.+?)(?=\s+(?:tahun|year|di|pada|oleh|operator|untuk|dengan|dan|wk|wilayah\s+kerja)\b|$)",
             r"di\s+(\w+)\s+(?:tahun|tahun\s+\d{4})",  # Contextual
         ],
         "wk_name": [
-            r"wk\s+(\w+)",
-            r"wilayah\s+kerja\s+(\w+)",
-            r"working\s+area\s+(\w+)",
+            r"(?:wk|wilayah\s+kerja|working\s+area)\s+(.+?)(?=\s+(?:tahun|year|di|pada|oleh|operator|untuk|dengan|dan|lapangan|field)\b|$)",
+        ],
+        "operator_name": [
+            r"(?:operator|perusahaan|oleh)\s+(.+?)(?=\s+(?:tahun|year|di|pada|untuk|dengan|dan|wk|wilayah\s+kerja|lapangan|field)\b|$)",
         ],
         "report_year": [
             r"tahun\s+(\d{4})",
@@ -176,6 +180,26 @@ class QueryClassifier:
         ],
     }
 
+    # Document patterns (surat, MoM, berita acara, official correspondence)
+    DOCUMENT_PATTERNS = {
+        "document_types": [
+            r"surat\s+(?:tentang|perihal|persetujuan|keputusan|rekomendasi)",
+            r"\bmom\b",
+            r"minutes\s+of\s+meeting",
+            r"berita\s+acara",
+            r"notulen",
+            r"korespondensi",
+            r"correspondence",
+            r"official\s+letter",
+            r"dokumen\s+(?:resmi|persetujuan|terkait)",
+        ],
+        "document_references": [
+            r"pod\s+(?:i{1,3}|iv|\d+|pertama|kedua|ketiga)\s+.*revisi",
+            r"revisi\s+\d+",
+            r"persetujuan\s+(?:pod|wp&?b|afe|poffd|pofd)",
+        ],
+    }
+
     # Spatial patterns
     SPATIAL_PATTERNS = {
         "proximity": [
@@ -214,7 +238,21 @@ class QueryClassifier:
         query_lower = query.lower()
         detected_entities = self._extract_entities(query_lower)
 
-        # Check for conceptual queries first (highest priority)
+        # Check for document queries first (highest priority) — surat/MoM/
+        # berita acara wording (e.g. "persetujuan") could otherwise drift
+        # into CONCEPTUAL, so document intent must be resolved explicitly.
+        document_match = self._match_patterns(query_lower, self.DOCUMENT_PATTERNS)
+        if document_match:
+            return QueryClassification(
+                query_type=QueryType.DOCUMENT,
+                confidence=0.9,
+                detected_entities=detected_entities,
+                suggested_table=None,
+                suggested_columns=[],
+                reason=f"Document query detected: {document_match}",
+            )
+
+        # Check for conceptual queries
         conceptual_match = self._match_patterns(query_lower, self.CONCEPTUAL_PATTERNS)
         if conceptual_match:
             return QueryClassification(
@@ -295,9 +333,23 @@ class QueryClassifier:
             for pattern in patterns:
                 match = re.search(pattern, query, re.IGNORECASE)
                 if match:
-                    entities[entity_type] = match.group(1)
+                    value = match.group(1)
+                    if entity_type != "report_year":
+                        value = self._clean_entity_value(value)
+                    if value:
+                        entities[entity_type] = value
                     break
         return entities
+
+    def _clean_entity_value(self, value: str) -> str:
+        """Normalize a regex-captured entity phrase."""
+        cleaned = re.sub(r"\b20\d{2}\b", "", value)
+        cleaned = re.sub(r"[^\w\s&./'-]", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        first_word = cleaned.split(" ", 1)[0] if cleaned else ""
+        if first_word in {"apa", "yang", "siapa", "berapa", "mana"}:
+            return ""
+        return cleaned
 
     def _match_patterns(self, query: str, pattern_groups: dict) -> str | None:
         """Check if query matches any pattern in groups.
@@ -333,6 +385,11 @@ class QueryClassifier:
             elif query_category == "production_profile":
                 return "wa_timeseries"
 
+        if "project_name" in entities or "operator_name" in entities:
+            if query_category == "production_profile":
+                return "project_timeseries"
+            return "project_resources"
+
         if query_category in _resource_categories:
             return "field_resources"
 
@@ -363,9 +420,16 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
         List of LangChain tool names to bind for this query
     """
     base_tools = [
+        "Entity Resolver",
         "Knowledge Traversal",
         "SQL Executor",
         "Simple Data Query",
+        "Code Interpreter",
+        "Shell Executor",
+        "Resources Column Guide",
+        "Timeseries Column Guide",
+        "Document Search",
+        "Document Reader",
     ] + _SCHEMA_TOOLS
 
     if classification.query_type in (
@@ -382,6 +446,9 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
 
     elif classification.query_type == QueryType.COMPLEX_FACTUAL:
         return ["Uncertainty Resolver", "Problem Cluster Search"] + base_tools
+
+    elif classification.query_type == QueryType.DOCUMENT:
+        return ["Semantic Search"] + base_tools  # doc tools already in base_tools
 
     else:  # AMBIGUOUS
         return [
@@ -421,7 +488,7 @@ def format_classification_for_prompt(classification: QueryClassification) -> str
 
     if classification.query_type == QueryType.SIMPLE_FACTUAL:
         lines.append("**Write SQL directly using the schema above.**")
-        lines.append("- DO NOT call knowledge_traversal")
+        lines.append("- DO NOT call entity_resolver")
         lines.append("- DO NOT call get_recommended_table")
         lines.append("- DO NOT call get_resources_columns")
         lines.append("- Use suggested table and columns above")
@@ -458,7 +525,20 @@ def format_classification_for_prompt(classification: QueryClassification) -> str
         lines.append(
             "- If auto-resolved entities above are sufficient → write SQL directly"
         )
-        lines.append("- If entities are unclear → call knowledge_traversal")
+        lines.append("- If entities are unclear → call entity_resolver")
+
+    elif classification.query_type == QueryType.DOCUMENT:
+        lines.append("**This is a document query (surat/MoM/berita acara).**")
+        lines.append(
+            "- Call search_documents(query, [doc_type/doc_topic/year filters]) FIRST"
+        )
+        lines.append("- DO NOT call entity_resolver — it cannot find documents")
+        lines.append(
+            "- Use read_document(doc_id) for full text when comparing or quoting"
+        )
+        lines.append(
+            "- If no results: tell the user no matching documents are ingested"
+        )
 
     lines.append("")
     lines.append(f"*Reason: {classification.reason}*")

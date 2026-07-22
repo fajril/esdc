@@ -7,17 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-22
+
 ### Added
 
+- POD master registry: SQLite source of truth (`pod.sqlite`) published to DuckDB
+  (`pod_registry`, `pod_project`) for iris; seed with
+  `esdc load --from-excel pod-itb-skk.xlsx --pod-registry`.
+- `esdc portal` — Excel-like web editor (Tabulator) for PODs, project links,
+  revision chains, and reference tables, with generated immutable pod_id
+  (`PL-YYYY-XXXX-A-B-R`) and typo-preventing dropdown/autocomplete editors.
+- **`esdc corpus` document ingestion pipeline** — parse official documents (POD approvals, MoM minutes, BA documents, regulations, contracts) into a searchable local corpus for IRIS document search
+  - Two-phase, human-reviewed workflow: `esdc corpus extract` parses sources to reviewable `.corpus.md` sidecars with LLM-prefilled metadata and per-page `native`/`llm_ocr` markers; `esdc corpus commit` ingests only sidecars marked `reviewed: true` into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed). Nothing reaches the searchable corpus without passing through this review gate.
+  - Source formats: `.pdf`, `.docx` (python-docx: headings, markdown tables, document-order walk), and `.md` (verbatim); sidecar-path collisions between same-named sources fail explicitly
+  - Per-page tiered PDF extraction: native text layer used when present, `glm-ocr` (Ollama vision model, zai-org/GLM-OCR) OCRs scanned/image-only pages and significant embedded images (tables/charts saved as pictures)
+  - Optional cleanup model pass (`corpus.cleanup_model`) reformats messy OCR segments with digit-invention and length guards; original text kept when the guard rejects
+  - Standardized 16-type `doc_type` vocabulary (uu, perpu, mk, pp, permen, kepmen, letter, mom, ba, note, psc, gsa, pod, ptk, sop, others) with regulatory hierarchy, single-sourced in `doc_schema.yaml` — the extraction prompt, CLI validation, and iris tool context all derive from it; legacy values (`surat`, `other`) auto-migrate at commit; casing is normalized
+  - Entity resolution to canonical WK/field/project names at extract and commit, with unresolved names kept as-is and per-file warnings
+  - CLI metadata overrides on `extract` and `commit` (`--level`, `--doc-type`, `--wk-name`, `--field-name`, `--project-name`); `commit --skip-review` ingests pending sidecars and writes `reviewed: true` back on success (with audit warnings)
+  - Two-line progress display: file-count bar plus an in-place status line showing the current file and phase
+  - Management commands: `esdc corpus status`, `list`, `remove`, `clear`, `reembed`
+  - New iris chat tools `search_documents` and `read_document` for querying the corpus from chat; tool descriptions carry the schema glossary and hierarchy
+  - Configurable via `corpus.*` in `~/.esdc/config.yaml` (chunk size/overlap, OCR model, DPI, context window, native-text threshold, `metadata_model`/`cleanup_model` incl. `main` provider routing, `ollama_host` for remote OCR/embedding)
 - **Auto-reindex after `esdc fetch`** — FTS and B-tree indexes are rebuilt automatically after data loading, ensuring ILIKE queries return correct results for newly-fetched data
   - Default behavior: reindex is ON after every fetch (both full-replace and per-year append modes)
   - Use `--no-reindex` flag on `esdc fetch` to skip reindexing if desired
   - Fixes ILIKE queries returning no results after `esdc fetch --year` because FTS index was stale
 - **FTS zero-row fallback** — when an FTS-rewritten query returns 0 rows, the system automatically retries with the original ILIKE query, ensuring results are never lost due to FTS stemming/stopword issues
 - **FTS index without stemmer/stopwords** — FTS indexes are now created with `stemmer=''` and `stopwords=''` so that short keywords like "Duri" are matched exactly without being filtered by English stemming rules
-
-### Added
-
+- **Reachability matrix in `knowledge_traversal`** — when `topic` is `transition` or `level`, the tool now auto-appends a compact reachability matrix (Level → Allowed Targets) covering all 18 levels (E0-E8, X0-X6, A1, A2), with the queried entity highlighted. Prevents LLM reasoning errors like claiming E3 can transition to E4. Opt-out via `include_reachability=False`.
+- **OAuth authentication and OpenAI provider support** — device-flow OAuth with local S256 PKCE (no external hash service), HTML-escaped callback error page, refreshed tokens persisted atomically to config with `0o600` permissions, and an `expires_at` calculation fix
+- **CI workflow** — GitHub Actions running `ruff check esdc/ tests/` and the pytest suite on every push/PR
 - **New LLM Providers**: Anthropic (Claude), Google (Gemini), Azure OpenAI, Groq, Ollama Cloud
   - Added `AnthropicProvider` via `langchain-anthropic` (`ChatAnthropic`)
   - Added `GoogleProvider` via `langchain-google-genai` (`ChatGoogleGenerativeAI`)
@@ -34,6 +54,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated CLI `esdc provider add` to accept new provider types
   - Updated Phoenix evals to route Groq and Azure OpenAI through OpenAI-compatible judge LLM
   - Added comprehensive unit tests in `tests/test_new_providers.py`
+- **Cache diagnostics in `esdc status`** — hit rate, size, entries, and invalidation history
+  - SQL Results Cache: entries, size, hits, misses, hit rate (via `diskcache` with `statistics=True`)
+  - Tool Results Cache: same stats for get_schema, list_tables, entity_resolver, etc.
+  - JSON Parsing Cache (RAM): entries, hits, misses, hit rate (in-memory counter)
+  - Last invalidated timestamp recorded when `esdc reload` or `invalidate_sql_cache()` runs
+  - New public functions: `get_sql_cache_stats()`, `get_tool_cache_stats()` in `esdc/chat/tools.py`
+  - New `_record_cache_invalidation()` and `get_last_cache_invalidation()` in `esdc/dbmanager.py`
+  - Color-coded hit rate: green ≥80%, yellow ≥50%, red <50%
+- **Chat TUI overhaul** — complete redesign of chat interface with new panels, status bar, slash commands, and performance improvements
+  - Provider-reported token usage over heuristic
+  - Context health indicator (replaces query history)
+  - Inference liveness in status bar and ticking timeline
+  - Current WIB datetime injected into system prompt
+  - Image links surfacing with ctrl+o open shortcut
+  - /new and /help slash commands
+  - Model reasoning streaming into ThinkingIndicator
+  - SQL, results, and query history moved to right panel
+  - Live tool timeline in right panel
+  - Session/context info consolidated into one-line status bar
+  - Markdown rendering throttled to 10Hz flush
+- **Glossary for non-KSMI commercial terms**
 
 ### Changed
 
@@ -44,7 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Added `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-pro`, `gemini-2.0-flash` to mappings
   - `GroqProvider`: added `llama-4-scout`, `qwen-qwq-32b`, `mistral-saba-24b` to `CONTEXT_LENGTHS`
   - All deprecated/retired models removed from `list_models()` (Claude 3.5 retired Oct 2025, Gemini 2.0 Flash retired Jun 2026)
-
 - **Refactored Configuration Wizard (`esdc configs`)**:
   - Replaced `textual` TUI with `questionary`-based interactive prompts
   - Deleted `esdc/chat/wizard.py` (854 baris) and `esdc/commands/provider.py` (131 baris)
@@ -62,9 +102,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Colorful UI** (Blue Grey palette): key-value distinct, Rich Panel header, questionary Style
   - Removed `esdc chat --setup` — now displays "Run 'esdc configs'" redirect message
   - Added `--show` / `-s` flag to `esdc configs` for non-interactive config display
-
 - Added `langchain-anthropic>=0.3.0`, `langchain-google-genai>=2.0.0`, `langchain-groq>=0.2.0`
 - Added `questionary>=2.0.0`
+- Extracted widgets from `app.py` into `widgets.py`
+- Unified TUI streaming on shared `astream_agent_events`
+- Moved `event_streamer` to `esdc/chat` as shared streaming module
+- Deleted unused `AgentFactory` from server
+- Removed no-op `--web` flag from `serve` command
+- Removed broken `chat --setup` flag, point hints to `esdc configs`
+
+### Fixed
+
+- ThinkingIndicator safe for dynamic mid-stream mounting
+- Match real tool display names so SQL/results panels populate
 
 ## [0.7.0] - 2026-05-13
 

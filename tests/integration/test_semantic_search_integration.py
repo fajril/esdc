@@ -1,22 +1,29 @@
 """Integration tests for semantic search with real Ollama."""
 
+import os
+
 import pytest
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(
+    not os.environ.get("ESDC_RUN_INTEGRATION"),
+    reason="writes embeddings into the real ~/.esdc DB — "
+    "set ESDC_RUN_INTEGRATION=1 to opt in",
+)
 @pytest.mark.skipif(not pytest.importorskip("ollama"), reason="Ollama not installed")
 def test_end_to_end_semantic_search():
     """End-to-end test with actual Ollama and database.
 
-    Requires:
+    Requires (opt-in via ESDC_RUN_INTEGRATION=1):
     - Ollama running with qwen3-embedding:0.6b model
     - ESDC database with project_remarks data
     """
     import duckdb
 
     from esdc.configs import Config
-    from esdc.knowledge_graph.embedding_manager import EmbeddingManager
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+    from esdc.search.embedding_manager import EmbeddingManager
+    from esdc.search.semantic_resolver import SemanticResolver
 
     # Check prerequisites
     manager = EmbeddingManager(model="qwen3-embedding:0.6b")
@@ -64,7 +71,7 @@ def test_end_to_end_semantic_search():
 @pytest.mark.integration
 def test_semantic_search_fallback_no_ollama():
     """Test graceful fallback when Ollama is not available."""
-    from esdc.knowledge_graph.embedding_manager import EmbeddingManager
+    from esdc.search.embedding_manager import EmbeddingManager
 
     # Try to connect to non-existent Ollama
     manager = EmbeddingManager(model="nonexistent-model")
@@ -74,13 +81,23 @@ def test_semantic_search_fallback_no_ollama():
 
 
 @pytest.mark.integration
-def test_semantic_search_no_embeddings():
-    """Test behavior when no embeddings exist."""
-    from esdc.knowledge_graph.semantic_resolver import SemanticResolver
+def test_semantic_search_no_embeddings(isolated_config):
+    """Test behavior when no embeddings exist.
 
+    Uses the isolated_config fixture so this doesn't depend on (or
+    get contaminated by) whatever the developer's real ~/.esdc DB
+    happens to contain -- the point is to exercise a store with zero
+    embeddings, not "whatever store is on disk".
+    """
+    from esdc.configs import Config
+    from esdc.search.semantic_resolver import SemanticResolver
+
+    Config.get_db_dir().mkdir(parents=True, exist_ok=True)
     resolver = SemanticResolver()
 
-    # This should return not_available, not error
+    # This should return not_available, not error -- and it must not
+    # require Ollama, since search_by_text should short-circuit before
+    # ever generating a query embedding.
     result = resolver.search_by_text("test query")
 
     assert result["status"] == "not_available"

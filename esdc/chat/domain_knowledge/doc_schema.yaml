@@ -1,0 +1,260 @@
+table_name: documents
+description: >-
+  Corpus of Indonesian oil & gas official documents (regulatory instruments,
+  letters, MoM, berita acara, contracts, and more) ingested via `esdc corpus`,
+  searchable by iris through search_documents.
+llm_fields: # order = order of definition lines in METADATA_PROMPT
+  - name: doc_type
+    type: string
+    enum: [uu, perpu, mk, pp, perpres, permen, kepres, kepmen, ptk, sop, letter, mom, ba, note, contract, book, others]
+    prompt: |-
+      one of "uu" (undang-undang) | "perpu" (peraturan pengganti UU) | "mk"
+        (putusan Mahkamah Konstitusi) | "pp" (peraturan pemerintah) | "perpres"
+        (peraturan presiden) | "permen" (peraturan menteri) | "kepres"
+        (keputusan presiden) | "kepmen" (keputusan menteri) | "ptk" (pedoman
+        tata kerja SKK Migas) | "sop" (standard operating procedure) |
+        "letter" (official letter: persetujuan/edaran/umum) | "mom" (minutes
+        of meeting) | "ba" (berita acara) | "note" (non-binding note) |
+        "contract" (binding commercial contract, e.g. PSC/GSA) | "book"
+        (bound proposal/approval book, e.g. POD/WP&B) | "others"
+    description: >-
+      Document category (FORM, not topic): regulatory instruments (uu, perpu,
+      mk, pp, perpres, permen, kepres, kepmen, ptk, sop — high to low legal force), letter
+      (official letter), mom (minutes of meeting), ba (berita acara), note
+      (non-binding note), contract (binding commercial contract, e.g. PSC or
+      GSA), book (bound proposal/approval book, e.g. POD or WP&B submission),
+      or others.
+    aliases: [jenis dokumen, tipe surat]
+  - name: doc_topic
+    type: list[string]
+    enum: [pod_i, pod, pofd, opl, opll, wpnb, afe, psc, gsa, monitoring_pod, others]
+    prompt: |-
+      list of business object(s) this document concerns: "pod_i" (POD I,
+        first/ministerial POD) | "pod" (POD) | "pofd" (POFD) | "opl" (OPL) |
+        "opll" (OPLL, optimasi pengembangan lapangan-lapangan) | "wpnb"
+        (WP&B) | "afe" (AFE) | "psc" (production sharing contract) | "gsa"
+        (gas sales agreement) | "monitoring_pod" (monitoring POD) | "others"
+        — usually exactly one value
+    description: >-
+      Business object(s) (TOPIC, not form) the document concerns: POD I
+      (first POD, ministerial), POD, POFD, OPL, OPLL (optimasi pengembangan
+      lapangan-lapangan), WP&B, AFE, PSC (production sharing contract), GSA
+      (gas sales agreement), monitoring POD, or others. Usually exactly one
+      value, but multi-topic documents are supported.
+    aliases: [topik dokumen, objek bisnis]
+  - name: doc_number
+    type: string
+    prompt: >-
+      the document/letter number exactly as written
+    description: >-
+      The document or letter reference number, transcribed exactly as written.
+    aliases: [nomor surat, nomor dokumen]
+  - name: doc_date
+    type: date
+    prompt: >-
+      ISO date YYYY-MM-DD
+    description: >-
+      The document's issue date, in ISO format (YYYY-MM-DD).
+    aliases: [tanggal surat, tanggal dokumen]
+  - name: subject
+    type: string
+    prompt: >-
+      perihal or meeting title
+    description: >-
+      The subject line (perihal) of a letter, or the title of a meeting.
+    aliases: [perihal, judul]
+  - name: sender
+    type: string
+    prompt: >-
+      issuing organization or signatory org
+    description: >-
+      Issuing or signing ORGANIZATION (e.g. SKK Migas, a KKKS) — not a person.
+    aliases: [pengirim, penerbit, dari]
+  - name: recipient
+    type: string
+    prompt: >-
+      addressed organization (letters only)
+    description: >-
+      The organization the document is addressed to (letters only).
+    aliases: [penerima, kepada]
+  - name: doc_level
+    type: string
+    enum: [wk, field, project, regulation, unknown]
+    prompt: >-
+      "wk" | "field" | "project" | "regulation" | "unknown" — the scope this
+      document is about
+    description: >-
+      The scope this document is about: wk (working area / wilayah kerja),
+      field (lapangan), project, regulation (national/ministerial regulatory
+      instrument — not tied to any wk/field/project), or unknown.
+    aliases: [tingkat dokumen, cakupan]
+  - name: wk_name
+    type: list[string]
+    prompt: |-
+      list of working area (wilayah kerja) names mentioned
+        (e.g. ["Rokan", "Mahakam"])
+    description: >-
+      List of working area (wilayah kerja) names mentioned in the document.
+    aliases: [wilayah kerja, nama WK]
+  - name: field_name
+    type: list[string]
+    prompt: >-
+      list of field (lapangan) names mentioned (e.g. ["Duri", "Minas"])
+    description: >-
+      List of field (lapangan) names mentioned in the document.
+    aliases: [lapangan, nama field]
+  - name: project_name
+    type: list[string]
+    prompt: >-
+      list of project or POD names mentioned (e.g. ["POD Duri", "POD Minas"])
+    description: >-
+      List of project or POD (Plan of Development) names mentioned in the document.
+    aliases: [nama proyek, nama POD]
+  - name: pod_name
+    type: list[string]
+    prompt: >-
+      list of POD/plan-of-development name(s) this document approves or
+      discusses, exactly as written (e.g. "POD I Lapangan Abadi",
+      "Optimasi Pengembangan Lapangan Pedada"); null if none
+    description: >-
+      Name(s) of the POD (plan of development) the document approves or
+      discusses, as written in the document. Used to suggest links to the
+      POD registry; not resolved against project entities.
+    aliases: [nama POD, judul POD]
+  - name: extras
+    type: object
+    prompt: |-
+      object with doc_type-specific fields, e.g. for mom:
+        {{"peserta": [...], "keputusan": [...]}}
+    description: >-
+      Additional doc_type-specific fields (e.g. participants and decisions for
+      a mom document). Stored as JSON in the metadata column.
+    aliases: [tambahan]
+housekeeping_fields: # set by the pipeline, not the LLM
+  - name: source_file
+    description: >-
+      Original file name the sidecar was extracted from. Stored in the
+      file_name column.
+  - name: file_hash
+    description: SHA-256 hash of the source file bytes; used as the dedup key.
+  - name: page_count
+    description: Number of pages in the source document.
+  - name: extraction_method
+    description: Extraction method used to obtain the document text (native or OCR).
+  - name: raw_entities
+    description: >-
+      Raw entity-resolution candidates captured before canonicalization,
+      stored as JSON.
+  - name: suggested_pod_ids
+    description: >-
+      Registry pod_id(s) suggested by matching the letter number and
+      pod_name against the POD registry (pipeline-computed, JSON list).
+      Suggestions only — pod_document links are always human-confirmed.
+doc_types: # authoritative glossary, one entry per doc_type enum value
+  - name: uu
+    title: Undang-Undang
+    description: Undang-undang (UU) — produk hukum tertinggi hasil legislasi.
+  - name: perpu
+    title: Peraturan Pemerintah Pengganti Undang-Undang
+    description: >-
+      Peraturan pemerintah pengganti undang-undang (Perpu), diterbitkan dalam
+      kondisi mendesak dan setara UU.
+  - name: mk
+    title: Putusan Mahkamah Konstitusi
+    description: Putusan Mahkamah Konstitusi (MK), setara UU dalam kekuatan hukum.
+  - name: pp
+    title: Peraturan Pemerintah
+    description: Peraturan pemerintah (PP) — aturan pelaksana di bawah UU.
+  - name: perpres
+    title: Peraturan Presiden
+    description: Peraturan presiden (perpres) — peraturan yang diterbitkan Presiden.
+  - name: permen
+    title: Peraturan Menteri
+    description: Peraturan menteri (permen) — peraturan yang diterbitkan Menteri.
+  - name: kepmen
+    title: Keputusan Menteri
+    description: Keputusan menteri (kepmen) — kebijakan yang diambil Menteri.
+  - name: kepres
+    title: Keputusan Presiden
+    description: Keputusan presiden (kepres) — kebijakan yang diambil Presiden.
+  - name: ptk
+    title: Pedoman Tata Kerja
+    description: >-
+      Pedoman tata kerja (PTK) — pedoman resmi SKK Migas sebagai acuan
+      pelaksanaan kegiatan usaha hulu migas.
+  - name: sop
+    title: Standard Operating Procedure
+    description: Standard operating procedure (SOP) — aturan proses bisnis internal institusi.
+  - name: letter
+    title: Surat Resmi
+    description: >-
+      Surat resmi yang diterbitkan lembaga: surat persetujuan, surat edaran,
+      atau surat umum.
+  - name: mom
+    title: Minutes of Meeting
+    description: >-
+      Minutes of meeting (MoM) — kesepakatan rapat yang dituangkan dalam
+      dokumen.
+  - name: ba
+    title: Berita Acara
+    description: Berita acara (BA).
+  - name: note
+    title: Catatan
+    description: Catatan tidak mengikat, cenderung informatif.
+  - name: contract
+    title: Kontrak Komersial
+    description: >-
+      Kontrak komersial yang mengikat, misalnya production sharing contract
+      (PSC) atau gas sales agreement (GSA).
+  - name: book
+    title: Buku Proposal/Persetujuan
+    description: >-
+      Buku proposal atau persetujuan yang mengikat, misalnya buku persetujuan
+      POD atau pengajuan WP&B.
+  - name: others
+    title: Lainnya
+    description: Jenis dokumen di luar tipe lain.
+doc_type_hierarchy: # regulatory force, high to low; ties share a level
+  - [uu, perpu, mk]
+  - [pp]
+  - [perpres]
+  - [permen]
+  - [kepres]
+  - [kepmen]
+  - [ptk]
+  - [sop]
+legacy_doc_type_map:
+  surat: letter
+  other: others
+  psc: contract
+  gsa: contract
+  pod: book
+legacy_topic_seed: # legacy doc_type value -> doc_topic seeded alongside the remap above
+  psc: psc
+  gsa: gsa
+  pod: pod
+doc_level_rules: # doc_type rule takes precedence over doc_topic rule
+  doc_type:
+    uu: regulation
+    perpu: regulation
+    mk: regulation
+    pp: regulation
+    perpres: regulation
+    permen: regulation
+    kepres: regulation
+    kepmen: regulation
+    ptk: regulation
+    sop: regulation
+  doc_topic:
+    pod_i: project
+    pod: project
+    pofd: project
+    opl: project
+    opll: project
+    afe: project
+    wpnb: wk
+    psc: wk
+enums:
+  doc_level: [wk, field, project, regulation, unknown]
+  doc_type: [uu, perpu, mk, pp, perpres, permen, kepres, kepmen, ptk, sop, letter, mom, ba, note, contract, book, others]
+  doc_topic: [pod_i, pod, pofd, opl, opll, wpnb, afe, psc, gsa, monitoring_pod, others]

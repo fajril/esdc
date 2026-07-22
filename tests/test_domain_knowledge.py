@@ -743,3 +743,93 @@ class TestGetRecommendedTable:
         """Test recommended table for unknown entity."""
         assert get_recommended_table("unknown") == "project_resources"
         assert get_recommended_table(None) == "project_resources"
+
+
+class TestKsmiRetrieveEntityResolution:
+    """Tests for ksmi_retrieve entity resolution with case-insensitive matching."""
+
+    def test_entity_lowercase_reserves(self):
+        """Test 'reserves' resolves to ProjectClassification.Reserves."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "reserves")
+        assert "Reserves" in result
+        assert "not found" not in result.lower()
+
+    def test_entity_capitalized_reserves(self):
+        """Test 'Reserves' resolves to ProjectClassification.Reserves."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "Reserves")
+        assert "Reserves" in result
+        assert "not found" not in result.lower()
+
+    def test_entity_uppercase_reserves(self):
+        """Test 'RESERVES' resolves to ProjectClassification.Reserves."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "RESERVES")
+        assert "Reserves" in result
+        assert "not found" not in result.lower()
+
+    def test_entity_cadangan_alias(self):
+        """Test 'cadangan' (Indonesian alias) resolves to ProjectClassification.Reserves."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "cadangan")
+        assert "Reserves" in result or "Cadangan" in result
+        assert "not found" not in result.lower()
+
+    def test_entity_grr_alias(self):
+        """Test 'GRR' resolves to ProjectClassification.Reserves."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "GRR")
+        assert "Reserves" in result or "GRR" in result
+        assert "not found" not in result.lower()
+
+    def test_entity_grr_lowercase(self):
+        """Test 'grr' (lowercase) resolves to ProjectClassification.Reserves."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "grr")
+        assert "Reserves" in result or "GRR" in result
+        assert "not found" not in result.lower()
+
+    def test_entity_contingent_resources(self):
+        """Test 'contingent' resolves via name/alias in ProjectClassification."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "contingent")
+        assert "Contingent" in result or "contingent" in result.lower()
+        assert "not found" not in result.lower()
+
+    def test_entity_e0_level_code(self):
+        """Test 'E0' level code resolves to project level."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("level", "E0")
+        assert "E0" in result
+        assert "not found" not in result.lower()
+
+    def test_entity_ksmi_framework(self):
+        """Test 'KSMI' or 'KSMIFramework' resolves to KSMI definition."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "KSMI")
+        assert "KSMI" in result
+        assert "not found" not in result.lower()
+
+    def test_entity_partial_name_match(self):
+        """Test partial name matching in nested sections."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "contingent")
+        assert "not found" not in result.lower()
+
+    def test_entity_not_found(self):
+        """Test truly unknown entity returns not-found message."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "xyznonexistent")
+        assert "not found" in result.lower()

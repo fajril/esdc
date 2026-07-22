@@ -24,6 +24,24 @@ class TestSimpleMessages:
         assert isinstance(lc_messages[0], AIMessage)
         assert lc_messages[0].content == "Hi there!"
 
+    def test_assistant_message_preserves_reasoning_content(self) -> None:
+        """Test assistant reasoning_content is preserved."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Final answer",
+                "reasoning_content": "I reasoned about the tool result.",
+            }
+        ]
+        lc_messages = convert_messages_to_langchain(messages)
+        assert len(lc_messages) == 1
+        assert isinstance(lc_messages[0], AIMessage)
+        assert lc_messages[0].content == "Final answer"
+        assert (
+            lc_messages[0].additional_kwargs["reasoning_content"]
+            == "I reasoned about the tool result."
+        )
+
     def test_system_message(self) -> None:
         """Test system message."""
         messages = [{"role": "system", "content": "You are helpful."}]
@@ -93,6 +111,60 @@ class TestOutputArrayWithToolCalls:
         assert lc_messages[0].tool_calls[0]["name"] == "get_data"
         assert lc_messages[0].tool_calls[0]["id"] == "call_1"
         assert lc_messages[0].tool_calls[0]["args"] == {"param": "value"}
+
+    def test_assistant_with_native_tool_calls_and_reasoning_content(self) -> None:
+        """Test native Chat Completions tool_calls with reasoning content."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "Need to call the reserve lookup.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_data",
+                            "arguments": '{"param": "value"}',
+                        },
+                    }
+                ],
+            }
+        ]
+        lc_messages = convert_messages_to_langchain(messages)
+        assert len(lc_messages) == 1
+        assert isinstance(lc_messages[0], AIMessage)
+        assert lc_messages[0].additional_kwargs["reasoning_content"] == (
+            "Need to call the reserve lookup."
+        )
+        assert len(lc_messages[0].tool_calls) == 1
+        assert lc_messages[0].tool_calls[0]["name"] == "get_data"
+        assert lc_messages[0].tool_calls[0]["id"] == "call_1"
+        assert lc_messages[0].tool_calls[0]["args"] == {"param": "value"}
+
+    def test_output_function_call_preserves_reasoning_content(self) -> None:
+        """Test OpenWebUI output function_call preserves reasoning content."""
+        messages = [
+            {
+                "role": "assistant",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "get_data",
+                        "arguments": '{"param": "value"}',
+                        "reasoning_content": "Need to call a function.",
+                    }
+                ],
+            }
+        ]
+        lc_messages = convert_messages_to_langchain(messages)
+        assert len(lc_messages) == 1
+        assert isinstance(lc_messages[0], AIMessage)
+        assert lc_messages[0].additional_kwargs["reasoning_content"] == (
+            "Need to call a function."
+        )
+        assert lc_messages[0].tool_calls[0]["id"] == "call_1"
 
     def test_function_call_output(self) -> None:
         """Test function_call_output in output array."""

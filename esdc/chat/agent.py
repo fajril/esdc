@@ -1,9 +1,10 @@
 # Standard library
 import asyncio
+import contextlib
 import json
 import logging
 import time
-from collections.abc import AsyncGenerator
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 # Third-party
@@ -15,7 +16,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.runnables import Runnable
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
@@ -28,9 +29,10 @@ from esdc.chat.query_classifier import (
     format_classification_for_prompt,
     get_tools_for_classification,
 )
+from esdc.chat.skills import discover_skills, inject_skills_into_prompt
 from esdc.chat.smart_query import simple_data_query
 from esdc.chat.tools import (
-    execute_cypher,
+    entity_resolver,
     execute_sql,
     get_recommended_table,
     get_resources_columns,
@@ -38,8 +40,10 @@ from esdc.chat.tools import (
     get_timeseries_columns,
     knowledge_traversal,
     list_tables,
+    read_document,
     resolve_spatial,
     resolve_uncertainty_level,
+    search_documents,
     search_problem_cluster,
     semantic_search,
 )
@@ -170,8 +174,82 @@ def _detect_context_length(llm: BaseChatModel) -> int:
     return model_context_length
 
 
-TOKEN_CHARS_PER_TOKEN = 4
+def _merge_allowed_tools(
+    classifier_tools: list[str],
+    conditional_tool_names: set[str],
+) -> list[str]:
+    """Classifier-selected tools plus conditionally-registered ones.
+
+    Conditionally-registered tools (OpenTerminal sandbox tools, external
+    passthrough tools) are not known to the classifier, so they must always
+    stay allowed. Everything else follows the classifier's restriction.
+    """
+    return sorted(set(classifier_tools) | conditional_tool_names)
+
+
 MAX_TOOL_RESULT_CHARS = 10000
+
+# A signature is blocked once it would be the 3rd+ execution of an
+# identical tool+args call (i.e. 2 prior executions already happened):
+# repeating past this point cannot change the output and only burns the
+# MAX_TOOL_CALLS budget (see the Entity Resolver death-spiral in
+# docs/plans/2026-07-13-improve-document-search-usage.md).
+_LOOP_DETECTION_MAX_PRIOR_EXECUTIONS = 2
+
+_REPEATED_CALL_BLOCKED_PREFIX = "REPEATED CALL BLOCKED"
+
+
+def _tool_call_signature(tool_name: str, tool_args: Any) -> str:
+    """Build a stable signature identifying a tool call by name + args.
+
+    Used by the tool_node loop guard to recognize when the LLM repeats an
+    identical call instead of trying something different.
+    """
+    if isinstance(tool_args, str):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            tool_args = json.loads(tool_args)
+    return f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
+
+
+def _count_executed_tool_signatures(messages: list[AnyMessage]) -> dict[str, int]:
+    """Count prior tool executions per call signature in the current turn.
+
+    Only messages after the last HumanMessage are counted: a user asking
+    the same question in a later turn legitimately re-runs the same tool
+    calls and must not inherit counts from earlier turns.
+
+    Pairs each ToolMessage with the tool_call it answers (matched by
+    tool_call_id against preceding AIMessage.tool_calls) to recover the
+    tool+args combination it represents. Calls the loop guard itself
+    already blocked (content prefixed with "REPEATED CALL BLOCKED") never
+    actually executed, so they are not counted.
+    """
+    turn_start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            turn_start = i + 1
+            break
+    turn_messages = messages[turn_start:]
+
+    call_index: dict[str, tuple[str, Any]] = {}
+    for msg in turn_messages:
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id")
+                if tc_id:
+                    call_index[tc_id] = (tc.get("name", "unknown"), tc.get("args", {}))
+
+    counts: dict[str, int] = {}
+    for msg in turn_messages:
+        if isinstance(msg, ToolMessage) and not str(msg.content).startswith(
+            _REPEATED_CALL_BLOCKED_PREFIX
+        ):
+            entry = call_index.get(msg.tool_call_id)
+            if entry is None:
+                continue
+            signature = _tool_call_signature(*entry)
+            counts[signature] = counts.get(signature, 0) + 1
+    return counts
 
 
 async def generate_conversation_title(
@@ -406,13 +484,18 @@ def create_agent(
     """
     if context_length is None:
         context_length = _detect_context_length(llm)
+    provider_type = getattr(llm, "_esdc_provider_type", None)
+    model_name = getattr(llm, "_esdc_model_name", None)
+    base_url = getattr(llm, "_esdc_base_url", None)
     if tools is None:
         tools = [
             simple_data_query,
+            entity_resolver,
             knowledge_traversal,
             resolve_spatial,
             semantic_search,
-            execute_cypher,
+            search_documents,
+            read_document,
             execute_sql,
             get_schema,
             list_tables,
@@ -433,12 +516,22 @@ def create_agent(
 
     _external_tool_names = external_tool_names or set()
 
+    conditional_tool_names: set[str] = set(_external_tool_names)
+    if openterminal_tools:
+        conditional_tool_names |= {t.name for t in openterminal_tools}
+
     all_tools: dict[str, Any] = {tool.name: tool for tool in tools}
+
+    # Discover skills and inject their instructions into the system prompt
+    skills = discover_skills()
+
     tools_by_name = dict(all_tools)
 
     def init_node(state: AgentState) -> dict[str, Any]:
         """Initialize system prompt and defaults in state (runs once)."""
         system_prompt = get_system_prompt()
+        if skills:
+            system_prompt = inject_skills_into_prompt(system_prompt, skills)
         logger.debug("[INIT] system_prompt_set | len=%d", len(system_prompt))
         return {
             "system_prompt": system_prompt,
@@ -491,8 +584,11 @@ def create_agent(
                 empty_count,
             )
 
+        # Inject current datetime so model knows "latest" context
+        wib = timezone(timedelta(hours=7))
+        now = datetime.now(wib).strftime("%Y-%m-%d %H:%M WIB")
         messages_with_system = [
-            SystemMessage(content=system_prompt)
+            SystemMessage(content=f"{system_prompt}\n\nCurrent datetime: {now}")
         ] + filtered_messages
 
         tool_call_count = state.get("tool_call_count", 0)
@@ -681,10 +777,39 @@ def create_agent(
             "[TOOL] TOOL_NODE: Processing %d tool calls", len(ai_message.tool_calls)
         )
 
+        signature_counts = _count_executed_tool_signatures(state["messages"])
+
         for tool_call in ai_message.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call.get("args", {})
             tool_id = tool_call.get("id", "unknown")
+
+            signature = _tool_call_signature(tool_name, tool_args)
+            prior_executions = signature_counts.get(signature, 0)
+            if prior_executions >= _LOOP_DETECTION_MAX_PRIOR_EXECUTIONS:
+                logger.warning(
+                    "[TOOL_NODE] Loop detected: %s already executed %d times with "
+                    "identical args, blocking | signature=%s",
+                    tool_name,
+                    prior_executions,
+                    signature,
+                )
+                result.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": (
+                            f"{_REPEATED_CALL_BLOCKED_PREFIX}: '{tool_name}' already "
+                            f"returned identical results for these exact arguments "
+                            f"{prior_executions} times. Calling again will not change "
+                            "the output. Use a DIFFERENT tool (e.g. search_documents "
+                            "for document queries) or give your final answer with "
+                            "what you have."
+                        ),
+                    }
+                )
+                continue
 
             if tool_name in _external_tool_names:
                 logger.info(
@@ -748,7 +873,7 @@ def create_agent(
                     if len(observation_str) > MAX_TOOL_RESULT_CHARS:
                         observation = (
                             observation_str[:MAX_TOOL_RESULT_CHARS]
-                            + "\n\n[Result truncated to first 10000 characters for context efficiency]"  # noqa: E501
+                            + f"\n\n[Result truncated to first {MAX_TOOL_RESULT_CHARS} characters for context efficiency]"  # noqa: E501
                         )
                         logger.info(
                             "[TOOL] TOOL_NODE: %s result truncated from %d to %d chars",
@@ -760,6 +885,7 @@ def create_agent(
                     logger.error("[TOOL] TOOL_NODE: %s failed: %s", tool_name, e)
                     observation = f"Error: {str(e)}"
 
+                signature_counts[signature] = prior_executions + 1
                 result.append(
                     {
                         "tool_call_id": tool_id,
@@ -791,7 +917,13 @@ def create_agent(
 
     def manage_context_with_length(state: AgentState) -> dict[str, Any]:
         """Wrapper for manage_context_node with bound context_length."""
-        return manage_context_node(state, context_length=context_length)
+        return manage_context_node(
+            state,
+            context_length=context_length,
+            provider_type=provider_type,
+            model=model_name,
+            base_url=base_url,
+        )
 
     def query_classification_node(state: AgentState) -> dict[str, Any]:
         """Classify query and inject strategy into system prompt."""
@@ -819,21 +951,21 @@ def create_agent(
             allowed_tools = get_tools_for_classification(classification)
 
             # Preserve conditionally-registered tools (e.g. OpenTerminal
-            # Compute Engine, File Processing, View File) that exist in
+            # Shell Executor) that exist in
             # all_tools but are not returned by the classifier. Without
             # this, query_classification_node would override allowed_tools
             # with only classifier-selected tools, dropping any tools that
             # were added by create_agent conditionally (like sandbox tools),
             # making the LLM unable to call them.
-            classifier_tool_set = set(allowed_tools)
-            preserved = set(all_tools.keys()) - classifier_tool_set
-            if preserved:
+            before = set(allowed_tools)
+            allowed_tools = _merge_allowed_tools(allowed_tools, conditional_tool_names)
+            added = set(allowed_tools) - before
+            if added:
                 logger.debug(
                     "[CLASSIFICATION] Preserving conditionally-registered "
                     "tools not in classifier output: %s",
-                    sorted(preserved),
+                    sorted(added),
                 )
-                allowed_tools = list(classifier_tool_set | preserved)
 
             strategy_msg = SystemMessage(content=strategy_text)
             logger.info(
@@ -908,387 +1040,3 @@ def create_agent(
     )
 
     return graph.compile(checkpointer=checkpointer)
-
-
-async def run_agent_stream(
-    agent: Runnable,
-    user_input: str,
-    thread_id: str,
-    checkpointer: BaseCheckpointSaver | None = None,
-) -> AsyncGenerator[dict[str, Any], None]:
-    """Run the agent with streaming output.
-
-    Args:
-        agent: Compiled LangGraph agent
-        user_input: User message
-        thread_id: Conversation thread ID
-        checkpointer: Optional checkpointer for memory
-            (agent should already be compiled)
-
-    Yields:
-        Dict with 'type' (message/tool/error) and 'content' or 'token_usage'
-    """
-    config: RunnableConfig = {  # type: ignore[assignment]
-        "recursion_limit": 100,
-        "configurable": {
-            "thread_id": thread_id,
-            "checkpoint_ns": "esdc_chat",
-        },
-    }
-
-    messages = [HumanMessage(content=user_input)]
-
-    if checkpointer:
-        agent = agent.compile(checkpointer=checkpointer)  # type: ignore[attr-defined]
-
-    stored_tool_calls: list[dict[str, Any]] = []
-    conversation_messages: list[
-        AnyMessage
-    ] = []  # Track messages for real-time token count
-
-    stream_start = time.perf_counter()
-    first_token_time: float | None = None
-    first_llm_time: float | None = None
-    tool_call_time: float | None = None
-
-    logger.info("=" * 60)
-    logger.info("🔔 AGENT_STREAM_STARTED: thread_id=%s", thread_id)
-    logger.info("=" * 60)
-
-    event_count = 0
-    token_event_count = 0
-
-    async for event in agent.astream_events(
-        {"messages": messages},
-        config=config,
-        version="v2",
-    ):
-        event_count += 1
-        event_type = event.get("event")
-        data = event.get("data", {})
-
-        # Log every event (but not too spammy)
-        if event_count <= 5 or event_count % 20 == 0:
-            elapsed_ms = (time.perf_counter() - stream_start) * 1000
-            logger.debug(
-                "🔔 AGENT_EVENT #%d: type=%s | elapsed=%.0fms",
-                event_count,
-                event_type,
-                elapsed_ms,
-            )
-
-        # Handle token streaming (character-by-character)
-        # ChatOllama may emit either on_chat_model_stream or on_llm_stream
-        if event_type in ("on_chat_model_stream", "on_llm_stream"):
-            if first_token_time is None:
-                first_token_time = time.perf_counter()
-                ttft_ms = (first_token_time - stream_start) * 1000
-                logger.debug("[TIMING] first_token | ttft=%.2fms", ttft_ms)
-            token_event_count += 1
-            chunk = data.get("chunk")
-            if chunk:
-                # Handle different chunk formats
-                if hasattr(chunk, "content"):
-                    content = chunk.content
-                elif isinstance(chunk, str):
-                    content = chunk
-                else:
-                    content = str(chunk) if chunk else ""
-
-                if content:
-                    # Log token details (every 50 tokens)
-                    if token_event_count % 50 == 0:
-                        logger.info(
-                            "✅ TOKEN_EVENT #%d: len=%d, preview='%s'",
-                            token_event_count,
-                            len(content),
-                            content[:40],
-                        )
-
-                    yield {
-                        "type": "token",
-                        "content": content,
-                    }
-
-        # Handle context management node completion
-        elif event_type == "on_chain_end":
-            node_name = event.get("name", "")
-            if node_name == "manage_context":
-                output_data = data.get("output", {})
-                messages = output_data.get("messages", [])
-                context_metadata = output_data.get("context_metadata")
-                if context_metadata:
-                    logger.info("📦 CONTEXT_METADATA: %s", context_metadata)
-                    yield {"type": "context_metadata", "metadata": context_metadata}
-                # Initialize conversation_messages with managed messages
-                if messages:
-                    conversation_messages = messages.copy()
-                    yield {
-                        "type": "messages_state",
-                        "messages": conversation_messages.copy(),
-                        "message_count": len(conversation_messages),
-                    }
-
-        # Handle completion (tool calls, final message)
-        elif event_type == "on_chat_model_end":
-            if first_llm_time is None:
-                first_llm_time = time.perf_counter()
-                elapsed_ms = (first_llm_time - stream_start) * 1000
-                logger.debug("[TIMING] first_llm_response | elapsed=%.2fms", elapsed_ms)
-            logger.info("🔚 CHAT_MODEL_END: completing LLM call")
-            output = data.get("output")
-            if output:
-                # Add AI message to conversation for token tracking
-                conversation_messages.append(output)
-                yield {
-                    "type": "messages_state",
-                    "messages": conversation_messages.copy(),
-                    "message_count": len(conversation_messages),
-                }
-
-                # Token usage
-                tokens_used = _extract_token_usage(output, user_input)
-                if tokens_used > 0:
-                    logger.info("📊 TOKEN_USAGE: %d tokens", tokens_used)
-                    yield {"type": "token_usage", "tokens": tokens_used}
-
-                # Tool calls
-                if hasattr(output, "tool_calls") and output.tool_calls:
-                    logger.info(
-                        "🛠️ TOOL_CALLS_DETECTED: count=%d", len(output.tool_calls)
-                    )
-                    for tc in output.tool_calls:
-                        # Store for later SQL extraction
-                        args = tc.get("args", {})
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except Exception:
-                                args = {}
-                        query = args.get("query", "")
-
-                        stored_tool_calls.append(
-                            {
-                                "name": tc["name"],
-                                "args": args,
-                                "query": query,
-                                "id": tc.get("id", ""),
-                            }
-                        )
-
-                        logger.info(
-                            f"AGENT_STORING: tool_call={tc['name']}, query={query[:50] if query else 'N/A'}..."  # noqa: E501
-                        )
-
-                        yield {
-                            "type": "tool_call",
-                            "tool": tc["name"],
-                            "args": args,
-                        }
-
-                # Content (apply existing SQL filtering)
-                if hasattr(output, "content") and output.content:
-                    content = output.content
-                    # Apply SQL filtering (lines 249-267)
-                    if "```sql" in content.lower():
-                        import re
-
-                        sql_pattern = r"```sql\s*?\n?(.*?)\n?```"
-                        content = re.sub(
-                            sql_pattern, "", content, flags=re.DOTALL | re.IGNORECASE
-                        )
-                        table_pattern = r"\|.*\|.*\n\|[-:| ]+\|"
-                        content = re.sub(table_pattern, "", content)
-                        content = re.sub(r"\n{3,}", "\n\n", content)
-                        content = content.strip()
-                        logger.info(
-                            "AGENT_FILTERED: Removed SQL code block from message"
-                        )
-
-                    if content:
-                        yield {
-                            "type": "message",
-                            "content": content,
-                            "additional_kwargs": output.additional_kwargs
-                            if hasattr(output, "additional_kwargs")
-                            else {},
-                        }
-
-        # Handle tool results
-        elif event_type == "on_tool_end":
-            tool_result = data.get("output")
-            tool_name = event.get("name", "unknown")
-
-            if tool_call_time is None:
-                tool_call_time = time.perf_counter()
-                elapsed_ms = (tool_call_time - stream_start) * 1000
-                logger.debug(
-                    "[TIMING] first_tool_result | elapsed=%.2fms | tool=%s",
-                    elapsed_ms,
-                    tool_name,
-                )
-
-            logger.info(
-                "[TOOL] AGENT_TOOL_END: tool=%s, result_len=%d",
-                tool_name,
-                len(str(tool_result)),
-            )
-
-            # Extract SQL from stored_tool_calls (pop from front - FIFO order)
-            sql = ""
-            tool_call_id = "unknown"
-            if stored_tool_calls:
-                stored_tc = stored_tool_calls.pop(0)
-                tool_call_id = stored_tc.get("id", "unknown")
-                if stored_tc.get("name") == "execute_sql":
-                    args = stored_tc.get("args", {})
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except Exception:
-                            args = {}
-                    sql = args.get("query", "")
-                    logger.info(
-                        "📤 YIELDING tool_result: tool=%s, sql_len=%d, result_len=%d",
-                        tool_name,
-                        len(sql),
-                        len(str(tool_result)),
-                    )
-            else:
-                logger.info(
-                    "YIELDING tool_result NO SQL - tool=%s, result_length=%d (no stored calls)",  # noqa: E501
-                    tool_name,
-                    len(str(tool_result)),
-                )
-
-            # Add ToolMessage to conversation for token tracking
-            tool_msg = ToolMessage(content=str(tool_result), tool_call_id=tool_call_id)
-            conversation_messages.append(tool_msg)
-            yield {
-                "type": "messages_state",
-                "messages": conversation_messages.copy(),
-                "message_count": len(conversation_messages),
-            }
-
-            yield {
-                "type": "tool_result",
-                "tool": tool_name,
-                "result": str(tool_result),
-                "sql": sql,
-            }
-
-    # If no content was streamed (e.g., fallback message from agent_node
-    # that never triggered LLM events), yield it now
-    if token_event_count == 0 and first_llm_time is None:
-        logger.warning("[AGENT] No LLM content streamed, yielding fallback message")
-        yield {
-            "type": "message",
-            "content": (
-                "Maaf, saya tidak dapat memproses permintaan Anda. Silakan coba lagi."
-            ),
-        }
-
-    # Stream complete - log final timing summary
-    total_ms = (time.perf_counter() - stream_start) * 1000
-    logger.debug("=" * 60)
-    logger.debug(
-        "[TIMING] STREAM_COMPLETE | total=%.2fms | events=%d", total_ms, event_count
-    )
-    if first_token_time:
-        ttft_ms = (first_token_time - stream_start) * 1000
-        logger.debug("[TIMING] time_to_first_token=%.2fms", ttft_ms)
-    if first_llm_time:
-        llm_ms = (first_llm_time - stream_start) * 1000
-        logger.debug("[TIMING] time_to_first_llm_response=%.2fms", llm_ms)
-    if tool_call_time:
-        tool_ms = (tool_call_time - stream_start) * 1000
-        logger.debug("[TIMING] time_to_first_tool_result=%.2fms", tool_ms)
-    logger.debug("=" * 60)
-    logger.info(
-        "[TIMING] STREAM_COMPLETE | total=%.2fms | events=%d", total_ms, event_count
-    )
-    if first_token_time:
-        ttft_ms = (first_token_time - stream_start) * 1000
-        logger.info("[TIMING] time_to_first_token=%.2fms", ttft_ms)
-    if first_llm_time:
-        llm_ms = (first_llm_time - stream_start) * 1000
-        logger.info("[TIMING] time_to_first_llm_response=%.2fms", llm_ms)
-    if tool_call_time:
-        tool_ms = (tool_call_time - stream_start) * 1000
-        logger.info("[TIMING] time_to_first_tool_result=%.2fms", tool_ms)
-    logger.info("=" * 60)
-
-
-def _extract_token_usage(message: AIMessage, user_input: str) -> int:
-    """Extract token usage from an AIMessage response.
-
-    Tries multiple sources:
-    1. message.usage_metadata (LangChain format)
-    2. message.response_metadata with usage (OpenAI format)
-    3. Estimate from text length
-
-    Args:
-        message: AIMessage from LLM
-        user_input: Original user input for estimation fallback
-
-    Returns:
-        Estimated or actual token count
-    """
-    # Try LangChain usage_metadata format
-    if hasattr(message, "usage_metadata") and message.usage_metadata:
-        usage = message.usage_metadata
-        if isinstance(usage, dict):
-            # LangChain format: {'input_tokens': X, 'output_tokens': Y, 'total_tokens': Z}  # noqa: E501
-            if "total_tokens" in usage:
-                return int(usage["total_tokens"])
-            elif "output_tokens" in usage and "input_tokens" in usage:
-                return int(usage.get("input_tokens", 0)) + int(
-                    usage.get("output_tokens", 0)
-                )
-
-    # Try OpenAI response_metadata format
-    if hasattr(message, "response_metadata") and message.response_metadata:
-        metadata = message.response_metadata
-        if isinstance(metadata, dict):
-            usage = metadata.get("usage") or metadata.get("Usage")
-            if usage:
-                if hasattr(usage, "total_tokens"):
-                    return int(usage.total_tokens)
-                if isinstance(usage, dict):
-                    if "total_tokens" in usage:
-                        return int(usage["total_tokens"])
-                    elif "output_tokens" in usage and "prompt_tokens" in usage:
-                        return int(usage.get("prompt_tokens", 0)) + int(
-                            usage.get("output_tokens", 0)
-                        )
-
-    # Fallback: estimate from text content
-    if hasattr(message, "content") and message.content:
-        content = message.content
-        if isinstance(content, list):
-            # Handle list content (e.g., [{"type": "text", "text": "..."}])
-            text = " ".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in content
-            )
-        else:
-            text = str(content)
-        return _estimate_tokens(text)
-
-    return 0
-
-
-def _estimate_tokens(text: str) -> int:
-    """Estimate token count from text.
-
-    Uses rough approximation: ~4 characters per token.
-
-    Args:
-        text: Text to estimate tokens for
-
-    Returns:
-        Estimated token count
-    """
-    if not text:
-        return 0
-    return len(text) // TOKEN_CHARS_PER_TOKEN

@@ -4,13 +4,13 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import BaseModel
 
-from esdc.knowledge_graph.spatial_resolver import SpatialResolver
+from esdc.search.spatial_resolver import SpatialResolver
 
 
 class TestSpatialResolverWKScoped:
     """Test that wk_name parameter filters results correctly."""
 
-    @patch("esdc.knowledge_graph.spatial_resolver.SpatialResolver._get_connection")
+    @patch("esdc.search.spatial_resolver.SpatialResolver._get_connection")
     def test_find_fields_near_field_accepts_wk_name(self, mock_conn):
         """find_fields_near_field should accept wk_name parameter."""
         mock_cursor = MagicMock()
@@ -32,7 +32,7 @@ class TestSpatialResolverWKScoped:
         sql = call_args[0][0]
         assert "wk_name" in sql
 
-    @patch("esdc.knowledge_graph.spatial_resolver.SpatialResolver._get_connection")
+    @patch("esdc.search.spatial_resolver.SpatialResolver._get_connection")
     def test_find_fields_near_field_without_wk_name(self, mock_conn):
         """find_fields_near_field should work without wk_name (backward compat)."""
         mock_cursor = MagicMock()
@@ -50,7 +50,7 @@ class TestSpatialResolverWKScoped:
 
         assert result["status"] == "no_results"
 
-    @patch("esdc.knowledge_graph.spatial_resolver.SpatialResolver._get_connection")
+    @patch("esdc.search.spatial_resolver.SpatialResolver._get_connection")
     def test_calculate_distance_accepts_wk_name(self, mock_conn):
         """calculate_distance should accept wk_name parameter."""
         mock_cursor = MagicMock()
@@ -81,7 +81,7 @@ class TestSpatialResolverWKScoped:
         sql = call_args[0][0]
         assert "wk_name" in sql
 
-    @patch("esdc.knowledge_graph.spatial_resolver.SpatialResolver._get_connection")
+    @patch("esdc.search.spatial_resolver.SpatialResolver._get_connection")
     def test_calculate_distance_without_wk_name(self, mock_conn):
         """calculate_distance should work without wk_name (backward compat)."""
         mock_cursor = MagicMock()
@@ -108,7 +108,7 @@ class TestSpatialResolverWKScoped:
         assert result["status"] == "success"
         assert "wk_name" not in result
 
-    @patch("esdc.knowledge_graph.spatial_resolver.SpatialResolver._get_connection")
+    @patch("esdc.search.spatial_resolver.SpatialResolver._get_connection")
     def test_get_field_coordinates_accepts_wk_name(self, mock_conn):
         """get_field_coordinates should accept wk_name parameter."""
         mock_cursor = MagicMock()
@@ -135,7 +135,7 @@ class TestSpatialResolverWKScoped:
         sql = call_args[0][0]
         assert "wk_name" in sql
 
-    @patch("esdc.knowledge_graph.spatial_resolver.SpatialResolver._get_connection")
+    @patch("esdc.search.spatial_resolver.SpatialResolver._get_connection")
     def test_get_field_coordinates_without_wk_name(self, mock_conn):
         """get_field_coordinates should work without wk_name (backward compat)."""
         mock_cursor = MagicMock()

@@ -24,6 +24,13 @@ from .columns import (
 # Concepts Module
 # =============================================================================
 from .concepts import DOMAIN_CONCEPTS
+from .entity_patterns import QueryPatternMatcher
+
+# =============================================================================
+# Entity Resolution Module
+# =============================================================================
+from .entity_resolver_lib import EntityResolver
+from .entity_schema import KGSchema
 
 # =============================================================================
 # Functions Module
@@ -55,6 +62,16 @@ from .functions import (
     resolve_concept,
     should_use_risked_columns,
 )
+
+# =============================================================================
+# KSMI Graph Module (LadybugDB)
+# =============================================================================
+from .ksmi_graph_manager import KSMIGraphManager
+
+# =============================================================================
+# KSMI Loader Module
+# =============================================================================
+from .ksmi_loader import ksmi_retrieve
 
 # =============================================================================
 # Problems Module
@@ -92,11 +109,13 @@ from .tables import (
     REQUIRES_CLASSIFICATION_PREFIXES,
     TABLE_HIERARCHY,
     TABLE_REMARKS_COLUMNS,
+    TABLE_SUMMARY_COLUMNS,
     TABLE_VOL_REMARKS_COLUMNS,
     can_use_view_for_calculation,
     get_classification_context_columns,
     get_entity_filter_column,
     get_remarks_column,
+    get_summary_column,
     get_table_for_query,
     is_aggregate_view,
     is_detail_table,
@@ -138,6 +157,7 @@ __all__ = [
     "TABLE_HIERARCHY",
     "AGGREGATION_LEVELS",
     "TABLE_REMARKS_COLUMNS",
+    "TABLE_SUMMARY_COLUMNS",
     "TABLE_VOL_REMARKS_COLUMNS",
     "REQUIRES_CLASSIFICATION_PREFIXES",
     "CLASSIFICATION_CONTEXT_COLUMNS",
@@ -147,6 +167,7 @@ __all__ = [
     "can_use_view_for_calculation",
     "get_entity_filter_column",
     "get_remarks_column",
+    "get_summary_column",
     "requires_classification_columns",
     "get_classification_context_columns",
     "is_detail_table",
@@ -195,4 +216,12 @@ __all__ = [
     "get_available_report_year",
     "build_report_year_filter",
     "detect_report_year_from_query",
+    # KSMI Loader
+    "ksmi_retrieve",
+    # KSMI Graph Manager
+    "KSMIGraphManager",
+    # Entity Resolution
+    "EntityResolver",
+    "KGSchema",
+    "QueryPatternMatcher",
 ]

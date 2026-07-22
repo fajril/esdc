@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Tabulator 6.3.1, MIT license, vendored in static/ (tabulator.min.js / tabulator.min.css) -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }} — ESDC POD Portal</title>
+  <link rel="stylesheet" href="/static/tabulator.min.css">
+  <link rel="stylesheet" href="/static/portal.css?v={{ asset_version }}">
+</head>
+<body>
+  <nav>
+    <strong>POD Portal</strong>
+    <a href="/pods">PODs</a>
+    <a href="/links">Project Links</a>
+    <a href="/documents">Document Links</a>
+    <a href="/revisions">Revisions</a>
+    <a href="/references">References</a>
+    <button id="publish-btn" title="Re-publish registry to DuckDB">Publish</button>
+    <span id="status"></span>
+  </nav>
+  <main>{% block content %}{% endblock %}</main>
+  <script src="/static/tabulator.min.js"></script>
+  <script src="/static/portal.js?v={{ asset_version }}"></script>
+</body>
+</html>

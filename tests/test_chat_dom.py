@@ -251,18 +251,25 @@ class TestWidgetMountingOrder:
             ai_msg = ChatMessage("ai", "AI response")
             chat_panel.mount(ai_msg)
 
-            # Verify order by checking children
-            children = list(chat_panel.children)
+            # Verify order by checking children (filter out system greeting)
+            mounted = [
+                c
+                for c in chat_panel.children
+                if isinstance(
+                    c, (ThinkingIndicator, SQLPanel, ResultsPanel, ChatMessage)
+                )
+                and not (isinstance(c, ChatMessage) and c.role == "system")
+            ]
 
-            # Should have 4 widgets in order
-            assert len(children) >= 4
+            # Should have exactly the 4 widgets we mounted
+            assert len(mounted) == 4
 
-            # Check types in order
-            assert isinstance(children[0], ThinkingIndicator)
-            assert isinstance(children[1], SQLPanel)
-            assert isinstance(children[2], ResultsPanel)
-            assert isinstance(children[3], ChatMessage)
-            assert children[3].role == "ai"
+            # Check types in order: Thinking → SQL → Results → AI
+            assert isinstance(mounted[0], ThinkingIndicator)
+            assert isinstance(mounted[1], SQLPanel)
+            assert isinstance(mounted[2], ResultsPanel)
+            assert isinstance(mounted[3], ChatMessage)
+            assert mounted[3].role == "ai"
 
 
 class TestCollapsibleWidgets:

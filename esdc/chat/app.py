@@ -4,7 +4,6 @@
 import asyncio
 import json
 import logging
-import os
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -74,1037 +73,36 @@ logging.getLogger("markdown_it").setLevel(logging.WARNING)
 from langchain_core.language_models import BaseChatModel  # noqa: E402
 from langchain_core.runnables import Runnable  # noqa: E402
 from langgraph.checkpoint.base import BaseCheckpointSaver  # noqa: E402
-from textual import events  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
-from textual.containers import (  # noqa: E402
-    Container,
-    Horizontal,
-    ScrollableContainer,
-    Vertical,
-)
-from textual.message import Message  # noqa: E402
-from textual.widget import Widget  # noqa: E402
-from textual.widgets import Collapsible, Markdown, Static, TextArea  # noqa: E402
+from textual.containers import Horizontal  # noqa: E402
+from textual.widgets import TextArea  # noqa: E402
 
-MAX_MESSAGE_HISTORY = 100
+from esdc.chat.media import extract_image_urls  # noqa: E402
+from esdc.chat.widgets import (  # noqa: F401,E402  (re-exported for tests/back-compat)
+    ChatInput,
+    ChatMessage,
+    ChatPanel,
+    ContextHealth,
+    ContextPanel,
+    ConversationTitle,
+    Footer,
+    ResultsPanel,
+    SQLPanel,
+    StatusBar,
+    ThinkingIndicator,
+    ToolTimeline,
+)
+
 MAX_QUERY_HISTORY = 5
-DEFAULT_CONTEXT_LENGTH = 4096
 TOOLS_LIST = ["execute_sql", "get_schema", "list_tables"]
 
-
-class ContextSection(Container):
-    """Collapsible section widget for context panel."""
-
-    DEFAULT_CSS = """
-    ContextSection {
-        margin: 0 0 1 0;
-        border: none;
-    }
-
-    ContextSection .header {
-        background: transparent;
-        padding: 1 1;
-        text-style: bold;
-        color: $text;
-    }
-
-    ContextSection .header:hover {
-        color: $accent;
-    }
-
-    ContextSection .content {
-        padding: 0 1 1 1;
-        background: transparent;
-        border: none;
-    }
-    """
-
-    def __init__(
-        self,
-        title: str,
-        expanded: bool = True,
-        badge: str = "",
-        id: str | None = None,
-    ):
-        """Initialize a collapsible context section.
-
-        Args:
-            title: Display title for the section.
-            expanded: Whether section starts expanded (default True).
-            badge: Optional badge text displayed next to title.
-            id: Widget ID for CSS targeting.
-        """
-        super().__init__(id=id)
-        self.section_title = title
-        self.expanded = expanded
-        self.badge = badge
-        self._header: Static | None = None
-        self._content_children: list[Widget] = []
-
-    def compose_add_child(self, widget: "Widget") -> None:
-        """Capture children from 'with' block to render after header."""
-        self._content_children.append(widget)
-
-    def compose(self) -> ComposeResult:
-        """Header first, then content container with children."""
-        icon = "▼" if self.expanded else "▶"
-        title_text = f"{icon} {self.section_title}"
-        if self.badge:
-            title_text += f" [{self.badge}]"
-
-        self._header = Static(title_text, classes="header")
-        yield self._header
-
-        with Vertical(classes="content") as content:
-            if not self.expanded:
-                content.display = False
-            yield from self._content_children
-
-        # Clear after yielding to prevent accumulation on recompose
-        self._content_children = []
-
-    def on_click(self) -> None:
-        """Handle click to toggle."""
-        self.toggle()
-
-    def toggle(self) -> None:
-        """Toggle expanded state and update header."""
-        self.expanded = not self.expanded
-
-        # Find content container and toggle display
-        for child in self.children:
-            if "content" in child.classes:
-                child.display = self.expanded
-                break
-
-        if self._header:
-            icon = "▼" if self.expanded else "▶"
-            title_text = f"{icon} {self.section_title}"
-            if self.badge:
-                title_text += f" [{self.badge}]"
-            self._header.update(title_text)
-
-
-class ContextUsageWidget(Static):
-    """Display context usage with compaction status."""
-
-    DEFAULT_CSS = """
-    ContextUsageWidget {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-        margin: 1 0;
-    }
-
-    .context-display {
-        color: $text;
-        text-style: bold;
-    }
-
-    .context-muted {
-        color: $text-muted;
-    }
-
-    .context-warning {
-        color: $warning;
-    }
-
-    .context-danger {
-        color: $error;
-    }
-
-    .context-compacted {
-        color: $primary;
-        text-style: italic;
-    }
-    """
-
-    def __init__(
-        self,
-        token_count: int = 0,
-        context_length: int = DEFAULT_CONTEXT_LENGTH,
-        id: str | None = None,
-    ):
-        """Initialize context usage display widget.
-
-        Args:
-            token_count: Current token count (default 0).
-            context_length: Maximum context length in tokens.
-            id: Widget ID for CSS targeting.
-        """
-        super().__init__(id=id)
-        self.token_count = token_count
-        self.context_length = context_length
-        self.message_count: int = 0
-        self.compaction_info: dict | None = None
-
-    def update_usage(
-        self,
-        token_count: int,
-        message_count: int = 0,
-        compaction_info: dict | None = None,
-    ) -> None:
-        """Update token count, message count, and compaction info."""
-        self.token_count = token_count
-        self.message_count = message_count
-        self.compaction_info = compaction_info
-        self._update_display()
-
-    def get_percentage(self) -> int:
-        """Get percentage of context used."""
-        if self.context_length == 0:
-            return 0
-        return int((self.token_count / self.context_length) * 100)
-
-    def get_formatted(self) -> str:
-        """Get formatted display string."""
-        percentage = self.get_percentage()
-        return f"{self.token_count:,} / {self.context_length:,} ({percentage}%)"
-
-    def _update_display(self) -> None:
-        """Update the widget display with color coding and compaction status."""
-        percentage = self.get_percentage()
-        text = self.get_formatted()
-
-        lines = []
-
-        if percentage >= 90:
-            lines.append(f"[context-danger]{text}[/]")
-        elif percentage >= 75:
-            lines.append(f"[context-warning]{text}[/]")
-        else:
-            lines.append(text)
-
-        if self.message_count > 0:
-            lines.append(
-                f"[context-muted]{self.message_count} messages in conversation[/]"
-            )
-
-        if self.compaction_info and self.compaction_info.get("was_compacted"):
-            original_count = self.compaction_info.get("original_count", 0)
-            new_count = self.compaction_info.get("new_count", 0)
-            summarized_count = self.compaction_info.get("summarized_count", 0)
-            lines.append(
-                f"[context-compacted]📦 Compacted: {original_count} → {new_count} messages ({summarized_count} summarized)[/]"  # noqa: E501
-            )
-
-        self.update("\n".join(lines))
-
-
-class ToolStatusList(Static):
-    """Widget to display available tools and their status."""
-
-    DEFAULT_CSS = """
-    ToolStatusList {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-    }
-
-    .tool-item {
-        height: auto;
-        padding: 0 1;
-        margin: 1 0;
-    }
-
-    .tool-available {
-        color: $text-muted;
-    }
-
-    .tool-available .icon {
-        color: $text-disabled;
-    }
-
-    .tool-used {
-        color: $primary;
-        text-style: bold;
-    }
-
-    .tool-used .icon {
-        color: $primary;
-    }
-    """
-
-    def __init__(self, id: str | None = None):
-        """Initialize the tool status list widget."""
-        super().__init__(id=id)
-        self.tools = TOOLS_LIST
-        self.tools_used: list[str] = []
-
-    def mark_used(self, tools: list[str]) -> None:
-        """Mark specific tools as used."""
-        self.tools_used = tools
-        self._update_display()
-
-    def reset_used(self) -> None:
-        """Reset used tools list."""
-        self.tools_used = []
-        self._update_display()
-
-    def compose(self) -> ComposeResult:
-        """Compose the tool list."""
-        for tool in self.tools:
-            used = "✓" if tool not in self.tools_used else "●"
-            css_class = "tool-used" if tool in self.tools_used else "tool-available"
-            yield Static(f"{used} {tool}", classes=f"tool-item {css_class}")
-
-    def _update_display(self) -> None:
-        """Refresh the display."""
-        self.refresh()
-
-
-class QueryHistory(Static):
-    """Widget to display recent query history."""
-
-    DEFAULT_CSS = """
-    QueryHistory {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-    }
-
-    .history-item {
-        height: auto;
-        padding: 0 1;
-        margin: 1 0;
-    }
-
-    .placeholder {
-        color: $text-muted;
-    }
-
-    .history-number {
-        color: $text-muted;
-        text-style: bold;
-    }
-    """
-
-    def __init__(self, max_queries: int = 5, id: str | None = None):
-        """Initialize the query history widget."""
-        super().__init__(id=id)
-        self.max_queries = max_queries
-        self.queries: list[str] = []
-
-    def add_query(self, query: str) -> None:
-        """Add a query to history."""
-        self.queries.append(query)
-        if len(self.queries) > self.max_queries:
-            self.queries = self.queries[-self.max_queries :]
-        self._update_display()
-
-    def clear(self) -> None:
-        """Clear query history."""
-        self.queries = []
-        self._update_display()
-
-    def compose(self) -> ComposeResult:
-        """Compose the history list."""
-        if not self.queries:
-            yield Static("No queries yet", classes="history-item placeholder")
-            return
-
-        for i, query in enumerate(reversed(self.queries), 1):
-            truncated = query[:50] + "..." if len(query) > 50 else query
-            yield Static(f"{i}. {truncated}", classes="history-item")
-
-    def _update_display(self) -> None:
-        """Refresh display."""
-        self.refresh()
-
-
-class ConversationTitle(Static):
-    """Static conversation title displayed at top of context panel."""
-
-    DEFAULT_CSS = """
-    ConversationTitle {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-        text-style: bold;
-        color: $text;
-        content-align: center middle;
-    }
-    """
-
-    def __init__(self, title: str = "", id: str | None = None):
-        """Initialize conversation title widget.
-
-        Args:
-            title: Initial conversation title (empty shows as "New Conversation").
-            id: Widget ID for CSS targeting.
-        """
-        super().__init__(title if title else "New Conversation", id=id)
-        self._title = title
-
-    def set_title(self, title: str) -> None:
-        """Update the conversation title."""
-        self._title = title
-        self.update(title)
-
-
-class ContextPanel(Vertical):
-    """Static context panel showing session info and tool status."""
-
-    DEFAULT_CSS = """
-    ContextPanel {
-        width: 25%;
-        padding: 1;
-        background: $surface;
-        border: none;
-    }
-
-    ContextPanel > * {
-        border: none;
-    }
-
-    .tool-status {
-        margin-top: 1;
-        padding: 0;
-        color: $text-muted;
-        background: transparent;
-    }
-
-    .tool-status.querying {
-        color: $warning;
-    }
-
-    .tool-status.completed {
-        color: $success;
-    }
-
-    .tool-status.idle {
-        color: $text-muted;
-    }
-    """
-
-    def __init__(self, id: str | None = None):
-        """Initialize the context panel widget."""
-        super().__init__(id=id)
-        self._provider_name: str = ""
-        self._model_name: str = ""
-        self._session_thread_id: str = ""
-        self._current_directory: str = ""
-        self._tool_status: str = "🔍 Idle"
-        self._conversation_title: str = ""
-        self._token_count: int = 0
-        self._context_length: int = 4096
-
-    def compose(self) -> ComposeResult:
-        """Compose all sections of context panel."""
-        from textual.widgets import Static
-
-        # 1. Conversation Title (static top)
-        yield ConversationTitle(
-            self._conversation_title,
-            id="conversation-title",
-        )
-
-        # 2. Session Info (collapsible, expanded by default)
-
-        self._current_directory = os.getcwd()
-        thread_display = (
-            str(self._session_thread_id)[:8] if self._session_thread_id else "N/A"
-        )
-        session_content = (
-            f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"
-        )
-
-        with ContextSection(
-            "Session Info",
-            expanded=True,
-            id="session-section",
-        ):
-            yield Static(
-                session_content,
-                classes="session-content",
-                id="session-content",
-            )
-
-        # 3. Context (collapsible, expanded by default)
-        with ContextSection(
-            "Context",
-            expanded=True,
-            id="context-section",
-        ):
-            yield ContextUsageWidget(
-                token_count=self._token_count,
-                context_length=self._context_length,
-                id="context-usage",
-            )
-
-        # 4. Tool status indicator (static)
-        yield Static(self._tool_status, classes="tool-status idle", id="tool-status")
-
-    def on_mount(self) -> None:
-        """Called when panel is mounted."""
-        self._current_directory = os.getcwd()
-
-        logger.debug(
-            f"ContextPanel mounted, provider={self._provider_name!r}, model={self._model_name!r}"  # noqa: E501
-        )
-        self.refresh()
-
-    def update_conversation_title(self, title: str) -> None:
-        """Update the conversation title."""
-        self._conversation_title = title
-        try:
-            title_widget = self.query_one("#conversation-title", ConversationTitle)
-            title_widget.set_title(title)
-        except Exception as e:
-            logger.debug(f"Failed to update conversation title: {e}")
-
-    def update_context_usage(self, token_count: int, context_length: int) -> None:
-        """Update context usage display."""
-        self._token_count = token_count
-        self._context_length = context_length
-        try:
-            context_widget = self.query_one("#context-usage", ContextUsageWidget)
-            context_widget.token_count = token_count
-            context_widget.context_length = context_length
-            context_widget._update_display()
-            logger.debug(
-                f"🔍 Updated context usage: {token_count:,} / {context_length:,}"
-            )
-        except Exception as e:
-            logger.warning(f"❌ Failed to update context usage: {e}")
-        self.refresh()
-
-    def update_session_info(
-        self,
-        provider: str,
-        model: str,
-        thread_id: str,
-    ) -> None:
-        """Update session information displayed in the context panel."""
-        self._provider_name = provider
-        self._model_name = model
-        self._session_thread_id = thread_id
-
-        # Get current directory
-
-        self._current_directory = os.getcwd()
-
-        # Update the static content
-        try:
-            session_content = self.query_one("#session-content", Static)
-            thread_display = str(thread_id)[:8] if thread_id else "N/A"
-            session_content.update(
-                f"IRIS v0.5.0\nThread: {thread_display}...\nDir: {self._current_directory}"  # noqa: E501
-            )
-        except Exception:
-            pass
-        self.refresh()
-
-    def update_tool_status(self, status: str) -> None:
-        """Update tool execution status with emoji+text."""
-        self._tool_status = status
-        try:
-            status_widget = self.query_one("#tool-status", Static)
-            status_widget.update(status)
-            # Set appropriate class based on status
-            if "⏳" in status:
-                status_widget.set_class(True, "querying")
-                status_widget.set_class(False, "completed")
-                status_widget.set_class(False, "idle")
-            elif "✅" in status:
-                status_widget.set_class(False, "querying")
-                status_widget.set_class(True, "completed")
-                status_widget.set_class(False, "idle")
-            else:
-                status_widget.set_class(False, "querying")
-                status_widget.set_class(False, "completed")
-                status_widget.set_class(True, "idle")
-        except Exception:
-            pass
-
-    def reset_tool_status(self) -> None:
-        """Reset tool status to idle state."""
-        self.update_tool_status("🔍 Idle")
-
-
-class ChatMessage(Markdown):
-    """A Markdown-formatted chat message with role-based styling."""
-
-    DEFAULT_CSS = """
-    ChatMessage {
-        padding: 1 2;
-        margin: 0 0 1 0;
-        border: none;
-    }
-    ChatMessage.user {
-        background: transparent;
-        color: $text;
-        align-horizontal: right;
-        border-left: solid #F97316;
-        padding: 1 2 1 1;
-    }
-    ChatMessage.ai {
-        background: transparent;
-        color: $text;
-        align-horizontal: left;
-        border: none;
-    }
-    ChatMessage.system {
-        background: transparent;
-        color: $text-muted;
-        text-style: italic;
-        border: none;
-        text-align: center;
-    }
-    """
-
-    def __init__(self, role: str, content: str):
-        """Initialize a chat message widget."""
-        if role == "user" or role == "ai":
-            formatted = content
-        else:
-            formatted = f"**[{role.upper()}]** {content}"
-        super().__init__(formatted)
-        self.role = role
-        self.add_class(role)
-
-
-class StatusBar(Static):
-    """Status line showing IRIS and token count."""
-
-    DEFAULT_CSS = """
-    StatusBar {
-        height: 1;
-        padding: 0 2;
-        color: $text-muted;
-        background: $background;
-        border-top: solid $surface;
-    }
-
-    .status-provider {
-        color: $text;
-        text-style: bold;
-    }
-
-    .status-model {
-        color: $text;
-    }
-
-    .status-tokens {
-        color: $text-muted;
-    }
-    """
-
-    def __init__(self):
-        """Initialize the status bar widget."""
-        super().__init__("Loading...")
-
-    def set_status(
-        self,
-        provider_name: str,
-        model_name: str,
-        token_count: int = 0,
-        context_length: int = 0,
-        thread_id: str = "",
-    ) -> None:
-        """Update status bar display."""
-        parts = ["IRIS"]
-
-        if context_length > 0 and token_count > 0:
-            percentage = int((token_count / context_length) * 100)
-            parts.append(f"{token_count:,} tokens ({percentage}%)")
-        elif token_count > 0:
-            parts.append(f"{token_count:,} tokens")
-
-        if thread_id:
-            thread_id_str = str(thread_id)
-            parts.append(f"thread: {thread_id_str[:8]}")
-
-        self.update(" | ".join(parts))
-
-
-class ChatInput(TextArea):
-    """TextArea that supports Shift+Enter for newlines and Enter for submission."""
-
-    class Submitted(Message):
-        """Message posted when user presses Enter."""
-
-        def __init__(self, text_area: "ChatInput") -> None:
-            """Initialize the submitted message."""
-            self.text_area = text_area
-            super().__init__()
-
-        @property
-        def control(self) -> "ChatInput":
-            """Return the text area control."""
-            return self.text_area
-
-    async def _on_key(self, event: events.Key) -> None:
-        """Handle Enter vs Shift+Enter at the TextArea level."""
-        if event.key == "shift+enter":
-            # Shift+Enter: insert newline
-            event.stop()
-            event.prevent_default()
-            self.insert("\n")
-        elif event.key == "enter":
-            # Enter: submit
-            event.stop()
-            event.prevent_default()
-            self.post_message(self.Submitted(self))
-        else:
-            await super()._on_key(event)
-
-
-class Footer(Vertical):
-    """Footer container for status bar and input field."""
-
-    DEFAULT_CSS = """
-    Footer {
-        height: auto;
-        padding: 1 2;
-        background: $background;
-        border-top: solid $surface;
-    }
-    StatusBar {
-        height: 1;
-    }
-    Footer ChatInput {
-        height: 3;
-        min-height: 3;
-        max-height: 10;
-        width: 100%;
-        border: none;
-        border-left: solid #F97316;
-        background: $surface;
-        padding: 1 1 0 1;
-    }
-    Footer ChatInput:focus {
-        border: none;
-        border-left: solid #F97316;
-    }
-    """
-
-    def __init__(self):
-        """Initialize the footer widget."""
-        super().__init__()
-        self.status_bar = StatusBar()
-        self.user_input = ChatInput(
-            placeholder="Ask about your data... (Enter to send, Shift+Enter for new line)",  # noqa: E501
-            id="user_input",
-            show_line_numbers=False,
-            soft_wrap=True,
-        )
-        self.user_input.styles.height = 3  # Set initial height via styles
-
-    def compose(self) -> ComposeResult:
-        """Compose the footer layout."""
-        yield self.user_input
-        yield self.status_bar
-
-
-class ChatPanel(ScrollableContainer):
-    """Scrollable chat panel for displaying messages and collapsible widgets."""
-
-    DEFAULT_CSS = """
-    ChatPanel {
-        height: 100%;
-        width: 100%;
-        padding: 1;
-    }
-    """
-
-    def __init__(self):
-        """Initialize the chat panel widget."""
-        super().__init__()
-        self.messages: list[tuple[str, str]] = []
-
-    def add_message(self, role: str, content: str):
-        """Add a message to the chat panel."""
-        self.messages.append((role, content))
-        self.mount(ChatMessage(role, content))
-
-        if len(self.messages) > MAX_MESSAGE_HISTORY:
-            self.messages = self.messages[-MAX_MESSAGE_HISTORY:]
-
-        # Always scroll to bottom when adding new message (after DOM update + small delay)  # noqa: E501
-        self.call_after_refresh(
-            lambda: self.set_timer(
-                0.1, lambda: self.scroll_end(animate=False, immediate=True)
-            )
-        )
-
-    def mount_collapsible(self, collapsible: "Collapsible") -> None:
-        """Mount a collapsible widget to the chat panel."""
-        logger.debug(f"Mounting collapsible {type(collapsible).__name__} to ChatPanel")
-        self.mount(collapsible)
-
-    async def mount_collapsible_async(self, collapsible: "Collapsible") -> None:
-        """Mount a collapsible widget and scroll to make it visible."""
-        self.mount(collapsible)
-        collapsible.scroll_visible()
-        self.refresh()
-
-
-class ThinkingIndicator(Collapsible):
-    """Collapsible thinking indicator that shows AI reasoning progress."""
-
-    DEFAULT_CSS = """
-    ThinkingIndicator {
-        padding: 1 2;
-        margin: 0 0 1 0;
-        background: $surface;
-        border: solid $primary;
-        min-height: 2;
-    }
-
-    ThinkingIndicator .title {
-        color: $accent;
-        text-style: bold;
-    }
-
-    .thinking-steps {
-        color: $text;
-        padding: 0 1;
-        margin: 1 0;
-    }
-
-    .thinking-steps .bullet {
-        color: $accent;
-    }
-
-    ThinkingIndicator.collapsed {
-        height: auto;
-        min-height: 1;
-    }
-    """
-
-    def __init__(self):
-        """Initialize the thinking indicator widget."""
-        super().__init__(title="▶ Thinking...", collapsed=False)
-        self.steps: list[str] = []
-        self._content_widget: Static | None = None
-
-    def compose(self) -> ComposeResult:
-        """Compose the thinking indicator layout."""
-        yield Static("", classes="thinking-steps")
-
-    def on_mount(self) -> None:
-        """Handle widget mount event."""
-        self._content_widget = self.query_one(".thinking-steps", Static)
-        # Update display if steps were added before mount
-        if self.steps:
-            self._update_display()
-
-    def add_step(self, step: str):
-        """Add a thinking step to display."""
-        self.steps.append(step)
-        self._update_display()
-
-    def _update_display(self):
-        """Update the display with current steps."""
-        if not self.steps:
-            self.title = "▶ Thinking..."
-            return
-
-        step_count = len(self.steps)
-        self.title = f"▶ Thinking... ({step_count} steps)"
-
-        if self._content_widget:
-            content = "\n".join(f"  • {s}" for s in self.steps)
-            self._content_widget.update(content)
-
-    def on_collapsible_expand(self) -> None:
-        """Handle expand - show all steps."""
-        if self._content_widget:
-            content = "\n".join(f"  • {s}" for s in self.steps)
-            self._content_widget.update(content)
-
-    def on_collapsible_collapse(self) -> None:
-        """Handle collapse - show summary."""
-        self.title = f"▶ Thinking... ({len(self.steps)} steps)"
-
-
-class SQLPanel(Collapsible):
-    """Collapsible SQL query display in chat panel."""
-
-    DEFAULT_CSS = """
-    SQLPanel {
-        margin: 0 0 1 0;
-        background: $surface;
-        border: solid $primary;
-        min-height: 3;
-    }
-
-    SQLPanel .title {
-        color: $accent;
-        text-style: bold;
-    }
-
-    SQLPanel Markdown.sql-content {
-        max-height: 20;
-    }
-
-    .sql-content {
-        color: $text;
-        padding: 1 2;
-    }
-
-    SQLPanel.collapsed {
-        height: auto;
-        min-height: 1;
-    }
-    """
-
-    def __init__(self, sql: str = ""):
-        """Initialize the SQL panel widget."""
-        super().__init__(title="📝 SQL Query", collapsed=not sql)
-        self.sql_content = sql
-        self._content_widget: Markdown | None = None
-
-    def compose(self) -> ComposeResult:
-        """Compose the SQL panel layout."""
-        content = (
-            f"```sql\n{self.sql_content}\n```"
-            if self.sql_content
-            else "Executing query..."
-        )
-        yield Markdown(content, classes="sql-content")
-
-    def on_mount(self) -> None:
-        """Handle widget mount event."""
-        self._content_widget = self.query_one(".sql-content", Markdown)
-
-    def set_sql(self, sql: str) -> None:
-        """Update the SQL content after mount."""
-        self.sql_content = sql
-        if self._content_widget:
-            content = f"```sql\n{sql}\n```" if sql else "Executing query..."
-            self._content_widget.update(content)
-        self.collapsed = not sql
-
-
-class ResultsPanel(Collapsible):
-    """Collapsible query results display in chat panel."""
-
-    DEFAULT_CSS = """
-    ResultsPanel {
-        margin: 0 0 1 0;
-        background: $surface;
-        border: solid $primary;
-        min-height: 3;
-    }
-
-    ResultsPanel .title {
-        color: $accent;
-        text-style: bold;
-    }
-
-    ResultsPanel Markdown.results-content {
-        max-height: 30;
-    }
-
-    .results-content {
-        color: $text;
-        padding: 1 2;
-    }
-
-    ResultsPanel.collapsed {
-        height: auto;
-        min-height: 1;
-    }
-    """
-
-    def __init__(self, results: str = ""):
-        """Initialize the results panel widget."""
-        super().__init__(title="📊 Query Results", collapsed=not results)
-        self.results_content = results
-        self._content_widget: Markdown | None = None
-
-    def compose(self) -> ComposeResult:
-        """Compose the results panel layout."""
-        content = (
-            self._format_results_as_markdown(self.results_content)
-            if self.results_content
-            else "Waiting for results..."
-        )
-        yield Markdown(content, classes="results-content")
-
-    def _format_results_as_markdown(self, results: str) -> str:
-        """Convert raw query results to markdown table format."""
-        if not results or results.strip() == "":
-            return "No results returned."
-
-        # Check if already formatted as markdown table
-        if results.startswith("|") and "|---" in results:
-            return results
-
-        # Convert pipe-separated text to markdown table
-        lines = results.strip().split("\n")
-        if len(lines) < 2:
-            return results
-
-        # Assume first line is headers, second line is separator if present
-        md_lines = []
-
-        # Header row
-        headers = lines[0].split("|")
-        headers = [h.strip() for h in headers if h.strip()]
-        md_lines.append("| " + " | ".join(headers) + " |")
-
-        # Separator
-        md_lines.append("|" + "---|" * len(headers))
-
-        # Data rows
-        for line in lines[1:]:
-            if line.strip():
-                cells = line.split("|")
-                cells = [c.strip() for c in cells if c.strip()]
-                md_lines.append("| " + " | ".join(cells) + " |")
-
-        return "\n".join(md_lines)
-
-    def on_mount(self) -> None:
-        """Handle widget mount event."""
-        self._content_widget = self.query_one(".results-content", Markdown)
-
-    def set_results(self, results: str) -> None:
-        """Update the results content after mount."""
-        self.results_content = results
-        if self._content_widget:
-            formatted = self._format_results_as_markdown(results)
-            self._content_widget.update(formatted)
-        # Update collapsed state
-        self.collapsed = not results
-
-
-class RightPanel(Vertical):
-    """Container for SQL and Results panels."""
-
-    DEFAULT_CSS = """
-    RightPanel {
-        width: 100%;
-        height: 100%;
-    }
-    """
-
-    def __init__(self):
-        """Initialize the right panel widget."""
-        super().__init__()
-        self.sql_panel = SQLPanel()
-        self.results_panel = ResultsPanel()
-
-    def compose(self) -> ComposeResult:
-        """Compose the right panel layout."""
-        yield self.sql_panel
-        yield self.results_panel
-
-    def set_sql(self, sql: str):
-        """Set the SQL content in the SQL panel."""
-        self.sql_panel.set_sql(sql)
-
-    def set_results(self, results: str):
-        """Set the results content in the results panel."""
-        self.results_panel.set_results(results)
+# Tools register with LangChain display names (e.g. @tool("SQL Executor")),
+# not their python function names — those display names are what actually
+# show up in tool_calls[].name / tool_result "tool" fields at runtime. Keep
+# the python names too for backward compatibility with older agent builds.
+_SQL_EXECUTOR_NAMES = {"SQL Executor", "execute_sql"}
+_DATA_TOOL_NAMES = _SQL_EXECUTOR_NAMES | {"Simple Data Query", "simple_data_query"}
 
 
 class ESDCChatApp(App):
@@ -1170,7 +168,7 @@ class ESDCChatApp(App):
     }
 
     /* Content widgets for sections */
-    .sql-content, .results-content, .schema-content, .session-content {
+    .sql-content, .results-content, .schema-content {
         padding: 1 1;
         color: #ffffff;
         background: transparent;
@@ -1187,44 +185,6 @@ class ESDCChatApp(App):
 
     .schema-content {
         color: #a0a0a0;
-    }
-
-    .session-content {
-        color: #a0a0a0;
-    }
-
-    /* ===== Widget - Clean Design ===== */
-    ContextUsageWidget {
-        height: auto;
-        padding: 0;
-        background: transparent;
-        border: none;
-    }
-
-    ToolStatusList {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-    }
-
-    .tool-item {
-        height: auto;
-        padding: 0 1;
-        margin: 1 0;
-    }
-
-    QueryHistory {
-        height: auto;
-        padding: 1;
-        background: transparent;
-        border: none;
-    }
-
-    .history-item {
-        height: auto;
-        padding: 0 1;
-        margin: 1 0;
     }
 
     /* ===== Thinking Indicator - Subtle ===== */
@@ -1282,6 +242,7 @@ class ESDCChatApp(App):
         Binding("ctrl+r", "toggle_results_section", "Toggle Results"),
         Binding("ctrl+e", "toggle_all_sections", "Toggle All"),
         Binding("ctrl+shift+s", "save_screenshot", "Save Screenshot"),
+        Binding("ctrl+o", "open_image", "Open Image"),
         Binding("escape", "cancel_query", "Cancel"),
     ]
 
@@ -1299,18 +260,26 @@ class ESDCChatApp(App):
         self._message_count: int = 0
         self._cancelled: bool = False
         self._token_count: int = 0
+        self._token_count_exact: bool = False
         self._context_length: int = 4096
         self._provider_name: str = ""
+        self._provider_type: str = ""
         self._model_name: str = ""
+        self._base_url: str = ""
+        self._system_prompt: str = ""
         self._context_panel_visible: bool = True
         self._context_metadata: dict | None = None
+        self._compaction_notified: bool = False
 
         # Queue-based streaming infrastructure
         self._event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._streaming_message: ChatMessage | None = None
+        self._thinking_indicator: ThinkingIndicator | None = None
         self._accumulated_content: str = ""
+        self._render_dirty: bool = False
         self._conversation_title: str = ""
         self._title_generated: bool = False
+        self._last_image_url: str | None = None
 
     def compose(self) -> ComposeResult:
         """Compose the main application layout."""
@@ -1346,13 +315,16 @@ class ESDCChatApp(App):
 
         self._provider_name = Config.get_default_provider()
         self._model_name = Config.get_provider_model()
+        self._system_prompt = ""
 
         # Get context length from provider
         provider_config = Config.get_provider_config()
         if provider_config and provider_config.get("model"):
             from esdc.providers import get_provider
 
-            provider = get_provider(provider_config.get("provider_type", "ollama"))
+            self._provider_type = provider_config.get("provider_type", "ollama")
+            self._base_url = provider_config.get("base_url", "")
+            provider = get_provider(self._provider_type)
             if provider:
                 # Use static fallback; dynamic resolution from the provider API
                 # happens later inside the agent pipeline when the LLM instance
@@ -1360,37 +332,37 @@ class ESDCChatApp(App):
                 self._context_length = provider.get_context_length(
                     provider_config.get("model", "")
                 )
+        try:
+            from esdc.chat.prompts import get_system_prompt
+
+            self._system_prompt = get_system_prompt()
+        except Exception as exc:
+            logger.debug("Failed to load system prompt for token panel: %s", exc)
 
         # Log context length
         logger.info(
             f"📊 Context length: {self._model_name} = {self._context_length:,} tokens"
         )
 
-        # Update context panel with session info
-        if self._context_panel:
-            self._context_panel.update_session_info(
-                self._provider_name,
-                self._model_name,
-                self._thread_id,
-            )
-            # Initialize context usage display
-            self._context_panel.update_context_usage(
-                self._token_count,
-                self._context_length,
-            )
-
         # Set up timer to consume events from queue (runs every 50ms)
         self.set_interval(0.05, self._consume_events)
+        self.set_interval(0.1, self._flush_stream_render)
 
-        self.status_bar.set_status(
-            self._provider_name,
-            self._model_name,
-            self._token_count,
-            self._context_length,
-            self._thread_id,
-        )
+        self._set_status()
 
         self._init_agent()
+
+    def _set_status(self, tool_status: str = "") -> None:
+        """Update the status bar with current session state."""
+        if self.status_bar:
+            self.status_bar.set_status(
+                model_name=self._model_name,
+                thread_id=self._thread_id,
+                token_count=self._token_count,
+                context_length=self._context_length,
+                tool_status=tool_status,
+                exact=self._token_count_exact,
+            )
 
     def _init_agent(self) -> None:
         """Initialize the LLM and agent."""
@@ -1410,7 +382,7 @@ class ESDCChatApp(App):
         if not provider_config:
             self.display_message(
                 "system",
-                "Error: No provider configured. Run 'esdc chat --setup' first.",
+                "Error: No provider configured. Run 'esdc configs' first.",
             )
             return
 
@@ -1436,6 +408,48 @@ class ESDCChatApp(App):
         if self.user_input.styles.height != new_height:
             self.user_input.styles.height = new_height
 
+    def _handle_slash_command(self, text: str) -> bool:
+        """Handle /commands typed into the chat input. Returns True if handled."""
+        if not text.startswith("/"):
+            return False
+
+        command = text.split()[0].lower()
+
+        if command == "/new":
+            from esdc.chat.memory import create_thread_id
+
+            self._thread_id = create_thread_id()
+            self._token_count = 0
+            self._token_count_exact = False
+            self._context_metadata = None
+            self._compaction_notified = False
+            self._conversation_title = ""
+            self._title_generated = False
+            if self.chat_panel:
+                self.chat_panel.remove_children()
+            if self._context_panel:
+                try:
+                    self._context_panel.timeline.reset()
+                    self._context_panel.sql_panel.set_sql("")
+                    self._context_panel.results_panel.set_results("")
+                    self._context_panel.context_health.reset()
+                    self._context_panel.update_conversation_title("New Conversation")
+                except Exception:
+                    logger.debug("panel reset failed", exc_info=True)
+            self._set_status()
+            self.display_message("system", "New conversation started.")
+            return True
+
+        if command == "/help":
+            self.display_message(
+                "system",
+                "Commands: /new — start a new conversation · /help — this list",
+            )
+            return True
+
+        self.display_message("system", f"Unknown command: {command} — try /help")
+        return True
+
     def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
         """Handle message submission from ChatInput."""
         if not self.user_input:
@@ -1443,6 +457,10 @@ class ESDCChatApp(App):
 
         user_input = self.user_input.text.strip()
         if not user_input:
+            return
+
+        if self._handle_slash_command(user_input):
+            self.user_input.text = ""
             return
 
         # Generate conversation title on first query (in background)
@@ -1463,6 +481,13 @@ class ESDCChatApp(App):
             self.display_message("ai", "Error: Agent not initialized")
             return
 
+        # Reset the tool timeline for the new turn
+        if self._context_panel:
+            try:
+                self._context_panel.timeline.reset()
+            except Exception:
+                logger.debug("timeline reset failed", exc_info=True)
+
         # Create streaming AI message
         self._streaming_message = ChatMessage("ai", "")
         self._accumulated_content = ""
@@ -1477,6 +502,7 @@ class ESDCChatApp(App):
             )
 
         # Start background streaming task (NON-blocking)
+        self._set_status("⏳ thinking…")
         asyncio.create_task(self._stream_in_background(user_input))
         logger.info("🚀 Started background streaming task")
 
@@ -1499,15 +525,6 @@ class ESDCChatApp(App):
             await self._event_queue.put({"type": "complete", "success": True})
             logger.info("Query completed successfully")
 
-        except asyncio.TimeoutError:
-            logger.warning("Query timed out after 120 seconds")
-            await self._event_queue.put(
-                {
-                    "type": "complete",
-                    "success": False,
-                    "error": "Request timed out after 2 minutes. Please try again.",
-                }
-            )
         except Exception as e:
             logger.exception(f"Query failed with error: {e}")
             await self._event_queue.put(
@@ -1539,79 +556,60 @@ class ESDCChatApp(App):
             if self._context_panel:
                 self._context_panel.update_conversation_title(self._conversation_title)
 
-    async def _consume_events(self) -> None:
+    def _consume_events(self) -> None:
         """Consume events from queue in main thread (called by timer every 50ms)."""
         try:
             # Process up to 10 events per tick to avoid blocking
             for _ in range(10):
                 try:
                     chunk = self._event_queue.get_nowait()
-                    await self._process_chunk(chunk)
+                    self._handle_stream_chunk(chunk)
                 except asyncio.QueueEmpty:
                     break
         except Exception as e:
             logger.error(f"Error consuming events: {e}")
 
-    async def _process_chunk(self, chunk: dict[str, Any]) -> None:
+    def _flush_stream_render(self) -> None:
+        """Render accumulated stream content at most 10x/sec."""
+        if not self._render_dirty or not self._streaming_message:
+            return
+        self._render_dirty = False
+        self._streaming_message.update(self._accumulated_content)
+        if self.chat_panel:
+            self.chat_panel.scroll_end(animate=False)
+
+    def _handle_stream_chunk(self, chunk: dict[str, Any]) -> None:
         """Process a single chunk and update UI."""
         chunk_type = chunk.get("type", "unknown")
 
-        if chunk_type == "token":
+        if chunk_type == "reasoning_token":
+            content = chunk.get("content", "")
+            if not content:
+                return
+            if self._thinking_indicator is None and self.chat_panel:
+                self._thinking_indicator = ThinkingIndicator()
+                self.chat_panel.mount(self._thinking_indicator)
+            if self._thinking_indicator:
+                self._thinking_indicator.append_reasoning(content)
+
+        elif chunk_type == "token":
+            if self._thinking_indicator and not self._thinking_indicator._done:
+                self._thinking_indicator.mark_done()
             token = chunk.get("content", "")
             if token and self._streaming_message:
                 self._accumulated_content += token
-                self._streaming_message.update(self._accumulated_content)
-
-                # Always scroll to bottom on new content (after DOM update + delay for Markdown)  # noqa: E501
-                if self.chat_panel:
-                    chat_panel = self.chat_panel
-                    self.call_after_refresh(
-                        lambda: self.set_timer(
-                            0.1,
-                            lambda: chat_panel.scroll_end(
-                                animate=False, immediate=True
-                            ),
-                        )
-                    )
+                self._render_dirty = True
 
         elif chunk_type == "message":
             content = chunk.get("content", "")
             if content and not self._accumulated_content:
                 self._accumulated_content = content
                 if self._streaming_message:
-                    self._streaming_message.update(self._accumulated_content)
-
-                # Always scroll to bottom on new content (after DOM update + delay for Markdown)  # noqa: E501
-                if self.chat_panel:
-                    chat_panel = self.chat_panel
-                    self.call_after_refresh(
-                        lambda: self.set_timer(
-                            0.1,
-                            lambda: chat_panel.scroll_end(
-                                animate=False, immediate=True
-                            ),
-                        )
-                    )
+                    self._render_dirty = True
 
         elif chunk_type == "tool_call":
             tool_name = chunk.get("tool", "")
             tool_args = chunk.get("args", {})
-
-            # Tool-specific status messages
-            TOOL_STATUS_MAP = {  # noqa: N806
-                "execute_sql": "⏳ Executing SQL query...",
-                "SQL Executor": "🛠️ Using SQL Executor...",
-                "get_schema": "⏳ Getting table schema...",
-                "Schema Inspector": "🛠️ Using Schema Inspector...",
-                "list_tables": "⏳ Listing available tables...",
-                "Table Lister": "🛠️ Using Table Lister...",
-                "get_recommended_table": "⏳ Finding recommended table...",
-                "Table Selector": "🛠️ Using Table Selector...",
-                "resolve_uncertainty_level": "⏳ Resolving uncertainty level...",
-                "Uncertainty Resolver": "🛠️ Using Uncertainty Resolver...",
-                "search_problem_cluster": "⏳ Searching problem cluster definitions...",
-                "Problem Cluster Search": "🛠️ Using Problem Cluster Search...",
-            }
 
             sql_query = ""
             if isinstance(tool_args, dict):
@@ -1629,33 +627,12 @@ class ESDCChatApp(App):
                 len(sql_query) if sql_query else 0,
             )
 
-            # Get appropriate status message
-            status_msg = TOOL_STATUS_MAP.get(tool_name, f"⏳ Using {tool_name}...")
-
-            # Update tool status
-            if self._context_panel:
-                self._context_panel.update_tool_status(status_msg)
-
-            # Add indicator to message
-            if self._streaming_message:
-                indicator_text = f"\n\n{status_msg}"
-                if sql_query and tool_name in ("execute_sql", "SQL Executor"):
-                    indicator_text += f"\n\n```sql\n{sql_query}\n```\n"
-
-                self._accumulated_content += indicator_text
-                self._streaming_message.update(self._accumulated_content)
-
-                # Always scroll to bottom when adding tool indicator (after DOM update + delay for Markdown)  # noqa: E501
-                if self.chat_panel:
-                    chat_panel = self.chat_panel
-                    self.call_after_refresh(
-                        lambda: self.set_timer(
-                            0.1,
-                            lambda: chat_panel.scroll_end(
-                                animate=False, immediate=True
-                            ),
-                        )
-                    )
+            if self._context_panel and tool_name:
+                try:
+                    self._context_panel.timeline.start_tool(tool_name)
+                except Exception:
+                    logger.debug("timeline start failed", exc_info=True)
+            self._set_status(f"⏳ {tool_name}")
 
         elif chunk_type == "tool_result":
             result = chunk.get("result", "")
@@ -1667,62 +644,73 @@ class ESDCChatApp(App):
                 len(result),
             )
 
-            # Tool-specific completion messages
-            TOOL_COMPLETED_MAP = {  # noqa: N806
-                "execute_sql": "✅ SQL query completed",
-                "SQL Executor": "✅ SQL Executor completed",
-                "get_schema": "✅ Schema retrieved",
-                "Schema Inspector": "✅ Schema Inspector completed",
-                "list_tables": "✅ Tables listed",
-                "Table Lister": "✅ Table Lister completed",
-                "get_recommended_table": "✅ Recommended table found",
-                "Table Selector": "✅ Table Selector completed",
-                "resolve_uncertainty_level": "✅ Uncertainty level resolved",
-                "Uncertainty Resolver": "✅ Uncertainty Resolver completed",
-                "search_problem_cluster": "✅ Problem cluster definition found",
-                "Problem Cluster Search": "✅ Problem Cluster Search completed",
-            }
+            if self._context_panel and tool_name:
+                try:
+                    self._context_panel.timeline.finish_tool(tool_name)
+                except Exception:
+                    logger.debug("timeline finish failed", exc_info=True)
+            self._set_status("⏳ thinking…")
 
-            # Update tool status
-            if self._context_panel:
-                completed_msg = TOOL_COMPLETED_MAP.get(tool_name, "✅ Tool completed")
-                self._context_panel.update_tool_status(completed_msg)
+            sql = chunk.get("sql", "")
+            if tool_name in _DATA_TOOL_NAMES:
+                extracted_sql = sql
+                if not extracted_sql and result:
+                    try:
+                        parsed = json.loads(result)
+                        if isinstance(parsed, dict):
+                            extracted_sql = parsed.get("sql", "") or ""
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if self._context_panel:
+                    try:
+                        if extracted_sql:
+                            self._context_panel.sql_panel.set_sql(extracted_sql)
+                        if result:
+                            self._context_panel.results_panel.set_results(result)
+                    except Exception:
+                        logger.debug("panel wiring failed", exc_info=True)
 
         elif chunk_type == "context_metadata":
             metadata = chunk.get("metadata")
             # Only update if compaction occurred (don't overwrite with non-compaction)
             if metadata and metadata.get("was_compacted"):
                 self._context_metadata = metadata
+                if not self._compaction_notified:
+                    self._compaction_notified = True
+                    self.display_message(
+                        "system",
+                        "Context compacted — older turns are now summarized. "
+                        "For unrelated topics, /new gives a fresh start.",
+                    )
 
         elif chunk_type == "messages_state":
             messages = chunk.get("messages", [])
-            message_count = chunk.get("message_count", len(messages))
             if messages:
-                from esdc.chat.context_manager import estimate_tokens
+                from esdc.chat.token_counter import resolve_context_tokens
 
-                self._token_count = estimate_tokens(messages)
-                if self.status_bar:
-                    self.status_bar.set_status(
-                        self._provider_name,
-                        self._model_name,
-                        self._token_count,
-                        self._context_length,
-                        self._thread_id,
-                    )
+                self._token_count, self._token_count_exact = resolve_context_tokens(
+                    messages,
+                    system_prompt=self._system_prompt,
+                    provider_type=self._provider_type,
+                    model=self._model_name,
+                    base_url=self._base_url,
+                )
+                self._set_status()
+                message_count = chunk.get("message_count", len(messages))
                 if self._context_panel:
-                    self._context_panel.update_context_usage(
-                        self._token_count,
-                        self._context_length,
-                    )
                     try:
-                        context_widget = self._context_panel.query_one(
-                            "#context-usage", ContextUsageWidget
-                        )
-                        context_widget.update_usage(
-                            self._token_count, message_count, self._context_metadata
+                        self._context_panel.context_health.update_health(
+                            self._token_count,
+                            self._context_length,
+                            message_count,
+                            compacted=bool(
+                                self._context_metadata
+                                and self._context_metadata.get("was_compacted")
+                            ),
+                            exact=self._token_count_exact,
                         )
                     except Exception:
-                        pass
+                        logger.debug("context health update failed", exc_info=True)
 
         elif chunk_type == "token_usage":
             # DEPRECATED: messages_state provides more accurate token count
@@ -1733,60 +721,125 @@ class ESDCChatApp(App):
             success = chunk.get("success", True)
             error = chunk.get("error")
 
+            # Clear the inference-in-progress indicator now that the turn
+            # is done.
+            self._set_status()
+
+            # Force a final render of any pending accumulated content before
+            # resetting streaming state.
+            self._flush_stream_render()
+
+            if success:
+                for url in extract_image_urls(self._accumulated_content):
+                    self._last_image_url = url
+                    self.display_message(
+                        "system", f"🖼 Image saved: {url} — press ctrl+o to open"
+                    )
+
             if not success and error and self._streaming_message:
                 self._streaming_message.update(f"Error: {error}")
 
             # Final scroll to bottom after streaming completes (critical fix)
             if self.chat_panel:
-                chat_panel = self.chat_panel
-                self.call_after_refresh(
-                    lambda: self.set_timer(
-                        0.1,
-                        lambda: chat_panel.scroll_end(animate=False, immediate=True),
-                    )
-                )
+                self.chat_panel.scroll_end(animate=False)
 
             # Reset state
             self._streaming_message = None
+            self._thinking_indicator = None
             self._accumulated_content = ""
 
     async def _stream_response(
         self, user_input: str
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Stream response from the agent."""
-        from esdc.chat.agent import run_agent_stream
+        """Adapt shared astream_agent_events into UI chunks."""
+        from langchain_core.messages import HumanMessage, ToolMessage
+        from langchain_core.runnables import RunnableConfig
+
+        import esdc.chat.event_streamer as event_streamer
 
         if not self._agent:
             return
 
-        async for chunk in run_agent_stream(
-            self._agent,
-            user_input,
-            self._thread_id,
+        config = RunnableConfig(
+            configurable={
+                "thread_id": self._thread_id,
+                "checkpoint_ns": "esdc_chat",
+            },
+            recursion_limit=event_streamer.DEFAULT_RECURSION_LIMIT,
+        )
+
+        tracked_messages: list[Any] = [HumanMessage(content=user_input)]
+        pending_sql: dict[str, str] = {}
+
+        async for event in event_streamer.astream_agent_events(
+            self._agent, [HumanMessage(content=user_input)], config=config
         ):
-            # CRITICAL: Forward token events for real-time streaming
-            if chunk["type"] == "token":
-                yield chunk
-            elif chunk["type"] == "message":
-                content = chunk.get("content", "")
-                if content:
-                    yield {"type": "message", "content": content}
-            elif chunk["type"] == "tool_call":
+            etype = event.get("type")
+
+            if etype == "token":
+                yield {"type": "token", "content": event.get("content", "")}
+
+            elif etype == "reasoning_token":
                 yield {
-                    "type": "tool_call",
-                    "tool": chunk.get("tool", ""),
-                    "args": chunk.get("args", {}),
+                    "type": "reasoning_token",
+                    "content": event.get("content", ""),
                 }
-            elif chunk["type"] == "tool_result":
-                result = chunk.get("result", "")
-                sql = chunk.get("sql", "")
-                yield {"type": "tool_result", "result": result, "sql": sql}
-            elif (
-                chunk["type"] == "token_usage"
-                or chunk["type"] == "messages_state"
-                or chunk["type"] == "context_metadata"
-            ):
-                yield chunk
+
+            elif etype == "message_complete":
+                ai_message = event.get("ai_message")
+                if ai_message is None:
+                    continue
+                tracked_messages.append(ai_message)
+                tool_calls = getattr(ai_message, "tool_calls", None) or []
+                for tc in tool_calls:
+                    args = tc.get("args", {}) or {}
+                    if tc.get("name") in _SQL_EXECUTOR_NAMES and isinstance(
+                        args, dict
+                    ):
+                        pending_sql[tc.get("id") or ""] = args.get("query", "")
+                    yield {
+                        "type": "tool_call",
+                        "tool": tc.get("name", ""),
+                        "args": args,
+                    }
+                if not tool_calls:
+                    content = str(ai_message.content or "")
+                    if content:
+                        yield {"type": "message", "content": content}
+                yield {
+                    "type": "messages_state",
+                    "messages": list(tracked_messages),
+                    "message_count": len(tracked_messages),
+                }
+
+            elif etype == "tool_result":
+                tool_call_id = event.get("tool_call_id") or ""
+                result = str(event.get("result", ""))
+                tracked_messages.append(
+                    ToolMessage(content=result, tool_call_id=tool_call_id)
+                )
+                yield {
+                    "type": "tool_result",
+                    "tool": event.get("tool_name", ""),
+                    "result": result,
+                    "sql": pending_sql.pop(tool_call_id, ""),
+                }
+
+            elif etype == "context_metadata":
+                yield {
+                    "type": "context_metadata",
+                    "metadata": event.get("metadata"),
+                }
+
+            elif etype == "recursion_error":
+                yield {
+                    "type": "message",
+                    "content": (
+                        "The agent hit its step limit for this question: "
+                        f"{event.get('message', 'recursion limit exceeded')}. "
+                        "Try a more specific question."
+                    ),
+                }
 
     def display_message(self, role: str, content: str) -> None:
         """Display a message in the chat panel."""
@@ -1816,6 +869,48 @@ class ESDCChatApp(App):
         self.notify(
             f"Context panel {'shown' if self._context_panel_visible else 'hidden'}"
         )
+
+    def action_toggle_sql_section(self) -> None:
+        """Toggle the SQL panel's collapsed state."""
+        if self._context_panel:
+            try:
+                sql_panel = self._context_panel.sql_panel
+                sql_panel.collapsed = not sql_panel.collapsed
+            except Exception:
+                logger.debug("toggle sql section failed", exc_info=True)
+
+    def action_toggle_results_section(self) -> None:
+        """Toggle the results panel's collapsed state."""
+        if self._context_panel:
+            try:
+                results_panel = self._context_panel.results_panel
+                results_panel.collapsed = not results_panel.collapsed
+            except Exception:
+                logger.debug("toggle results section failed", exc_info=True)
+
+    def action_toggle_all_sections(self) -> None:
+        """Toggle SQL and results panels together."""
+        if not self._context_panel:
+            return
+        try:
+            sql_panel = self._context_panel.sql_panel
+            results_panel = self._context_panel.results_panel
+        except Exception:
+            logger.debug("toggle all failed", exc_info=True)
+            return
+        # Collapse all if any is expanded; otherwise expand all
+        any_expanded = not sql_panel.collapsed or not results_panel.collapsed
+        sql_panel.collapsed = any_expanded
+        results_panel.collapsed = any_expanded
+
+    def action_open_image(self) -> None:
+        """Open the most recent image from the conversation."""
+        if not self._last_image_url:
+            self.display_message("system", "No image in this conversation yet.")
+            return
+        import webbrowser
+
+        webbrowser.open(self._last_image_url)
 
     def action_save_screenshot(self, filename: str | None = None) -> None:
         """Save screenshot of the current screen.

@@ -1,0 +1,323 @@
+table_name: pod_plan
+description: "POD planning and monitoring data, including approval metadata, production assumptions, price assumptions, cost components, and contractor/government economic indicators."
+sheet_name: POD
+columns:
+  - name: report_date
+    type: date
+    description: "Date when this POD value case was reported, recorded, approved, or captured as a snapshot."
+    aliases: ["tanggal laporan", "tanggal persetujuan POD", "monitoring date", "snapshot date"]
+    maps_to:
+      - ProducingLicense
+
+  - name: effective_date
+    type: date
+    description: "Date or period-end date represented by the POD values. Infer the period from this date: YYYY-12-31 means annual, YYYY-06-30 means semester, YYYY-03-31 or YYYY-09-30 means quarterly, and any other date means point/ad hoc."
+    aliases: ["tanggal efektif", "as-of date", "value date", "period end date"]
+    maps_to:
+      - ProducingLicense
+
+  - name: case_type
+    type: string
+    description: "Normalized POD value case type: plan, outlook, or actual. Use plan for approved POD assumptions, outlook for monitoring estimates, and actual for realized values."
+    aliases: ["report_status", "status laporan", "scenario", "plan outlook actual"]
+    maps_to:
+      - ProducingLicense
+
+  - name: pod_id
+    type: string
+    description: "Unique POD identifier."
+    aliases: ["ID POD", "POD ID"]
+    maps_to:
+      - ProducingLicense
+
+  - name: pod_letter_num
+    type: string
+    description: "POD approval letter number."
+    aliases: ["nomor surat POD", "POD letter number"]
+    maps_to:
+      - ProducingLicense
+
+  - name: pod_name
+    type: string
+    description: "Name of the POD document or producing-license document."
+    aliases: ["nama POD", "plan of development"]
+    maps_to:
+      - ProducingLicense
+
+  - name: lifting_oil
+    type: float
+    unit: "Thousand Stock Tank Barrel (MSTB)"
+    description: "Total oil lifting volume."
+    aliases: ["oil lifting", "lifting minyak"]
+    maps_to:
+      - ProducingLicense
+
+  - name: wap_oil
+    type: float
+    unit: "USD/STB"
+    description: "Yearly weighted average oil price."
+    aliases: ["oil WAP", "weighted average oil price"]
+    maps_to:
+      - ProducingLicense
+
+  - name: lifting_gas
+    type: float
+    unit: "Trillion British Thermal Unit (TBTU)"
+    description: "Total gas lifting volume."
+    aliases: ["gas lifting", "lifting gas"]
+    maps_to:
+      - ProducingLicense
+
+  - name: wap_gas
+    type: float
+    unit: "USD/MMBTU"
+    description: "Yearly weighted average gas price."
+    aliases: ["gas WAP", "weighted average gas price"]
+    maps_to:
+      - ProducingLicense
+
+  - name: grs_rev
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Gross revenue."
+    aliases: ["gross revenue"]
+    maps_to:
+      - ProducingLicense
+
+  - name: ctr_grs_share
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Contractor gross share."
+    aliases: ["contractor gross share"]
+    maps_to:
+      - ProducingLicense
+
+  - name: goi_grs_share
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Government of Indonesia gross share."
+    aliases: ["GOI gross share", "government gross share"]
+    maps_to:
+      - ProducingLicense
+
+  - name: sunk_cost
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Costs incurred during the exploration stage."
+    aliases: ["exploration sunk cost"]
+    maps_to:
+      - ProducingLicense
+
+  - name: investment
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Sum of capital and tangible costs."
+    aliases: ["investment cost"]
+    maps_to:
+      - ProducingLicense
+
+  - name: capital_cost
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Depreciable or amortizable cost components. Cost components classified as capital must not also be classified as intangible. Under a Gross Split PSC contract, capital categorized as sunk cost is treated through amortization with a 2-year unit of production method."
+    aliases: ["capital", "capital expenditure"]
+    maps_to:
+      - ProducingLicense
+
+  - name: intangible_cost
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Non-depreciable and non-amortizable cost components. Cost components classified as intangible are treated as direct charges in the year of PIS (Put Into Service), without depreciation or amortization. Cost components subject to depreciation or amortization must not be classified as intangible."
+    aliases: ["intangible"]
+    maps_to:
+      - ProducingLicense
+
+  - name: opex_asr_lbt
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Sum of OPEX, ASR, and LBT."
+    aliases: ["opex asr lbt"]
+    maps_to:
+      - ProducingLicense
+
+  - name: opex
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Operational expenditure."
+    aliases: ["operational expenditure"]
+    maps_to:
+      - ProducingLicense
+
+  - name: asr
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Abandonment and site restoration cost."
+    aliases: ["abandonment and site restoration"]
+    maps_to:
+      - ProducingLicense
+
+  - name: lbt
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Land and building tax."
+    aliases: ["land and building tax"]
+    maps_to:
+      - ProducingLicense
+
+  - name: cr_or_dc
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Cost recovery or deductible cost for a Gross Split PSC."
+    aliases: ["cost recovery", "deductible cost"]
+    maps_to:
+      - ProducingLicense
+
+  - name: unrec_or_cfwd_dc
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Unrecovered cost for a Cost Recovery PSC or carry-forward deductible cost."
+    aliases: ["unrecovered cost", "carry forward deductible cost"]
+    maps_to:
+      - ProducingLicense
+
+  - name: ctr_net_share
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Contractor net share."
+    aliases: ["contractor net share"]
+    maps_to:
+      - ProducingLicense
+
+  - name: ctr_net_cf
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Contractor net cash flow."
+    aliases: ["contractor net cash flow"]
+    maps_to:
+      - ProducingLicense
+
+  - name: ctr_npv
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Contractor net present value at a 10 percent discount rate."
+    aliases: ["contractor NPV", "contractor net present value"]
+    maps_to:
+      - ProducingLicense
+
+  - name: ctr_irr
+    type: float
+    unit: "Percentage (%)"
+    description: "Contractor internal rate of return."
+    aliases: ["contractor IRR", "internal rate of return"]
+    maps_to:
+      - ProducingLicense
+
+  - name: ctr_pot
+    type: float
+    unit: "year(s)"
+    description: "Contractor payout time."
+    aliases: ["contractor payout time", "POT"]
+    maps_to:
+      - ProducingLicense
+
+  - name: ctr_pv_ratio
+    type: float
+    unit: "dimensionless"
+    description: "Contractor present value ratio."
+    aliases: ["PV ratio", "present value ratio"]
+    maps_to:
+      - ProducingLicense
+
+  - name: ctr_pi
+    type: float
+    unit: "dimensionless"
+    description: "Contractor profitability index."
+    aliases: ["profitability index", "PI"]
+    maps_to:
+      - ProducingLicense
+
+  - name: goi_ftp
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "First tranche petroleum applicable to the Cost Recovery PSC scheme."
+    aliases: ["GOI FTP", "first tranche petroleum"]
+    maps_to:
+      - ProducingLicense
+
+  - name: goi_net_dmo
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Net domestic market obligation."
+    aliases: ["net DMO", "domestic market obligation"]
+    maps_to:
+      - ProducingLicense
+
+  - name: goi_tax
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Taxes paid to the Government of Indonesia."
+    aliases: ["GOI tax", "government tax"]
+    maps_to:
+      - ProducingLicense
+
+  - name: goi_take
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Government of Indonesia take."
+    aliases: ["GOI take", "government take"]
+    maps_to:
+      - ProducingLicense
+
+  - name: goi_npv
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Government of Indonesia net present value."
+    aliases: ["GOI NPV", "government net present value"]
+    maps_to:
+      - ProducingLicense
+
+  - name: total_indirect_tax
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Total indirect taxes, such as value-added tax (VAT)."
+    aliases: ["indirect tax", "VAT"]
+    maps_to:
+      - ProducingLicense
+
+  - name: undep_asset_total
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Total undepreciated asset value, equal to undep_asset_oil plus undep_asset_gas."
+    aliases: ["total undepreciated asset"]
+    maps_to:
+      - ProducingLicense
+
+  - name: undep_asset_oil
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Undepreciated asset value from investment related to oil lifting."
+    aliases: ["oil undepreciated asset"]
+    maps_to:
+      - ProducingLicense
+
+  - name: undep_asset_gas
+    type: float
+    unit: "Thousand USD (MUSD)"
+    description: "Undepreciated asset value from investment related to gas lifting."
+    aliases: ["gas undepreciated asset"]
+    maps_to:
+      - ProducingLicense
+
+  - name: pod_scope
+    type: string
+    description: "POD scope of work."
+    aliases: ["scope of work", "lingkup kerja POD"]
+    maps_to:
+      - ProducingLicense
+
+  - name: supercedes_by
+    type: string
+    description: "POD ID that supersedes this POD, indicating that this POD is obsolete."
+    aliases: ["superseded by", "digantikan oleh"]
+    maps_to:
+      - ProducingLicense

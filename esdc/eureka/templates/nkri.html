@@ -1,0 +1,710 @@
+{% extends "base.html" %}
+{% block title %}Eureka — NKRI Dashboard{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/katex/katex.min.css">
+<script src="/static/katex/katex.min.js"></script>
+<script src="/static/katex/auto-render.min.js"></script>
+{% endblock %}
+
+{% block content %}
+{% set k = kpis %}
+{% set w = wk %}
+{% set f = fields %}
+{% set p = projects %}
+
+<div class="resources-layout animate-scale-in stagger-1">
+  <div class="resources-left">
+    <div class="section-title">    <span class="section-badge" style="background:var(--reserves);"></span>Resource Classification</div>
+
+  <div class="hero-pipeline">
+    {# ── 1. Reserves (2fr card) ── #}
+    <div class="hero-metric reserves">
+      <div class="hero-metric-header">Reserves</div>
+      <div class="hero-subheader">Commercial — 1P · 2P · 3P</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.res_1p_oc) }}">{{ "%.0f"|format(k.res_1p_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.res_2p_oc) }}">{{ "%.0f"|format(k.res_2p_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.res_3p_oc) }}">{{ "%.0f"|format(k.res_3p_oc) }}</span>
+          </div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_res_2p_oc is not none %}{{ 'up' if k.yoy_res_2p_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_res_2p_oc is not none %}{% if k.yoy_res_2p_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_res_2p_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.res_1p_an) }}">{{ "%.0f"|format(k.res_1p_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.res_2p_an) }}">{{ "%.0f"|format(k.res_2p_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.res_3p_an) }}">{{ "%.0f"|format(k.res_3p_an) }}</span>
+          </div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_res_2p_an is not none %}{{ 'up' if k.yoy_res_2p_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_res_2p_an is not none %}{% if k.yoy_res_2p_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_res_2p_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── 2. GRR ── #}
+    <div class="hero-metric grr">
+      <div class="hero-metric-header">GRR</div>
+      <div class="hero-subheader">Technical — 1R · 2R · 3R</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.grr_1r_oc) }}">{{ "%.0f"|format(k.grr_1r_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.grr_2r_oc) }}">{{ "%.0f"|format(k.grr_2r_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.grr_3r_oc) }}">{{ "%.0f"|format(k.grr_3r_oc) }}</span>
+          </div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_grr_oc is not none %}{{ 'up' if k.yoy_grr_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_grr_oc is not none %}{% if k.yoy_grr_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_grr_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.grr_1r_an) }}">{{ "%.0f"|format(k.grr_1r_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.grr_2r_an) }}">{{ "%.0f"|format(k.grr_2r_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.grr_3r_an) }}">{{ "%.0f"|format(k.grr_3r_an) }}</span>
+          </div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_grr_an is not none %}{{ 'up' if k.yoy_grr_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_grr_an is not none %}{% if k.yoy_grr_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_grr_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── 3. Contingent Resources (Exploitation) ── #}
+    <div class="hero-metric cont-exploit">
+      <div class="hero-metric-header">Contingent Resources</div>
+      <div class="hero-subheader">Exploitation — 1C · 2C · 3C</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.cont_exploit_1c_oc) }}">{{ "%.0f"|format(k.cont_exploit_1c_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.cont_exploit_2c_oc) }}">{{ "%.0f"|format(k.cont_exploit_2c_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.cont_exploit_3c_oc) }}">{{ "%.0f"|format(k.cont_exploit_3c_oc) }}</span>
+          </div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_cont_exploit_oc is not none %}{{ 'up' if k.yoy_cont_exploit_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_cont_exploit_oc is not none %}{% if k.yoy_cont_exploit_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_cont_exploit_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.cont_exploit_1c_an) }}">{{ "%.0f"|format(k.cont_exploit_1c_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.cont_exploit_2c_an) }}">{{ "%.0f"|format(k.cont_exploit_2c_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.cont_exploit_3c_an) }}">{{ "%.0f"|format(k.cont_exploit_3c_an) }}</span>
+          </div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_cont_exploit_an is not none %}{{ 'up' if k.yoy_cont_exploit_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_cont_exploit_an is not none %}{% if k.yoy_cont_exploit_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_cont_exploit_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── 4. Contingent Resources (Exploration) ── #}
+    <div class="hero-metric cont-explore">
+      <div class="hero-metric-header">Contingent Resources</div>
+      <div class="hero-subheader">Exploration — 1C · 2C · 3C</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.cont_explore_1c_oc) }}">{{ "%.0f"|format(k.cont_explore_1c_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.cont_explore_2c_oc) }}">{{ "%.0f"|format(k.cont_explore_2c_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.cont_explore_3c_oc) }}">{{ "%.0f"|format(k.cont_explore_3c_oc) }}</span>
+          </div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_cont_explore_oc is not none %}{{ 'up' if k.yoy_cont_explore_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_cont_explore_oc is not none %}{% if k.yoy_cont_explore_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_cont_explore_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.cont_explore_1c_an) }}">{{ "%.0f"|format(k.cont_explore_1c_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.cont_explore_2c_an) }}">{{ "%.0f"|format(k.cont_explore_2c_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.cont_explore_3c_an) }}">{{ "%.0f"|format(k.cont_explore_3c_an) }}</span>
+          </div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_cont_explore_an is not none %}{{ 'up' if k.yoy_cont_explore_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_cont_explore_an is not none %}{% if k.yoy_cont_explore_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_cont_explore_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── 5. Prospective Resources ── #}
+    <div class="hero-metric prospective">
+      <div class="hero-metric-header">Prospective Resources</div>
+      <div class="hero-subheader">Risked — 1U · 2U · 3U</div>
+      <div class="hero-columns">
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low oil" data-count="{{ "%.0f"|format(k.prospective_1u_oc) }}">{{ "%.0f"|format(k.prospective_1u_oc) }}</span>
+            <span class="hero-range-value mid oil" data-count="{{ "%.0f"|format(k.prospective_2u_oc) }}">{{ "%.0f"|format(k.prospective_2u_oc) }}</span>
+            <span class="hero-range-value high oil" data-count="{{ "%.0f"|format(k.prospective_3u_oc) }}">{{ "%.0f"|format(k.prospective_3u_oc) }}</span>
+          </div>
+          <div class="hero-unit">MMSTB</div>
+          <div class="hero-fluid-label">Oil + Condensate</div>
+          <div class="hero-yoy {% if k.yoy_prospective_oc is not none %}{{ 'up' if k.yoy_prospective_oc >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_prospective_oc is not none %}{% if k.yoy_prospective_oc >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_prospective_oc) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="hero-column">
+          <div class="hero-range-row">
+            <span class="hero-range-value low gas" data-count="{{ "%.0f"|format(k.prospective_1u_an) }}">{{ "%.0f"|format(k.prospective_1u_an) }}</span>
+            <span class="hero-range-value mid gas" data-count="{{ "%.0f"|format(k.prospective_2u_an) }}">{{ "%.0f"|format(k.prospective_2u_an) }}</span>
+            <span class="hero-range-value high gas" data-count="{{ "%.0f"|format(k.prospective_3u_an) }}">{{ "%.0f"|format(k.prospective_3u_an) }}</span>
+          </div>
+          <div class="hero-unit">TSCF</div>
+          <div class="hero-fluid-label">Assoc. + Non Assoc. Gas</div>
+          <div class="hero-yoy {% if k.yoy_prospective_an is not none %}{{ 'up' if k.yoy_prospective_an >= 0 else 'down' }}{% endif %}">
+            {% if k.yoy_prospective_an is not none %}{% if k.yoy_prospective_an >= 0 %}▲{% else %}▼{% endif %} {{ "%+.1f"|format(k.yoy_prospective_an) }}%{% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="resources-right animate-fade-up stagger-2">
+  <div class="section-title">
+    <span class="section-badge" style="background:var(--info);"></span>
+    Production
+  </div>
+  <div class="hero-metric production right-section-card">
+    <div class="hero-metric-header">Production</div>
+    <div class="hero-subheader">Cumulative &amp; Yearly</div>
+    <div class="prod-grid">
+      <div class="prod-cell">
+        <div class="prod-cell-value" style="color:var(--oil-bright)" data-count="{{ "%.0f"|format(k.cumprod_sls_oc) }}">{{ "%.0f"|format(k.cumprod_sls_oc) }}</div>
+        <div class="hero-unit">MMSTB</div>
+        <div class="prod-cell-label">Cumulative Oil + Condensate</div>
+      </div>
+      <div class="prod-cell">
+        <div class="prod-cell-value" style="color:var(--gas-bright)" data-count="{{ "%.0f"|format(k.cumprod_sls_an) }}">{{ "%.0f"|format(k.cumprod_sls_an) }}</div>
+        <div class="hero-unit">TSCF</div>
+        <div class="prod-cell-label">Cumulative Assoc. + Non Assoc. Gas</div>
+      </div>
+      <div class="prod-cell">
+        <div class="prod-cell-value" style="color:var(--oil-bright)">{{ "%.0f"|format(k.yearly_sls_oc) }}</div>
+        <div class="hero-unit">MMSTB/yr</div>
+        <div class="prod-cell-label">Yearly Oil + Condensate</div>
+      </div>
+      <div class="prod-cell">
+        <div class="prod-cell-value" style="color:var(--gas-bright)">{{ "%.0f"|format(k.yearly_sls_an) }}</div>
+        <div class="hero-unit">TSCF/yr</div>
+        <div class="prod-cell-label">Yearly Assoc. + Non Assoc. Gas</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title" style="margin-top:1.25rem;">
+    <span class="section-badge" style="background:var(--cont-exploit);"></span>
+    Asset Counts
+  </div>
+  <div class="counts-bar">
+    <div class="count-item">
+      <div class="count-header">
+        <span class="count-type">Working Areas</span>
+        <span class="count-total">{{ w.total_wk }}</span>
+      </div>
+      <div class="count-details">
+        <div class="count-detail-row">
+          <span class="count-detail-label">Exploitation</span>
+          <span class="count-detail-value">{{ w.exploit_wk }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploit" style="width:{{ (w.exploit_wk / w.total_wk * 100) if w.total_wk else 0 }}%"></div>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.25rem;">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Production</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--oil-bright)">{{ w.production_wk }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Development</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--info)">{{ w.development_wk }}</span>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.5rem;">
+          <span class="count-detail-label">Exploration</span>
+          <span class="count-detail-value">{{ w.exploration_wk }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploration" style="width:{{ (w.exploration_wk / w.total_wk * 100) if w.total_wk else 0 }}%"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="count-item">
+      <div class="count-header">
+        <span class="count-type">Fields</span>
+        <span class="count-total">{{ f.total_fields }}</span>
+      </div>
+      <div class="count-details">
+        <div class="count-detail-row">
+          <span class="count-detail-label">Exploitation</span>
+          <span class="count-detail-value">{{ f.exploit_fields }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploit" style="width:{{ (f.exploit_fields / f.total_fields * 100) if f.total_fields else 0 }}%"></div>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.25rem;">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Production</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--oil-bright)">{{ f.production_fields }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Development</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--info)">{{ f.development_fields }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Idle</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--warning)">{{ f.idle_fields }}</span>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.5rem;">
+          <span class="count-detail-label">Exploration</span>
+          <span class="count-detail-value">{{ f.exploration_fields }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploration" style="width:{{ (f.exploration_fields / f.total_fields * 100) if f.total_fields else 0 }}%"></div>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.25rem;">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Discovered</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--cont-explore)">{{ f.discovered_fields }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Undiscovered</span>
+          <span class="count-detail-value" style="font-size:0.75rem;color:var(--prospective)">{{ f.undiscovered_fields }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="count-item">
+      <div class="count-header">
+        <span class="count-type">Projects</span>
+        <span class="count-total">{{ p.total_projects }}</span>
+      </div>
+      <div class="count-details">
+        <div class="count-detail-row">
+          <span class="count-detail-label">Exploitation</span>
+          <span class="count-detail-value">{{ p.exploit_projects }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploit" style="width:{{ (p.exploit_projects / p.total_projects * 100) if p.total_projects else 0 }}%"></div>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.25rem;">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Primary</span>
+          <span class="count-detail-value" style="font-size:0.75rem">{{ p.primary_projects }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ Waterflood</span>
+          <span class="count-detail-value" style="font-size:0.75rem">{{ p.waterflood_projects }}</span>
+        </div>
+        <div class="count-detail-row">
+          <span class="count-detail-label" style="font-size:0.75rem;color:var(--text-muted)">&nbsp;&nbsp;→ EOR/EGR</span>
+          <span class="count-detail-value" style="font-size:0.75rem">{{ p.eor_egr_projects }}</span>
+        </div>
+        <div class="count-detail-row" style="margin-top:0.5rem;">
+          <span class="count-detail-label">Exploration</span>
+          <span class="count-detail-value">{{ p.exploration_projects }}</span>
+        </div>
+        <div class="count-detail-bar-bg">
+          <div class="count-detail-bar-fill exploration" style="width:{{ (p.exploration_projects / p.total_projects * 100) if p.total_projects else 0 }}%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="section-separator"></div>
+
+<div class="animate-fade-up stagger-3">
+  <div class="section-title">
+    <span class="section-badge" style="background:var(--oil);"></span>
+    Initial Petroleum in Place
+  </div>
+  <div class="inplace-grid">
+    <div class="inplace-card">
+      <div class="inplace-card-header">Discovered — Exploitation</div>
+      <div class="inplace-rows">
+        <div class="inplace-row">
+          <span class="inplace-label">IOIP</span>
+          <span class="inplace-value oil" data-count="{{ "%.0f"|format(inplace.disc_exploit_ioip) }}">{{ "%.0f"|format(inplace.disc_exploit_ioip) }}</span>
+          <span class="inplace-unit">MMSTB</span>
+        </div>
+        <div class="inplace-row">
+          <span class="inplace-label">IGIP</span>
+          <span class="inplace-value gas" data-count="{{ "%.0f"|format(inplace.disc_exploit_igip) }}">{{ "%.0f"|format(inplace.disc_exploit_igip) }}</span>
+          <span class="inplace-unit">TSCF</span>
+        </div>
+      </div>
+    </div>
+    <div class="inplace-card">
+      <div class="inplace-card-header">Discovered — Exploration</div>
+      <div class="inplace-rows">
+        <div class="inplace-row">
+          <span class="inplace-label">IOIP</span>
+          <span class="inplace-value oil" data-count="{{ "%.0f"|format(inplace.disc_explore_ioip) }}">{{ "%.0f"|format(inplace.disc_explore_ioip) }}</span>
+          <span class="inplace-unit">MMSTB</span>
+        </div>
+        <div class="inplace-row">
+          <span class="inplace-label">IGIP</span>
+          <span class="inplace-value gas" data-count="{{ "%.0f"|format(inplace.disc_explore_igip) }}">{{ "%.0f"|format(inplace.disc_explore_igip) }}</span>
+          <span class="inplace-unit">TSCF</span>
+        </div>
+      </div>
+    </div>
+    <div class="inplace-card total">
+      <div class="inplace-card-header">Undiscovered — Risked</div>
+      <div class="inplace-rows">
+        <div class="inplace-row">
+          <span class="inplace-label">IOIP</span>
+          <span class="inplace-value oil" data-count="{{ "%.0f"|format(inplace.undisc_risked_ioip) }}">{{ "%.0f"|format(inplace.undisc_risked_ioip) }}</span>
+          <span class="inplace-unit">MMSTB</span>
+        </div>
+        <div class="inplace-row">
+          <span class="inplace-label">IGIP</span>
+          <span class="inplace-value gas" data-count="{{ "%.0f"|format(inplace.undisc_risked_igip) }}">{{ "%.0f"|format(inplace.undisc_risked_igip) }}</span>
+          <span class="inplace-unit">TSCF</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section-separator"></div>
+
+<div class="animate-fade-up stagger-4">
+  <div class="content-with-summary">
+    <div class="content-main">
+      <div class="section-title">
+        <span class="section-badge" style="background:var(--oil);"></span>
+        NKRI Timeseries — Oil &amp; Gas Forecast
+      </div>
+      <div class="chart-panel">
+        <div class="chart-body" id="chart-ts-oc"></div>
+      </div>
+      <div style="margin-top:1rem;">
+        <div class="chart-panel">
+          <div class="chart-body" id="chart-ts-an"></div>
+        </div>
+      </div>
+
+      <div class="section-separator"></div>
+
+      <div class="section-title">
+        <span class="section-badge" style="background:var(--gas);"></span>
+        Projects by Onstream Year
+      </div>
+      <div class="chart-panel">
+        <div class="chart-body" id="chart-onstream"></div>
+      </div>
+    </div>
+
+    <aside class="summary-sidebar">
+      <div class="section-title">
+        <span class="section-badge" style="background:var(--info);"></span>
+        Analysis
+      </div>
+      {% set summary_parts = nkri_summary.split('\n\n', 1) if nkri_summary else none %}
+      {% set summary_headline = summary_parts[0] if summary_parts else '' %}
+      {% set summary_body = summary_parts[1] if summary_parts and summary_parts|length > 1 else '' %}
+      {% if nkri_summary %}
+      <div class="summary-card">
+        <div class="summary-card-accent"></div>
+        <div class="summary-meta">
+          <span class="summary-badge">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><path d="M12 2l2 7h7l-5 5 2 7-6-4-6 4 2-7-5-5h7z"/></svg>
+            Evaluated by IRIS
+          </span>
+          <div class="font-controls">
+            <button class="font-btn" id="font-decrease" title="Decrease font size">A&minus;</button>
+            <button class="font-btn" id="font-reset" title="Reset font size">A&#8635;</button>
+            <button class="font-btn" id="font-increase" title="Increase font size">A+</button>
+          </div>
+          <span class="summary-year">{{ selected_year }}</span>
+        </div>
+        {% if summary_headline %}
+        <div class="summary-headline">{{ summary_headline | markdown | safe }}</div>
+        {% endif %}
+        {% if summary_body %}
+        <div class="summary-body">{{ summary_body | markdown | safe }}</div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="summary-card summary-empty">
+        <div class="summary-empty-text">No IRIS-generated analysis available for {{ selected_year }}.</div>
+        <div class="summary-empty-latex">\[ \LaTeX \]</div>
+        <div class="summary-empty-quote">&ldquo;Reservoir engineering is the art of making decisions based on incomplete information.&rdquo;<br>&mdash; L.P. Dake</div>
+        <div class="summary-empty-equation">\[
+\begin{aligned}
+N_p[B_o + (R_p - R_s)B_g] + W_pB_w
+&= N[(B_o - B_{oi}) \\
+&\quad + (R_{si} - R_s)B_g \\
+&\quad + mB_{oi}\left(\frac{B_g}{B_{gi}} - 1\right) \\
+&\quad + (1+m)B_{oi}\frac{c_wS_{wc} + c_f}{1 - S_{wc}}\Delta p] \\
+&\quad + W_eB_w
+\end{aligned}
+\]</div>
+        <div class="summary-empty-hint">Run <code>esdc summarize nkri --year {{ selected_year }}</code></div>
+      </div>
+      {% endif %}
+    </aside>
+  </div>
+</div>
+
+<div class="section-separator"></div>
+
+<div class="animate-fade-up stagger-6">
+  <div class="section-title">
+    <span class="section-badge" style="background:var(--gas);"></span>
+    Data Explorer
+  </div>
+  <div class="table-section">
+    <div class="table-toolbar">
+      <div style="display:flex;align-items:center;gap:0.75rem;">
+        <span class="table-toolbar-label">View</span>
+        <select id="detail-select" class="detail-filter">
+          <option value="resources" selected>Resources</option>
+          <option value="reserves">Reserves</option>
+          <option value="inplace">In-Place</option>
+          <option value="cumprod">Cumulative Production</option>
+          <option value="rate">Production Rate</option>
+        </select>
+      </div>
+      <a href="/eureka/api/nkri/export?year={{ selected_year }}&format=csv" class="btn-export">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Export CSV
+      </a>
+    </div>
+    <div class="table-container" id="data-table-container">
+      <div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem;">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4;margin-bottom:0.5rem;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        <br>Loading data...
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ── Analysis font size controls ──
+  const summaryBody = document.querySelector('.summary-body');
+  const FONT_DEFAULT = 0.85;
+  const FONT_MIN = 0.7;
+  const FONT_MAX = 1.4;
+  const FONT_STEP = 0.05;
+  let currentFontSize = FONT_DEFAULT;
+
+  function setFontSize(size) {
+    currentFontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, size));
+    if (summaryBody) {
+      summaryBody.style.fontSize = currentFontSize + 'rem';
+      summaryBody.querySelectorAll('h1, h2, h3').forEach(h => {
+        h.style.fontSize = (currentFontSize + 0.15) + 'rem';
+      });
+    }
+  }
+
+  document.getElementById('font-decrease')?.addEventListener('click', () => setFontSize(currentFontSize - FONT_STEP));
+  document.getElementById('font-increase')?.addEventListener('click', () => setFontSize(currentFontSize + FONT_STEP));
+  document.getElementById('font-reset')?.addEventListener('click', () => setFontSize(FONT_DEFAULT));
+
+  // ── Count-up animation for hero values ──
+  function animateValue(el, end, duration) {
+    const start = 0;
+    let startTimestamp = null;
+    const step = (timestamp) => {
+      if (!startTimestamp) startTimestamp = timestamp;
+      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      el.textContent = Math.floor(eased * (end - start) + start).toLocaleString();
+      if (progress < 1) {
+        window.requestAnimationFrame(step);
+      }
+    };
+    window.requestAnimationFrame(step);
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[data-count]').forEach(el => {
+      const raw = el.getAttribute('data-count');
+      const parsed = parseFloat(raw.replace(/,/g, ''));
+      if (!isNaN(parsed) && parsed > 0) {
+        el.textContent = '0';
+        animateValue(el, parsed, 1200);
+      }
+    });
+  });
+
+  // ── Plotly dark theme config ──
+  const plotlyConfig = {
+    responsive: true,
+    displayModeBar: true,
+    modeBarButtonsToRemove: ['lasso2d','select2d','sendDataToCloud'],
+    displaylogo: false,
+    toImageButtonOptions: {format: 'png', filename: 'eureka-chart'}
+  };
+
+  const plotlyLayoutDefaults = {
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(0,0,0,0)',
+    font: {family: 'JetBrains Mono, monospace', color: '#E6EDF3', size: 12},
+    margin: {l:50,r:30,t:30,b:50},
+    hoverlabel: {bgcolor: '#1C2128', bordercolor: '#21262D', font: {color: '#E6EDF3', size: 11, family: 'JetBrains Mono, monospace'}},
+    legend: {orientation:'h',yanchor:'bottom',y:1.02,xanchor:'right',x:1, font:{color:'#E6EDF3',size:11}},
+    xaxis: {gridcolor: 'rgba(48,54,61,0.3)', zerolinecolor: 'rgba(48,54,61,0.5)', tickfont:{size:11}, showspikes:false},
+    yaxis: {gridcolor: 'rgba(48,54,61,0.3)', zerolinecolor: 'rgba(48,54,61,0.5)', tickfont:{size:11}, showspikes:false}
+  };
+
+  const charts = {
+    'chart-ts-oc': {{ ts_oc_fig.to_json() | safe }},
+    'chart-ts-an': {{ ts_an_fig.to_json() | safe }},
+    'chart-onstream': {{ onstream_fig.to_json() | safe }}
+  };
+
+  const chartRenderPromises = [];
+  for (const [id, figJson] of Object.entries(charts)) {
+    try {
+      const parsed = typeof figJson === 'string' ? JSON.parse(figJson) : figJson;
+      const layout = { ...plotlyLayoutDefaults, ...parsed.layout };
+      const chartEl = document.getElementById(id);
+      const renderPromise = Plotly.newPlot(chartEl, parsed.data, layout, plotlyConfig)
+        .then(() => {
+          if (id === 'chart-onstream') {
+            chartEl.on('plotly_afterplot', syncSummarySidebarHeight);
+          }
+          syncSummarySidebarHeight();
+        });
+      chartRenderPromises.push(renderPromise);
+    } catch(e) {
+      console.error('Chart render failed', id, e);
+      document.getElementById(id).innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;"><span style="color:var(--danger);margin-right:0.5rem;">×</span>Chart unavailable</div>';
+    }
+  }
+
+  function syncSummarySidebarHeight() {
+    const section = document.querySelector('.content-with-summary');
+    const sidebar = document.querySelector('.summary-sidebar');
+    const onstreamPanel = document.querySelector('#chart-onstream')?.closest('.chart-panel');
+    const titles = Array.from(document.querySelectorAll('.section-title'));
+    const onstreamTitle = titles.find((el) =>
+      el.textContent.trim().toLowerCase().includes('projects by onstream')
+    );
+    if (!section || !sidebar || !onstreamPanel || !onstreamTitle) return;
+    if (window.matchMedia('(max-width: 991px)').matches) {
+      sidebar.style.removeProperty('--summary-sidebar-height');
+      sidebar.style.removeProperty('--summary-sidebar-offset');
+      return;
+    }
+    const sectionTop = section.getBoundingClientRect().top;
+    const onstreamBottom = onstreamPanel.getBoundingClientRect().bottom;
+    const height = Math.max(420, Math.round(onstreamBottom - sectionTop));
+    sidebar.style.setProperty('--summary-sidebar-offset', '0px');
+    sidebar.style.setProperty('--summary-sidebar-height', `${height}px`);
+  }
+
+  window.addEventListener('resize', syncSummarySidebarHeight);
+  Promise.allSettled(chartRenderPromises).then(syncSummarySidebarHeight);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(syncSummarySidebarHeight);
+  }
+  requestAnimationFrame(syncSummarySidebarHeight);
+  window.setTimeout(syncSummarySidebarHeight, 750);
+  window.setTimeout(syncSummarySidebarHeight, 1500);
+
+  // ── Data table loader ──
+  function loadTable(detail) {
+    const container = document.getElementById('data-table-container');
+    container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:0.85rem;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4;margin-bottom:0.5rem;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><br>Loading...</div>';
+
+    fetch('/eureka/api/nkri/table?year={{ selected_year }}&detail=' + detail)
+      .then(r => r.json())
+      .then(response => {
+        const data = response.data;
+        const colNames = response.column_names;
+        if (!data || data.length === 0) {
+          container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text-muted);">No data available.</div>';
+          return;
+        }
+        const cols = Object.keys(data[0]);
+        let html = '<table class="eureka-table"><thead><tr>';
+        cols.forEach(c => {
+          const displayName = colNames[c] || c;
+          html += '<th>' + displayName + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+        data.forEach(row => {
+          html += '<tr>';
+          cols.forEach(c => {
+            let val = row[c];
+            if (typeof val === 'number' && !Number.isInteger(val)) {
+              val = val.toLocaleString(undefined, {maximumFractionDigits: 0});
+            } else if (typeof val === 'number') {
+              val = val.toLocaleString();
+            }
+            html += '<td>' + (val !== null && val !== undefined ? val : '—') + '</td>';
+          });
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        container.innerHTML = html;
+      })
+      .catch(err => {
+        console.error('Table load failed', err);
+        container.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--danger);">Failed to load data.</div>';
+      });
+  }
+
+  document.getElementById('detail-select').addEventListener('change', function() {
+    loadTable(this.value);
+  });
+
+  loadTable('resources');
+
+  // ── Animate count bars on scroll ──
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const bars = entry.target.querySelectorAll('.count-detail-bar-fill');
+        bars.forEach(bar => {
+          const w = bar.style.width;
+          bar.style.width = '0%';
+          requestAnimationFrame(() => { bar.style.width = w; });
+        });
+        observer.unobserve(entry.target);
+      }
+    });
+  }, {threshold: 0.3});
+
+  document.querySelectorAll('.counts-bar').forEach(el => observer.observe(el));
+
+  // ── KaTeX auto-render for NKRI Analysis markdown ──
+  const autoRenderTargets = document.querySelectorAll('.summary-body, .summary-empty-text, .summary-empty-latex, .summary-empty-equation');
+  autoRenderTargets.forEach(el => {
+    if (typeof renderMathInElement === 'function') {
+      renderMathInElement(el, {
+        delimiters: [
+          {left: '\\[', right: '\\]', display: true},
+          {left: '\\(', right: '\\)', display: false}
+        ]
+      });
+    }
+  });
+</script>
+{% endblock %}

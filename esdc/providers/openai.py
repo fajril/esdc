@@ -14,6 +14,33 @@ from esdc.auth import is_token_expired, start_oauth_flow  # noqa: E402
 from esdc.providers.base import Provider, ProviderConfig  # noqa: E402
 
 
+def _persist_refreshed_oauth(provider_name: str, oauth: dict[str, Any]) -> None:
+    """Best-effort persistence of refreshed OAuth tokens to disk.
+
+    OAuth providers may rotate the refresh_token on every refresh; if that
+    rotated token is only kept in memory, the on-disk copy goes stale and
+    authentication breaks on the next process restart. This writes the
+    updated tokens back via ``Config.persist_provider_oauth``.
+
+    A persistence failure (e.g. read-only filesystem, disk full, provider
+    not found in the on-disk config) must never break the in-flight LLM
+    call — the in-memory refresh already succeeded, so we only log a
+    warning here.
+    """
+    try:
+        from esdc.configs import Config
+
+        Config.persist_provider_oauth(provider_name, oauth)
+    except Exception:
+        logger.warning(
+            "Failed to persist refreshed OAuth tokens for provider '%s' "
+            "to disk; in-memory session will continue but the on-disk "
+            "config may go stale after restart",
+            provider_name,
+            exc_info=True,
+        )
+
+
 class OpenAIProvider(Provider):
     """Provider implementation for OpenAI API."""
 
@@ -109,8 +136,11 @@ class OpenAIProvider(Provider):
                 refresh_token = config.oauth.get("refresh_token", "")
                 new_tokens = refresh_access_token(refresh_token)
                 config.oauth.update(new_tokens)
-                config.oauth["expires_at"] = int(new_tokens.get("expires_in", 3600))
+                config.oauth["expires_at"] = int(time.time()) + int(
+                    new_tokens.get("expires_in", 3600)
+                )
                 effective_api_key = new_tokens.get("access_token")
+                _persist_refreshed_oauth(config.name, config.oauth)
 
         if reasoning_effort is not None:
             kwargs["extra_body"] = {
@@ -146,7 +176,10 @@ class OpenAIProvider(Provider):
                         config.oauth.get("refresh_token", "")
                     )
                     config.oauth.update(new_tokens)
-                    config.oauth["expires_at"] = int(new_tokens.get("expires_in", 3600))
+                    config.oauth["expires_at"] = int(time.time()) + int(
+                        new_tokens.get("expires_in", 3600)
+                    )
+                    _persist_refreshed_oauth(config.name, config.oauth)
 
                 api_key = config.oauth.get("access_token")
             elif config.api_key:

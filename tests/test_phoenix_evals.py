@@ -146,6 +146,7 @@ class TestESDCToolsDescription:
         assert isinstance(ESDC_TOOLS_DESCRIPTION, str)
         assert len(ESDC_TOOLS_DESCRIPTION) > 0
         assert "SQL Executor" in ESDC_TOOLS_DESCRIPTION
+        assert "Entity Resolver" in ESDC_TOOLS_DESCRIPTION
         assert "Knowledge Traversal" in ESDC_TOOLS_DESCRIPTION
         assert "Semantic Search" in ESDC_TOOLS_DESCRIPTION
 

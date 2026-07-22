@@ -1,4 +1,5 @@
 import contextlib
+import datetime
 import logging
 import shutil
 import time
@@ -14,9 +15,17 @@ from esdc.selection import TableName
 
 
 def get_duckdb_connection(
-    db_path: str | Path, read_only: bool = False
+    db_path: str | Path, read_only: bool = True
 ) -> duckdb.DuckDBPyConnection:
     """Open a DuckDB connection with the VSS extension loaded.
+
+    Read-only by default: DuckDB allows many concurrent read-only
+    processes but a read-write connection demands an exclusive lock on
+    the file, blocking everything else (`esdc serve` vs `esdc status`).
+    Write paths must opt in explicitly with ``read_only=False``; a write
+    attempt on a read-only connection fails loudly instead of silently
+    holding the exclusive lock. Note: ``read_only=True`` cannot create a
+    missing database file.
 
     The VSS extension must be loaded before any operation on a database
     that contains HNSW indexes, including CHECKPOINT and WAL replay.
@@ -259,7 +268,7 @@ def reindex_fts() -> None:
 
     console.print("[bold]Rebuilding search indexes...[/bold]")
     logging.info("Rebuilding FTS indexes on %s", db_path)
-    conn = get_duckdb_connection(db_path)
+    conn = get_duckdb_connection(db_path, read_only=False)
     try:
         with console.status(_step("dropping HNSW index")):
             conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
@@ -351,7 +360,7 @@ def load_data_to_db(
     _ensure_duckdb_database(Config.get_db_file())
     if not Config.get_db_dir().exists():
         Config.get_db_dir().mkdir(parents=True, exist_ok=True)
-    conn = get_duckdb_connection(Config.get_db_file())
+    conn = get_duckdb_connection(Config.get_db_file(), read_only=False)
 
     with console.status(_status("preparing")) as status:
         try:
@@ -753,8 +762,44 @@ def verify_indexes(conn: duckdb.DuckDBPyConnection) -> dict:
 
 
 def invalidate_sql_cache() -> None:
-    """Clear the SQL results cache directory."""
+    """Clear the SQL results cache directory and record invalidation timestamp."""
     cache_dir = Config.get_cache_dir() / "sql_results"
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
         logging.info("SQL cache invalidated: %s", cache_dir)
+    # Record invalidation timestamp
+    _record_cache_invalidation(cache_dir)
+
+
+def _record_cache_invalidation(cache_dir: Path) -> None:
+    """Record the timestamp of cache invalidation.
+
+    Stores timestamp in a sibling file so it survives cache directory deletion.
+    """
+    from esdc.configs import Config
+
+    cache_root = Config.get_cache_dir()
+    timestamp_file = cache_root / ".last_invalidated"
+    now = datetime.datetime.now().isoformat()
+    try:
+        timestamp_file.write_text(now)
+    except OSError as e:
+        logging.warning("Could not record cache invalidation timestamp: %s", e)
+
+
+def get_last_cache_invalidation() -> str | None:
+    """Get the timestamp of the last cache invalidation.
+
+    Returns:
+        ISO timestamp string or None if never invalidated.
+    """
+    from esdc.configs import Config
+
+    cache_root = Config.get_cache_dir()
+    timestamp_file = cache_root / ".last_invalidated"
+    if timestamp_file.exists():
+        try:
+            return timestamp_file.read_text().strip()
+        except OSError:
+            return None
+    return None

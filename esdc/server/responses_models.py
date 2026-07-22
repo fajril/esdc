@@ -284,7 +284,7 @@ class ResponsesRequest(BaseModel):
         default="auto", description="How the model should use tools"
     )
     stream: bool = Field(default=True, description="Whether to stream the response")
-    temperature: float | None = Field(default=0.7, ge=0, le=2)
+    temperature: float | None = Field(default=None, ge=0, le=2)
     max_output_tokens: int | None = Field(default=None, ge=1)
     top_p: float | None = Field(default=1, ge=0, le=1)
     reasoning_effort: str | None = Field(

@@ -19,10 +19,10 @@ from typing import Any
 logger = logging.getLogger("esdc.chat.external_tools")
 
 INTERNAL_TOOL_NAMES: set[str] = {
+    "entity_resolver",
     "knowledge_traversal",
     "resolve_spatial",
     "semantic_search",
-    "execute_cypher",
     "execute_sql",
     "get_schema",
     "list_tables",
@@ -32,9 +32,7 @@ INTERNAL_TOOL_NAMES: set[str] = {
     "get_timeseries_columns",
     "get_resources_columns",
     "list_available_models",
-    "Compute Engine",
-    "File Processing",
-    "View File",
+    "Shell Executor",
 }
 
 EXTERNAL_TOOL_MARKER_PREFIX = "[EXTERNAL_TOOL_CALL:"
