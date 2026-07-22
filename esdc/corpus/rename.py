@@ -13,7 +13,7 @@ import datetime
 import hashlib
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -135,7 +135,7 @@ def _resolve_fields(
     llm: _LlmContext,
 ) -> tuple[dict[str, Any], Path | None, str]:
     """Return (fields, sidecar_src, doc_date_source) via sidecar -> DB -> LLM."""
-    fields: dict[str, Any] = {k: None for k in _FIELDS}
+    fields: dict[str, Any] = dict.fromkeys(_FIELDS)
     if doc_type_override is not None:
         fields["doc_type"] = doc_type_override
     sidecar_src: Path | None = None
