@@ -6,16 +6,13 @@ ids happens in esdc.knowledge.resolver.
 
 from __future__ import annotations
 
-import logging
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from esdc.corpus.metadata import parse_llm_json
 from esdc.knowledge.guideline import Guideline, build_extraction_prompt
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,13 +88,27 @@ def extract_knowledge(
 ) -> ExtractionResult:
     prompt = build_extraction_prompt(guideline, doc_meta, markdown)
     raw = llm_caller(prompt)
-    parsed = parse_llm_json(raw)
-    # If parse_llm_json returned empty dict and raw had no JSON pattern,
-    # the response was unparseable
-    if not parsed and not re.search(r"\{.*\}", raw, re.DOTALL):
+
+    # Validate that the response contains valid JSON before parsing.
+    # This ensures we raise ValueError for both:
+    # 1. No {..} object found at all
+    # 2. {..} found but fails to parse (unquoted keys, trailing commas, etc.)
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
         raise ValueError(f"LLM response contained no valid JSON: {raw[:100]}")
+
+    try:
+        parsed_dict = json.loads(match.group(0))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"LLM response contained invalid JSON: {raw[:100]}") from e
+
+    if not isinstance(parsed_dict, dict):
+        raise ValueError(f"LLM response JSON is not an object: {raw[:100]}")
+
     return ExtractionResult(
-        entities=_clean_entities(parsed.get("entities"), set(guideline.entity_types)),
-        claims=_clean_claims(parsed.get("claims"), set(guideline.claim_types)),
-        unknown_types=_clean_unknowns(parsed.get("unknown_types")),
+        entities=_clean_entities(
+            parsed_dict.get("entities"), set(guideline.entity_types)
+        ),
+        claims=_clean_claims(parsed_dict.get("claims"), set(guideline.claim_types)),
+        unknown_types=_clean_unknowns(parsed_dict.get("unknown_types")),
     )

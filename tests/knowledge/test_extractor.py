@@ -69,3 +69,14 @@ def test_unparseable_response_raises_value_error():
         extract_knowledge(
             "# Doc", META, load_guideline(), lambda p: "I cannot help with that"
         )
+
+
+def test_braces_but_invalid_json_raises_value_error():
+    """Regression: malformed JSON with braces present must raise, not silently parse as {}."""
+    with pytest.raises(ValueError):
+        extract_knowledge(
+            "# Doc",
+            META,
+            load_guideline(),
+            lambda p: "Result: {entities: [], claims: []}",  # unquoted keys
+        )
