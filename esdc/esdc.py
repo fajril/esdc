@@ -2478,6 +2478,96 @@ def commit(
     _print_corpus_report(report)
 
 
+@corpus_app.command()
+def learn(
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Reprocess all docs and rebuild dossiers."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report what would be processed; no writes."),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Process at most N documents (smoke runs)."),
+    ] = None,
+) -> None:
+    """Reconstruct the knowledge graph from the committed corpus (eager)."""
+    from esdc.knowledge import learn as learn_mod
+
+    try:
+        report = learn_mod.run_learn(force=force, dry_run=dry_run, limit=limit)
+    except (ValueError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+
+    if report.dry_run:
+        rich.print(
+            f"[yellow]Dry run:[/yellow] would process "
+            f"{report.docs_processed}/{report.docs_total} documents "
+            f"({report.docs_skipped} up to date)."
+        )
+        return
+
+    rich.print("[bold]Corpus learn complete[/bold]")
+    rich.print(
+        f"  Documents: {report.docs_processed} processed, "
+        f"{report.docs_skipped} skipped, {report.docs_failed} failed "
+        f"(of {report.docs_total})"
+    )
+    rich.print(
+        f"  Edges: {report.edges_written} written "
+        f"({report.pod_document_added} pod_document links promoted)"
+    )
+    rich.print(
+        f"  Claims: {report.claims_written} "
+        f"| unresolved mentions: {report.unresolved_mentions}"
+    )
+    rich.print(
+        f"  Dossiers: {report.dossiers_built} built, "
+        f"{report.dossiers_skipped} up to date"
+    )
+    if report.proposals_pending:
+        rich.print(
+            f"[yellow]  {report.proposals_pending} schema proposal(s) pending "
+            f"— review with: esdc corpus proposals[/yellow]"
+        )
+    if report.docs_failed:
+        rich.print(
+            f"[red]  {report.docs_failed} document(s) failed — "
+            f"rerun 'esdc corpus learn' to retry.[/red]"
+        )
+
+
+@corpus_app.command()
+def proposals() -> None:
+    """List pending schema proposals discovered by `esdc corpus learn`."""
+    from esdc.knowledge.store import KnowledgeStore
+    from esdc.pod_registry.store import get_sqlite_connection
+
+    conn = get_sqlite_connection()
+    try:
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        props = store.pending_proposals()
+    finally:
+        conn.close()
+    if not props:
+        rich.print("No pending proposals.")
+        return
+    for p in props:
+        rich.print(
+            f"[cyan]{p['proposal_type']}[/cyan] {p['name']} "
+            f"— seen in {p['evidence_count']} doc(s): "
+            f"{', '.join(p['sample_doc_ids'][:5])}"
+        )
+    rich.print(
+        "\nTo adopt a proposal, add it to esdc/knowledge/guideline.yaml "
+        "and rerun: esdc corpus learn"
+    )
+
+
 @corpus_app.command(name="status")
 def corpus_status(
     paths: Annotated[
