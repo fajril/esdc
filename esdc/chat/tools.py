@@ -2341,8 +2341,10 @@ def explore_entity(
                     ),
                 }
             )
-        hits = graph.find(entity, top_k=5)
+        hits = graph.find(entity, top_k=5, entity_type=entity_type)
         if entity_type:
+            # Harmless safety net: find() already restricts to entity_type
+            # when given, so this should be a no-op in practice.
             hits = [h for h in hits if h["entity_type"] == entity_type]
         if not hits:
             return json.dumps(

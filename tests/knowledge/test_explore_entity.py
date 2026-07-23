@@ -89,6 +89,50 @@ def test_not_found(mock_graph):
     assert out["status"] == "not_found"
 
 
+def test_project_entity_type_resolves_via_real_graph(sqlite_conn, duck_conn, tmp_path):
+    """entity_type='project' must resolve through the real find() filter.
+
+    Regression coverage for Issue #1: explore_entity previously always
+    returned not_found for entity_type='project' because the instance
+    graph had no Project FTS index. The other explore_entity tests in this
+    file mock the graph entirely, so they cannot catch that -- this test
+    exercises a real InstanceGraphManager (built from the same
+    sqlite/duckdb fixtures as tests/knowledge/test_instance_graph.py) and
+    only mocks the dossier lookup (`_get_knowledge_context`), which is
+    unrelated to the bug being fixed here.
+    """
+    from esdc.chat.domain_knowledge.instance_graph import InstanceGraphManager
+    from esdc.knowledge.linker import run_deterministic_linking
+    from esdc.knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(sqlite_conn)
+    store.ensure_tables()
+    run_deterministic_linking(sqlite_conn, duck_conn, store)
+    sqlite_conn.commit()
+    # duck_conn holds the only read-write connection to the tmp duckdb
+    # file; InstanceGraphManager opens its own read-only connection to
+    # the same file, which duckdb refuses while a different-config
+    # connection is still open (see test_instance_graph.py for the same
+    # pattern).
+    duck_conn.close()
+
+    real_graph = InstanceGraphManager(
+        sqlite_path=tmp_path / "esdc.sqlite",
+        duckdb_path=tmp_path / "esdc.duckdb",
+    )
+
+    with (
+        patch("esdc.chat.tools._get_instance_graph", return_value=real_graph),
+        patch("esdc.chat.tools._get_knowledge_context", return_value=(None, [])),
+    ):
+        out = _invoke("Duri Steamflood", entity_type="project")
+
+    assert out["status"] == "success"
+    assert out["entity"]["entity_type"] == "project"
+    assert out["entity"]["entity_id"] == "PRJ-001"
+    assert out["entity"]["name"] == "Duri Steamflood"
+
+
 def test_tool_registered_in_agent_defaults():
     import esdc.chat.agent as agent_mod
 

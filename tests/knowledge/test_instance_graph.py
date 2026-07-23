@@ -116,3 +116,101 @@ def test_cypher_query_passthrough(learned_sqlite: Path):
         "RETURN d.doc_id, p.pod_id ORDER BY d.doc_id"
     )
     assert len(rows) >= 2
+
+
+def test_find_resolves_project_with_real_name(
+    learned_sqlite: Path, duck_conn, tmp_path: Path
+):
+    """Project FTS lookup must exist and surface the real duckdb name.
+
+    Without a Project FTS index, find() never returns project hits at all
+    -- this is the Issue #1 bug (entity_type='project' always not_found).
+
+    duck_conn is closed before constructing the graph: it holds the only
+    read-write connection to the tmp duckdb file for this test, and
+    InstanceGraphManager opens its own read-only connection to the same
+    file (deliberately, to avoid contending with a live portal on a real
+    DB) -- duckdb refuses a second connection with a different
+    configuration while the first is still open.
+    """
+    duck_conn.close()
+    mgr = InstanceGraphManager(
+        sqlite_path=learned_sqlite, duckdb_path=tmp_path / "esdc.duckdb"
+    )
+    hits = mgr.find("Duri Steamflood")
+    assert hits
+    projects = [h for h in hits if h["entity_type"] == "project"]
+    assert projects, (
+        f"expected a project hit, got types={[h['entity_type'] for h in hits]}"
+    )
+    top = projects[0]
+    assert top["entity_id"] == "PRJ-001"
+    assert top["name"] == "Duri Steamflood"
+
+
+def test_project_neighbor_reports_real_name(
+    learned_sqlite: Path, duck_conn, tmp_path: Path
+):
+    """A Project reached as a POD neighbor must show its real name.
+
+    Today Project nodes are created with project_name = project_id (the
+    graph is built only from sqlite kg_edge, which has no names) -- this
+    asserts the duckdb-backed real name instead of the opaque "PRJ-001".
+    """
+    duck_conn.close()
+    mgr = InstanceGraphManager(
+        sqlite_path=learned_sqlite, duckdb_path=tmp_path / "esdc.duckdb"
+    )
+    n = mgr.neighbors("pod", "PL-2019-0001-2-2-0")
+    has_project = n.get("HAS_PROJECT", [])
+    assert any(
+        item["entity_id"] == "PRJ-001" and item["name"] == "Duri Steamflood"
+        for item in has_project
+    ), f"expected real project name among neighbors, got {has_project}"
+
+
+def test_find_entity_type_filter_avoids_cross_type_truncation(
+    learned_sqlite: Path, duck_conn, tmp_path: Path
+):
+    """entity_type filter must apply BEFORE top_k truncation, not after.
+
+    "Duri Steamflood" matches both POD entities ("POD I Duri", "POD I Duri
+    Revisi 1" via the "Duri" token) and the Project "Duri Steamflood". POD
+    outranks Project under _TYPE_PRIORITY, so with top_k=1 a plain find()
+    surfaces a POD, not the project -- demonstrating that a caller asking
+    specifically for entity_type="project" would otherwise lose the match
+    to higher-priority cross-type hits before ever getting to filter.
+    """
+    duck_conn.close()
+    mgr = InstanceGraphManager(
+        sqlite_path=learned_sqlite, duckdb_path=tmp_path / "esdc.duckdb"
+    )
+    plain = mgr.find("Duri Steamflood", top_k=1)
+    assert plain
+    assert plain[0]["entity_type"] == "pod", (
+        "test setup assumption broken: expected POD to outrank Project in "
+        f"the unfiltered top_k=1 result, got {plain}"
+    )
+
+    filtered = mgr.find("Duri Steamflood", top_k=1, entity_type="project")
+    assert filtered
+    assert all(h["entity_type"] == "project" for h in filtered)
+    assert filtered[0]["entity_id"] == "PRJ-001"
+    assert filtered[0]["name"] == "Duri Steamflood"
+
+
+def test_project_names_degrade_gracefully_without_duckdb(learned_sqlite: Path):
+    """A missing/unreadable duckdb must not break graph availability.
+
+    Project nodes must fall back to project_id as name -- exactly today's
+    behavior -- rather than the graph failing to build.
+    """
+    mgr = InstanceGraphManager(
+        sqlite_path=learned_sqlite,
+        duckdb_path=Path("/nonexistent/path/esdc.duckdb"),
+    )
+    assert mgr.is_available() is True
+    hits = mgr.find("PRJ-001", entity_type="project")
+    assert hits
+    assert hits[0]["entity_id"] == "PRJ-001"
+    assert hits[0]["name"] == "PRJ-001"

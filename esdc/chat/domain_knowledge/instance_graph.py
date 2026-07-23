@@ -16,6 +16,8 @@ from typing import Any
 
 import real_ladybug as lb
 
+from esdc.configs import Config
+from esdc.dbmanager import get_duckdb_connection
 from esdc.pod_registry.store import get_esdc_sqlite_path
 
 logger = logging.getLogger(__name__)
@@ -83,6 +85,7 @@ _NODE_NAME_COL = {
 # (label, fts index name, indexed properties)
 _FTS_INDEXES = [
     ("POD", "pod_fts", ["pod_name"]),
+    ("Project", "project_fts", ["project_name"]),
     ("Field", "field_fts", ["name"]),
     ("WorkingArea", "wk_fts", ["name"]),
     ("Document", "document_fts", ["subject"]),
@@ -125,7 +128,11 @@ class InstanceGraphManager:
     _instance: InstanceGraphManager | None = None
     _class_lock: threading.Lock = threading.Lock()
 
-    def __new__(cls, sqlite_path: Path | None = None) -> InstanceGraphManager:
+    def __new__(
+        cls,
+        sqlite_path: Path | None = None,
+        duckdb_path: Path | None = None,
+    ) -> InstanceGraphManager:
         if sqlite_path is not None:
             return super().__new__(cls)
         with cls._class_lock:
@@ -133,7 +140,11 @@ class InstanceGraphManager:
                 cls._instance = super().__new__(cls)
             return cls._instance
 
-    def __init__(self, sqlite_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        sqlite_path: Path | None = None,
+        duckdb_path: Path | None = None,
+    ) -> None:
         # Narrow benign race: two no-arg constructions could both pass this
         # check before either sets `_ctor_done` (this runs outside
         # `_class_lock`, unlike the singleton assignment in __new__). At
@@ -143,6 +154,9 @@ class InstanceGraphManager:
         if sqlite_path is None and getattr(self, "_ctor_done", False):
             return
         self._sqlite_path = sqlite_path or get_esdc_sqlite_path()
+        self._duckdb_path = (
+            duckdb_path if duckdb_path is not None else Config.get_db_file()
+        )
         self._build_lock = threading.Lock()
         self._built = False
         self._available = False
@@ -196,11 +210,13 @@ class InstanceGraphManager:
                 self._available = False
                 return
 
+            project_names = self._load_project_names()
+
             self._db = lb.Database(":memory:")
             self._conn = lb.Connection(self._db)
             self._load_extensions()
             self._create_schema()
-            self._load_nodes(conn)
+            self._load_nodes(conn, project_names)
             self._load_edges(conn)
             self._create_fts_indexes()
             self._available = True
@@ -210,6 +226,45 @@ class InstanceGraphManager:
             self._available = False
         finally:
             conn.close()
+
+    def _load_project_names(self) -> dict[str, str]:
+        """Look up project_id -> project_name from duckdb project_resources.
+
+        The instance graph is built from sqlite kg_edge, which only has
+        project_ids; real names live in duckdb. This is a best-effort
+        enrichment: a missing/locked duckdb file must not break graph
+        availability, so any failure here degrades to an empty map (Project
+        nodes then fall back to project_id as their name, same as before
+        this method existed).
+        """
+        if self._duckdb_path is None or not Path(self._duckdb_path).exists():
+            return {}
+        conn = None
+        try:
+            conn = get_duckdb_connection(self._duckdb_path, read_only=True)
+            rows = conn.execute(
+                """
+                SELECT project_id, project_name FROM (
+                    SELECT project_id, project_name,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY project_id ORDER BY report_year DESC
+                           ) AS rn
+                    FROM project_resources
+                ) WHERE rn = 1
+                """
+            ).fetchall()
+            return {str(pid): name for pid, name in rows if name}
+        except Exception as e:
+            logger.warning(
+                "[InstanceGraph] project_names_unavailable | path=%s error=%s",
+                self._duckdb_path,
+                e,
+            )
+            return {}
+        finally:
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    conn.close()
 
     def _load_extensions(self) -> None:
         assert self._conn is not None
@@ -225,7 +280,9 @@ class InstanceGraphManager:
                 if "already exists" not in str(e).lower():
                     logger.warning("[InstanceGraph] schema_error | %s", e)
 
-    def _load_nodes(self, conn: sqlite3.Connection) -> None:
+    def _load_nodes(
+        self, conn: sqlite3.Connection, project_names: dict[str, str]
+    ) -> None:
         assert self._conn is not None
 
         for row in conn.execute(
@@ -277,9 +334,10 @@ class InstanceGraphManager:
             try:
                 esc_id = _cypher_escape(entity_id)
                 if entity_type == "project":
+                    esc_name = _cypher_escape(project_names.get(entity_id, entity_id))
                     self._conn.execute(
                         f"CREATE (:Project {{project_id: '{esc_id}', "
-                        f"project_name: '{esc_id}'}})"
+                        f"project_name: '{esc_name}'}})"
                     )
                 elif entity_type == "field":
                     self._conn.execute(f"CREATE (:Field {{name: '{esc_id}'}})")
@@ -367,13 +425,26 @@ class InstanceGraphManager:
         self._ensure_built()
         return self._available
 
-    def find(self, text: str, top_k: int = 5) -> list[dict[str, Any]]:
+    def find(
+        self,
+        text: str,
+        top_k: int = 5,
+        entity_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         self._ensure_built()
         if not self._available:
             return []
         escaped = text.replace("'", "\\'")
         all_results: list[dict[str, Any]] = []
-        for table, idx_name, _props in _FTS_INDEXES:
+        indexes = _FTS_INDEXES
+        if entity_type is not None:
+            # Restrict to the requested type's index BEFORE the top_k
+            # truncation below, so a valid match of that type is never
+            # lost to higher-priority cross-type hits filling up top_k
+            # first (see explore_entity's entity_type filter).
+            target_label = _TYPE_TO_LABEL.get(entity_type)
+            indexes = [idx for idx in _FTS_INDEXES if idx[0] == target_label]
+        for table, idx_name, _props in indexes:
             key_col = _NODE_KEY_COL[table]
             name_col = _NODE_NAME_COL[table]
             cypher = (
