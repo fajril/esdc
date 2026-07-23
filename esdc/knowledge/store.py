@@ -66,6 +66,7 @@ RELATIONS = (
     "ABOUT_POD",
     "ABOUT_FIELD",
     "ABOUT_WK",
+    "ABOUT_PROJECT",
     "HAS_PROJECT",
     "REVISES",
     "IN_FIELD",
