@@ -7,22 +7,18 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _clear_tool_cache(tmp_path_factory, monkeypatch):
-    """Isolate the tool results cache from the real ~/.esdc/cache.
+def _clear_tool_cache(monkeypatch):
+    """Reset the module-level tool results cache handle between tests.
 
-    Redirects Config.get_cache_dir() at a tmp directory so that both
-    invalidate_tool_cache()'s rmtree/`.last_invalidated` write and
-    explore_entity's cache.set(...) never touch the developer's real
-    ~/.esdc/cache.
+    Config.get_cache_dir() isolation from the real ~/.esdc/cache is handled
+    globally by the `_isolate_tool_cache_dir` autouse fixture in
+    tests/knowledge/conftest.py. This fixture only drops any
+    already-initialized module-level cache handle (which may point at a
+    directory from a prior test) so it gets recreated against the
+    currently-patched tmp dir, then clears it before/after each test.
     """
     import esdc.chat.tools as tools_mod
-    from esdc.configs import Config
 
-    cache_dir = tmp_path_factory.mktemp("tool-cache")
-    monkeypatch.setattr(Config, "get_cache_dir", classmethod(lambda cls: cache_dir))
-    # Drop any already-initialized module-level cache handle (which may
-    # point at a real directory from a prior, unpatched test) so it gets
-    # recreated against the patched tmp dir.
     monkeypatch.setattr(tools_mod, "_tool_cache", None)
 
     from esdc.chat.tools import invalidate_tool_cache

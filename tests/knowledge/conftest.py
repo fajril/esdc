@@ -23,6 +23,24 @@ def _isolate_user_guideline(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(Config, "get_db_dir", classmethod(lambda cls: empty))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_tool_cache_dir(tmp_path_factory, monkeypatch):
+    """Point Config.get_cache_dir at a tmp dir for every knowledge test.
+
+    Without this, code that resolves Config.get_cache_dir() at call time
+    (e.g. invalidate_tool_cache(), which shutil.rmtree()s the cache dir and
+    rewrites .last_invalidated) would operate on the developer's real
+    ~/.esdc/cache. This fixture must stay generic to tests/knowledge/ as a
+    whole -- it is the single source of truth for cache-dir isolation, so
+    individual test modules (test_learn.py, test_explore_entity.py, etc.)
+    do not need to patch Config.get_cache_dir themselves.
+    """
+    from esdc.configs import Config
+
+    cache_dir = tmp_path_factory.mktemp("tool-cache")
+    monkeypatch.setattr(Config, "get_cache_dir", classmethod(lambda cls: cache_dir))
+
+
 @pytest.fixture
 def sqlite_conn(tmp_path: Path) -> sqlite3.Connection:
     """Registry + minimal documents table, seeded with a tiny POD world."""
