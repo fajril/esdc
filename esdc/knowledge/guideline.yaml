@@ -22,7 +22,7 @@ claim_types:
     onstream dates, work programs. Predicate examples: well_count,
     onstream_date, facility.
   decision: >
-    approvals, rejections, revision requests, follow-up actions from
+    Approvals, rejections, revision requests, follow-up actions from
     letters or MoM. Predicate examples: approval, follow_up, revision_request.
   issue: >
     Problems and constraints reported: subsurface, facility, land, permit,

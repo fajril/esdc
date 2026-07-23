@@ -54,7 +54,14 @@ def test_prompt_contains_types_metadata_and_truncated_markdown():
     prompt = build_extraction_prompt(g, meta, "A" * 50000, max_chars=1000)
     assert "economics" in prompt
     assert "MoM Monitoring POD I Duri" in prompt
-    assert prompt.count("A") <= 1000
+    # Verify markdown body was truncated to max_chars (1000).
+    # Extract body between "Document markdown:\n---\n" and "\n---"
+    body_start = prompt.find("Document markdown:\n---\n") + len(
+        "Document markdown:\n---\n"
+    )
+    body_end = prompt.rfind("\n---")
+    truncated_body = prompt[body_start:body_end]
+    assert truncated_body == "A" * 1000
     # doc_type hint for mom is included
     assert "action items" in prompt
     assert "JSON" in prompt
