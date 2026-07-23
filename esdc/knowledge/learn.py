@@ -1,0 +1,229 @@
+"""`esdc corpus learn` orchestrator: eager knowledge reconstruction.
+
+Phases:
+1. Deterministic linking (registries, letter numbers, metadata) — no LLM.
+2. Guideline-driven LLM extraction per new/changed document.
+3. Registry-backed resolution of extracted mentions into edges/claims.
+4. Dossier synthesis per POD, cached by source hash.
+
+Incremental: per-doc learn_state hash = sha256(file_hash + guideline hash),
+so both document changes and guideline edits retrigger exactly the right
+work. Everything is precomputed here; chat serving never calls an LLM
+for knowledge.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import sqlite3
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+import duckdb
+
+from esdc.knowledge.dossier import ensure_dossier_table, generate_pod_dossier
+from esdc.knowledge.extractor import extract_knowledge
+from esdc.knowledge.guideline import load_guideline
+from esdc.knowledge.linker import run_deterministic_linking
+from esdc.knowledge.resolver import resolve_extraction
+from esdc.knowledge.store import KnowledgeStore
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LearnReport:
+    docs_total: int = 0
+    docs_processed: int = 0
+    docs_skipped: int = 0
+    docs_failed: int = 0
+    edges_written: int = 0
+    pod_document_added: int = 0
+    claims_written: int = 0
+    unresolved_mentions: int = 0
+    dossiers_built: int = 0
+    dossiers_skipped: int = 0
+    proposals_pending: int = 0
+    dry_run: bool = False
+
+
+def _doc_source_hash(file_hash: str, guideline_hash: str) -> str:
+    return hashlib.sha256(f"{file_hash}:{guideline_hash}".encode()).hexdigest()
+
+
+def _open_default_llm() -> tuple[Callable[[str], str], str, str]:
+    from esdc.configs import Config
+    from esdc.providers import create_llm_from_config
+
+    provider_config = Config.get_provider_config()
+    if not provider_config:
+        raise ValueError("No provider configured. Run 'esdc configs' first.")
+    llm = create_llm_from_config(provider_config)
+    provider = str(
+        provider_config.get("name") or provider_config.get("provider_type") or ""
+    )
+    model = str(provider_config.get("model") or "")
+    return (lambda p: str(llm.invoke(p).content)), provider, model
+
+
+def run_learn(
+    *,
+    force: bool = False,
+    dry_run: bool = False,
+    limit: int | None = None,
+    sqlite_conn: sqlite3.Connection | None = None,
+    duck_conn: duckdb.DuckDBPyConnection | None = None,
+    llm_caller: Callable[[str], str] | None = None,
+    provider: str = "",
+    model: str = "",
+    progress: bool = True,
+) -> LearnReport:
+    close_sqlite = close_duck = False
+    if sqlite_conn is None:
+        from esdc.pod_registry.store import get_sqlite_connection
+
+        sqlite_conn = get_sqlite_connection()
+        close_sqlite = True
+    if duck_conn is None:
+        from esdc.configs import Config
+        from esdc.dbmanager import get_duckdb_connection
+
+        duck_conn = get_duckdb_connection(Config.get_db_file(), read_only=False)
+        close_duck = True
+
+    report = LearnReport(dry_run=dry_run)
+    try:
+        guideline = load_guideline()
+        store = KnowledgeStore(sqlite_conn)
+        store.ensure_tables()
+
+        docs = sqlite_conn.execute(
+            "SELECT doc_id, file_hash, doc_type, doc_date, subject, markdown "
+            "FROM documents ORDER BY doc_date, doc_id"
+        ).fetchall()
+        report.docs_total = len(docs)
+
+        pending: list[sqlite3.Row] = []
+        for doc in docs:
+            src_hash = _doc_source_hash(doc["file_hash"], guideline.content_hash)
+            if force or store.needs_learn(doc["doc_id"], src_hash):
+                pending.append(doc)
+            else:
+                report.docs_skipped += 1
+        if limit is not None:
+            pending = pending[:limit]
+
+        if dry_run:
+            report.docs_processed = len(pending)
+            return report
+
+        # Phase 1: deterministic
+        link_report = run_deterministic_linking(sqlite_conn, duck_conn, store)
+        report.edges_written += link_report.edges_written
+        report.pod_document_added = link_report.pod_document_added
+
+        if llm_caller is None:
+            llm_caller, provider, model = _open_default_llm()
+
+        # Phases 2+3: extraction + resolution
+        iterator: Any = pending
+        prog = None
+        if progress and pending:
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                TextColumn,
+                TimeElapsedColumn,
+            )
+
+            prog = Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("{task.completed}/{task.total}"),
+                TimeElapsedColumn(),
+            )
+            prog.start()
+            task_id = prog.add_task("Extracting knowledge", total=len(pending))
+
+        for doc in iterator:
+            doc_id = doc["doc_id"]
+            src_hash = _doc_source_hash(doc["file_hash"], guideline.content_hash)
+            try:
+                meta = {
+                    "doc_type": doc["doc_type"],
+                    "doc_date": doc["doc_date"],
+                    "subject": doc["subject"],
+                }
+                extraction = extract_knowledge(
+                    doc["markdown"] or "", meta, guideline, llm_caller
+                )
+                resolution = resolve_extraction(
+                    doc_id, extraction, sqlite_conn, duck_conn
+                )
+                # replace this doc's previous LLM knowledge, keep deterministic
+                # edges (they are re-upserted by phase 1 on every run)
+                store.delete_doc_edges(doc_id)
+                if resolution.edges:
+                    report.edges_written += store.upsert_edges(resolution.edges)
+                report.claims_written += store.replace_claims(doc_id, resolution.claims)
+                report.unresolved_mentions += len(resolution.unresolved)
+                for unknown in extraction.unknown_types:
+                    store.bump_proposal(unknown["kind"], unknown["name"], doc_id)
+                store.mark_learned(doc_id, src_hash)
+                report.docs_processed += 1
+            except Exception as e:  # noqa: BLE001 - one bad doc must not stop learn
+                logger.error("[Learn] doc_failed | doc_id=%s error=%s", doc_id, e)
+                report.docs_failed += 1
+            if prog is not None:
+                prog.advance(task_id)
+        if prog is not None:
+            prog.stop()
+
+        # Deleting doc edges above also removed deterministic doc edges for
+        # processed docs; restore them.
+        link_report = run_deterministic_linking(sqlite_conn, duck_conn, store)
+
+        # Phase 4: dossiers for every POD with at least one document link
+        ensure_dossier_table(duck_conn)
+        pod_ids = [
+            r[0]
+            for r in sqlite_conn.execute(
+                "SELECT DISTINCT dst_id FROM kg_edge "
+                "WHERE rel = 'ABOUT_POD' ORDER BY dst_id"
+            ).fetchall()
+        ]
+        for pod_id in pod_ids:
+            status = generate_pod_dossier(
+                pod_id,
+                sqlite_conn,
+                duck_conn,
+                store,
+                guideline.content_hash,
+                llm_caller,
+                provider=provider,
+                model=model,
+                force=force,
+            )
+            if status == "built":
+                report.dossiers_built += 1
+            else:
+                report.dossiers_skipped += 1
+
+        report.proposals_pending = len(store.pending_proposals())
+        duck_conn.execute("CHECKPOINT")
+
+        try:
+            from esdc.chat.tools import invalidate_tool_cache, reset_sql_cache
+
+            reset_sql_cache()
+            invalidate_tool_cache()
+        except ImportError:
+            pass
+        return report
+    finally:
+        if close_sqlite:
+            sqlite_conn.close()
+        if close_duck:
+            duck_conn.close()
