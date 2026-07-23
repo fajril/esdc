@@ -214,3 +214,30 @@ def test_project_names_degrade_gracefully_without_duckdb(learned_sqlite: Path):
     assert hits
     assert hits[0]["entity_id"] == "PRJ-001"
     assert hits[0]["name"] == "PRJ-001"
+
+
+def test_project_names_degrade_gracefully_on_connection_failure(
+    learned_sqlite: Path, tmp_path: Path, monkeypatch
+):
+    """An existing-but-unreadable duckdb (e.g. a live portal lock) must not.
+
+    break graph availability either -- same graceful-degradation contract
+    as the missing-file case above, but exercising the except-branch of
+    _load_project_names rather than the exists()-check short circuit.
+    """
+    import esdc.chat.domain_knowledge.instance_graph as instance_graph_module
+
+    locked_duckdb = tmp_path / "esdc.duckdb"
+    locked_duckdb.write_bytes(b"not a real duckdb file")
+
+    def _raise(*args, **kwargs):
+        raise OSError("simulated live-portal lock")
+
+    monkeypatch.setattr(instance_graph_module, "get_duckdb_connection", _raise)
+
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite, duckdb_path=locked_duckdb)
+    assert mgr.is_available() is True
+    hits = mgr.find("PRJ-001", entity_type="project")
+    assert hits
+    assert hits[0]["entity_id"] == "PRJ-001"
+    assert hits[0]["name"] == "PRJ-001"

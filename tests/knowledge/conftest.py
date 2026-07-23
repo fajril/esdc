@@ -41,6 +41,30 @@ def _isolate_tool_cache_dir(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(Config, "get_cache_dir", classmethod(lambda cls: cache_dir))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_instance_graph_duckdb(tmp_path_factory, monkeypatch):
+    """Point Config.get_db_file at a tmp path that does NOT exist.
+
+    InstanceGraphManager.__init__ defaults duckdb_path to Config.get_db_file()
+    when the caller omits it (e.g. every pre-existing test in
+    test_instance_graph.py that only passes sqlite_path=..., plus the no-arg
+    singleton InstanceGraphManager() built by test_end_to_end.py). Without
+    this fixture those tests would silently open the developer's real,
+    ~1GB ~/.esdc/esdc.duckdb read-only -- a test-isolation violation.
+    InstanceGraphManager degrades gracefully when the duckdb file is absent
+    (falls back to project_id as the project name, is_available() stays
+    True), so pointing at a path that does not exist is safe and requires no
+    other test changes. This fixture must stay generic to tests/knowledge/ as
+    a whole -- it is the single source of truth for duckdb-path isolation.
+    Explicit duckdb_path=... arguments passed by individual tests still win
+    over this default and are unaffected.
+    """
+    from esdc.configs import Config
+
+    missing = tmp_path_factory.mktemp("no-duckdb") / "esdc.duckdb"
+    monkeypatch.setattr(Config, "get_db_file", classmethod(lambda cls: missing))
+
+
 @pytest.fixture
 def sqlite_conn(tmp_path: Path) -> sqlite3.Connection:
     """Registry + minimal documents table, seeded with a tiny POD world."""
