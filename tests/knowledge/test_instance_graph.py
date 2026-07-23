@@ -44,26 +44,47 @@ def test_find_resolves_pod_by_name(learned_sqlite: Path):
 
 
 def test_find_ranks_entities_over_documents(learned_sqlite: Path):
-    """Type-priority policy decides ranking, not per-table score collapse.
+    """Type-priority ranking must hold even for a non-top same-type hit.
 
-    "Duri" matches both the Field "Duri" and Document subjects containing
-    "Duri" (e.g. "MoM Monitoring POD I Duri"). Entity-resolution policy
-    requires real entity nodes to always outrank Document nodes here,
-    regardless of raw BM25 magnitude on either side.
+    Query choice ("Duri") is deliberate, not arbitrary: the fixture seeds
+    TWO PODs matching it ("POD I Duri", "POD I Duri Revisi 1") plus one
+    Field "Duri" (empirically confirmed via mgr.find("Duri") -- 2 pod hits,
+    1 field hit, 2 document hits). That gives a *non-top* entity hit
+    (the weaker POD) to check against the lower-priority Field hit.
+
+    Under the OLD per-table max-normalized scoring, every table's top hit
+    collapsed to exactly 1.0: POD's top ("POD I Duri") -> 1.0, Field's only
+    hit ("Duri") -> 1.0, but the second/weaker POD hit ("POD I Duri Revisi
+    1") normalized to < 1.0. Sorting by normalized score then put the
+    Field hit (1.0) BETWEEN the two POD hits (1.0, then <1.0) -- i.e. NOT
+    both PODs before Field. The fixed type-priority-then-raw-score ranking
+    keeps all pod-priority (0) hits ahead of field-priority (2) hits
+    regardless of BM25 magnitude, so both PODs must precede Field.
     """
     mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
     hits = mgr.find("Duri", top_k=10)
     types = [h["entity_type"] for h in hits]
+    assert types.count("pod") >= 2
     assert "field" in types
     assert "document" in types
-    assert types.index("field") < types.index("document")
+    pod_positions = [i for i, t in enumerate(types) if t == "pod"]
+    field_position = types.index("field")
+    assert max(pod_positions) < field_position, (
+        f"expected both POD hits before the Field hit, got order={types}"
+    )
+    assert field_position < types.index("document")
 
 
 def test_find_orders_same_type_by_raw_score(learned_sqlite: Path):
-    """Within one entity type, ties are broken by raw score.
+    """Within one entity type, ties are broken by RAW (uncollapsed) score.
 
     Raw BM25 is comparable within the same FTS index, so this should not
-    fall back to insertion order.
+    fall back to insertion order -- and it should not be per-table
+    max-normalized either. The OLD implementation forced every table's top
+    hit to exactly 1.0 before sorting; asserting the top score here is NOT
+    1.0 (plus that the two scores are genuinely distinct raw magnitudes,
+    not just a normalized order) fails under that old behavior and passes
+    under the fixed raw-score implementation.
     """
     mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
     hits = mgr.find("POD Duri", top_k=10)
@@ -71,6 +92,8 @@ def test_find_orders_same_type_by_raw_score(learned_sqlite: Path):
     assert len(pod_hits) >= 2
     scores = [h["score"] for h in pod_hits]
     assert scores == sorted(scores, reverse=True)
+    assert scores[0] != 1.0
+    assert scores[0] > scores[1]
 
 
 def test_neighbors_groups_by_relation(learned_sqlite: Path):
