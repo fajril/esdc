@@ -396,6 +396,45 @@ LLM/OCR inference with the filename passed as a hint. `--doc-type` overrides
 the detected type. Dry-run is the default; pass `--yes` to rename on disk.
 Files whose date/type/title cannot be resolved are skipped, not renamed.
 
+### Learn the knowledge graph
+
+```bash
+esdc corpus learn --dry-run          # report what would be processed
+esdc corpus learn                    # process every new/changed document
+esdc corpus learn --limit 3          # process at most N documents (smoke runs)
+esdc corpus learn --force            # reprocess every document and rebuild all dossiers
+esdc corpus learn --init-guideline   # draft ~/.esdc/guideline.yaml from the corpus, then exit
+esdc corpus proposals                # list schema proposals discovered along the way
+```
+
+`esdc corpus learn` reconstructs a knowledge graph over the committed corpus,
+eagerly, so chat never needs an LLM to serve learned knowledge. Four phases,
+incremental per document (a per-doc hash of file content + guideline content
+decides whether it needs relearning):
+
+1. **Deterministic linking** — registry-backed edges (letter-number matches,
+   `suggested_pod_ids`, field/WK/project metadata) with no LLM; exact
+   letter-number matches auto-promote `pod_document` links.
+2. **Guideline-driven extraction** — an LLM reads each new/changed document
+   against `~/.esdc/guideline.yaml` (falling back to the packaged default)
+   and proposes entities, claims, and any types missing from the guideline.
+3. **Registry-backed resolution** — extracted mentions are resolved to
+   canonical POD/project/field/WK entities; unresolved mentions are
+   discarded, not guessed at.
+4. **Dossier synthesis** — one Markdown case file per POD with at least one
+   linked document, cached by source hash so unaffected PODs are skipped on
+   rerun.
+
+Types the LLM proposes that aren't in the guideline yet (new claim types,
+entity types, etc.) are queued as schema proposals rather than silently
+accepted — review them with `esdc corpus proposals` and add accepted ones to
+`~/.esdc/guideline.yaml` by hand.
+
+In chat, the `explore_entity` tool traverses the resulting graph (a
+disposable in-memory LadybugDB instance graph rebuilt from `esdc.sqlite`) to
+answer broad questions about one POD/field/project/WK — its dossier, related
+documents/projects/revisions, and extracted claims.
+
 ### Remote Ollama
 
 `OLLAMA_HOST` is honored for OCR, so extraction can run against a remote Ollama server (e.g. a GPU host) instead of localhost:

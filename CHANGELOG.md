@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New iris chat tools `search_documents` and `read_document` for querying the corpus from chat; tool descriptions carry the schema glossary and hierarchy
   - Configurable via `corpus.*` in `~/.esdc/config.yaml` (chunk size/overlap, OCR model, DPI, context window, native-text threshold, `metadata_model`/`cleanup_model` incl. `main` provider routing, `ollama_host` for remote OCR/embedding)
 - **`esdc corpus rename`** — rename source files and their sidecars to `DOC_TYPE - YYYY.MM.DD - title.<ext>`, resolving fields from the sidecar, the committed corpus DB, or LLM/OCR inference; dry-run by default, `--yes` to apply, `--doc-type` to override
+- **`esdc corpus learn`** — eager knowledge-graph reconstruction over the committed corpus: deterministic registry edges (letter-number matches now auto-promote `pod_document` links), guideline-driven LLM claim extraction (`~/.esdc/guideline.yaml`, falling back to the packaged default; `--init-guideline` drafts one from the corpus), registry-backed entity resolution, per-POD dossiers cached by source hash, and schema proposals (`esdc corpus proposals`)
+- **Chat tool `explore_entity`** — traverses the learned knowledge graph (LadybugDB instance graph) and returns the entity's dossier, related documents/projects/revisions, and extracted claims
 - **Auto-reindex after `esdc fetch`** — FTS and B-tree indexes are rebuilt automatically after data loading, ensuring ILIKE queries return correct results for newly-fetched data
   - Default behavior: reindex is ON after every fetch (both full-replace and per-year append modes)
   - Use `--no-reindex` flag on `esdc fetch` to skip reindexing if desired
