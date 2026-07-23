@@ -2258,11 +2258,15 @@ def _get_knowledge_context(
     from esdc.pod_registry.store import get_sqlite_connection
 
     dossier = None
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         dossier = get_dossier(conn, entity_type, entity_id)
     except Exception as e:  # table may not exist before first learn
         logger.debug("[ExploreEntity] no dossier | %s", e)
+    finally:
+        if conn:
+            conn.close()
 
     claims: list[dict[str, Any]] = []
     sconn = get_sqlite_connection()
