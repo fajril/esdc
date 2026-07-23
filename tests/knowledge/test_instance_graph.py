@@ -43,6 +43,36 @@ def test_find_resolves_pod_by_name(learned_sqlite: Path):
     assert top["entity_id"] in ("PL-2019-0001-2-2-0", "PL-2022-0002-2-2-1")
 
 
+def test_find_ranks_entities_over_documents(learned_sqlite: Path):
+    """Type-priority policy decides ranking, not per-table score collapse.
+
+    "Duri" matches both the Field "Duri" and Document subjects containing
+    "Duri" (e.g. "MoM Monitoring POD I Duri"). Entity-resolution policy
+    requires real entity nodes to always outrank Document nodes here,
+    regardless of raw BM25 magnitude on either side.
+    """
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    hits = mgr.find("Duri", top_k=10)
+    types = [h["entity_type"] for h in hits]
+    assert "field" in types
+    assert "document" in types
+    assert types.index("field") < types.index("document")
+
+
+def test_find_orders_same_type_by_raw_score(learned_sqlite: Path):
+    """Within one entity type, ties are broken by raw score.
+
+    Raw BM25 is comparable within the same FTS index, so this should not
+    fall back to insertion order.
+    """
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    hits = mgr.find("POD Duri", top_k=10)
+    pod_hits = [h for h in hits if h["entity_type"] == "pod"]
+    assert len(pod_hits) >= 2
+    scores = [h["score"] for h in pod_hits]
+    assert scores == sorted(scores, reverse=True)
+
+
 def test_neighbors_groups_by_relation(learned_sqlite: Path):
     mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
     n = mgr.neighbors("pod", "PL-2019-0001-2-2-0")

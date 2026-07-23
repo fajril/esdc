@@ -7,6 +7,7 @@ for Cypher traversal and BM25 entity lookup in chat tools.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 import threading
@@ -87,6 +88,23 @@ _FTS_INDEXES = [
     ("Document", "document_fts", ["subject"]),
 ]
 
+# Entity-resolution ranking policy for find(): LadybugDB computes BM25 stats
+# (idf, avg field length) independently per FTS index, so raw scores from
+# separate single-column indexes are NOT comparable across tables -- only
+# within the same table/index. `find()` is used to resolve a search string to
+# an entity node for graph traversal, so real entity nodes (pod/project/
+# field/working_area) should always be preferred over Document nodes. Lower
+# number = higher priority; this is the PRIMARY sort key. Raw (uncollapsed)
+# score is only used as a tie-breaker within the same type/table, where it
+# is directly comparable.
+_TYPE_PRIORITY: dict[str, int] = {
+    "pod": 0,
+    "project": 1,
+    "field": 2,
+    "working_area": 3,
+    "document": 4,
+}
+
 
 def _cypher_escape(s: str) -> str:
     s = s.replace("\\", "\\\\")
@@ -116,6 +134,12 @@ class InstanceGraphManager:
             return cls._instance
 
     def __init__(self, sqlite_path: Path | None = None) -> None:
+        # Narrow benign race: two no-arg constructions could both pass this
+        # check before either sets `_ctor_done` (this runs outside
+        # `_class_lock`, unlike the singleton assignment in __new__). At
+        # worst that re-initializes _build_lock/_built/etc a second time on
+        # the same shared instance; _build() itself is idempotent and
+        # guarded by _build_lock, so a stray re-init is safe, not corrupt.
         if sqlite_path is None and getattr(self, "_ctor_done", False):
             return
         self._sqlite_path = sqlite_path or get_esdc_sqlite_path()
@@ -135,8 +159,12 @@ class InstanceGraphManager:
 
     def close(self) -> None:
         if self._conn is not None:
+            with contextlib.suppress(Exception):
+                self._conn.close()
             self._conn = None
         if self._db is not None:
+            with contextlib.suppress(Exception):
+                self._db.close()
             self._db = None
         self._built = False
         self._available = False
@@ -361,23 +389,22 @@ class InstanceGraphManager:
                 continue
             if not rows:
                 continue
-            # BM25 stats (idf, avg field length) are computed per FTS index,
-            # so raw scores from separate single-column indexes are not on
-            # a comparable scale (e.g. a term that is common within one
-            # table's small corpus but rare in another's). Normalize each
-            # table's batch against its own top score before merging so
-            # relative relevance within a table is preserved across tables.
-            max_score = max(row[2] for row in rows) or 1.0
             for row in rows:
                 all_results.append(
                     {
                         "entity_type": _LABEL_TO_TYPE[table],
                         "entity_id": row[0],
                         "name": row[1],
-                        "score": row[2] / max_score,
+                        "score": row[2],
                     }
                 )
-        all_results.sort(key=lambda r: r["score"], reverse=True)
+        # See _TYPE_PRIORITY docstring: type priority is the primary sort
+        # key (deterministic, intentional entity-resolution policy); raw
+        # score only breaks ties within the same type, where it is
+        # actually comparable.
+        all_results.sort(
+            key=lambda r: (_TYPE_PRIORITY.get(r["entity_type"], 99), -r["score"])
+        )
         return all_results[:top_k]
 
     def neighbors(
