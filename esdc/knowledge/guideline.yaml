@@ -1,0 +1,38 @@
+# Extraction guideline for `esdc corpus learn`.
+# Edit this file to steer what the LLM extracts. Changing it re-triggers
+# extraction for all documents on the next `esdc corpus learn` run.
+version: 1
+
+entity_types:
+  pod: "Plan of Development / POFD / OPL / OPLL / POP approval unit"
+  project: "Upstream development project (most granular ESDC unit)"
+  field: "Oil/gas field (lapangan)"
+  working_area: "Wilayah Kerja (WK) / PSC contract area"
+
+claim_types:
+  economics: >
+    Economic indicators tied to an approval or evaluation: NPV, IRR, POT,
+    capex, opex, cost recovery, government take, split. Predicate examples:
+    npv_musd, irr_pct, capex_musd, pot_year.
+  reserves: >
+    Volume numbers: reserves, resources, in-place, EUR, RF. Predicate
+    examples: eur_oil_mmstb, grr_gas_bscf, rf_pct.
+  commitment: >
+    Obligations agreed by KKKS or SKK Migas: well counts, facilities,
+    onstream dates, work programs. Predicate examples: well_count,
+    onstream_date, facility.
+  decision: >
+    approvals, rejections, revision requests, follow-up actions from
+    letters or MoM. Predicate examples: approval, follow_up, revision_request.
+  issue: >
+    Problems and constraints reported: subsurface, facility, land, permit,
+    commercial. Predicate examples: constraint, delay_cause.
+  schedule: >
+    Dates and milestones: approval dates, onstream targets, POD expiry.
+    Predicate examples: approval_date, onstream_target.
+
+doc_type_hints:
+  letter: "Focus on decisions, approval terms, economics tables, commitments."
+  mom: "Focus on decisions, action items, issues, and revised numbers."
+  permen: "Regulatory document: extract rules as decision claims, no entities."
+  kepmen: "Regulatory document: extract rules as decision claims, no entities."
