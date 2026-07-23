@@ -47,3 +47,14 @@ def test_corpus_learn_reports_missing_provider():
         result = runner.invoke(app, ["corpus", "learn"])
     assert result.exit_code == 1
     assert "No provider configured" in result.output
+
+
+def test_corpus_learn_init_guideline_flag(tmp_path):
+    with patch(
+        "esdc.knowledge.bootstrap.init_guideline",
+        return_value=tmp_path / "guideline.yaml",
+    ) as mock:
+        result = runner.invoke(app, ["corpus", "learn", "--init-guideline"])
+    assert result.exit_code == 0
+    mock.assert_called_once_with(force=False)
+    assert "Review" in result.output

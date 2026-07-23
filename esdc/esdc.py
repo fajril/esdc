@@ -2492,9 +2492,29 @@ def learn(
         int | None,
         typer.Option("--limit", help="Process at most N documents (smoke runs)."),
     ] = None,
+    init_guideline: Annotated[
+        bool,
+        typer.Option(
+            "--init-guideline",
+            help="Draft ~/.esdc/guideline.yaml from the corpus via LLM, "
+            "then exit. Review it before running learn.",
+        ),
+    ] = False,
 ) -> None:
     """Reconstruct the knowledge graph from the committed corpus (eager)."""
     from esdc.knowledge import learn as learn_mod
+
+    if init_guideline:
+        from esdc.knowledge.bootstrap import init_guideline as init_fn
+
+        try:
+            path = init_fn(force=force)
+        except (ValueError, FileExistsError, FileNotFoundError) as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1) from None
+        rich.print(f"[green]Guideline draft written:[/green] {path}")
+        rich.print("Review and edit it, then run: [cyan]esdc corpus learn[/cyan]")
+        return
 
     try:
         report = learn_mod.run_learn(force=force, dry_run=dry_run, limit=limit)
