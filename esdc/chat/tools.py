@@ -2323,6 +2323,24 @@ def explore_entity(
     Returns JSON with entity, dossier (markdown), related (edges grouped
     by relation), claims, status.
     """
+    from esdc.chat.domain_knowledge.instance_graph import _TYPE_TO_LABEL
+
+    if entity_type:
+        # Normalize LLM-provided variants ('POD', 'working area', ...) to the
+        # canonical keys graph.find() understands, same convention as the
+        # entity_key normalization in get_recommended_table (tools.py:737).
+        entity_type = entity_type.strip().lower().replace(" ", "_")
+        if entity_type not in _TYPE_TO_LABEL:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": (
+                        f"Unknown entity_type '{entity_type}'. Valid: pod, "
+                        "project, field, working_area, document."
+                    ),
+                }
+            )
+
     cache = _get_tool_cache()
     cache_key = _tool_cache_key(
         "explore_entity", entity=entity, entity_type=entity_type

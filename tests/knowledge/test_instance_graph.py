@@ -43,6 +43,22 @@ def test_find_resolves_pod_by_name(learned_sqlite: Path):
     assert top["entity_id"] in ("PL-2019-0001-2-2-0", "PL-2022-0002-2-2-1")
 
 
+def test_find_trailing_backslash_does_not_raise(learned_sqlite: Path):
+    r"""A trailing backslash in the query text must not swallow the closing.
+
+    quote of the QUERY_FTS_INDEX string literal. The hand-rolled escaping
+    previously used in find() (only `'` -> `\'`) left a lone backslash at
+    the end of the Cypher string literal, which escapes the closing quote
+    instead of being escaped itself -- every per-table query then raised
+    and find() silently degraded to an empty result (surfacing as a
+    misleading not_found in explore_entity). _cypher_escape escapes
+    backslashes first, so this must return normally instead of raising.
+    """
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    hits = mgr.find("Duri\\")
+    assert isinstance(hits, list)
+
+
 def test_find_ranks_entities_over_documents(learned_sqlite: Path):
     """Type-priority ranking must hold even for a non-top same-type hit.
 

@@ -89,6 +89,42 @@ def test_not_found(mock_graph):
     assert out["status"] == "not_found"
 
 
+@patch("esdc.chat.tools._get_knowledge_context")
+@patch("esdc.chat.tools._get_instance_graph")
+def test_entity_type_uppercase_normalizes_like_lowercase(mock_graph, mock_ctx):
+    """entity_type='POD' must resolve exactly like 'pod', not not_found.
+
+    Regression coverage: explore_entity previously passed entity_type
+    through to graph.find() unnormalized, so an LLM-provided variant like
+    'POD' never matched find()'s (and the safety-net filter's) lowercase
+    entity_type values.
+    """
+    mgr = mock_graph.return_value
+    mgr.is_available.return_value = True
+    mgr.find.return_value = [
+        {"entity_type": "pod", "entity_id": "PL-1", "name": "POD I Duri", "score": 3.2}
+    ]
+    mgr.neighbors.return_value = {}
+    mock_ctx.return_value = (None, [])
+
+    out = _invoke("POD I Duri", entity_type="POD")
+
+    assert out["status"] == "success"
+    assert out["entity"]["entity_id"] == "PL-1"
+    mgr.find.assert_called_once_with("POD I Duri", top_k=5, entity_type="pod")
+
+
+@patch("esdc.chat.tools._get_instance_graph")
+def test_unknown_entity_type_returns_error(mock_graph):
+    out = _invoke("POD I Duri", entity_type="banana")
+    assert out["status"] == "error"
+    assert "banana" in out["message"]
+    for valid in ("pod", "project", "field", "working_area", "document"):
+        assert valid in out["message"]
+    # Unknown entity_type must fail before ever touching the graph.
+    mock_graph.assert_not_called()
+
+
 def test_project_entity_type_resolves_via_real_graph(sqlite_conn, duck_conn, tmp_path):
     """entity_type='project' must resolve through the real find() filter.
 

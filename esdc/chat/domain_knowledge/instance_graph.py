@@ -247,7 +247,8 @@ class InstanceGraphManager:
                 SELECT project_id, project_name FROM (
                     SELECT project_id, project_name,
                            ROW_NUMBER() OVER (
-                               PARTITION BY project_id ORDER BY report_year DESC
+                               PARTITION BY project_id
+                               ORDER BY report_year DESC, project_name
                            ) AS rn
                     FROM project_resources
                 ) WHERE rn = 1
@@ -434,7 +435,7 @@ class InstanceGraphManager:
         self._ensure_built()
         if not self._available:
             return []
-        escaped = text.replace("'", "\\'")
+        escaped = _cypher_escape(text)
         all_results: list[dict[str, Any]] = []
         indexes = _FTS_INDEXES
         if entity_type is not None:
