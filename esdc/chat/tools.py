@@ -1851,9 +1851,7 @@ def search_documents(
         "Example: 'persetujuan POD lapangan Duri 2025'.",
     ],
     limit: Annotated[int, "Maximum results (default 5)."] = 5,
-    doc_type: Annotated[
-        str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."
-    ] = None,
+    doc_type: Annotated[str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."] = None,
     doc_topic: Annotated[
         str | None, f"Filter by business topic: {', '.join(_DOC_TOPIC_VALUES)}."
     ] = None,
@@ -1916,9 +1914,7 @@ def search_documents(
         filters["project_name"] = project_name
 
     cache = _get_tool_cache()
-    cache_key = _tool_cache_key(
-        "search_documents", query=query, limit=limit, **filters
-    )
+    cache_key = _tool_cache_key("search_documents", query=query, limit=limit, **filters)
     if cache_key in cache:
         logger.debug("[CACHE] hit | tool=search_documents key=%s", cache_key[:16])
         return str(cache[cache_key])
@@ -2231,9 +2227,7 @@ def _query_graph(
         if entity and relationship:
             results = mgr.traverse(entity, relationship)
             if results:
-                base_output = _format_traverse_results(
-                    entity, relationship, results
-                )
+                base_output = _format_traverse_results(entity, relationship, results)
         if base_output is None and entity:
             results = mgr.find_all(entity)
             if results:
@@ -2242,9 +2236,141 @@ def _query_graph(
             try:
                 matrix_text = mgr.format_reachability(highlight=entity)
             except Exception as e:
-                logger.warning(
-                    "[KSMI-KG] reachability_format_error | %s", e
-                )
+                logger.warning("[KSMI-KG] reachability_format_error | %s", e)
     except Exception as e:
         logger.warning("[KSMI-KG] graph_fallback | error=%s", e)
     return base_output, matrix_text
+
+
+def _get_instance_graph():
+    """Seam for tests; returns the singleton instance graph manager."""
+    from esdc.chat.domain_knowledge.instance_graph import get_instance_graph
+
+    return get_instance_graph()
+
+
+def _get_knowledge_context(
+    entity_type: str, entity_id: str
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Fetch dossier (duckdb) and claims (sqlite) for one resolved entity."""
+    from esdc.knowledge.dossier import get_dossier
+    from esdc.knowledge.store import KnowledgeStore
+    from esdc.pod_registry.store import get_sqlite_connection
+
+    dossier = None
+    conn = get_db_connection()
+    try:
+        dossier = get_dossier(conn, entity_type, entity_id)
+    except Exception as e:  # table may not exist before first learn
+        logger.debug("[ExploreEntity] no dossier | %s", e)
+
+    claims: list[dict[str, Any]] = []
+    sconn = get_sqlite_connection()
+    try:
+        store = KnowledgeStore(sconn)
+        store.ensure_tables()
+        claims = [
+            {
+                "doc_id": c.doc_id,
+                "type": c.claim_type,
+                "predicate": c.predicate,
+                "value": c.value,
+                "evidence": c.evidence,
+            }
+            for c in store.claims_for(entity_type, entity_id)
+        ]
+    finally:
+        sconn.close()
+    return dossier, claims
+
+
+@tool("Entity Knowledge Explorer")
+def explore_entity(
+    entity: Annotated[
+        str,
+        "Entity name to explore: POD name, field name, working area, "
+        "project name, or document subject. Free text, bilingual. "
+        "Example: 'POD I Duri Revisi 1'.",
+    ],
+    entity_type: Annotated[
+        str | None,
+        "Optional filter: 'pod', 'project', 'field', 'working_area', "
+        "'document'. Leave empty to search all types.",
+    ] = None,
+) -> str:
+    """Explore everything known about one entity via the knowledge graph.
+
+    Built by `esdc corpus learn`. For a POD this returns its full dossier
+    (approval, economics, commitments, meeting history, current issues —
+    with [doc_id] citations), all related entities (documents about it,
+    projects under it, revision chain, field/WK), and extracted claims.
+
+    Use this tool when:
+    - The user asks a broad question about one POD/field/project/WK:
+      "bagaimana keekonomian POD X", "status proyek Y", "ceritakan POD Z"
+    - You need the connections: which MoMs discussed a POD, what a POD
+      revised, which projects implement it
+    - A search_documents hit mentions a POD and you want its full context
+
+    Follow-ups: use read_document(doc_id) on any cited doc_id; use
+    execute_sql for current numbers.
+    DO NOT use for aggregate portfolio queries (use execute_sql).
+
+    Returns JSON with entity, dossier (markdown), related (edges grouped
+    by relation), claims, status.
+    """
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "explore_entity", entity=entity, entity_type=entity_type
+    )
+    if cache_key in cache:
+        return str(cache[cache_key])
+
+    try:
+        graph = _get_instance_graph()
+        if not graph.is_available():
+            return json.dumps(
+                {
+                    "status": "not_available",
+                    "message": (
+                        "Knowledge graph not built yet. Run: esdc corpus learn"
+                    ),
+                }
+            )
+        hits = graph.find(entity, top_k=5)
+        if entity_type:
+            hits = [h for h in hits if h["entity_type"] == entity_type]
+        if not hits:
+            return json.dumps(
+                {
+                    "status": "not_found",
+                    "message": f"No entity matching '{entity}'.",
+                }
+            )
+        top = hits[0]
+        related = graph.neighbors(top["entity_type"], top["entity_id"])
+        dossier, claims = _get_knowledge_context(top["entity_type"], top["entity_id"])
+        result = json.dumps(
+            {
+                "status": "success",
+                "entity": top,
+                "other_matches": hits[1:],
+                "dossier": dossier["dossier_text"] if dossier else None,
+                "related": related,
+                "claims": claims,
+                "message": (
+                    None
+                    if dossier
+                    else "No dossier for this entity yet (dossiers exist for "
+                    "PODs after `esdc corpus learn`)."
+                ),
+            },
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        )
+        cache.set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.error("[ExploreEntity] failed | entity=%s error=%s", entity, e)
+        return json.dumps({"status": "error", "message": str(e)})
