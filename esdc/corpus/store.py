@@ -972,11 +972,14 @@ class CorpusStore:
                     "count": 0,
                 }
 
+            # Over-retrieve before RRF: a wider pool costs little here and
+            # feeds both the fusion and the optional reranker.
+            pool = max(limit * 2, 50)
             query_embedding = self._embedder.generate_embedding(query)
-            vector_results = self._vector_search(query_embedding, limit * 2, filters)
+            vector_results = self._vector_search(query_embedding, pool, filters)
 
             try:
-                keyword_results = self._keyword_search(query, limit * 2, filters)
+                keyword_results = self._keyword_search(query, pool, filters)
             except Exception as e:
                 logger.warning(
                     "[Corpus] keyword search failed, using vector-only | error=%s", e

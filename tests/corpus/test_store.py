@@ -681,3 +681,19 @@ def test_keyword_search_matches_prefix_terms(store_with_doc_factory):
     results = store._keyword_search("Merak", 10, None)
     assert results, "prefix term must be FTS-searchable"
     assert results[0]["embed_text"]
+
+
+def test_search_over_retrieves_before_rrf(store_with_doc_factory, monkeypatch):
+    store, _ = store_with_doc_factory(subject="Pengembangan Merak")
+    seen = {}
+
+    orig_vec = store._vector_search
+
+    def spy_vector(embedding, limit, filters):
+        seen["pool"] = limit
+        return orig_vec(embedding, limit, filters)
+
+    monkeypatch.setattr(store, "_vector_search", spy_vector)
+    store.rebuild_indexes()
+    store.search("produksi", limit=5)
+    assert seen["pool"] == 50  # max(5 * 2, 50)
