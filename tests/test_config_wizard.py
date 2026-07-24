@@ -8,6 +8,7 @@ from esdc.config_wizard import (
     _prompt_for_config_value,
     run_wizard,
 )
+from esdc.configs import KEY_DESCRIPTIONS, MODEL_SECTIONS, SETTINGS_SECTIONS
 
 
 class TestMaskValue:
@@ -102,13 +103,26 @@ class TestFetchModels:
 
 
 class TestRunWizard:
-    """Test the main run_wizard dispatch logic."""
+    """Test the main run_wizard dispatch logic.
+
+    The wizard is now a nested tree: top menu -> "Models & endpoints" ->
+    "Chat providers" -> individual provider actions. Each "__back__" pops
+    one level (mocked via questionary.select, since _select_with_back calls
+    it under the hood).
+    """
 
     @patch("esdc.config_wizard.Config.init_config")
     @patch("esdc.config_wizard.questionary.select")
     @patch("esdc.config_wizard._add_provider_flow")
     def test_add_provider(self, mock_add, mock_select, mock_init):
-        mock_select.return_value.ask.side_effect = ["Add provider", "Exit"]
+        mock_select.return_value.ask.side_effect = [
+            "Models & endpoints",
+            "Chat providers",
+            "Add provider",
+            "__back__",
+            "__back__",
+            "Exit",
+        ]
         run_wizard()
         mock_add.assert_called_once()
 
@@ -138,11 +152,153 @@ class TestRunWizard:
     @patch("esdc.config_wizard._edit_provider_flow")
     def test_edit_provider(self, mock_edit, mock_select, mock_init):
         mock_select.return_value.ask.side_effect = [
+            "Models & endpoints",
+            "Chat providers",
             "Edit provider",
+            "__back__",
+            "__back__",
             "Exit",
         ]
         run_wizard()
         mock_edit.assert_called_once()
+
+
+class TestMenuDispatch:
+    """Top menu -> submenu routes to the right underlying flow/section."""
+
+    @patch("esdc.config_wizard.Config.init_config")
+    @patch("esdc.config_wizard.questionary.select")
+    @patch("esdc.config_wizard._edit_section")
+    def test_corpus_models_routes_to_edit_section(
+        self, mock_edit_section, mock_select, mock_init
+    ):
+        mock_select.return_value.ask.side_effect = [
+            "Models & endpoints",
+            "Corpus models",
+            "__back__",
+            "Exit",
+        ]
+        run_wizard()
+        mock_edit_section.assert_called_once_with(
+            "Corpus models", MODEL_SECTIONS["Corpus models"]
+        )
+
+    @patch("esdc.config_wizard.Config.init_config")
+    @patch("esdc.config_wizard.questionary.select")
+    @patch("esdc.config_wizard._edit_section")
+    def test_logging_routes_to_edit_section(
+        self, mock_edit_section, mock_select, mock_init
+    ):
+        mock_select.return_value.ask.side_effect = [
+            "Settings",
+            "Logging",
+            "__back__",
+            "Exit",
+        ]
+        run_wizard()
+        mock_edit_section.assert_called_once_with(
+            "Logging", SETTINGS_SECTIONS["Logging"]
+        )
+
+
+class TestPromptInstructionLine:
+    """Descriptions move off the message and onto questionary's instruction=."""
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_corpus_model_uses_instruction_param(self, mock_select):
+        mock_select.return_value.ask.return_value = "main"
+
+        _prompt_for_config_value("corpus.metadata_model", "main")
+
+        _, kwargs = mock_select.call_args
+        message = (
+            mock_select.call_args.args[0] if mock_select.call_args.args else ""
+        )
+        description = KEY_DESCRIPTIONS["corpus.metadata_model"]
+        assert kwargs.get("instruction") == description
+        assert description not in message
+
+
+class TestPhoenixSurfaced:
+    """phoenix.* keys appear in Observability even when absent from config.yaml."""
+
+    @patch("esdc.config_wizard._select_with_back", return_value="__back__")
+    def test_phoenix_keys_present_with_defaults(
+        self, mock_select_back, isolated_config
+    ):
+        """With an empty config.yaml, phoenix.* still surface from get_defaults."""
+        from esdc.config_wizard import _edit_section
+
+        _edit_section("Observability", SETTINGS_SECTIONS["Observability"])
+
+        choices = mock_select_back.call_args.kwargs.get("choices") or (
+            mock_select_back.call_args.args[1]
+        )
+        labels = {c.value: str(c.title) for c in choices}
+        assert "phoenix.enabled = False" in labels["phoenix.enabled"]
+        assert "http://localhost:4317" in labels["phoenix.collector_endpoint"]
+        assert "iris" in labels["phoenix.project_name"]
+
+
+class TestResetMenu:
+    """Reset submenu: single-key reset and reset-all behind a confirm gate."""
+
+    @patch("esdc.config_wizard.Config.reset_config")
+    @patch("esdc.config_wizard.questionary.confirm")
+    @patch("esdc.config_wizard.questionary.select")
+    @patch("esdc.config_wizard.rich_print")
+    def test_reset_all_confirmed(
+        self, mock_print, mock_select, mock_confirm, mock_reset
+    ):
+        from esdc.config_wizard import _reset_menu
+
+        mock_select.return_value.ask.side_effect = ["Reset all", "__back__"]
+        mock_confirm.return_value.ask.return_value = True
+
+        _reset_menu()
+
+        mock_reset.assert_called_once_with()
+
+    @patch("esdc.config_wizard.Config.reset_config")
+    @patch("esdc.config_wizard.questionary.confirm")
+    @patch("esdc.config_wizard.questionary.select")
+    @patch("esdc.config_wizard.rich_print")
+    def test_reset_all_declined(
+        self, mock_print, mock_select, mock_confirm, mock_reset
+    ):
+        from esdc.config_wizard import _reset_menu
+
+        mock_select.return_value.ask.side_effect = ["Reset all", "__back__"]
+        mock_confirm.return_value.ask.return_value = False
+
+        _reset_menu()
+
+        mock_reset.assert_not_called()
+
+    @patch("esdc.config_wizard.Config.reset_config")
+    @patch(
+        "esdc.config_wizard.Config.get_all_config_flat",
+        return_value={"logging.level": "INFO"},
+    )
+    @patch("esdc.config_wizard.questionary.confirm")
+    @patch("esdc.config_wizard.questionary.select")
+    @patch("esdc.config_wizard.rich_print")
+    def test_reset_single_key(
+        self, mock_print, mock_select, mock_confirm, mock_flat, mock_reset
+    ):
+        from esdc.config_wizard import _reset_menu
+
+        mock_select.return_value.ask.side_effect = [
+            "Reset key",
+            "Logging",
+            "logging.level",
+            "__back__",
+        ]
+        mock_confirm.return_value.ask.return_value = True
+
+        _reset_menu()
+
+        mock_reset.assert_called_once_with("logging.level")
 
 
 class TestProviderCRUDFlows:
@@ -301,27 +457,25 @@ class TestConfigFlows:
     @patch("esdc.config_wizard.questionary.select")
     @patch("esdc.config_wizard._prompt_for_config_value")
     @patch("esdc.config_wizard.Config.set_config_value")
-    @patch("esdc.config_wizard.questionary.confirm")
     @patch("esdc.config_wizard.rich_print")
     def test_edit_general_config(
         self,
         mock_print,
-        mock_confirm,
         mock_set,
         mock_prompt,
         mock_select,
         mock_flat,
     ):
-        from esdc.config_wizard import _edit_general_config_flow
+        from esdc.config_wizard import _edit_section
 
         mock_flat.return_value = {"logging.level": "INFO"}
-        mock_confirm.side_effect = [False]
         mock_select.return_value.ask.return_value = "__back__"
 
-        _edit_general_config_flow()
+        _edit_section("Logging", ["logging.level"])
 
         # When back is selected, no edits should happen
         mock_prompt.assert_not_called()
+        mock_set.assert_not_called()
 
     @patch("esdc.config_wizard.Config.get_all_config_flat")
     @patch("esdc.config_wizard.rich_print")
@@ -349,10 +503,10 @@ class TestGeneralConfigListsCorpusKeys:
     @patch("esdc.config_wizard._select_with_back", return_value="__back__")
     @patch("esdc.config_wizard.Config.get_all_config_flat")
     def test_corpus_defaults_merged(self, mock_flat, mock_select):
-        from esdc.config_wizard import _edit_general_config_flow
+        from esdc.config_wizard import _edit_section
 
         mock_flat.return_value = {"api_url": "http://x"}  # no corpus.* in file
-        _edit_general_config_flow()
+        _edit_section("Corpus models", MODEL_SECTIONS["Corpus models"])
 
         choices = mock_select.call_args.kwargs.get("choices") or (
             mock_select.call_args.args[1] if len(mock_select.call_args.args) > 1 else []

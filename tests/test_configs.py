@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from esdc.configs import Config
+from esdc.configs import MODEL_SECTIONS, SETTINGS_SECTIONS, Config
 
 
 class TestConfigDir:
@@ -201,3 +201,49 @@ class TestDbFile:
         """Test get_db_path returns directory (backwards compatibility)."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             assert Config.get_db_path() == tmp_path
+
+
+class TestWizardSectionCoverage:
+    """MODEL_SECTIONS + SETTINGS_SECTIONS must cover every editable key once.
+
+    The wizard redesign groups flat config keys into a domain tree. This
+    invariant guards against a new key silently falling out of the tree
+    (no home) or landing in two groups at once.
+    """
+
+    def _editable_flat_keys(self) -> set[str]:
+        flat_defaults = Config._flatten(Config.get_defaults())
+        editable = set(flat_defaults.keys())
+        editable |= {f"corpus.{k}" for k in Config.CORPUS_DEFAULTS}
+        editable |= {
+            "phoenix.enabled",
+            "phoenix.collector_endpoint",
+            "phoenix.project_name",
+        }
+        # default_provider / provider_order are edited only via the
+        # provider CRUD flows, never via the flat key sections.
+        editable -= {"default_provider", "provider_order"}
+        return editable
+
+    def test_union_matches_editable_keys(self):
+        grouped_keys: list[str] = []
+        for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values():
+            grouped_keys.extend(keys)
+
+        assert set(grouped_keys) == self._editable_flat_keys()
+
+    def test_no_key_duplicated_across_groups(self):
+        grouped_keys: list[str] = []
+        for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values():
+            grouped_keys.extend(keys)
+
+        assert len(grouped_keys) == len(set(grouped_keys))
+
+    def test_no_orphan_keys(self):
+        grouped_keys = {
+            key
+            for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
+            for key in keys
+        }
+        orphans = self._editable_flat_keys() - grouped_keys
+        assert orphans == set()

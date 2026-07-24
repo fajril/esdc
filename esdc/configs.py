@@ -68,6 +68,56 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "Minimum embedded-image size (fraction of page area) that gets OCR'd "
         "on native-text pages; smaller images (logos, signatures) are ignored"
     ),
+    "phoenix.enabled": "Enable Phoenix/OpenInference tracing",
+    "phoenix.collector_endpoint": "Phoenix OTLP collector endpoint URL",
+    "phoenix.project_name": "Phoenix project name for trace grouping",
+}
+
+
+# Model/endpoint-role groups shown under "Models & endpoints" in the wizard.
+# "Chat providers" is intentionally absent here — it is served by the
+# provider CRUD flows, not by flat key editing.
+MODEL_SECTIONS: dict[str, list[str]] = {
+    "Embeddings": [
+        "embedding_host",
+        "semantic_search.embedding_batch_size",
+    ],
+    "Corpus models": [
+        "corpus.ocr_model",
+        "corpus.metadata_model",
+        "corpus.cleanup_model",
+        "corpus.ollama_host",
+        "corpus.num_ctx",
+    ],
+}
+
+# Non-model settings shown under "Settings" in the wizard.
+SETTINGS_SECTIONS: dict[str, list[str]] = {
+    "Connection": ["api_url", "api.verify_ssl", "database_path"],
+    "Chat behavior": ["tool_format"],
+    "Corpus processing": [
+        "corpus.chunk_size",
+        "corpus.chunk_overlap",
+        "corpus.ocr_dpi",
+        "corpus.min_chars_per_page",
+        "corpus.min_image_area",
+    ],
+    "Logging": [
+        "logging.level",
+        "logging.file.enabled",
+        "logging.file.path",
+        "logging.file.max_size",
+        "logging.file.backup_count",
+        "logging.server.level",
+        "logging.agent.level",
+        "logging.chat.level",
+    ],
+    "Cache": ["cache.sql_ttl"],
+    "Observability": [
+        "phoenix.enabled",
+        "phoenix.collector_endpoint",
+        "phoenix.project_name",
+    ],
 }
 
 
@@ -984,6 +1034,11 @@ class Config:
             },
             "embedding_host": None,
             "corpus": dict(cls.CORPUS_DEFAULTS),
+            "phoenix": {
+                "enabled": False,
+                "collector_endpoint": "http://localhost:4317",
+                "project_name": "iris",
+            },
         }
 
     @classmethod

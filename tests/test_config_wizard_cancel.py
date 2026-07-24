@@ -90,8 +90,8 @@ class TestPromptForConfigValueCancel:
         assert result is None
 
 
-class TestEditGeneralConfigSkipOnCancel:
-    """_edit_general_config_flow must skip save when _prompt returns None."""
+class TestEditSectionSkipOnCancel:
+    """_edit_section must skip save when _prompt_for_config_value returns None."""
 
     @patch("esdc.config_wizard.Config.get_all_config_flat")
     @patch("esdc.config_wizard.Config.set_config_value")
@@ -106,7 +106,7 @@ class TestEditGeneralConfigSkipOnCancel:
         mock_set,
         mock_flat,
     ):
-        from esdc.config_wizard import _edit_general_config_flow
+        from esdc.config_wizard import _edit_section
 
         mock_flat.return_value = {"api_url": "https://example.com"}
         mock_select.return_value.ask.side_effect = [
@@ -115,7 +115,7 @@ class TestEditGeneralConfigSkipOnCancel:
         ]
         mock_prompt.return_value = None
 
-        _edit_general_config_flow()
+        _edit_section("Connection", ["api_url"])
 
         # Should NOT call set_config_value because prompt returned None
         mock_set.assert_not_called()
