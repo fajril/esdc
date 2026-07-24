@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import diskcache
+import duckdb
 import pytest
 
 from esdc.corpus.chunker import Chunk
@@ -158,6 +159,34 @@ def test_search_documents_empty_db_not_available(tool_env):
     assert result["status"] == "not_available"
     assert "esdc corpus extract" in result["message"]
     assert "esdc corpus commit" in result["message"]
+
+
+def test_search_documents_survives_missing_embed_text_column(populated):
+    """Simulates an upgraded install: a pre-branch DuckDB has document_chunks
+    populated but lacks the embed_text column that this branch's
+    `_vector_search` now selects. `search_documents` builds its own
+    CorpusStore and must self-heal via `ensure_tables()` before calling
+    `store.search(...)`; without that call, DuckDB's Binder error
+    ("column embed_text not found") is caught and every chat search
+    returns status="error" until a corpus CLI command happens to run
+    `_open_corpus_store()` first. This test fails on unpatched
+    `search_documents` (proven: reverting the tools.py fix reproduces the
+    "error" status here).
+    """
+    from esdc.chat.tools import search_documents
+
+    conn = duckdb.connect(str(populated))
+    conn.execute("INSTALL vss")
+    conn.execute("LOAD vss")
+    conn.execute("SET hnsw_enable_experimental_persistence = true")
+    # The HNSW index blocks dropping any column positioned before it;
+    # drop it first (search() rebuilds via a sequential scan just fine).
+    conn.execute("DROP INDEX IF EXISTS idx_hnsw_chunks")
+    conn.execute("ALTER TABLE document_chunks DROP COLUMN embed_text")
+    conn.close()
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
+    assert result["status"] in ("success", "no_results")
 
 
 def test_read_document_returns_markdown_and_metadata(populated):

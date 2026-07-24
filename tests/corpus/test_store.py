@@ -750,3 +750,15 @@ def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatc
 
     Reranker._instance = None
     Reranker._failed = False
+
+
+def test_corpus_config_isolated_in_tests():
+    """search()'s _maybe_rerank calls Config.get_corpus_config(); the
+    autouse _isolated_db_dirs fixture in conftest.py must also patch
+    _load_config so tests never read the real ~/.esdc/config.yaml. If a
+    dev machine has corpus.rerank: true set, an un-isolated test would
+    trigger a real cross-encoder download and reorder search results.
+    """
+    from esdc.configs import Config
+
+    assert Config.get_corpus_config()["rerank"] is False

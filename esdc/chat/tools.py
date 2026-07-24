@@ -1926,6 +1926,13 @@ def search_documents(
         from esdc.corpus.store import CorpusStore
 
         store = CorpusStore(embedder=_get_corpus_embedder())
+        # Mirror the CLI's _open_corpus_store: heal schema drift (e.g. a
+        # pre-branch DuckDB missing the embed_text column) before search
+        # runs its SELECT, so an upgraded install doesn't error on every
+        # chat search until the user happens to run a corpus CLI command.
+        # validate_model stays False (default) — chat search must not
+        # hard-fail on an embedding-model mismatch.
+        store.ensure_tables()
         result = store.search(
             query=query,
             limit=limit,
