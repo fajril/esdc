@@ -18,8 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged.
 - Search over-retrieves (min 50 candidates per path) before RRF fusion.
 - Optional local reranker (`corpus.rerank: true`, default off): fastembed
-  cross-encoder (`jinaai/jina-reranker-v2-base-multilingual`) reorders the
-  top `corpus.rerank_pool` (default 30) candidates.
+  cross-encoder reorders the top `corpus.rerank_pool` (default 30) candidates.
+  The model is configurable via `corpus.rerank_model` — default
+  `jinaai/jina-reranker-v2-base-multilingual` (CC-BY-NC, non-commercial); set
+  `BAAI/bge-reranker-v2-m3` (Apache-2.0, Bahasa Indonesia) for commercial use,
+  registered on demand from a fastembed-compatible ONNX (no torch pulled in).
 - New `esdc corpus eval <queries.jsonl>` scores retrieval Pass@k and latency;
   use `--rerank/--no-rerank` to compare modes.
 

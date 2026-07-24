@@ -64,6 +64,11 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "(off by default; first use downloads the model, ~1 GB)"
     ),
     "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
+    "corpus.rerank_model": (
+        "Reranker model: a fastembed built-in "
+        "(default jinaai/jina-reranker-v2-base-multilingual, CC-BY-NC) or a "
+        "known custom model (BAAI/bge-reranker-v2-m3, Apache-2.0, Indonesian)"
+    ),
     "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
     "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
     "corpus.min_chars_per_page": (
@@ -105,6 +110,7 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
         "corpus.chunk_overlap",
         "corpus.rerank",
         "corpus.rerank_pool",
+        "corpus.rerank_model",
         "corpus.ocr_dpi",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
@@ -871,6 +877,11 @@ class Config:
         # downloads the model (~1 GB, cached).
         "rerank": False,
         "rerank_pool": 30,  # candidates scored per query when rerank is on
+        # rerank_model: fastembed built-in (default) or a known custom model
+        # (BAAI/bge-reranker-v2-m3 — Apache-2.0, Indonesian-capable — is
+        # registered on demand). Reranker output is not stored, so this is
+        # runtime-only and safe to change without reembedding.
+        "rerank_model": "jinaai/jina-reranker-v2-base-multilingual",
         "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
         # metadata_model: text LLM for metadata extraction; "main" = default
         # chat provider, "" = use ocr_model on the rendered first page
