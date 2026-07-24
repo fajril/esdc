@@ -1370,7 +1370,7 @@ def run_reembed() -> CorpusReport:
                 chunks = chunk_markdown(
                     doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
                 )
-                store.replace_chunks(doc_id, chunks)
+                store.replace_chunks(doc, chunks)
                 report.processed.append(name)
             except Exception as e:
                 report.failed[name] = str(e)

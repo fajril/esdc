@@ -258,9 +258,13 @@ class CorpusStore:
                 chunk_index INTEGER NOT NULL,
                 section VARCHAR,
                 chunk_text TEXT NOT NULL,
+                embed_text TEXT,
                 embedding FLOAT[{dim}]
             )
         """)
+        conn.execute(
+            f"ALTER TABLE {self.CHUNK_TABLE} ADD COLUMN IF NOT EXISTS embed_text TEXT"
+        )
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.META_TABLE} (
                 embedding_model VARCHAR NOT NULL,
@@ -470,8 +474,15 @@ class CorpusStore:
         """
         conn = self._get_connection()
         sconn = self._get_sqlite()
-        texts = [c.text for c in chunks]
-        embeddings = self._embedder.generate_embeddings_batch(texts) if texts else []
+        from esdc.corpus.context import build_context_prefix, build_embed_text
+
+        prefix = build_context_prefix(doc)
+        embed_texts = [build_embed_text(prefix, c.section, c.text) for c in chunks]
+        embeddings = (
+            self._embedder.generate_embeddings_batch(embed_texts)
+            if embed_texts
+            else []
+        )
         values = self._doc_row_values(doc)
 
         conn.execute("BEGIN TRANSACTION")
@@ -489,8 +500,9 @@ class CorpusStore:
                 conn.executemany(
                     f"""
                     INSERT INTO {self.CHUNK_TABLE} (
-                        chunk_id, doc_id, chunk_index, section, chunk_text, embedding
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        chunk_id, doc_id, chunk_index, section, chunk_text,
+                        embed_text, embedding
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         [
@@ -499,9 +511,12 @@ class CorpusStore:
                             chunk.index,
                             chunk.section,
                             chunk.text,
+                            embed_text,
                             embedding,
                         ]
-                        for chunk, embedding in zip(chunks, embeddings, strict=True)
+                        for chunk, embed_text, embedding in zip(
+                            chunks, embed_texts, embeddings, strict=True
+                        )
                     ],
                 )
             conn.execute("COMMIT")
@@ -633,24 +648,35 @@ class CorpusStore:
 
         return counts
 
-    def replace_chunks(self, doc_id: str, chunks: list[Chunk]) -> None:
+    def replace_chunks(self, doc: dict[str, Any], chunks: list[Chunk]) -> None:
         """Replace all chunks for a document (used by `corpus reembed`)."""
+        from esdc.corpus.context import build_context_prefix, build_embed_text
+
+        doc_id = doc["doc_id"]
         conn = self._get_connection()
-        texts = [c.text for c in chunks]
-        embeddings = self._embedder.generate_embeddings_batch(texts) if texts else []
+        prefix = build_context_prefix(doc)
+        embed_texts = [build_embed_text(prefix, c.section, c.text) for c in chunks]
+        embeddings = (
+            self._embedder.generate_embeddings_batch(embed_texts)
+            if embed_texts
+            else []
+        )
 
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(
                 f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id]
             )
-            for chunk, embedding in zip(chunks, embeddings, strict=True):
+            for chunk, embed_text, embedding in zip(
+                chunks, embed_texts, embeddings, strict=True
+            ):
                 chunk_id = f"{doc_id}:{chunk.index:04d}"
                 conn.execute(
                     f"""
                     INSERT INTO {self.CHUNK_TABLE} (
-                        chunk_id, doc_id, chunk_index, section, chunk_text, embedding
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        chunk_id, doc_id, chunk_index, section, chunk_text,
+                        embed_text, embedding
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         chunk_id,
@@ -658,6 +684,7 @@ class CorpusStore:
                         chunk.index,
                         chunk.section,
                         chunk.text,
+                        embed_text,
                         embedding,
                     ],
                 )
@@ -712,6 +739,7 @@ class CorpusStore:
                         chunk_index INTEGER NOT NULL,
                         section VARCHAR,
                         chunk_text TEXT NOT NULL,
+                        embed_text TEXT,
                         embedding FLOAT[{dim}]
                     )
                 """)
@@ -742,7 +770,7 @@ class CorpusStore:
         try:
             conn.execute(
                 f"PRAGMA create_fts_index("
-                f"'{self.CHUNK_TABLE}', 'chunk_id', 'chunk_text', overwrite=1)"
+                f"'{self.CHUNK_TABLE}', 'chunk_id', 'embed_text', overwrite=1)"
             )
             logger.info("[Corpus] FTS index created")
         except Exception as e:
@@ -819,7 +847,8 @@ class CorpusStore:
 
         if filter_clause:
             sql = f"""
-                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, {distance}
+                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, c.embed_text,
+                    {distance}
                 FROM {self.CHUNK_TABLE} c
                 JOIN {self.DOC_TABLE} d ON d.doc_id = c.doc_id
                 WHERE 1=1{filter_clause}
@@ -828,7 +857,8 @@ class CorpusStore:
             """
         else:
             sql = f"""
-                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, {distance}
+                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, c.embed_text,
+                    {distance}
                 FROM {self.CHUNK_TABLE} c
                 ORDER BY dist ASC
                 LIMIT ?
@@ -841,7 +871,8 @@ class CorpusStore:
                 "doc_id": row[1],
                 "section": row[2],
                 "chunk_text": row[3],
-                "similarity": 1 - row[4],
+                "embed_text": row[4],
+                "similarity": 1 - row[5],
             }
             for row in rows
         ]
@@ -859,7 +890,7 @@ class CorpusStore:
 
         sql = f"""
             SELECT
-                c.chunk_id, c.doc_id, c.section, c.chunk_text,
+                c.chunk_id, c.doc_id, c.section, c.chunk_text, c.embed_text,
                 fts_main_{self.CHUNK_TABLE}.match_bm25(
                     c.chunk_id, '{escaped_query}'
                 ) AS bm25_score
@@ -879,7 +910,8 @@ class CorpusStore:
                 "doc_id": row[1],
                 "section": row[2],
                 "chunk_text": row[3],
-                "bm25_score": round(float(row[4] or 0), 4),
+                "embed_text": row[4],
+                "bm25_score": round(float(row[5] or 0), 4),
             }
             for row in rows
         ]

@@ -2491,10 +2491,10 @@ def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkey
 
     orig_replace = store2.replace_chunks
 
-    def flaky_replace(doc_id, chunks):
-        if doc_id == doc_b["doc_id"]:
+    def flaky_replace(doc, chunks):
+        if doc["doc_id"] == doc_b["doc_id"]:
             raise RuntimeError("embedding backend down")
-        return orig_replace(doc_id, chunks)
+        return orig_replace(doc, chunks)
 
     monkeypatch.setattr(store2, "replace_chunks", flaky_replace)
 

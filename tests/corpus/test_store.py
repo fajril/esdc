@@ -4,7 +4,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from esdc.corpus.chunker import Chunk
+from esdc.corpus.chunker import Chunk, chunk_markdown
 from esdc.corpus.store import CorpusStore
 
 
@@ -126,7 +126,7 @@ def test_clear(store):
 
 def test_replace_chunks(store):
     store.insert_document(DOC, [Chunk(0, None, "lama")])
-    store.replace_chunks("abc123", [Chunk(0, None, "baru"), Chunk(1, None, "baru2")])
+    store.replace_chunks(DOC, [Chunk(0, None, "baru"), Chunk(1, None, "baru2")])
     assert store.counts() == {"documents": 1, "chunks": 2}
 
 
@@ -604,3 +604,80 @@ def test_default_embedder_is_internal(monkeypatch, tmp_path):
     assert store._embedder.model == f"fastembed:{PINNED_MODEL}"
     assert type(store._embedder).__name__ == "InternalEmbedder"
     assert store.get_document_by_hash("deadbeef") is None
+
+
+# --------------------------------------------------------------------------
+# embed_text: contextual prefix drives embeddings + FTS (chunk_text stays
+# display-only)
+# --------------------------------------------------------------------------
+
+
+class RecordingEmbedder:
+    model = "fake-model"
+
+    def __init__(self):
+        self.batch_calls = []
+
+    def generate_embedding(self, text):
+        return [0.1] * 8
+
+    def generate_embeddings_batch(self, texts):
+        self.batch_calls.append(list(texts))
+        return [[0.1] * 8 for _ in texts]
+
+
+@pytest.fixture
+def store_with_doc_factory(tmp_path):
+    stores = []
+
+    def factory(chunk_size=3000, **doc_fields):
+        store = CorpusStore(
+            db_path=tmp_path / "corpus.duckdb",
+            embedder=RecordingEmbedder(),
+            sqlite_path=tmp_path / "esdc.sqlite",
+        )
+        store.ensure_tables()
+        doc = dict(DOC)
+        doc.update(doc_fields)
+        chunks = chunk_markdown(doc["markdown"], chunk_size, min(300, chunk_size - 1))
+        store.insert_document(doc, chunks)
+        stores.append(store)
+        return store, doc
+
+    yield factory
+    for s in stores:
+        s.close()
+
+
+def test_insert_stores_contextual_embed_text(store_with_doc_factory):
+    """embed_text = prefix + section + chunk text; chunk_text untouched."""
+    store, doc = store_with_doc_factory(
+        doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
+    )
+    row = store._get_connection().execute(
+        "SELECT chunk_text, embed_text FROM document_chunks LIMIT 1"
+    ).fetchone()
+    chunk_text, embed_text = row
+    assert "Merak" in embed_text
+    assert embed_text.endswith(chunk_text)
+    assert "Merak |" not in chunk_text  # display text has no prefix
+
+
+def test_embedder_receives_contextual_text(store_with_doc_factory):
+    """The vector is computed from embed_text, not chunk_text."""
+    store, doc = store_with_doc_factory(
+        doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
+    )
+    embedded_texts = store._embedder.batch_calls[-1]
+    assert all("Merak" in t for t in embedded_texts)
+
+
+def test_keyword_search_matches_prefix_terms(store_with_doc_factory):
+    """FTS runs over embed_text: doc-level entity terms hit every chunk."""
+    store, doc = store_with_doc_factory(
+        doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
+    )
+    store.rebuild_indexes()
+    results = store._keyword_search("Merak", 10, None)
+    assert results, "prefix term must be FTS-searchable"
+    assert results[0]["embed_text"]
