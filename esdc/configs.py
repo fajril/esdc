@@ -1155,6 +1155,7 @@ class Config:
             "api.verify_ssl",
             "logging.file.enabled",
             "corpus.rerank",
+            "phoenix.enabled",
         }
     )
 
@@ -1164,6 +1165,11 @@ class Config:
             "logging.file.backup_count",
             "semantic_search.embedding_batch_size",
             "corpus.rerank_pool",
+            "corpus.chunk_size",
+            "corpus.chunk_overlap",
+            "corpus.ocr_dpi",
+            "corpus.num_ctx",
+            "corpus.min_chars_per_page",
         }
     )
 

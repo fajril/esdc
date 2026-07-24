@@ -57,6 +57,12 @@ class TestPromptForConfigValue:
         result = _prompt_for_config_value("cache.sql_ttl", 3600)
         assert result == 42
 
+    @patch("esdc.config_wizard.questionary.text")
+    def test_integer_corpus_num_ctx(self, mock_text):
+        mock_text.return_value.ask.return_value = "4096"
+        result = _prompt_for_config_value("corpus.num_ctx", 16384)
+        assert result == 4096
+
 
 class TestFetchModels:
     """Test model list fetching."""
