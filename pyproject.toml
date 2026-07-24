@@ -40,6 +40,8 @@ dependencies = [
     "tiktoken>=0.12.0",
     # Direct APIs
     "ollama>=0.4.0",
+    # Internal embeddings/rerank (ONNX, in-process — no daemon)
+    "fastembed>=0.7.0",
     "click>=8.0.0",
     # Web server
     "fastapi>=0.100.0",
