@@ -1154,6 +1154,7 @@ class Config:
         {
             "api.verify_ssl",
             "logging.file.enabled",
+            "corpus.rerank",
         }
     )
 
@@ -1162,6 +1163,7 @@ class Config:
             "cache.sql_ttl",
             "logging.file.backup_count",
             "semantic_search.embedding_batch_size",
+            "corpus.rerank_pool",
         }
     )
 

@@ -295,6 +295,39 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
             ).ask()
         return selected
 
+    # 2b. Reranker model key? Curated fastembed choices + custom escape.
+    # Keep these choices in sync with esdc/corpus/reranker.py DEFAULT_RERANKER
+    # + _CUSTOM_RERANKERS.
+    if key == "corpus.rerank_model":
+        choices = [
+            questionary.Choice(
+                "jina-v2 multilingual (default, CC-BY-NC / non-commercial)",
+                value="jinaai/jina-reranker-v2-base-multilingual",
+            ),
+            questionary.Choice(
+                "bge-reranker-v2-m3 (Apache-2.0, Bahasa Indonesia)",
+                value="BAAI/bge-reranker-v2-m3",
+            ),
+            questionary.Choice("Custom…", value="__custom__"),
+        ]
+        default_choice = next(
+            (c for c in choices if c.value == str(current)), choices[0]
+        )
+        selected = questionary.select(
+            label,
+            choices=choices,
+            default=default_choice,
+            instruction=instruction,
+            style=_WIZARD_STYLE,
+        ).ask()
+        if selected == "__custom__":
+            return questionary.text(
+                f"{label} — model name:",
+                default=str(current),
+                style=_WIZARD_STYLE,
+            ).ask()
+        return selected
+
     # 3. Enum key?
     if key in ENUM_CHOICES:
         choices = ENUM_CHOICES[key]
