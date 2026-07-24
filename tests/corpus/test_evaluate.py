@@ -1,6 +1,6 @@
 import json
 
-from esdc.corpus.evaluate import EvalReport, run_eval
+from esdc.corpus.evaluate import run_eval
 
 
 class FakeStore:

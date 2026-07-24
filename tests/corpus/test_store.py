@@ -595,7 +595,6 @@ def test_get_document_by_hash_returns_row_then_none(store):
 
 
 def test_default_embedder_is_internal(monkeypatch, tmp_path):
-    import esdc.corpus.embedder as embedder_mod
     from esdc.corpus.embedder import PINNED_MODEL
 
     store = CorpusStore(
@@ -753,7 +752,9 @@ def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatc
 
 
 def test_corpus_config_isolated_in_tests():
-    """search()'s _maybe_rerank calls Config.get_corpus_config(); the
+    """Config isolation: search() must not read the real ~/.esdc config.
+
+    search()'s _maybe_rerank calls Config.get_corpus_config(); the
     autouse _isolated_db_dirs fixture in conftest.py must also patch
     _load_config so tests never read the real ~/.esdc/config.yaml. If a
     dev machine has corpus.rerank: true set, an un-isolated test would

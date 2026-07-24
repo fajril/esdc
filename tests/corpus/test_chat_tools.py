@@ -162,7 +162,9 @@ def test_search_documents_empty_db_not_available(tool_env):
 
 
 def test_search_documents_survives_missing_embed_text_column(populated):
-    """Simulates an upgraded install: a pre-branch DuckDB has document_chunks
+    """Simulate an upgraded install missing the embed_text column.
+
+    A pre-branch DuckDB has document_chunks
     populated but lacks the embed_text column that this branch's
     `_vector_search` now selects. `search_documents` builds its own
     CorpusStore and must self-heal via `ensure_tables()` before calling
