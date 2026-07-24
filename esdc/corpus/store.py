@@ -108,9 +108,9 @@ class CorpusStore:
         Args:
             db_path: DuckDB file path. Defaults to Config.get_db_file().
             embedder: Object with generate_embedding/generate_embeddings_batch
-                and a `.model` attribute. Defaults to a lazily-imported
-                EmbeddingManager() so importing this module does not
-                require ollama to be installed.
+                and a `.model` attribute. Defaults to the internal fastembed
+                embedder (esdc.corpus.embedder.InternalEmbedder) — no Ollama
+                daemon needed for corpus commit/search.
             sqlite_path: Operational SQLite db holding the documents
                 source of truth. Defaults to the shared esdc.sqlite.
         """
@@ -122,9 +122,9 @@ class CorpusStore:
         self._sconn: sqlite3.Connection | None = None
 
         if embedder is None:
-            from esdc.search.embedding_manager import EmbeddingManager
+            from esdc.corpus.embedder import InternalEmbedder
 
-            embedder = EmbeddingManager()
+            embedder = InternalEmbedder()
         self._embedder = embedder
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
@@ -183,7 +183,7 @@ class CorpusStore:
 
         When ``validate_model=False`` (default), skips the embedder probe
         if tables already exist so read-only commands like ``corpus list``
-        work without Ollama running. Pass ``validate_model=True`` from
+        work without loading the embedding model. Pass ``validate_model=True`` from
         write paths (commit, reembed) to detect model mismatches.
         """
         conn = self._get_connection()

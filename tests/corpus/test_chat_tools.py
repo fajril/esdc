@@ -1,9 +1,10 @@
 """Tests for the iris chat tools `search_documents` and `read_document`.
 
-Monkeypatch choice: the tools construct ``CorpusStore()`` with defaults,
-which resolve ``db_path`` via ``Config.get_db_file()`` and the embedder via
-``esdc.search.embedding_manager.EmbeddingManager`` (lazily imported inside
-``CorpusStore.__init__``). We patch both module attributes so the real
+Monkeypatch choice: the tools construct ``CorpusStore()`` via
+``_get_corpus_embedder()``, which resolves ``db_path`` via
+``Config.get_db_file()`` and the embedder via
+``esdc.corpus.embedder.InternalEmbedder`` (lazily imported inside
+``_get_corpus_embedder``). We patch both module attributes so the real
 constructor path is exercised against a tmp DuckDB with a FakeEmbedder.
 The tool result cache is redirected to a tmp diskcache for isolation.
 """
@@ -80,11 +81,12 @@ def tool_env(tmp_path: Path, monkeypatch):
     from esdc.configs import Config
 
     tools_mod = importlib.import_module("esdc.chat.tools")
-    em = importlib.import_module("esdc.search.embedding_manager")
+    embedder_mod = importlib.import_module("esdc.corpus.embedder")
 
     db_path = tmp_path / "corpus.duckdb"
     monkeypatch.setattr(Config, "get_db_file", classmethod(lambda cls: db_path))
-    monkeypatch.setattr(em, "EmbeddingManager", FakeEmbedder)
+    monkeypatch.setattr(embedder_mod, "InternalEmbedder", FakeEmbedder)
+    monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
     cache = diskcache.Cache(str(tmp_path / "tool_cache"))
     monkeypatch.setattr(tools_mod, "_get_tool_cache", lambda: cache)
@@ -294,7 +296,7 @@ def test_search_documents_reuses_embedder(tool_env, monkeypatch):
 
     monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
     monkeypatch.setattr(
-        "esdc.search.embedding_manager.EmbeddingManager", _CountingEmbedder
+        "esdc.corpus.embedder.InternalEmbedder", _CountingEmbedder
     )
     # invalidate the tool cache so both calls hit the store
     tools_mod.invalidate_tool_cache()

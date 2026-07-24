@@ -592,4 +592,15 @@ def test_get_document_by_hash_returns_row_then_none(store):
     assert got["file_hash"] == DOC["file_hash"]
     assert got["doc_date"] == DOC["doc_date"]
     assert got["subject"] == "Persetujuan"
+
+
+def test_default_embedder_is_internal(monkeypatch, tmp_path):
+    import esdc.corpus.embedder as embedder_mod
+    from esdc.corpus.embedder import PINNED_MODEL
+
+    store = CorpusStore(
+        db_path=tmp_path / "corpus.duckdb", sqlite_path=tmp_path / "esdc.sqlite"
+    )
+    assert store._embedder.model == f"fastembed:{PINNED_MODEL}"
+    assert type(store._embedder).__name__ == "InternalEmbedder"
     assert store.get_document_by_hash("deadbeef") is None
