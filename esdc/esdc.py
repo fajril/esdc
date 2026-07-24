@@ -2967,10 +2967,12 @@ def reembed() -> None:
 
 @corpus_app.command(name="eval")
 def corpus_eval(
-    queries: Path = typer.Argument(
-        ...,
-        help='JSONL: {"query": "...", "expected": ["<doc_id or file_name>"]}',
-    ),
+    queries: Annotated[
+        Path,
+        typer.Argument(
+            help='JSONL: {"query": "...", "expected": ["<doc_id or file_name>"]}',
+        ),
+    ],
     ks: str = typer.Option("1,5,10", "--k", help="Comma-separated k values"),
     rerank: bool | None = typer.Option(
         None,
