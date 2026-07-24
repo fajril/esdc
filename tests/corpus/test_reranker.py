@@ -103,6 +103,38 @@ def test_register_custom_makes_bge_v2_m3_fastembed_supported():
     _register_custom("BAAI/bge-reranker-v2-m3")
 
 
+def test_load_encoder_caches_under_esdc_models_dir(monkeypatch, tmp_path):
+    """Real cross-encoder downloads to <config_dir>/models, not the temp dir.
+
+    Keeps a warmed reranker alive across reboots / tmp purges for offline use.
+    """
+    import fastembed.rerank.cross_encoder as ce_mod
+
+    from esdc.configs import Config
+
+    captured = {}
+
+    class RecordingTCE:
+        @classmethod
+        def list_supported_models(cls):
+            return [{"model": DEFAULT_RERANKER}]
+
+        def __init__(self, model_name, cache_dir=None, **kwargs):
+            captured["model_name"] = model_name
+            captured["cache_dir"] = cache_dir
+
+    monkeypatch.setattr(ce_mod, "TextCrossEncoder", RecordingTCE)
+    monkeypatch.setattr(Config, "get_config_dir", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        Config, "get_corpus_config", classmethod(lambda cls: {})
+    )
+
+    reranker_mod._load_encoder()
+
+    assert captured["model_name"] == DEFAULT_RERANKER
+    assert captured["cache_dir"] == str(tmp_path / "models")
+
+
 def test_register_custom_builtin_or_unknown_is_noop():
     # A fastembed built-in needs no registration.
     _register_custom("jinaai/jina-reranker-v2-base-multilingual")

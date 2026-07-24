@@ -85,9 +85,14 @@ def _load_encoder() -> Any:
     """Load the configured fastembed cross-encoder (monkeypatch seam)."""
     from fastembed.rerank.cross_encoder import TextCrossEncoder
 
+    from esdc.configs import Config
+
     model_name = _resolve_model_name()
     _register_custom(model_name)
-    return TextCrossEncoder(model_name=model_name)
+    # Persist weights under ~/.esdc/models (follows ESDC_CONFIG_DIR), not the
+    # volatile system temp dir fastembed defaults to.
+    cache_dir = str(Config.get_config_dir() / "models")
+    return TextCrossEncoder(model_name=model_name, cache_dir=cache_dir)
 
 
 class Reranker:

@@ -19,6 +19,33 @@ def fake_model(monkeypatch):
     monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
 
 
+def test_get_model_caches_under_esdc_models_dir(monkeypatch, tmp_path):
+    """Real model downloads to <config_dir>/models, not the system temp dir.
+
+    Keeps a warmed model alive across reboots / tmp purges for offline use.
+    """
+    import fastembed
+
+    from esdc.configs import Config
+
+    captured = {}
+
+    class RecordingTextEmbedding:
+        def __init__(self, model_name, cache_dir=None, **kwargs):
+            captured["model_name"] = model_name
+            captured["cache_dir"] = cache_dir
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", RecordingTextEmbedding)
+    monkeypatch.setattr(Config, "get_config_dir", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(embedder_mod, "_model", None)
+
+    embedder_mod._get_model()
+
+    assert captured["model_name"] == PINNED_MODEL
+    assert captured["cache_dir"] == str(tmp_path / "models")
+    monkeypatch.setattr(embedder_mod, "_model", None)
+
+
 def test_model_attr_is_prefixed_pin():
     e = InternalEmbedder()
     assert e.model == f"fastembed:{PINNED_MODEL}"

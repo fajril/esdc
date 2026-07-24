@@ -29,8 +29,16 @@ def _get_model() -> Any:
         if _model is None:
             from fastembed import TextEmbedding
 
+            from esdc.configs import Config
+
+            # Persist weights under ~/.esdc/models (follows ESDC_CONFIG_DIR),
+            # not the volatile system temp dir fastembed defaults to — so a
+            # warmed model survives reboots / tmp purges.
+            cache_dir = str(Config.get_config_dir() / "models")
             try:
-                _model = TextEmbedding(model_name=PINNED_MODEL)
+                _model = TextEmbedding(
+                    model_name=PINNED_MODEL, cache_dir=cache_dir
+                )
             except Exception as e:
                 raise RuntimeError(
                     f"[Corpus] failed to load embedding model {PINNED_MODEL}. "

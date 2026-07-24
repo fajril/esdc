@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `esdc corpus eval <queries.jsonl>` scores retrieval Pass@k and latency;
   use `--rerank/--no-rerank` to compare modes.
 - New `esdc corpus warmup` pre-downloads the embedder and (with `--rerank`) the
-  reranker model for offline/air-gapped setups.
+  reranker model for offline/air-gapped setups. Model weights are cached under
+  `~/.esdc/models` (follows `ESDC_CONFIG_DIR`) instead of the volatile system
+  temp dir, so a warmed model survives reboots and tmp purges.
 
 ## [0.8.0] - 2026-07-22
 
