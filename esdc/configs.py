@@ -59,6 +59,11 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     ),
     "corpus.chunk_size": "Max characters per corpus chunk",
     "corpus.chunk_overlap": "Characters carried over between corpus chunks",
+    "corpus.rerank": (
+        "Enable local cross-encoder rerank stage over RRF search results "
+        "(off by default; first use downloads the model, ~1 GB)"
+    ),
+    "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
     "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
     "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
     "corpus.min_chars_per_page": (
@@ -98,6 +103,8 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
     "Corpus processing": [
         "corpus.chunk_size",
         "corpus.chunk_overlap",
+        "corpus.rerank",
+        "corpus.rerank_pool",
         "corpus.ocr_dpi",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
@@ -859,6 +866,11 @@ class Config:
     CORPUS_DEFAULTS = {
         "chunk_size": 3000,  # max chars per chunk (~750 tokens)
         "chunk_overlap": 300,  # chars carried over between chunks
+        # rerank: second-stage cross-encoder over the RRF top pool.
+        # Off by default until `esdc corpus eval` justifies it; first use
+        # downloads the model (~1 GB, cached).
+        "rerank": False,
+        "rerank_pool": 30,  # candidates scored per query when rerank is on
         "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
         # metadata_model: text LLM for metadata extraction; "main" = default
         # chat provider, "" = use ocr_model on the rendered first page

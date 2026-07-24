@@ -697,3 +697,56 @@ def test_search_over_retrieves_before_rrf(store_with_doc_factory, monkeypatch):
     store.rebuild_indexes()
     store.search("produksi", limit=5)
     assert seen["pool"] == 50  # max(5 * 2, 50)
+
+
+def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
+    import esdc.corpus.reranker as reranker_mod
+    from esdc.corpus.reranker import Reranker
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+    class ReverseEncoder:
+        def rerank(self, query, texts):
+            return list(range(len(texts)))  # later candidate wins
+
+    monkeypatch.setattr(reranker_mod, "_load_encoder", lambda: ReverseEncoder())
+
+    # chunk_size=20 forces the two sections into separate chunks so the
+    # reranker has something to reorder.
+    store, _ = store_with_doc_factory(
+        chunk_size=20,
+        subject="Pengembangan Merak",
+        markdown="# A\n\nalpha konten\n\n# B\n\nbeta konten",
+    )
+    store.rebuild_indexes()
+    baseline = store.search("konten", limit=2, rerank=False)
+    reranked = store.search("konten", limit=2, rerank=True)
+    assert reranked["status"] == "success"
+    base_ids = [r["doc_id"] + r["chunk_text"] for r in baseline["results"]]
+    rer_ids = [r["doc_id"] + r["chunk_text"] for r in reranked["results"]]
+    assert rer_ids == list(reversed(base_ids))
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+
+def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatch):
+    import esdc.corpus.reranker as reranker_mod
+    from esdc.corpus.reranker import Reranker
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+    def boom():
+        raise RuntimeError("model missing")
+
+    monkeypatch.setattr(reranker_mod, "_load_encoder", boom)
+
+    store, _ = store_with_doc_factory(subject="Pengembangan Merak")
+    store.rebuild_indexes()
+    result = store.search("produksi", limit=5, rerank=True)
+    assert result["status"] in ("success", "no_results")  # never error
+
+    Reranker._instance = None
+    Reranker._failed = False

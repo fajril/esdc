@@ -943,8 +943,51 @@ class CorpusStore:
 
         return sorted(scored.values(), key=lambda x: x["score"], reverse=True)
 
+    def _maybe_rerank(
+        self,
+        query: str,
+        merged: list[dict[str, Any]],
+        rerank: bool | None,
+    ) -> list[dict[str, Any]]:
+        """Reorder the top of the RRF list with the local cross-encoder.
+
+        rerank=None reads corpus.rerank from config; an explicit bool
+        overrides it (the eval harness compares both modes). Any failure
+        keeps RRF order — rerank never breaks search.
+        """
+        cfg = Config.get_corpus_config()
+        enabled = cfg.get("rerank", False) if rerank is None else rerank
+        if not enabled or len(merged) <= 1:
+            return merged
+
+        from esdc.corpus.reranker import Reranker
+
+        rr = Reranker.get()
+        if rr is None:
+            return merged
+
+        pool = min(int(cfg.get("rerank_pool", 30)), len(merged))
+        top = merged[:pool]
+        try:
+            scores = rr.rerank(
+                query, [r.get("embed_text") or r["chunk_text"] for r in top]
+            )
+        except Exception as e:
+            logger.warning(
+                "[Corpus] rerank failed, keeping RRF order | error=%s", e
+            )
+            return merged
+        for r, s in zip(top, scores, strict=True):
+            r["rerank_score"] = s
+        top.sort(key=lambda r: r["rerank_score"], reverse=True)
+        return top + merged[pool:]
+
     def search(
-        self, query: str, limit: int = 10, filters: dict[str, Any] | None = None
+        self,
+        query: str,
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+        rerank: bool | None = None,
     ) -> dict[str, Any]:
         """Hybrid (vector + BM25) search over document_chunks.
 
@@ -986,7 +1029,8 @@ class CorpusStore:
                 )
                 keyword_results = []
 
-            merged = self._merge_rrf(vector_results, keyword_results)[:limit]
+            merged = self._merge_rrf(vector_results, keyword_results)
+            merged = self._maybe_rerank(query, merged, rerank)[:limit]
 
             if not merged:
                 return {"status": "no_results", "results": [], "count": 0}
