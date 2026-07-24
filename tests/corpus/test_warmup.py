@@ -1,0 +1,107 @@
+"""Warmup unit tests — never load a real model, never hit the network."""
+
+import pytest
+
+import esdc.corpus.embedder as embedder_mod
+import esdc.corpus.reranker as reranker_mod
+from esdc.corpus.reranker import Reranker
+from esdc.corpus.warmup import run_warmup
+
+
+class FakeTextEmbedding:
+    def embed(self, texts):
+        for _ in texts:
+            yield [0.1, 0.2, 0.3]
+
+
+class FakeEncoder:
+    def rerank(self, query, texts):
+        return list(range(len(texts)))
+
+
+@pytest.fixture(autouse=True)
+def reset_singleton():
+    Reranker._instance = None
+    Reranker._failed = False
+    yield
+    Reranker._instance = None
+    Reranker._failed = False
+
+
+def test_warms_embedder_always(monkeypatch):
+    monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config, "get_corpus_config", classmethod(lambda cls: {"rerank": False})
+    )
+
+    results = run_warmup(rerank=False)
+
+    embedder_result = next(r for r in results if r.component == "embedder")
+    assert embedder_result.ok is True
+    assert embedder_result.model == "fastembed:intfloat/multilingual-e5-large"
+
+    reranker_result = next(r for r in results if r.component == "reranker")
+    assert reranker_result.ok is True
+    assert "disabled" in reranker_result.detail or "skip" in reranker_result.detail
+
+
+def test_warms_reranker_when_flag_true(monkeypatch):
+    monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
+    monkeypatch.setattr(reranker_mod, "_load_encoder", lambda: FakeEncoder())
+
+    results = run_warmup(rerank=True)
+
+    embedder_result = next(r for r in results if r.component == "embedder")
+    reranker_result = next(r for r in results if r.component == "reranker")
+    assert embedder_result.ok is True
+    assert reranker_result.ok is True
+    assert reranker_result.model == "jinaai/jina-reranker-v2-base-multilingual"
+
+
+def test_rerank_none_follows_config(monkeypatch):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config, "get_corpus_config", classmethod(lambda cls: {"rerank": True})
+    )
+    monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
+    monkeypatch.setattr(reranker_mod, "_load_encoder", lambda: FakeEncoder())
+
+    results = run_warmup()
+
+    reranker_result = next(r for r in results if r.component == "reranker")
+    assert reranker_result.ok is True
+
+
+def test_embedder_failure_reported(monkeypatch):
+    def boom():
+        raise RuntimeError("no internet")
+
+    monkeypatch.setattr(embedder_mod, "_get_model", boom)
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config, "get_corpus_config", classmethod(lambda cls: {"rerank": False})
+    )
+
+    results = run_warmup()
+
+    embedder_result = next(r for r in results if r.component == "embedder")
+    assert embedder_result.ok is False
+    assert "no internet" in embedder_result.detail
+
+
+def test_reranker_load_failure_reported(monkeypatch):
+    monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
+
+    def boom():
+        raise RuntimeError("no model")
+
+    monkeypatch.setattr(reranker_mod, "_load_encoder", boom)
+
+    results = run_warmup(rerank=True)
+
+    reranker_result = next(r for r in results if r.component == "reranker")
+    assert reranker_result.ok is False

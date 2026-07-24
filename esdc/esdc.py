@@ -2995,5 +2995,26 @@ def corpus_eval(
         raise typer.Exit(code=1)
 
 
+@corpus_app.command(name="warmup")
+def corpus_warmup(
+    rerank: bool | None = typer.Option(
+        None,
+        "--rerank/--no-rerank",
+        help="Also warm the reranker (default: corpus.rerank config)",
+    ),
+) -> None:
+    """Pre-download corpus models (embedder + optional reranker) for offline use."""
+    from esdc.corpus.warmup import run_warmup
+
+    results = run_warmup(rerank=rerank)
+    failed = False
+    for r in results:
+        mark = "[green]OK[/green]" if r.ok else "[red]FAIL[/red]"
+        rich.print(f"{mark} {r.component}: {r.model} — {r.detail}")
+        failed = failed or not r.ok
+    if failed:
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
