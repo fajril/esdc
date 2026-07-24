@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Corpus retrieval overhaul
+
+- Embeddings are now internal (fastembed ONNX, pinned `intfloat/multilingual-e5-large`) — corpus
+  commit/search no longer needs an Ollama daemon. Existing corpora: run
+  `esdc corpus reembed` once (the commit command will tell you).
+- Contextual retrieval: each chunk is embedded and FTS-indexed with its
+  document context (doc type, subject, entities, section) prepended, so
+  queries mixing topic + entity rank the right document. Display text is
+  unchanged.
+- Search over-retrieves (min 50 candidates per path) before RRF fusion.
+- Optional local reranker (`corpus.rerank: true`, default off): fastembed
+  cross-encoder (`jinaai/jina-reranker-v2-base-multilingual`) reorders the
+  top `corpus.rerank_pool` (default 30) candidates.
+- New `esdc corpus eval <queries.jsonl>` scores retrieval Pass@k and latency;
+  use `--rerank/--no-rerank` to compare modes.
+
 ## [0.8.0] - 2026-07-22
 
 ### Added
