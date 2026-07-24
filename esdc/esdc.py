@@ -2965,6 +2965,34 @@ def reembed() -> None:
     )
 
 
+@corpus_app.command(name="eval")
+def corpus_eval(
+    queries: Path = typer.Argument(
+        ...,
+        help='JSONL: {"query": "...", "expected": ["<doc_id or file_name>"]}',
+    ),
+    ks: str = typer.Option("1,5,10", "--k", help="Comma-separated k values"),
+    rerank: bool | None = typer.Option(
+        None,
+        "--rerank/--no-rerank",
+        help="Force rerank on/off (default: corpus.rerank config)",
+    ),
+) -> None:
+    """Score retrieval quality (Pass@k, latency) against a query set."""
+    from esdc.corpus.evaluate import run_eval
+
+    k_values = tuple(int(k.strip()) for k in ks.split(",") if k.strip())
+    report = run_eval(queries, ks=k_values, rerank=rerank)
+
+    rich.print(f"Queries scored: {report.n_queries}")
+    for k in k_values:
+        pct = report.pass_at.get(k, 0.0) * 100
+        rich.print(f"  Pass@{k}: {pct:.1f}%")
+    rich.print(f"  Mean latency: {report.mean_latency_ms:.0f} ms")
+    for f in report.failures:
+        rich.print(f"[yellow]  skipped: {f}[/yellow]")
+    if not report.n_queries:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
