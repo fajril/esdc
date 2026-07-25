@@ -1,6 +1,11 @@
 import pytest
 
-from esdc.corpus.sampling import allocate, compute_sample_size, corpus_fingerprint, sample_docs
+from esdc.corpus.sampling import (
+    allocate,
+    compute_sample_size,
+    corpus_fingerprint,
+    sample_docs,
+)
 
 
 @pytest.mark.parametrize(
