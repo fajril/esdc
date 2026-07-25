@@ -705,6 +705,39 @@ def test_eval_stale_fingerprint_blocks(monkeypatch, tmp_path, fake_store):
     assert "Corpus changed" in result.output
 
 
+def test_eval_stale_reports_changed_doc(monkeypatch, tmp_path, fake_store):
+    """A doc re-ingested with edited content (same doc_id, new file_hash).
+
+    Must be reported as "~1 changed", not folded into +added/-removed.
+    """
+    from esdc.corpus.query_gen import QueryMeta, write_query_file
+
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+
+    # Same doc_ids as the live store (no additions/removals), but letter-0's
+    # recorded file_hash ("OLD-HASH") no longer matches the store's current
+    # hash ("h0") — simulating a content edit under the same doc_id.
+    rows = [
+        {"query": "q0", "expected": ["letter-0"], "file_hash": "OLD-HASH"},
+        {"query": "q1", "expected": ["letter-1"], "file_hash": "h1"},
+        {"query": "q2", "expected": ["letter-2"], "file_hash": "h2"},
+    ]
+    meta = QueryMeta(
+        fingerprint="stale-fp",  # deliberately not matching the live fingerprint
+        margin=0.05, n=3, ks=[1, 5, 10],
+        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+    )
+    write_query_file(path, rows, meta)
+
+    result = runner.invoke(app, ["corpus", "eval"])
+    assert result.exit_code == 1
+    assert "Corpus changed" in result.output
+    assert "+0 new" in result.output
+    assert "-0 removed" in result.output
+    assert "~1 changed" in result.output
+
+
 def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
     """--refresh reconciles against a mutated live corpus and prints delta.
 
@@ -760,3 +793,46 @@ def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
     assert new_meta.fingerprint == corpus_fingerprint(
         fake_store.fingerprint_rows()
     )
+
+
+def test_eval_refresh_reports_changed_count(monkeypatch, tmp_path, fake_store):
+    """--refresh reports a "~C changed" segment for docs whose content changed.
+
+    Same doc_id, new file_hash, between the old and new query file.
+    """
+    from esdc.corpus.query_gen import QueryMeta, write_query_file
+
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    _patch_provider_config(monkeypatch)
+
+    # Query file recording a stale file_hash for letter-0; the live store's
+    # sample_content/fingerprint_rows for letter-0 report "h0".
+    old_rows = [
+        {"query": "q0", "expected": ["letter-0"], "file_hash": "OLD-HASH"},
+        {"query": "q1", "expected": ["letter-1"], "file_hash": "h1"},
+        {"query": "q2", "expected": ["letter-2"], "file_hash": "h2"},
+    ]
+    meta = QueryMeta(
+        fingerprint="stale-fp", margin=0.05, n=3, ks=[1, 5, 10],
+        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+    )
+    write_query_file(path, old_rows, meta)
+
+    class _Resp:
+        content = "refreshed query?"
+
+    class _FakeLLM:
+        def invoke(self, prompt):
+            return _Resp()
+
+    monkeypatch.setattr(
+        "esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM()
+    )
+
+    result = runner.invoke(app, ["corpus", "eval", "--refresh"])
+    assert result.exit_code == 0, result.output
+    assert "Refreshed:" in result.output
+    assert "+0 new" in result.output
+    assert "-0 removed" in result.output
+    assert "~1 changed" in result.output

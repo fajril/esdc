@@ -793,6 +793,7 @@ def test_sample_content_returns_first_chunk(populated_store):
     assert content["doc_id"] == any_id
     assert "doc_type" in content and "subject" in content
     assert isinstance(content["chunk_text"], str)
+    assert content["file_hash"] == DOC["file_hash"]
 
 
 def test_sample_content_missing_doc_returns_none(populated_store):

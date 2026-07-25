@@ -3076,9 +3076,22 @@ def corpus_eval(
                 new_ids = {r["expected"][0] for r in rows}
                 added = len(new_ids - old_ids)
                 removed = len(old_ids - new_ids)
+                old_by_id = {
+                    r["expected"][0]: r.get("file_hash")
+                    for r in old_rows if r.get("expected")
+                }
+                new_by_id = {
+                    r["expected"][0]: r.get("file_hash")
+                    for r in rows if r.get("expected")
+                }
+                changed = sum(
+                    1
+                    for d in (old_by_id.keys() & new_by_id.keys())
+                    if old_by_id[d] and new_by_id[d] and old_by_id[d] != new_by_id[d]
+                )
                 rich.print(
-                    f"Refreshed: +{added} new, -{removed} removed "
-                    f"→ {len(rows)} queries"
+                    f"Refreshed: +{added} new, -{removed} removed, "
+                    f"~{changed} changed → {len(rows)} queries"
                 )
         finally:
             store.close()
@@ -3103,12 +3116,21 @@ def corpus_eval(
             finally:
                 store.close()
             if live != meta.fingerprint:
-                existing_ids = {r["expected"][0] for r in _rows}
+                live_hash = dict(fp_rows)
+                existing_ids = {r["expected"][0] for r in _rows if r.get("expected")}
                 added = len(live_ids - existing_ids)
                 removed = len(existing_ids - live_ids)
+                changed = sum(
+                    1
+                    for r in _rows
+                    if r.get("expected")
+                    and r["expected"][0] in live_hash
+                    and r.get("file_hash")
+                    and r["file_hash"] != live_hash[r["expected"][0]]
+                )
                 typer.echo(
-                    f"Corpus changed (+{added} new, -{removed} removed). "
-                    f"Rerun with --refresh or --init.",
+                    f"Corpus changed (+{added} new, -{removed} removed, "
+                    f"~{changed} changed). Rerun with --refresh or --init.",
                     err=True,
                 )
                 raise typer.Exit(1)

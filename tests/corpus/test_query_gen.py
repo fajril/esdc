@@ -156,3 +156,49 @@ def test_reconcile_does_not_grow_past_original_size():
     new_rows, _ = reconcile(store, _call, rows, meta, seed=1)
     assert len(new_rows) <= meta.n          # never exceeds original size
     assert len(new_rows) == 6               # noop-ish: kept already fills target
+
+
+def test_reconcile_regenerates_doc_with_changed_file_hash():
+    store = FakeStore(_docs(10))
+    rows, meta = generate(store, _call, n=6, seed=1)
+
+    changed_id = rows[0]["expected"][0]
+    other_ids = [r["expected"][0] for r in rows[1:]]
+    store._docs[changed_id]["file_hash"] = "NEW-HASH"
+    store._docs[changed_id]["chunk_text"] = "brand new body"
+
+    new_rows, _ = reconcile(store, _call, rows, meta, seed=1)
+    new_ids = {r["expected"][0] for r in new_rows}
+
+    # Doc is still present, still exactly one row for it.
+    assert changed_id in new_ids
+    assert sum(1 for r in new_rows if r["expected"][0] == changed_id) == 1
+
+    # Its row was regenerated: file_hash reflects the NEW content.
+    changed_row = next(r for r in new_rows if r["expected"][0] == changed_id)
+    assert changed_row["file_hash"] == "NEW-HASH"
+
+    # Unchanged docs' rows are untouched (identical dicts as before).
+    old_by_id = {r["expected"][0]: r for r in rows if r["expected"][0] in other_ids}
+    new_by_id = {r["expected"][0]: r for r in new_rows if r["expected"][0] in other_ids}
+    for doc_id, old_row in old_by_id.items():
+        assert new_by_id[doc_id] == old_row
+
+
+def test_reconcile_keeps_legacy_row_without_file_hash():
+    """A pre-existing row with no `file_hash` key is kept, not regenerated."""
+    store = FakeStore(_docs(10))
+    rows, meta = generate(store, _call, n=6, seed=1)
+
+    legacy_id = rows[0]["expected"][0]
+    legacy_row = dict(rows[0])
+    del legacy_row["file_hash"]
+    rows[0] = legacy_row
+
+    # Even though live content differs, a legacy row (no file_hash) can't be
+    # detected as changed, so it must be kept as-is.
+    store._docs[legacy_id]["file_hash"] = "SOME-OTHER-HASH"
+
+    new_rows, _ = reconcile(store, _call, rows, meta, seed=1)
+    assert legacy_row in new_rows
+    assert sum(1 for r in new_rows if r["expected"][0] == legacy_id) == 1

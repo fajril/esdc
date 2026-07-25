@@ -103,7 +103,13 @@ def _synthesize_rows(
         if content is None:
             continue
         query = synthesize_query(call, content["subject"], content["chunk_text"])
-        rows.append({"query": query, "expected": [doc_id]})
+        rows.append(
+            {
+                "query": query,
+                "expected": [doc_id],
+                "file_hash": content.get("file_hash", ""),
+            }
+        )
         if progress_cb:
             progress_cb(i, total)
     return rows
@@ -150,16 +156,29 @@ def reconcile(
     seed: int = 42,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> tuple[list[dict], QueryMeta]:
-    """Drop rows for vanished docs, add samples for new docs, re-balance strata."""
+    """Drop rows for vanished docs, regenerate changed docs, add new docs."""
     docs = store.list_documents()
-    live_ids = {d["doc_id"] for d in docs}
+    live_hash = dict(store.fingerprint_rows())
     by_type = _docs_by_type(docs)
 
-    kept = [
-        r for r in existing_rows
-        if r.get("expected") and r["expected"][0] in live_ids
-    ]
+    kept: list[dict] = []
+    changed_ids: list[str] = []
+    for r in existing_rows:
+        if not r.get("expected"):
+            continue
+        doc_id = r["expected"][0]
+        if doc_id not in live_hash:
+            continue  # removed doc — dropped
+        row_hash = r.get("file_hash")
+        if not row_hash:
+            kept.append(r)  # legacy/no hash — keep, can't tell if changed
+        elif row_hash == live_hash[doc_id]:
+            kept.append(r)  # unchanged
+        else:
+            changed_ids.append(doc_id)  # content changed — regenerate
+
     kept_ids = {r["expected"][0] for r in kept}
+    covered_ids = kept_ids | set(changed_ids)
 
     margin = existing_meta.margin if existing_meta else 0.05
     ks = tuple(existing_meta.ks) if existing_meta else (1, 5, 10)
@@ -174,22 +193,23 @@ def reconcile(
     counts = {k: len(v) for k, v in by_type.items()}
     alloc = allocate(counts, target)
 
-    # Candidate new docs = live docs not already covered.
+    # Candidate new docs = live docs not already covered (kept or changed).
     unused_by_type = {
-        t: [i for i in ids if i not in kept_ids] for t, ids in by_type.items()
+        t: [i for i in ids if i not in covered_ids] for t, ids in by_type.items()
     }
     kept_per_type: dict[str, int] = {}
-    for r in kept:
-        did = r["expected"][0]
+    for did in covered_ids:
         t = next((k for k, v in by_type.items() if did in v), "unknown")
         kept_per_type[t] = kept_per_type.get(t, 0) + 1
 
     need = {
         t: max(0, alloc.get(t, 0) - kept_per_type.get(t, 0)) for t in by_type
     }
-    budget = max(0, target - len(kept))
+    budget = max(0, target - len(kept) - len(changed_ids))
     add_ids = sample_docs(unused_by_type, need, seed=seed)[:budget]
-    new_rows = _synthesize_rows(store, call, add_ids, progress_cb)
+    synthesized = _synthesize_rows(
+        store, call, changed_ids + add_ids, progress_cb
+    )
 
-    rows = kept + new_rows
+    rows = kept + synthesized
     return rows, _make_meta(store, rows, margin, ks)

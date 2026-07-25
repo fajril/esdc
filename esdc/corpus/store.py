@@ -626,7 +626,7 @@ class CorpusStore:
         """doc_type + subject + first chunk text for one doc, for query synthesis."""
         sconn = self._get_sqlite()
         row = sconn.execute(
-            f"SELECT doc_id, doc_type, subject FROM {self.DOC_TABLE} "
+            f"SELECT doc_id, doc_type, subject, file_hash FROM {self.DOC_TABLE} "
             f"WHERE doc_id = ?",
             (doc_id,),
         ).fetchone()
