@@ -64,9 +64,11 @@ For a prebuilt wheel, add the matching index for your accelerator:
 Models (~1.2 GB total) download to `~/.esdc/models` on first use; run
 `esdc corpus warmup` to pre-fetch them for offline use.
 
-GPU offload (optional): set `corpus.n_gpu_layers: -1`. On Apple Silicon
-the source build enables Metal automatically. On a CUDA box install a
-CUDA build once (`CMAKE_ARGS="-DGGML_CUDA=on" pip install --force-reinstall
+GPU offload: `corpus.n_gpu_layers` defaults to `-1` (offload all layers
+when a GPU backend is present, else run on CPU — inert on the CPU-only
+wheel, so a GPU-less VPS just uses CPU). Set it to `0` to force CPU. The
+macOS metal wheel and a CUDA build both honour it; for CUDA install a CUDA
+build once (`CMAKE_ARGS="-DGGML_CUDA=on" pip install --force-reinstall
 --no-cache-dir llama-cpp-python`, or use the `cu124` wheel index above).
 
 ## Quick Start

@@ -41,8 +41,10 @@ def test_corpus_ollama_host_default_and_documented(monkeypatch):
     assert "corpus.ollama_host" in KEY_DESCRIPTIONS
 
 
-def test_corpus_defaults_have_gpu_layers_zero():
-    assert Config.CORPUS_DEFAULTS["n_gpu_layers"] == 0
+def test_corpus_defaults_gpu_layers_auto():
+    # Default -1 = offload all layers when a GPU backend (Metal/CUDA) is
+    # present, and fall back to CPU otherwise (inert on the CPU-only wheel).
+    assert Config.CORPUS_DEFAULTS["n_gpu_layers"] == -1
 
 
 def test_corpus_n_gpu_layers_registered_as_int_key():

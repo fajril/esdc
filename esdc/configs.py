@@ -72,7 +72,7 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
     "corpus.n_gpu_layers": (
         "llama.cpp GPU offload for corpus embed/rerank "
-        "(0=CPU, -1=all layers on a GPU box)"
+        "(-1=auto: all layers if a GPU is present else CPU; 0=force CPU)"
     ),
     "corpus.min_chars_per_page": (
         "Text-layer character threshold below which a page counts as scanned"
@@ -899,9 +899,11 @@ class Config:
         # models; "" = local daemon (http://127.0.0.1:11434)
         "ollama_host": "",
         # n_gpu_layers: llama.cpp GPU offload for corpus embed/rerank.
-        # 0 = CPU (default, laptops); -1 = offload all layers (GPU box,
-        # fast batch reembed). Runtime-only, never stored.
-        "n_gpu_layers": 0,
+        # -1 (default) = offload all layers when a GPU backend is present
+        # (Metal on the mac wheel, CUDA on a cuXXX wheel), and fall back to
+        # CPU otherwise — inert/no-op on the CPU-only wheel (a GPU-less VPS
+        # just runs on CPU). Set 0 to force CPU. Runtime-only, never stored.
+        "n_gpu_layers": -1,
     }
 
     @classmethod
