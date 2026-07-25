@@ -614,6 +614,38 @@ class CorpusStore:
             docs.append(doc)
         return docs
 
+    def fingerprint_rows(self) -> list[tuple[str, str]]:
+        """(doc_id, file_hash) for every document — input to corpus_fingerprint."""
+        sconn = self._get_sqlite()
+        rows = sconn.execute(
+            f"SELECT doc_id, file_hash FROM {self.DOC_TABLE}"
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def sample_content(self, doc_id: str) -> dict[str, Any] | None:
+        """doc_type + subject + first chunk text for one doc, for query synthesis."""
+        sconn = self._get_sqlite()
+        row = sconn.execute(
+            f"SELECT doc_id, doc_type, subject FROM {self.DOC_TABLE} "
+            f"WHERE doc_id = ?",
+            (doc_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        doc = dict(row)
+        chunk = (
+            self._get_connection()
+            .execute(
+                f"SELECT chunk_text FROM {self.CHUNK_TABLE} "
+                f"WHERE doc_id = ? ORDER BY chunk_index LIMIT 1",
+                [doc_id],
+            )
+            .fetchone()
+        )
+        doc["chunk_text"] = chunk[0] if chunk else ""
+        doc["subject"] = doc.get("subject") or ""
+        return doc
+
     def find_doc_ids(self, filters: dict[str, Any]) -> list[tuple[str, str]]:
         """(doc_id, file_name) pairs matching documents-column filters.
 

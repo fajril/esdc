@@ -767,3 +767,33 @@ def test_corpus_config_isolated_in_tests():
     from esdc.configs import Config
 
     assert Config.get_corpus_config()["rerank"] is False
+
+
+# --------------------------------------------------------------------------
+# Read helpers for eval query generation
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def populated_store(store):
+    store.insert_document(DOC, [Chunk(0, "Surat", "isi surat persetujuan")])
+    return store
+
+
+def test_fingerprint_rows_returns_doc_id_and_hash(populated_store):
+    rows = populated_store.fingerprint_rows()
+    assert all(len(r) == 2 for r in rows)
+    ids = {r[0] for r in rows}
+    assert ids  # non-empty; matches inserted docs
+
+
+def test_sample_content_returns_first_chunk(populated_store):
+    any_id = populated_store.fingerprint_rows()[0][0]
+    content = populated_store.sample_content(any_id)
+    assert content["doc_id"] == any_id
+    assert "doc_type" in content and "subject" in content
+    assert isinstance(content["chunk_text"], str)
+
+
+def test_sample_content_missing_doc_returns_none(populated_store):
+    assert populated_store.sample_content("does-not-exist") is None
