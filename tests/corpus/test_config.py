@@ -58,3 +58,8 @@ def test_corpus_default_reranker_is_qwen3_gguf():
         Config.CORPUS_DEFAULTS["rerank_model"]
         == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
     )
+
+
+def test_corpus_queries_path_under_config_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(Config, "get_config_dir", classmethod(lambda cls: tmp_path))
+    assert Config.get_corpus_queries_path() == tmp_path / "corpus_queries.jsonl"

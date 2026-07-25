@@ -170,6 +170,11 @@ class Config:
         return cls.get_config_dir() / "config.yaml"
 
     @classmethod
+    def get_corpus_queries_path(cls) -> Path:
+        """Return the eval query set path (~/.esdc/corpus_queries.jsonl)."""
+        return cls.get_config_dir() / "corpus_queries.jsonl"
+
+    @classmethod
     def _default_db_file(cls) -> Path:
         """Return the default DuckDB file path."""
         return cls.get_config_dir() / cls.DB_FILENAME
