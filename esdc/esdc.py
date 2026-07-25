@@ -2975,10 +2975,17 @@ def corpus_eval(
         ),
     ] = None,
     init: Annotated[
-        int | None,
+        bool,
         typer.Option(
             "--init",
-            help="Generate query set (N samples; omit N for auto size).",
+            help="Generate query set (auto-sized from --margin unless "
+            "--samples given).",
+        ),
+    ] = False,
+    samples: Annotated[
+        int | None,
+        typer.Option(
+            "--samples", "-n", help="Explicit sample size for --init (default: auto)."
         ),
     ] = None,
     refresh: Annotated[
@@ -3039,15 +3046,15 @@ def corpus_eval(
 
             return fn(cb)
 
-    if init is not None or refresh:
+    if init or refresh:
         store = CorpusStore()
         try:
             call = _llm_call()
-            if init is not None:
+            if init:
                 rows, meta = _progress_run(
                     lambda cb: generate(
                         store, call, margin=margin,
-                        n=(init or None), seed=seed, ks=k_values, progress_cb=cb,
+                        n=samples, seed=seed, ks=k_values, progress_cb=cb,
                     )
                 )
                 write_query_file(path, rows, meta)
@@ -3060,7 +3067,14 @@ def corpus_eval(
                     )
                 )
                 write_query_file(path, rows, meta)
-                rich.print(f"Refreshed query set → {len(rows)} queries")
+                old_ids = {r["expected"][0] for r in old_rows}
+                new_ids = {r["expected"][0] for r in rows}
+                added = len(new_ids - old_ids)
+                removed = len(old_ids - new_ids)
+                rich.print(
+                    f"Refreshed: +{added} new, -{removed} removed "
+                    f"→ {len(rows)} queries"
+                )
         finally:
             store.close()
     else:
@@ -3078,8 +3092,9 @@ def corpus_eval(
         else:
             store = CorpusStore()
             try:
-                live = corpus_fingerprint(store.fingerprint_rows())
-                live_ids = {r[0] for r in store.fingerprint_rows()}
+                fp_rows = store.fingerprint_rows()
+                live = corpus_fingerprint(fp_rows)
+                live_ids = {r[0] for r in fp_rows}
             finally:
                 store.close()
             if live != meta.fingerprint:

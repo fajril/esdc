@@ -650,11 +650,25 @@ def test_eval_missing_file_errors(monkeypatch, tmp_path):
 def test_eval_init_generates_and_scores(
     monkeypatch, tmp_path, fake_store, fake_llm
 ):
+    """`--init` with no value must auto-size (the primary default workflow)."""
     path = tmp_path / "corpus_queries.jsonl"
     _patch_queries_path(monkeypatch, path)
     _patch_provider_config(monkeypatch)
 
-    result = runner.invoke(app, ["corpus", "eval", "--init", "2"])
+    result = runner.invoke(app, ["corpus", "eval", "--init"])
+    assert result.exit_code == 0, result.output
+    assert "Generated" in result.output
+    assert path.exists()
+
+
+def test_eval_init_with_explicit_samples(
+    monkeypatch, tmp_path, fake_store, fake_llm
+):
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    _patch_provider_config(monkeypatch)
+
+    result = runner.invoke(app, ["corpus", "eval", "--init", "--samples", "2"])
     assert result.exit_code == 0, result.output
     assert "Generated" in result.output
     assert path.exists()
@@ -674,3 +688,60 @@ def test_eval_stale_fingerprint_blocks(monkeypatch, tmp_path, fake_store):
     result = runner.invoke(app, ["corpus", "eval"])
     assert result.exit_code == 1
     assert "Corpus changed" in result.output
+
+
+def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
+    """--refresh reconciles against a mutated live corpus and prints delta.
+
+    Reads the query file, reconciles against the (mutated) live corpus,
+    writes the updated file, and prints the +added/-removed delta.
+    """
+    from esdc.corpus.query_gen import QueryMeta, read_query_file, write_query_file
+    from esdc.corpus.sampling import corpus_fingerprint
+
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    _patch_provider_config(monkeypatch)
+
+    # Query file matching the store's current (3-doc) fingerprint.
+    old_rows = [
+        {"query": f"q{i}", "expected": [f"letter-{i}"]} for i in range(3)
+    ]
+    meta = QueryMeta(
+        fingerprint=corpus_fingerprint(fake_store.fingerprint_rows()),
+        margin=0.05, n=3, ks=[1, 5, 10],
+        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+    )
+    write_query_file(path, old_rows, meta)
+
+    # Mutate the corpus: drop letter-2, add letter-3 -> fingerprint changes.
+    del fake_store._docs["letter-2"]
+    fake_store._docs["letter-3"] = {
+        "doc_id": "letter-3", "doc_type": "letter", "subject": "subject 3",
+        "file_hash": "h3", "chunk_text": "body 3",
+    }
+
+    class _Resp:
+        content = "refreshed query?"
+
+    class _FakeLLM:
+        def invoke(self, prompt):
+            return _Resp()
+
+    monkeypatch.setattr(
+        "esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM()
+    )
+
+    result = runner.invoke(app, ["corpus", "eval", "--refresh"])
+    assert result.exit_code == 0, result.output
+    assert "Refreshed:" in result.output
+    assert "+1 new" in result.output
+    assert "-1 removed" in result.output
+
+    new_rows, new_meta = read_query_file(path)
+    new_ids = {r["expected"][0] for r in new_rows}
+    assert "letter-2" not in new_ids
+    assert "letter-3" in new_ids
+    assert new_meta.fingerprint == corpus_fingerprint(
+        fake_store.fingerprint_rows()
+    )
