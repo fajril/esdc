@@ -455,6 +455,25 @@ disposable in-memory LadybugDB instance graph rebuilt from `esdc.sqlite`) to
 answer broad questions about one POD/field/project/WK — its dossier, related
 documents/projects/revisions, and extracted claims.
 
+### Evaluating retrieval quality
+
+Generate a statistically-sized, stratified query set (one synthesized query
+per sampled document, allocated across `doc_type`), then score retrieval
+Pass@k and latency:
+
+```bash
+esdc corpus eval --init              # auto sample size (95% CI, ±5%)
+esdc corpus eval --init --samples 100   # fixed 100 samples
+esdc corpus eval --init --margin 0.10   # cheaper, ±10% margin (auto-size)
+esdc corpus eval                     # score existing set
+esdc corpus eval --refresh           # incremental sync after corpus changes
+```
+
+The query set lives at `~/.esdc/corpus_queries.jsonl`. If the corpus changes,
+`esdc corpus eval` refuses to run (exit 1, reporting new/removed documents) and
+prompts you to rerun with `--refresh` (incremental) or `--init` (regenerate).
+Query synthesis uses the configured chat LLM provider.
+
 ### Remote Ollama
 
 `OLLAMA_HOST` is honored for OCR, so extraction can run against a remote Ollama server (e.g. a GPU host) instead of localhost:
