@@ -6,7 +6,9 @@ docs/superpowers/specs/2026-07-25-dynamic-corpus-queries-design.md.
 
 from __future__ import annotations
 
+import hashlib
 import math
+import random
 
 
 def compute_sample_size(
@@ -86,3 +88,35 @@ def _cap_to_size(alloc: dict[str, int], strata: dict[str, int]) -> None:
         candidates.sort(key=lambda k: strata[k] - alloc[k], reverse=True)
         alloc[candidates[0]] += 1
         overflow -= 1
+
+
+def sample_docs(
+    docs_by_type: dict[str, list[str]],
+    allocation: dict[str, int],
+    seed: int = 42,
+) -> list[str]:
+    """Uniform random doc_ids per stratum, count driven by `allocation`.
+
+    Deterministic given the same seed and inputs. If a stratum has fewer
+    docs than its allocation, all of its docs are taken.
+    """
+    rng = random.Random(seed)
+    picked: list[str] = []
+    for doc_type in sorted(docs_by_type):
+        ids = docs_by_type[doc_type]
+        k = min(allocation.get(doc_type, 0), len(ids))
+        if k <= 0:
+            continue
+        picked.extend(rng.sample(ids, k))
+    return picked
+
+
+def corpus_fingerprint(rows: list[tuple[str, str]]) -> str:
+    """SHA-256 over the sorted (doc_id, file_hash) pairs of the corpus."""
+    h = hashlib.sha256()
+    for doc_id, file_hash in sorted(rows):
+        h.update(doc_id.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(file_hash.encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
