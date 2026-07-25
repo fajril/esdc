@@ -64,3 +64,15 @@ def test_bad_line_recorded_as_failure(tmp_path):
     report = run_eval(p, ks=(1,), store=FakeStore())
     assert report.n_queries == 1
     assert len(report.failures) == 1
+
+
+def test_meta_header_line_is_ignored(tmp_path):
+    p = tmp_path / "queries.jsonl"
+    p.write_text(
+        '{"_meta": {"fingerprint": "fp"}}\n'
+        '{"query": "q1", "expected": ["doc-b"]}\n',
+        encoding="utf-8",
+    )
+    report = run_eval(p, ks=(1,), store=FakeStore())
+    assert report.n_queries == 1
+    assert report.failures == []

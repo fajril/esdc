@@ -48,6 +48,8 @@ def run_eval(
                 continue
             try:
                 row = json.loads(line)
+                if isinstance(row, dict) and "_meta" in row:
+                    continue
                 query = row["query"]
                 expected = set(row["expected"])
             except (ValueError, KeyError, TypeError) as e:
