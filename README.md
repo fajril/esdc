@@ -51,6 +51,24 @@ uv pip install -e ".[phoenix]"
 uv sync --dev
 ```
 
+### Corpus embeddings/rerank (llama.cpp)
+
+The corpus uses `llama-cpp-python` (Qwen3 GGUFs, in-process, no daemon).
+Plain `pip install` compiles from source (needs cmake + a C++ compiler).
+For a prebuilt wheel, add the matching index for your accelerator:
+
+    pip install esdc --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu     # CPU
+    #                                                                         .../whl/metal   # macOS
+    #                                                                         .../whl/cu124   # CUDA 12.4
+
+Models (~1.2 GB total) download to `~/.esdc/models` on first use; run
+`esdc corpus warmup` to pre-fetch them for offline use.
+
+GPU offload (optional): set `corpus.n_gpu_layers: -1`. On Apple Silicon
+the source build enables Metal automatically. On a CUDA box install a
+CUDA build once (`CMAKE_ARGS="-DGGML_CUDA=on" pip install --force-reinstall
+--no-cache-dir llama-cpp-python`, or use the `cu124` wheel index above).
+
 ## Quick Start
 
 ### Chat Interface
