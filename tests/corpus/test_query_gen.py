@@ -135,3 +135,14 @@ def test_reconcile_noop_when_corpus_unchanged():
     new_rows, new_meta = reconcile(store, _call, rows, meta, seed=1)
     assert {r["expected"][0] for r in new_rows} == {r["expected"][0] for r in rows}
     assert new_meta.fingerprint == meta.fingerprint
+
+
+def test_reconcile_does_not_grow_past_original_size():
+    store = FakeStore(_docs(10, doc_type="letter"))
+    rows, meta = generate(store, _call, n=6, seed=1)   # 6 letter rows, target 6
+    # Corpus gains a new type; all 6 kept rows are still live letters.
+    for d in _docs(5, doc_type="report"):
+        store._docs[d["doc_id"]] = d
+    new_rows, _ = reconcile(store, _call, rows, meta, seed=1)
+    assert len(new_rows) <= meta.n          # never exceeds original size
+    assert len(new_rows) == 6               # noop-ish: kept already fills target

@@ -184,7 +184,8 @@ def reconcile(
     need = {
         t: max(0, alloc.get(t, 0) - kept_per_type.get(t, 0)) for t in by_type
     }
-    add_ids = sample_docs(unused_by_type, need, seed=seed)
+    budget = max(0, target - len(kept))
+    add_ids = sample_docs(unused_by_type, need, seed=seed)[:budget]
     new_rows = _synthesize_rows(store, call, add_ids, progress_cb)
 
     rows = kept + new_rows
