@@ -16,9 +16,9 @@ class FakeTextEmbedding:
         return [[0.1, 0.2, 0.3] for _ in texts]
 
 
-class FakeEncoder:
-    def rerank(self, query, texts):
-        return list(range(len(texts)))
+class FakeRerankModel:
+    def embed(self, prompt):
+        return [0.9, 0.1]
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,7 @@ def test_warms_embedder_always(monkeypatch):
 
 def test_warms_reranker_when_flag_true(monkeypatch):
     monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
-    monkeypatch.setattr(reranker_mod, "_load_encoder", lambda: FakeEncoder())
+    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: FakeRerankModel())
 
     results = run_warmup(rerank=True)
 
@@ -69,7 +69,7 @@ def test_rerank_none_follows_config(monkeypatch):
         Config, "get_corpus_config", classmethod(lambda cls: {"rerank": True})
     )
     monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
-    monkeypatch.setattr(reranker_mod, "_load_encoder", lambda: FakeEncoder())
+    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: FakeRerankModel())
 
     results = run_warmup()
 
@@ -101,7 +101,7 @@ def test_reranker_load_failure_reported(monkeypatch):
     def boom():
         raise RuntimeError("no model")
 
-    monkeypatch.setattr(reranker_mod, "_load_encoder", boom)
+    monkeypatch.setattr(reranker_mod, "_load_reranker", boom)
 
     results = run_warmup(rerank=True)
 

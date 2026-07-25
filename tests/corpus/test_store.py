@@ -705,11 +705,15 @@ def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
     Reranker._instance = None
     Reranker._failed = False
 
-    class ReverseEncoder:
-        def rerank(self, query, texts):
-            return list(range(len(texts)))  # later candidate wins
+    class ReverseModel:
+        def __init__(self):
+            self.i = 0
 
-    monkeypatch.setattr(reranker_mod, "_load_encoder", lambda: ReverseEncoder())
+        def embed(self, prompt):
+            self.i += 1
+            return [float(self.i), 0.0]  # later candidate wins
+
+    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: ReverseModel())
 
     # chunk_size=20 forces the two sections into separate chunks so the
     # reranker has something to reorder.
@@ -740,7 +744,7 @@ def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatc
     def boom():
         raise RuntimeError("model missing")
 
-    monkeypatch.setattr(reranker_mod, "_load_encoder", boom)
+    monkeypatch.setattr(reranker_mod, "_load_reranker", boom)
 
     store, _ = store_with_doc_factory(subject="Pengembangan Merak")
     store.rebuild_indexes()
