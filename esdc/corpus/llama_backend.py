@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
 from llama_cpp import Llama
 
 from esdc.configs import Config
@@ -36,7 +37,12 @@ def resolve_gguf(repo: str, filename: str) -> str:
     offline.
     """
     cache_dir = str(Config.get_config_dir() / "models")
-    return hf_hub_download(repo_id=repo, filename=filename, cache_dir=cache_dir)
+    try:
+        return hf_hub_download(
+            repo_id=repo, filename=filename, cache_dir=cache_dir, local_files_only=True
+        )
+    except EntryNotFoundError:
+        return hf_hub_download(repo_id=repo, filename=filename, cache_dir=cache_dir)
 
 
 def load_llama(
