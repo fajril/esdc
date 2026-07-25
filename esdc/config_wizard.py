@@ -295,18 +295,13 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
             ).ask()
         return selected
 
-    # 2b. Reranker model key? Curated fastembed choices + custom escape.
-    # Keep these choices in sync with esdc/corpus/reranker.py DEFAULT_RERANKER
-    # + _CUSTOM_RERANKERS.
+    # 2b. Reranker model key? Curated GGUF choice (llama.cpp registry) +
+    # custom escape. Keep in sync with esdc/corpus/reranker.py.
     if key == "corpus.rerank_model":
         choices = [
             questionary.Choice(
-                "jina-v2 multilingual (default, CC-BY-NC / non-commercial)",
-                value="jinaai/jina-reranker-v2-base-multilingual",
-            ),
-            questionary.Choice(
-                "bge-reranker-v2-m3 (Apache-2.0, Bahasa Indonesia)",
-                value="BAAI/bge-reranker-v2-m3",
+                "Qwen3-Reranker-0.6B Q8_0 (default, llama.cpp GGUF)",
+                value="ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
             ),
             questionary.Choice("Custom…", value="__custom__"),
         ]

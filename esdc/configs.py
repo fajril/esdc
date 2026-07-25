@@ -65,12 +65,15 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     ),
     "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
     "corpus.rerank_model": (
-        "Reranker model: a fastembed built-in "
-        "(default jinaai/jina-reranker-v2-base-multilingual, CC-BY-NC) or a "
-        "known custom model (BAAI/bge-reranker-v2-m3, Apache-2.0, Indonesian)"
+        "Reranker GGUF id run in-process via llama.cpp "
+        "(default ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
     ),
     "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
     "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
+    "corpus.n_gpu_layers": (
+        "llama.cpp GPU offload for corpus embed/rerank "
+        "(0=CPU, -1=all layers on a GPU box)"
+    ),
     "corpus.min_chars_per_page": (
         "Text-layer character threshold below which a page counts as scanned"
     ),
@@ -114,6 +117,7 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
         "corpus.ocr_dpi",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
+        "corpus.n_gpu_layers",
     ],
     "Logging": [
         "logging.level",
@@ -877,11 +881,9 @@ class Config:
         # downloads the model (~1 GB, cached).
         "rerank": False,
         "rerank_pool": 30,  # candidates scored per query when rerank is on
-        # rerank_model: fastembed built-in (default) or a known custom model
-        # (BAAI/bge-reranker-v2-m3 — Apache-2.0, Indonesian-capable — is
-        # registered on demand). Reranker output is not stored, so this is
-        # runtime-only and safe to change without reembedding.
-        "rerank_model": "jinaai/jina-reranker-v2-base-multilingual",
+        # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
+        # not stored), so safe to change without reembedding.
+        "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
         "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
         # metadata_model: text LLM for metadata extraction; "main" = default
         # chat provider, "" = use ocr_model on the rendered first page
@@ -896,6 +898,10 @@ class Config:
         # ollama_host: Ollama server for corpus OCR + Ollama-named text
         # models; "" = local daemon (http://127.0.0.1:11434)
         "ollama_host": "",
+        # n_gpu_layers: llama.cpp GPU offload for corpus embed/rerank.
+        # 0 = CPU (default, laptops); -1 = offload all layers (GPU box,
+        # fast batch reembed). Runtime-only, never stored.
+        "n_gpu_layers": 0,
     }
 
     @classmethod
@@ -1170,6 +1176,7 @@ class Config:
             "corpus.ocr_dpi",
             "corpus.num_ctx",
             "corpus.min_chars_per_page",
+            "corpus.n_gpu_layers",
         }
     )
 

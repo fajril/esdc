@@ -59,7 +59,7 @@ def test_warms_reranker_when_flag_true(monkeypatch):
     reranker_result = next(r for r in results if r.component == "reranker")
     assert embedder_result.ok is True
     assert reranker_result.ok is True
-    assert reranker_result.model == "jinaai/jina-reranker-v2-base-multilingual"
+    assert reranker_result.model == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
 
 
 def test_rerank_none_follows_config(monkeypatch):

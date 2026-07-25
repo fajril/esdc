@@ -648,25 +648,26 @@ class TestRerankKeyWidgets:
     @patch("esdc.config_wizard.questionary.select")
     def test_rerank_model_offers_curated_choices(self, mock_select):
         mock_select.return_value.ask.return_value = (
-            "jinaai/jina-reranker-v2-base-multilingual"
+            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
         )
         result = _prompt_for_config_value(
-            "corpus.rerank_model", "jinaai/jina-reranker-v2-base-multilingual"
+            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
         )
         choices = mock_select.call_args.kwargs["choices"]
         values = [c.value for c in choices]
-        assert "jinaai/jina-reranker-v2-base-multilingual" in values
-        assert "BAAI/bge-reranker-v2-m3" in values
+        assert "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF" in values
         assert "__custom__" in values
-        assert result == "jinaai/jina-reranker-v2-base-multilingual"
+        assert result == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
 
     @patch("esdc.config_wizard.questionary.select")
-    def test_rerank_model_selecting_bge(self, mock_select):
-        mock_select.return_value.ask.return_value = "BAAI/bge-reranker-v2-m3"
-        result = _prompt_for_config_value(
-            "corpus.rerank_model", "jinaai/jina-reranker-v2-base-multilingual"
+    def test_rerank_model_selecting_default(self, mock_select):
+        mock_select.return_value.ask.return_value = (
+            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
         )
-        assert result == "BAAI/bge-reranker-v2-m3"
+        result = _prompt_for_config_value(
+            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        )
+        assert result == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
 
     @patch("esdc.config_wizard.questionary.text")
     @patch("esdc.config_wizard.questionary.select")
@@ -676,7 +677,7 @@ class TestRerankKeyWidgets:
         mock_select.return_value.ask.return_value = "__custom__"
         mock_text.return_value.ask.return_value = "my-custom-reranker"
         result = _prompt_for_config_value(
-            "corpus.rerank_model", "jinaai/jina-reranker-v2-base-multilingual"
+            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
         )
         assert result == "my-custom-reranker"
 
