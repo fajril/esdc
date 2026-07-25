@@ -1,4 +1,4 @@
-"""Stratified sampling math + corpus fingerprint for eval query generation.
+"""Sample-size and stratified allocation math.
 
 Pure functions only — no LLM, no I/O. See
 docs/superpowers/specs/2026-07-25-dynamic-corpus-queries-design.md.
@@ -6,9 +6,7 @@ docs/superpowers/specs/2026-07-25-dynamic-corpus-queries-design.md.
 
 from __future__ import annotations
 
-import hashlib
 import math
-import random
 
 
 def compute_sample_size(
@@ -44,7 +42,7 @@ def allocate(strata_counts: dict[str, int], n: int) -> dict[str, int]:
         ranked = sorted(strata, key=lambda k: strata[k], reverse=True)
         return {k: (1 if i < n else 0) for i, k in enumerate(ranked) if i < n}
 
-    alloc = {k: 1 for k in strata}
+    alloc = dict.fromkeys(strata, 1)
     remaining = n - len(strata)
 
     # Ideal extra share (beyond the floor) per stratum.
