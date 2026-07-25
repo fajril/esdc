@@ -19,9 +19,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
+        # llama-cpp-python resolves to a prebuilt cpu wheel on Linux via the
+        # platform-marked [tool.uv.sources] index in pyproject.toml (no source
+        # compile) — no extra env needed.
         run: uv sync --group dev
-        env:
-          UV_EXTRA_INDEX_URL: https://abetlen.github.io/llama-cpp-python/whl/cpu
 
       - name: Lint
         run: uv run ruff check esdc/ tests/
