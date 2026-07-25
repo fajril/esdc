@@ -42,6 +42,9 @@ dependencies = [
     "ollama>=0.4.0",
     # Internal embeddings/rerank (ONNX, in-process — no daemon)
     "fastembed>=0.7.0",
+    # Corpus embeddings + rerank: llama.cpp in-process, Qwen3 GGUFs (no daemon).
+    # Prebuilt wheels: https://abetlen.github.io/llama-cpp-python/whl/<cpu|metal|cuda>
+    "llama-cpp-python>=0.3.0",
     "click>=8.0.0",
     # Web server
     "fastapi>=0.100.0",
