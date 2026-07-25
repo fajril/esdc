@@ -40,10 +40,10 @@ dependencies = [
     "tiktoken>=0.12.0",
     # Direct APIs
     "ollama>=0.4.0",
-    # Internal embeddings/rerank (ONNX, in-process — no daemon)
-    "fastembed>=0.7.0",
     # Corpus embeddings + rerank: llama.cpp in-process, Qwen3 GGUFs (no daemon).
     # Prebuilt wheels: https://abetlen.github.io/llama-cpp-python/whl/<cpu|metal|cuda>
+    # GGUF download/cache for corpus models (imported by corpus/llama_backend)
+    "huggingface-hub>=0.23.0",
     "llama-cpp-python>=0.3.0",
     "click>=8.0.0",
     # Web server
