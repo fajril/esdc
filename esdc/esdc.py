@@ -54,6 +54,7 @@ from rich.progress import (
     BarColumn,
     DownloadColumn,
     Progress,
+    SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
@@ -2968,11 +2969,26 @@ def reembed() -> None:
 @corpus_app.command(name="eval")
 def corpus_eval(
     queries: Annotated[
-        Path,
+        Path | None,
         typer.Argument(
-            help='JSONL: {"query": "...", "expected": ["<doc_id or file_name>"]}',
+            help="JSONL query set (default: ~/.esdc/corpus_queries.jsonl)",
         ),
-    ],
+    ] = None,
+    init: Annotated[
+        int | None,
+        typer.Option(
+            "--init",
+            help="Generate query set (N samples; omit N for auto size).",
+        ),
+    ] = None,
+    refresh: Annotated[
+        bool,
+        typer.Option("--refresh", help="Incrementally sync query set to corpus."),
+    ] = False,
+    margin: Annotated[
+        float, typer.Option("--margin", help="CI half-width for auto sample size.")
+    ] = 0.05,
+    seed: Annotated[int, typer.Option("--seed", help="Sampling seed.")] = 42,
     ks: str = typer.Option("1,5,10", "--k", help="Comma-separated k values"),
     rerank: bool | None = typer.Option(
         None,
@@ -2980,12 +2996,104 @@ def corpus_eval(
         help="Force rerank on/off (default: corpus.rerank config)",
     ),
 ) -> None:
-    """Score retrieval quality (Pass@k, latency) against a query set."""
+    """Score retrieval quality (Pass@k, latency) against a query set.
+
+    With no query set present, run `--init` first to generate one.
+    """
     from esdc.corpus.evaluate import run_eval
+    from esdc.corpus.query_gen import (
+        generate,
+        read_query_file,
+        reconcile,
+        write_query_file,
+    )
+    from esdc.corpus.sampling import corpus_fingerprint
+    from esdc.corpus.store import CorpusStore
 
+    path = queries or Config.get_corpus_queries_path()
     k_values = tuple(int(k.strip()) for k in ks.split(",") if k.strip())
-    report = run_eval(queries, ks=k_values, rerank=rerank)
 
+    def _llm_call():
+        cfg = Config.get_provider_config()
+        if not cfg:
+            typer.echo(
+                "Error: no LLM provider configured; query synthesis needs one.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        import esdc.providers as providers
+
+        llm = providers.create_llm_from_config(cfg)
+        return lambda prompt: str(llm.invoke(prompt).content)
+
+    def _progress_run(fn):
+        with Progress(
+            SpinnerColumn(),
+            *Progress.get_default_columns(),
+            TimeElapsedColumn(),
+        ) as progress:
+            task = progress.add_task("[cyan]Synthesizing queries...", total=None)
+
+            def cb(done: int, total: int) -> None:
+                progress.update(task, total=total, completed=done)
+
+            return fn(cb)
+
+    if init is not None or refresh:
+        store = CorpusStore()
+        try:
+            call = _llm_call()
+            if init is not None:
+                rows, meta = _progress_run(
+                    lambda cb: generate(
+                        store, call, margin=margin,
+                        n=(init or None), seed=seed, ks=k_values, progress_cb=cb,
+                    )
+                )
+                write_query_file(path, rows, meta)
+                rich.print(f"Generated {len(rows)} queries → {path}")
+            else:  # --refresh
+                old_rows, old_meta = read_query_file(path)
+                rows, meta = _progress_run(
+                    lambda cb: reconcile(
+                        store, call, old_rows, old_meta, seed=seed, progress_cb=cb,
+                    )
+                )
+                write_query_file(path, rows, meta)
+                rich.print(f"Refreshed query set → {len(rows)} queries")
+        finally:
+            store.close()
+    else:
+        if not path.exists():
+            typer.echo(
+                f"No query set at {path}. Run: esdc corpus eval --init", err=True
+            )
+            raise typer.Exit(1)
+        _rows, meta = read_query_file(path)
+        if meta is None:
+            rich.print(
+                "[yellow]Legacy query file (no fingerprint); "
+                "scoring as-is.[/yellow]"
+            )
+        else:
+            store = CorpusStore()
+            try:
+                live = corpus_fingerprint(store.fingerprint_rows())
+                live_ids = {r[0] for r in store.fingerprint_rows()}
+            finally:
+                store.close()
+            if live != meta.fingerprint:
+                existing_ids = {r["expected"][0] for r in _rows}
+                added = len(live_ids - existing_ids)
+                removed = len(existing_ids - live_ids)
+                typer.echo(
+                    f"Corpus changed (+{added} new, -{removed} removed). "
+                    f"Rerun with --refresh or --init.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+    report = run_eval(path, ks=k_values, rerank=rerank)
     rich.print(f"Queries scored: {report.n_queries}")
     for k in k_values:
         pct = report.pass_at.get(k, 0.0) * 100
