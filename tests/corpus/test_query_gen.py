@@ -1,4 +1,11 @@
-from esdc.corpus.query_gen import QueryMeta, read_query_file, write_query_file
+from esdc.corpus.query_gen import (
+    QueryMeta,
+    generate,
+    read_query_file,
+    reconcile,
+    synthesize_query,
+    write_query_file,
+)
 
 
 def test_write_then_read_roundtrip(tmp_path):
@@ -32,3 +39,99 @@ def test_read_legacy_file_without_meta(tmp_path):
     rows, meta = read_query_file(p)
     assert meta is None
     assert rows == [{"query": "q", "expected": ["d"]}]
+
+
+class FakeStore:
+    def __init__(self, docs):
+        # docs: list of {doc_id, doc_type, subject, file_hash, chunk_text}
+        self._docs = {d["doc_id"]: d for d in docs}
+
+    def list_documents(self):
+        return [
+            {"doc_id": d["doc_id"], "doc_type": d["doc_type"], "subject": d["subject"]}
+            for d in self._docs.values()
+        ]
+
+    def fingerprint_rows(self):
+        return [(d["doc_id"], d["file_hash"]) for d in self._docs.values()]
+
+    def sample_content(self, doc_id):
+        return self._docs.get(doc_id)
+
+
+def _call(prompt):  # deterministic stub LLM
+    return "generated query"
+
+
+def _docs(n, doc_type="letter"):
+    return [
+        {
+            "doc_id": f"{doc_type}-{i}", "doc_type": doc_type,
+            "subject": f"subject {i}", "file_hash": f"h{i}",
+            "chunk_text": f"body {i}",
+        }
+        for i in range(n)
+    ]
+
+
+def test_synthesize_query_uses_caller():
+    seen = {}
+    def cap(prompt):
+        seen["prompt"] = prompt
+        return "  a question?  "
+    out = synthesize_query(cap, subject="Surat X", chunk_text="isi")
+    assert out == "a question?"          # stripped
+    assert "Surat X" in seen["prompt"]   # subject grounded in prompt
+    assert "isi" in seen["prompt"]       # chunk grounded in prompt
+
+
+def test_generate_one_row_per_sampled_doc_with_meta():
+    store = FakeStore(_docs(50))
+    rows, meta = generate(store, _call, margin=0.10, seed=42)
+    assert 0 < len(rows) <= 50
+    assert all(r["expected"][0].startswith("letter-") for r in rows)
+    assert all(len(r["expected"]) == 1 for r in rows)
+    assert meta.n == len(rows)
+    assert meta.fingerprint  # set from fingerprint_rows()
+
+
+def test_generate_explicit_n_overrides_auto():
+    store = FakeStore(_docs(50))
+    rows, _ = generate(store, _call, n=7, seed=42)
+    assert len(rows) == 7
+
+
+def test_generate_progress_cb_called_per_query():
+    store = FakeStore(_docs(20))
+    calls = []
+    generate(store, _call, n=5, seed=1, progress_cb=lambda d, t: calls.append((d, t)))
+    assert calls[-1] == (5, 5)
+    assert all(t == 5 for _, t in calls)
+
+
+def test_reconcile_drops_removed_and_adds_new():
+    store = FakeStore(_docs(10))
+    rows, meta = generate(store, _call, n=6, seed=1)
+
+    # Remove one sampled doc, add three new docs.
+    kept_id = rows[0]["expected"][0]
+    dropped_id = rows[1]["expected"][0]
+    del store._docs[dropped_id]
+    for d in _docs(3, doc_type="report"):
+        store._docs[d["doc_id"]] = d
+
+    new_rows, new_meta = reconcile(store, _call, rows, meta, seed=1)
+    ids = {r["expected"][0] for r in new_rows}
+    assert dropped_id not in ids
+    assert kept_id in ids
+    assert new_meta.fingerprint == __import__(
+        "esdc.corpus.sampling", fromlist=["corpus_fingerprint"]
+    ).corpus_fingerprint(store.fingerprint_rows())
+
+
+def test_reconcile_noop_when_corpus_unchanged():
+    store = FakeStore(_docs(10))
+    rows, meta = generate(store, _call, n=6, seed=1)
+    new_rows, new_meta = reconcile(store, _call, rows, meta, seed=1)
+    assert {r["expected"][0] for r in new_rows} == {r["expected"][0] for r in rows}
+    assert new_meta.fingerprint == meta.fingerprint
