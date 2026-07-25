@@ -595,12 +595,12 @@ def test_get_document_by_hash_returns_row_then_none(store):
 
 
 def test_default_embedder_is_internal(monkeypatch, tmp_path):
-    from esdc.corpus.embedder import PINNED_MODEL
+    from esdc.corpus.embedder import MODEL_ID
 
     store = CorpusStore(
         db_path=tmp_path / "corpus.duckdb", sqlite_path=tmp_path / "esdc.sqlite"
     )
-    assert store._embedder.model == f"fastembed:{PINNED_MODEL}"
+    assert store._embedder.model == MODEL_ID
     assert type(store._embedder).__name__ == "InternalEmbedder"
     assert store.get_document_by_hash("deadbeef") is None
 

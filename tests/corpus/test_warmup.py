@@ -10,8 +10,10 @@ from esdc.corpus.warmup import run_warmup
 
 class FakeTextEmbedding:
     def embed(self, texts):
-        for _ in texts:
-            yield [0.1, 0.2, 0.3]
+        # llama.cpp-style: embed(str) -> vector; embed(list) -> list of vectors.
+        if isinstance(texts, str):
+            return [0.1, 0.2, 0.3]
+        return [[0.1, 0.2, 0.3] for _ in texts]
 
 
 class FakeEncoder:
@@ -40,7 +42,7 @@ def test_warms_embedder_always(monkeypatch):
 
     embedder_result = next(r for r in results if r.component == "embedder")
     assert embedder_result.ok is True
-    assert embedder_result.model == "fastembed:intfloat/multilingual-e5-large"
+    assert embedder_result.model == "qwen3-embedding-0.6b-q8_0"
 
     reranker_result = next(r for r in results if r.component == "reranker")
     assert reranker_result.ok is True
