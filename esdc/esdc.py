@@ -3047,6 +3047,11 @@ def corpus_eval(
             return fn(cb)
 
     if init or refresh:
+        if refresh and not path.exists():
+            typer.echo(
+                f"No query set at {path}. Run: esdc corpus eval --init", err=True
+            )
+            raise typer.Exit(1)
         store = CorpusStore()
         try:
             call = _llm_call()

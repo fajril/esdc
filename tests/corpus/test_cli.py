@@ -674,6 +674,21 @@ def test_eval_init_with_explicit_samples(
     assert path.exists()
 
 
+def test_eval_refresh_missing_file_errors(monkeypatch, tmp_path):
+    """--refresh on a missing file must error cleanly.
+
+    Must not raise a FileNotFoundError traceback.
+    """
+    _patch_queries_path(monkeypatch, tmp_path / "corpus_queries.jsonl")
+
+    result = runner.invoke(app, ["corpus", "eval", "--refresh"])
+    assert result.exit_code == 1
+    assert "--init" in result.output
+    assert result.exception is None or isinstance(
+        result.exception, SystemExit
+    )
+
+
 def test_eval_stale_fingerprint_blocks(monkeypatch, tmp_path, fake_store):
     from esdc.corpus.query_gen import QueryMeta, write_query_file
 

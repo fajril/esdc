@@ -155,7 +155,10 @@ def reconcile(
     live_ids = {d["doc_id"] for d in docs}
     by_type = _docs_by_type(docs)
 
-    kept = [r for r in existing_rows if r["expected"][0] in live_ids]
+    kept = [
+        r for r in existing_rows
+        if r.get("expected") and r["expected"][0] in live_ids
+    ]
     kept_ids = {r["expected"][0] for r in kept}
 
     margin = existing_meta.margin if existing_meta else 0.05

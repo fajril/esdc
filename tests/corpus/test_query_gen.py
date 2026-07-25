@@ -137,6 +137,16 @@ def test_reconcile_noop_when_corpus_unchanged():
     assert new_meta.fingerprint == meta.fingerprint
 
 
+def test_reconcile_drops_row_with_empty_expected():
+    """A hand-authored/legacy row with expected=[] must be dropped, not crash."""
+    store = FakeStore(_docs(10))
+    rows, meta = generate(store, _call, n=3, seed=1)
+    malformed = {"query": "x", "expected": []}
+    new_rows, _ = reconcile(store, _call, rows + [malformed], meta, seed=1)
+    assert malformed not in new_rows
+    assert all(r["expected"] for r in new_rows)
+
+
 def test_reconcile_does_not_grow_past_original_size():
     store = FakeStore(_docs(10, doc_type="letter"))
     rows, meta = generate(store, _call, n=6, seed=1)   # 6 letter rows, target 6
