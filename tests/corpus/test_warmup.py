@@ -1,9 +1,14 @@
 """Warmup unit tests — never load a real model, never hit the network."""
 
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 import esdc.corpus.embedder as embedder_mod
 import esdc.corpus.reranker as reranker_mod
+from esdc.corpus import warmup as w
 from esdc.corpus.reranker import Reranker
 from esdc.corpus.warmup import run_warmup
 
@@ -28,6 +33,21 @@ def reset_singleton():
     yield
     Reranker._instance = None
     Reranker._failed = False
+
+
+def test_warmup_embedder_ok_reranker_skipped_when_disabled():
+    fake_emb = MagicMock()
+    fake_emb.model = "qwen3-embedding-0.6b-q8_0"
+    with (
+        patch.object(w, "_build_embedder", return_value=fake_emb),
+        patch.object(w.Config, "get_corpus_config", return_value={"rerank": False}),
+        patch.object(w, "_resolve_model_name", return_value="rr-model"),
+    ):
+        results = w.run_warmup()
+    by = {r.component: r for r in results}
+    assert by["embedder"].ok is True
+    assert by["reranker"].ok is True
+    assert "skipped" in by["reranker"].detail
 
 
 def test_warms_embedder_always(monkeypatch):

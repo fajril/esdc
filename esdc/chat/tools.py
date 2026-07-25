@@ -172,7 +172,7 @@ _corpus_embedder = None
 def _get_corpus_embedder():
     """Lazily create and reuse one InternalEmbedder for corpus tools.
 
-    The embedder loads an in-process fastembed model; recreating it per
+    The embedder loads an in-process llama.cpp Qwen3 embedding model; recreating it per
     tool call wasted setup time. The CorpusStore/DuckDB connection is
     deliberately NOT cached (short-lived connections avoid file-lock
     conflicts with the corpus CLI).
