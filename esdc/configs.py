@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 SENSITIVE_KEYS = frozenset({"api_key"})
 
 ENUM_CHOICES: dict[str, list[str]] = {
+    "embedding_backend": ["local", "ollama", "openai"],
     "tool_format": ["native", "markdown", "auto"],
     "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "logging.server.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -39,6 +40,23 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "logging.chat.level": "Log level for the chat component",
     "semantic_search.embedding_batch_size": ("Number of embeddings per batch (10-500)"),
     "embedding_host": "Ollama host URL for embeddings (default: localhost)",
+    "embedding_backend": (
+        "Where bulk embedding generation runs for every vector space "
+        "('ollama' [default] = Ollama daemon at embedding_host, 'local' = "
+        "in-process llama.cpp with no daemon, 'openai' = any "
+        "OpenAI-compatible /v1/embeddings server). Query-time similarity "
+        "always runs locally regardless of this setting."
+    ),
+    "embedding_model": (
+        "Wire model id for the 'openai' embedding backend, as that server "
+        "names it (e.g. Qwen3-Embedding-0.6B-8bit); ignored by the 'local' "
+        "and 'ollama' backends, which pin their model in code"
+    ),
+    "embedding_api_key": (
+        "Bearer token for the 'openai' embedding backend "
+        "('' = send no Authorization header, which is what LM Studio and a "
+        "bare llama-server expect)"
+    ),
     "corpus.ocr_model": "Ollama vision model used for OCR of scanned pages",
     "corpus.metadata_model": (
         "Text LLM for metadata pre-fill at extract time ('main' = default "
@@ -92,7 +110,10 @@ KEY_DESCRIPTIONS: dict[str, str] = {
 # provider CRUD flows, not by flat key editing.
 MODEL_SECTIONS: dict[str, list[str]] = {
     "Embeddings": [
+        "embedding_backend",
         "embedding_host",
+        "embedding_model",
+        "embedding_api_key",
         "semantic_search.embedding_batch_size",
     ],
     "Corpus models": [
@@ -878,6 +899,58 @@ class Config:
         config = cls._load_config() or {}
         return config.get("embedding_host") or None
 
+    @classmethod
+    def get_embedding_backend(cls) -> str:
+        """Get the bulk-generation embedding backend.
+
+        Priority:
+        1. ESDC_EMBEDDING_BACKEND environment variable
+        2. config.yaml: embedding_backend
+        3. "ollama" (default)
+
+        Query-time similarity ignores this and always runs locally.
+
+        Returns:
+            One of "local", "ollama", "openai" (lowercased, stripped).
+        """
+        raw = os.environ.get("ESDC_EMBEDDING_BACKEND")
+        if not raw:
+            config = cls._load_config() or {}
+            raw = config.get("embedding_backend") or "ollama"
+        return str(raw).strip().lower()
+
+    @classmethod
+    def get_embedding_model(cls) -> str:
+        """Get the wire model id for the 'openai' embedding backend.
+
+        Priority:
+        1. ESDC_EMBEDDING_MODEL environment variable
+        2. config.yaml: embedding_model
+        3. "" (empty — the openai backend rejects this at construction)
+
+        Ignored by the 'local' and 'ollama' backends, which pin their model.
+        """
+        env_model = os.environ.get("ESDC_EMBEDDING_MODEL")
+        if env_model:
+            return env_model
+        config = cls._load_config() or {}
+        return str(config.get("embedding_model") or "")
+
+    @classmethod
+    def get_embedding_api_key(cls) -> str:
+        """Get the bearer token for the 'openai' embedding backend.
+
+        Priority:
+        1. ESDC_EMBEDDING_API_KEY environment variable
+        2. config.yaml: embedding_api_key
+        3. "" (no Authorization header sent)
+        """
+        env_key = os.environ.get("ESDC_EMBEDDING_API_KEY")
+        if env_key:
+            return env_key
+        config = cls._load_config() or {}
+        return str(config.get("embedding_api_key") or "")
+
     CORPUS_DEFAULTS = {
         "chunk_size": 3000,  # max chars per chunk (~750 tokens)
         "chunk_overlap": 300,  # chars carried over between chunks
@@ -1069,6 +1142,9 @@ class Config:
                 "embedding_batch_size": 100,
             },
             "embedding_host": None,
+            "embedding_backend": "ollama",
+            "embedding_model": "",
+            "embedding_api_key": "",
             "corpus": dict(cls.CORPUS_DEFAULTS),
             "phoenix": {
                 "enabled": False,
