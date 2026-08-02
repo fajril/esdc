@@ -71,6 +71,44 @@ macOS metal wheel and a CUDA build both honour it; for CUDA install a CUDA
 build once (`CMAKE_ARGS="-DGGML_CUDA=on" pip install --force-reinstall
 --no-cache-dir llama-cpp-python`, or use the `cu124` wheel index above).
 
+### Embedding backends
+
+Query-time similarity **always** runs on the in-process llama.cpp model, so
+semantic search works offline and needs no daemon. Only bulk generation —
+`esdc corpus commit`, `esdc corpus reembed`, `esdc reload` — uses the
+configured backend.
+
+| key | values | default |
+|---|---|---|
+| `embedding_backend` | `local`, `ollama`, `openai` | `ollama` |
+| `embedding_host` | URL, `""` = local daemon | `""` |
+| `embedding_model` | wire model id, `openai` only | `""` |
+| `embedding_api_key` | bearer token, `openai` only | `""` |
+
+`local` runs in-process with no daemon. `ollama` needs
+`ollama pull qwen3-embedding:0.6b` on the target host. `openai` works with
+any OpenAI-compatible `/v1/embeddings` server — LM Studio, llama-server,
+vLLM, TEI — and needs `embedding_model` set to whatever that server calls
+the model:
+
+```yaml
+embedding_backend: openai
+embedding_host: http://localhost:8889/v1
+embedding_model: Qwen3-Embedding-0.6B-8bit
+```
+
+Each vector space stores a probe vector. If a backend produces vectors that
+disagree with the stored ones by more than a small tolerance — a different
+quantization, pooling mode, or model — writes are rejected and searches
+report that embeddings need rebuilding. Measured cosine between the local
+GGUF, Ollama `qwen3-embedding:0.6b` and an MLX 8-bit build is ≥ 0.9986.
+
+Per-run override: `--embed-backend local|ollama|openai` on
+`esdc corpus commit`, `esdc corpus reembed` and `esdc reload`.
+
+`corpus.ollama_host` is unrelated — it points corpus OCR and text models at
+a host, not embeddings.
+
 ## Quick Start
 
 ### Chat Interface

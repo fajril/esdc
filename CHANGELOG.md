@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Embedding backends
+
+**Changed:** `embedding_model` no longer selects the Ollama tag. The `local`
+and `ollama` backends pin their model in code; only `openai` reads the key.
+Anyone who had it set moves to `qwen3-embedding:0.6b` for project
+embeddings on their next `esdc reload --embeddings-only`.
+
+**Changed:** `esdc corpus commit` and `esdc corpus reembed` now use the
+shared `embedding_backend`, which defaults to `ollama`. Set
+`embedding_backend: local` to keep embedding in-process with no daemon.
+
+**Fixed:** semantic project search no longer requires a reachable Ollama —
+queries embed locally.
+
 ### Corpus retrieval overhaul
 
 - Embeddings are now internal (fastembed ONNX, pinned `intfloat/multilingual-e5-large`) — corpus
