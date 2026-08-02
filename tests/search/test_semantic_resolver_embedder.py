@@ -96,6 +96,15 @@ def test_legacy_space_without_meta_seeds_on_query(tmp_path):
     assert json.loads(stored) == [1.0, 0.0]
 
 
+def test_pin_check_embeds_probe_only_once(tmp_path):
+    r = _seeded(tmp_path, [1.0, 0.0])
+    assert r._ensure_semantic_meta() is None
+    r._embedder.calls = 0
+    assert r._ensure_semantic_meta() is None
+    r.close()
+    assert r._embedder.calls == 0
+
+
 def test_build_writes_the_pin(tmp_path):
     r = SemanticResolver(
         db_path=tmp_path / "s.duckdb", embedder=_FixedEmbedder([1.0, 0.0])

@@ -55,6 +55,7 @@ class SemanticResolver:
         self._db_path = Path(db_path)
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._embedder = embedder if embedder is not None else InternalEmbedder()
+        self._pin_verified: bool = False
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
         """Get or create DuckDB connection with VSS extension loaded.
@@ -90,6 +91,9 @@ class SemanticResolver:
             disagrees with the pin, else None. Query paths must degrade
             rather than raise, matching _embeddings_available.
         """
+        if self._pin_verified:
+            return None
+
         from esdc.embedders import PROBE_TEXT, check_or_seed_probe
 
         conn = self._get_connection()
@@ -111,8 +115,10 @@ class SemanticResolver:
                     "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
                     [self._embedder.model, len(probe), json.dumps(probe)],
                 )
+                self._pin_verified = True
                 return None
             check_or_seed_probe(conn, self.SEMANTIC_META, self._embedder)
+            self._pin_verified = True
         except ValueError as e:
             logger.warning("[Semantic] embedding pin mismatch | %s", e)
             return {
