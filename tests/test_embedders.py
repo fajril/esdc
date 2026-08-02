@@ -207,3 +207,57 @@ def test_openai_reports_model_id(monkeypatch):
     e = emb.OpenAIEmbedder(host="http://h:1/v1", model="Qwen3-Embedding-0.6B-8bit")
     assert e.model == emb.MODEL_ID
     assert e.wire_model == "Qwen3-Embedding-0.6B-8bit"
+
+
+def test_factory_local_returns_internal(monkeypatch):
+    assert isinstance(emb.get_build_embedder("local"), emb.InternalEmbedder)
+
+
+def test_factory_ollama_uses_configured_host(monkeypatch):
+    mgr = MagicMock()
+    _patched_manager(monkeypatch, mgr)
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config, "get_embedding_host", classmethod(lambda cls: "http://box:11434")
+    )
+    e = emb.get_build_embedder("ollama")
+    assert isinstance(e, emb.OllamaEmbedder)
+    assert e.host == "http://box:11434"
+
+
+def test_factory_openai_passes_model_and_key(monkeypatch):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config, "get_embedding_host", classmethod(lambda cls: "http://h:8889/v1")
+    )
+    monkeypatch.setattr(Config, "get_embedding_model", classmethod(lambda cls: "M"))
+    monkeypatch.setattr(Config, "get_embedding_api_key", classmethod(lambda cls: "K"))
+    e = emb.get_build_embedder("openai")
+    assert isinstance(e, emb.OpenAIEmbedder)
+    assert e.wire_model == "M"
+    assert e.url == "http://h:8889/v1/embeddings"
+
+
+def test_factory_none_falls_through_to_config(monkeypatch):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(Config, "get_embedding_backend", classmethod(lambda cls: "local"))
+    assert isinstance(emb.get_build_embedder(None), emb.InternalEmbedder)
+
+
+def test_factory_explicit_arg_beats_config(monkeypatch):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(Config, "get_embedding_backend", classmethod(lambda cls: "ollama"))
+    assert isinstance(emb.get_build_embedder("local"), emb.InternalEmbedder)
+
+
+def test_factory_unknown_backend_lists_valid_ones():
+    with pytest.raises(ValueError) as exc:
+        emb.get_build_embedder("lmstudio")
+    msg = str(exc.value)
+    assert "lmstudio" in msg
+    for name in ("local", "ollama", "openai"):
+        assert name in msg

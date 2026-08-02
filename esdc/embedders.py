@@ -229,3 +229,40 @@ class OpenAIEmbedder:
         for start in range(0, len(texts), self._batch):
             out.extend(self._post(texts[start : start + self._batch]))
         return out
+
+
+def get_build_embedder(backend: str | None = None) -> Any:
+    """Construct the embedder used for BULK GENERATION.
+
+    Never call this from a query path: similarity always runs on
+    InternalEmbedder so search stays local, fast and offline.
+
+    Args:
+        backend: "local", "ollama" or "openai". None reads the
+            `embedding_backend` config key (default "ollama").
+
+    Returns:
+        An embedder exposing generate_embedding, generate_embeddings_batch
+        and a `.model` attribute equal to MODEL_ID.
+
+    Raises:
+        ValueError: the backend name is not one of the three known values.
+    """
+    from esdc.configs import Config
+
+    name = (backend or Config.get_embedding_backend()).strip().lower()
+
+    if name == "local":
+        return InternalEmbedder()
+    if name == "ollama":
+        return OllamaEmbedder(host=Config.get_embedding_host())
+    if name == "openai":
+        return OpenAIEmbedder(
+            host=Config.get_embedding_host(),
+            model=Config.get_embedding_model(),
+            api_key=Config.get_embedding_api_key(),
+        )
+    raise ValueError(
+        f"[Embedding] unknown embedding_backend {name!r}; "
+        "expected one of: local, ollama, openai"
+    )
