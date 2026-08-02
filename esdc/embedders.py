@@ -17,6 +17,8 @@ import logging
 import threading
 from typing import Any
 
+import requests
+
 logger = logging.getLogger(__name__)
 
 # Stable identifier pinned in corpus_meta/semantic_meta. Backend-neutral on
@@ -136,3 +138,94 @@ class OllamaEmbedder:
     def health_check(self) -> bool:
         """True when the daemon is reachable and the model is present."""
         return bool(self._mgr.health_check())
+
+
+def _normalize_openai_url(host: str | None) -> str:
+    """Build the /v1/embeddings URL from a base host.
+
+    Accepts a base with or without a /v1 suffix and with or without a
+    trailing slash, so http://box:8889, http://box:8889/ and
+    http://box:8889/v1 all resolve to the same endpoint.
+    """
+    base = (host or "http://localhost:1234").rstrip("/")
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return f"{base}/embeddings"
+
+
+class OpenAIEmbedder:
+    """Generation backend over any OpenAI-compatible /v1/embeddings server.
+
+    Verified against omlx; the same shape covers LM Studio, llama-server,
+    vLLM and TEI. Unlike the other backends the wire model name cannot be
+    pinned here — it depends on what the operator loaded — which is why
+    check_or_seed_probe is the only guarantee that this server is serving
+    the model the stored vectors came from.
+    """
+
+    def __init__(
+        self,
+        host: str | None,
+        model: str,
+        api_key: str | None = None,
+        batch_size: int | None = None,
+        timeout: int = 120,
+    ) -> None:
+        if not model:
+            raise ValueError(
+                "[Embedding] backend 'openai' requires the `embedding_model` "
+                "config key set to the id the server uses for the embedding "
+                "model (e.g. 'Qwen3-Embedding-0.6B-8bit'); run "
+                "`esdc configs` or query the server's /v1/models."
+            )
+        from esdc.configs import Config
+
+        self.url = _normalize_openai_url(host)
+        self.wire_model = model
+        self.model = MODEL_ID
+        self.host = host or self.url
+        self._api_key = api_key or None
+        self._batch = int(batch_size or Config.get_embedding_batch_size())
+        self._timeout = timeout
+
+    def _post(self, batch: list[str]) -> list[list[float]]:
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        try:
+            resp = requests.post(
+                self.url,
+                json={"model": self.wire_model, "input": batch},
+                headers=headers,
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            raise RuntimeError(_unreachable("openai", self.url, e)) from e
+
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"[Embedding] {self.url} returned HTTP {resp.status_code}: "
+                f"{str(resp.text)[:200]}. Check `embedding_model` matches a "
+                "model the server has loaded, or set "
+                "`embedding_backend: local` in ~/.esdc/config.yaml."
+            )
+
+        data = resp.json()["data"]
+        # The OpenAI schema does not guarantee response order; each entry
+        # carries its request index. Sorting is not optional — unsorted
+        # results silently pair each text with another text's vector.
+        ordered = sorted(data, key=lambda e: e.get("index", 0))
+        return [[float(x) for x in e["embedding"]] for e in ordered]
+
+    def generate_embedding(self, text: str) -> list[float]:
+        """Generate an embedding for a single text."""
+        return self._post([text])[0]
+
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for a batch of texts, chunked by batch size."""
+        if not texts:
+            return []
+        out: list[list[float]] = []
+        for start in range(0, len(texts), self._batch):
+            out.extend(self._post(texts[start : start + self._batch]))
+        return out

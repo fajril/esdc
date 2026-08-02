@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import esdc.embedders as emb
 
 
@@ -114,3 +116,94 @@ def test_ollama_error_names_host_and_local_escape_hatch(monkeypatch):
         raise AssertionError("expected RuntimeError")
     assert "http://box:11434" in msg
     assert "embedding_backend: local" in msg
+
+
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        ("http://localhost:8889", "http://localhost:8889/v1/embeddings"),
+        ("http://localhost:8889/", "http://localhost:8889/v1/embeddings"),
+        ("http://localhost:8889/v1", "http://localhost:8889/v1/embeddings"),
+        ("http://localhost:8889/v1/", "http://localhost:8889/v1/embeddings"),
+    ],
+)
+def test_openai_url_normalization(host, expected):
+    assert emb._normalize_openai_url(host) == expected
+
+
+def test_openai_requires_a_wire_model():
+    with pytest.raises(ValueError, match="embedding_model"):
+        emb.OpenAIEmbedder(host="http://h:1/v1", model="")
+
+
+def _http_ok(payload):
+    r = MagicMock()
+    r.status_code = 200
+    r.json.return_value = payload
+    return r
+
+
+def test_openai_sorts_data_by_index(monkeypatch):
+    """The OpenAI schema does not promise response order; entries carry index."""
+    payload = {
+        "data": [
+            {"index": 2, "embedding": [3.0]},
+            {"index": 0, "embedding": [1.0]},
+            {"index": 1, "embedding": [2.0]},
+        ]
+    }
+    post = MagicMock(return_value=_http_ok(payload))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    assert e.generate_embeddings_batch(["a", "b", "c"]) == [[1.0], [2.0], [3.0]]
+
+
+def test_openai_omits_auth_header_when_no_key(monkeypatch):
+    post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]}))
+    monkeypatch.setattr(emb.requests, "post", post)
+    emb.OpenAIEmbedder(host="http://h:1/v1", model="m").generate_embedding("x")
+    assert "Authorization" not in post.call_args.kwargs["headers"]
+
+
+def test_openai_sends_bearer_when_key_set(monkeypatch):
+    post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]}))
+    monkeypatch.setattr(emb.requests, "post", post)
+    emb.OpenAIEmbedder(host="http://h:1/v1", model="m", api_key="k").generate_embedding("x")
+    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer k"
+
+
+def test_openai_splits_batches(monkeypatch):
+    post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]}))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", batch_size=1)
+    e.generate_embeddings_batch(["a", "b", "c"])
+    assert post.call_count == 3
+
+
+def test_openai_non_2xx_raises_with_status_and_url(monkeypatch):
+    r = MagicMock()
+    r.status_code = 503
+    r.text = "model not loaded"
+    monkeypatch.setattr(emb.requests, "post", MagicMock(return_value=r))
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embedding("x")
+    assert "503" in str(exc.value)
+    assert "http://h:1/v1/embeddings" in str(exc.value)
+
+
+def test_openai_transport_error_names_local_escape_hatch(monkeypatch):
+    import requests as rq
+
+    monkeypatch.setattr(
+        emb.requests, "post", MagicMock(side_effect=rq.ConnectionError("refused"))
+    )
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    with pytest.raises(RuntimeError, match="embedding_backend: local"):
+        e.generate_embedding("x")
+
+
+def test_openai_reports_model_id(monkeypatch):
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="Qwen3-Embedding-0.6B-8bit")
+    assert e.model == emb.MODEL_ID
+    assert e.wire_model == "Qwen3-Embedding-0.6B-8bit"
