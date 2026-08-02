@@ -271,6 +271,11 @@ class CorpusStore:
                 dim INTEGER NOT NULL
             )
         """)
+        # probe_vec added after corpus_meta shipped; ALTER keeps existing
+        # corpora intact (same approach as embed_text / doc_topic).
+        conn.execute(
+            f"ALTER TABLE {self.META_TABLE} ADD COLUMN IF NOT EXISTS probe_vec JSON"
+        )
 
         if tables_exist:
             if validate_model:
@@ -306,6 +311,13 @@ class CorpusStore:
                     f"Existing chunk embeddings are no longer comparable. "
                     f"Run `esdc corpus reembed` to rebuild them."
                 )
+
+        if validate_model:
+            # Write paths only: proves this embedder shares a cosine space
+            # with whatever produced the stored vectors. Seeds on first run.
+            from esdc.embedders import check_or_seed_probe
+
+            check_or_seed_probe(conn, self.META_TABLE, self._embedder)
 
         self._migrate_legacy_entity_columns()
         self._create_document_indexes()
@@ -749,12 +761,17 @@ class CorpusStore:
 
         dim_changed = existing is not None and existing[1] != dim
 
+        from esdc.embedders import PROBE_TEXT
+
+        probe = json.dumps(self._embedder.generate_embedding(PROBE_TEXT))
+
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(f"DELETE FROM {self.META_TABLE}")
             conn.execute(
-                f"INSERT INTO {self.META_TABLE} (embedding_model, dim) VALUES (?, ?)",
-                [embedding_model, dim],
+                f"INSERT INTO {self.META_TABLE} "
+                "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
+                [embedding_model, dim, probe],
             )
             if dim_changed:
                 logger.info(
