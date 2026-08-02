@@ -2462,6 +2462,13 @@ def commit(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Validate and report without writing.")
     ] = False,
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
 ) -> None:
     """Ingest reviewed .corpus.md sidecars into the searchable corpus (step 2 of 2)."""
     from esdc.corpus.pipeline import run_commit
@@ -2472,8 +2479,10 @@ def commit(
             skip_review=skip_review,
             force=force,
             dry_run=dry_run,
+            embed_backend=embed_backend,
         )
-    except ValueError as e:  # e.g. embedding-model mismatch -> `corpus reembed`
+    except (ValueError, RuntimeError) as e:
+        # e.g. embedding-model mismatch -> `corpus reembed`
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
     _print_corpus_report(report)
@@ -2954,11 +2963,23 @@ def export(
 
 
 @corpus_app.command()
-def reembed() -> None:
+def reembed(
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
+) -> None:
     """Rebuild chunk embeddings for the whole corpus after an embedding-model change."""
     from esdc.corpus.pipeline import run_reembed
 
-    report = run_reembed()
+    try:
+        report = run_reembed(embed_backend=embed_backend)
+    except (ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     _print_corpus_report(report)
     typer.echo(
         f"Re-embedded {len(report.processed)} document(s) "

@@ -66,6 +66,7 @@ from esdc.corpus.sidecar import (
     write_sidecar_file,
 )
 from esdc.corpus.store import CorpusStore
+from esdc.embedders import get_build_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -937,13 +938,18 @@ def run_commit(
     skip_review: bool = False,
     force: bool = False,
     dry_run: bool = False,
+    embed_backend: str | None = None,
 ) -> CorpusReport:
-    """Ingest reviewed ``.corpus.md`` sidecars into the corpus store."""
+    """Ingest reviewed ``.corpus.md`` sidecars into the corpus store.
+
+    ``embed_backend`` overrides the ``embedding_backend`` config key for
+    this run only; None uses the configured default.
+    """
     report = CorpusReport()
     cfg = Config.get_corpus_config()
     sidecars = _collect_sidecars(paths)
 
-    store = CorpusStore()
+    store = CorpusStore(embedder=get_build_embedder(embed_backend))
     any_processed = False
     try:
         # also needed to reach the conn for canonical names
@@ -1337,7 +1343,7 @@ def run_meta_show(paths: list[Path]) -> list[dict[str, Any]]:
     return rows
 
 
-def run_reembed() -> CorpusReport:
+def run_reembed(embed_backend: str | None = None) -> CorpusReport:
     """Rebuild chunk embeddings for every document with the current embedder.
 
     ``CorpusStore.ensure_tables`` (default ``validate_model=False``)
@@ -1347,9 +1353,12 @@ def run_reembed() -> CorpusReport:
     ``set_meta`` then re-pins the new model/dim, recreating
     document_chunks if the dimension changed, and every document's chunks
     are regenerated from its stored markdown.
+
+    ``embed_backend`` overrides the ``embedding_backend`` config key for
+    this run only; None uses the configured default.
     """
     report = CorpusReport()
-    store = CorpusStore()
+    store = CorpusStore(embedder=get_build_embedder(embed_backend))
     try:
         store.ensure_tables()
 
