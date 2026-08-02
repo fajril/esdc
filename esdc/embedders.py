@@ -80,3 +80,59 @@ class InternalEmbedder:
         model = _get_model()
         with _infer_lock:
             return [[float(x) for x in vec] for vec in model.embed(texts)]
+
+
+def _unreachable(backend: str, target: str, err: Exception) -> str:
+    """Actionable message for a generation backend that could not be reached."""
+    return (
+        f"[Embedding] backend '{backend}' could not reach {target}: {err}. "
+        "Check the server is running and reachable, or set "
+        "`embedding_backend: local` in ~/.esdc/config.yaml to embed "
+        "in-process with no daemon."
+    )
+
+
+class OllamaEmbedder:
+    """Generation backend over an Ollama daemon.
+
+    Wraps EmbeddingManager rather than being handed to callers directly:
+    EmbeddingManager.model doubles as the Ollama wire tag AND, under the
+    CorpusStore embedder contract, the vector-space identity. Reporting the
+    wire tag would repin corpus_meta on every backend switch and force a
+    reembed for vectors that are 0.9995 identical.
+    """
+
+    OLLAMA_TAG = "qwen3-embedding:0.6b"
+
+    def __init__(self, host: str | None = None) -> None:
+        # Lazy import: esdc/search/__init__.py imports semantic_resolver,
+        # which imports this module. A module-level import here would be a
+        # circular import.
+        from esdc.search.embedding_manager import EmbeddingManager
+
+        self.host = host or "local ollama daemon"
+        self.model = MODEL_ID
+        self._mgr = EmbeddingManager(model=self.OLLAMA_TAG, host=host)
+
+    def generate_embedding(self, text: str) -> list[float]:
+        """Generate an embedding for a single text."""
+        try:
+            return [float(x) for x in self._mgr.generate_embedding(text)]
+        except Exception as e:
+            raise RuntimeError(_unreachable("ollama", self.host, e)) from e
+
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for a batch of texts."""
+        if not texts:
+            return []
+        try:
+            return [
+                [float(x) for x in v]
+                for v in self._mgr.generate_embeddings_batch(texts)
+            ]
+        except Exception as e:
+            raise RuntimeError(_unreachable("ollama", self.host, e)) from e
+
+    def health_check(self) -> bool:
+        """True when the daemon is reachable and the model is present."""
+        return bool(self._mgr.health_check())
