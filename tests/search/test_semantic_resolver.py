@@ -59,6 +59,7 @@ def test_search_by_text():
 
     mock_conn.execute.side_effect = [mock_cursor1, mock_cursor1, mock_cursor2]
     resolver._get_connection.return_value = mock_conn
+    resolver._ensure_semantic_meta = MagicMock(return_value=None)
 
     result = resolver.search_by_text("proyek masalah teknis", limit=5)
 

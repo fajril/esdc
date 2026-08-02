@@ -182,7 +182,10 @@ class TestHybridSearchToolIntegration:
         resolver._embedder.generate_embedding.return_value = [0.1] * 384
 
         # Mock search_by_embedding to return not_available (no embeddings)
-        with patch.object(resolver, "search_by_embedding") as mock_search:
+        with (
+            patch.object(resolver, "_ensure_semantic_meta", return_value=None),
+            patch.object(resolver, "search_by_embedding") as mock_search,
+        ):
             mock_search.return_value = {"status": "not_available"}
 
             result = resolver.hybrid_search("test query")

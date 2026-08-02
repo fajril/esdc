@@ -7,6 +7,7 @@ using vector embeddings and HNSW index for fast similarity search.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -31,6 +32,7 @@ class SemanticResolver:
     """
 
     EMBEDDING_TABLE = "project_embeddings"
+    SEMANTIC_META = "semantic_meta"
     DEFAULT_LIMIT = 10
 
     def __init__(
@@ -76,6 +78,55 @@ class SemanticResolver:
             self._conn.execute("LOAD vss")
             logger.debug("[Semantic] DuckDB connection established with VSS extension")
         return self._conn
+
+    def _ensure_semantic_meta(self) -> dict[str, Any] | None:
+        """Pin this space's embedding model and verify the active embedder.
+
+        Creates and seeds semantic_meta when missing — project_embeddings
+        predates the pin, so a legacy space adopts one on first use.
+
+        Returns:
+            The ``not_available`` response dict when the active embedder
+            disagrees with the pin, else None. Query paths must degrade
+            rather than raise, matching _embeddings_available.
+        """
+        from esdc.embedders import PROBE_TEXT, check_or_seed_probe
+
+        conn = self._get_connection()
+        try:
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.SEMANTIC_META} (
+                    embedding_model VARCHAR,
+                    dim INTEGER,
+                    probe_vec JSON
+                )
+            """)
+            row = conn.execute(
+                f"SELECT embedding_model FROM {self.SEMANTIC_META} LIMIT 1"
+            ).fetchone()
+            if row is None:
+                probe = self._embedder.generate_embedding(PROBE_TEXT)
+                conn.execute(
+                    f"INSERT INTO {self.SEMANTIC_META} "
+                    "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
+                    [self._embedder.model, len(probe), json.dumps(probe)],
+                )
+                return None
+            check_or_seed_probe(conn, self.SEMANTIC_META, self._embedder)
+        except ValueError as e:
+            logger.warning("[Semantic] embedding pin mismatch | %s", e)
+            return {
+                "status": "not_available",
+                "message": (
+                    "Stored project embeddings were built with a different "
+                    "embedding model. Run 'esdc reload --embeddings-only' to "
+                    "rebuild them."
+                ),
+                "results": [],
+            }
+        except Exception as e:  # pragma: no cover - DB-level failure
+            logger.debug("[Semantic] pin check skipped | %s", e)
+        return None
 
     def build_embeddings_table(self) -> bool:
         """Create embeddings table and HNSW index.
@@ -148,6 +199,23 @@ class SemanticResolver:
 
             # Create B-tree indexes on embedding contextual columns for fast filtering
             self._create_embedding_indexes()
+
+            from esdc.embedders import PROBE_TEXT
+
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.SEMANTIC_META} (
+                    embedding_model VARCHAR,
+                    dim INTEGER,
+                    probe_vec JSON
+                )
+            """)
+            probe = self._embedder.generate_embedding(PROBE_TEXT)
+            conn.execute(f"DELETE FROM {self.SEMANTIC_META}")
+            conn.execute(
+                f"INSERT INTO {self.SEMANTIC_META} "
+                "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
+                [self._embedder.model, embedding_dim, json.dumps(probe)],
+            )
 
             logger.info(
                 "[Semantic] embeddings table created with dimension %d", embedding_dim
@@ -387,6 +455,10 @@ class SemanticResolver:
         unavailable = self._embeddings_available()
         if unavailable is not None:
             return unavailable
+
+        mismatch = self._ensure_semantic_meta()
+        if mismatch is not None:
+            return mismatch
 
         # Generate query embedding
         query_embedding = self._embedder.generate_embedding(query)
@@ -792,6 +864,10 @@ class SemanticResolver:
             Dict with status, count, results
         """
         # Check if embeddings are available
+        mismatch = self._ensure_semantic_meta()
+        if mismatch is not None:
+            return mismatch
+
         query_embedding = self._embedder.generate_embedding(query)
 
         semantic_results_raw = self.search_by_embedding(
