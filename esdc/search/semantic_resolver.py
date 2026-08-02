@@ -15,7 +15,7 @@ from typing import Any
 import duckdb
 
 from esdc.configs import Config
-from esdc.search.embedding_manager import EmbeddingManager
+from esdc.embedders import InternalEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +36,23 @@ class SemanticResolver:
     def __init__(
         self,
         db_path: Path | str | None = None,
-        model: str | None = None,
+        embedder: Any | None = None,
     ) -> None:
-        """Initialize with DuckDB connection and EmbeddingManager."""
+        """Initialize with a DuckDB connection and an embedder.
+
+        Args:
+            db_path: DuckDB file. Defaults to Config.get_db_file().
+            embedder: Object with generate_embedding /
+                generate_embeddings_batch and a `.model` attribute.
+                Defaults to the in-process llama.cpp embedder — query-time
+                similarity always runs locally, with no daemon. Generation
+                call sites inject a backend from get_build_embedder.
+        """
         if db_path is None:
             db_path = Config.get_db_file()
         self._db_path = Path(db_path)
         self._conn: duckdb.DuckDBPyConnection | None = None
-        self._embedding_manager = EmbeddingManager(model=model)
+        self._embedder = embedder if embedder is not None else InternalEmbedder()
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
         """Get or create DuckDB connection with VSS extension loaded.
@@ -105,7 +114,7 @@ class SemanticResolver:
 
             # Detect embedding dimension by generating a test embedding
             logger.info("[Semantic] detecting embedding dimension from model")
-            test_embedding = self._embedding_manager.generate_embedding("test")
+            test_embedding = self._embedder.generate_embedding("test")
             embedding_dim = len(test_embedding)
             logger.info(f"[Semantic] detected embedding dimension: {embedding_dim}")
 
@@ -232,7 +241,7 @@ class SemanticResolver:
                 texts = [row[16] for row in batch]
 
                 # Generate embeddings
-                embeddings = self._embedding_manager.generate_embeddings_batch(texts)
+                embeddings = self._embedder.generate_embeddings_batch(texts)
 
                 # Store in DuckDB with all contextual columns using bulk insert
                 data_to_insert = []
@@ -380,7 +389,7 @@ class SemanticResolver:
             return unavailable
 
         # Generate query embedding
-        query_embedding = self._embedding_manager.generate_embedding(query)
+        query_embedding = self._embedder.generate_embedding(query)
 
         return self.search_by_embedding(query_embedding, limit, filters)
 
@@ -783,7 +792,7 @@ class SemanticResolver:
             Dict with status, count, results
         """
         # Check if embeddings are available
-        query_embedding = self._embedding_manager.generate_embedding(query)
+        query_embedding = self._embedder.generate_embedding(query)
 
         semantic_results_raw = self.search_by_embedding(
             query_embedding, limit * 2, filters
