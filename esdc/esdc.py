@@ -609,6 +609,13 @@ def reload(
             help="Only regenerate embeddings, skip data reload.",
         ),
     ] = False,
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
 ) -> None:
     """Reload data from binary files and save it to a file.
 
@@ -622,13 +629,15 @@ def reload(
         only rebuild FTS and B-tree indexes without reloading data.
         no_embeddings: If True, skip semantic embeddings generation.
         embeddings_only: If True, only regenerate embeddings without reloading data.
+        embed_backend: Override embedding_backend for this run
+        (local, ollama or openai).
 
     Returns:
         None
     """
     # Handle embeddings-only mode
     if embeddings_only:
-        _generate_embeddings()
+        _generate_embeddings(embed_backend=embed_backend)
         return
 
     # Handle reindex-only mode
@@ -656,13 +665,17 @@ def reload(
 
     # Generate embeddings after reload (unless disabled)
     if not no_embeddings:
-        _generate_embeddings()
+        _generate_embeddings(embed_backend=embed_backend)
 
 
-def _generate_embeddings() -> None:
-    """Generate semantic embeddings for project_remarks with progress bar."""
+def _generate_embeddings(embed_backend: str | None = None) -> None:
+    """Generate semantic embeddings for project_remarks with progress bar.
+
+    ``embed_backend`` overrides the ``embedding_backend`` config key for
+    this run only. Query-time similarity always runs locally regardless.
+    """
     from esdc.configs import Config
-    from esdc.search.embedding_manager import EmbeddingManager
+    from esdc.embedders import get_build_embedder
     from esdc.search.semantic_resolver import SemanticResolver
 
     logger = logging.getLogger(__name__)
@@ -680,11 +693,13 @@ def _generate_embeddings() -> None:
         )
         return
 
-    # Check if Ollama is available
-    embedding_manager = EmbeddingManager()
-    logger.info(f"Initialized embedding manager with model: {embedding_manager.model}")
+    embedder = get_build_embedder(embed_backend)
+    logger.info(f"Initialized embedder with model: {embedder.model}")
 
-    if not embedding_manager.health_check():
+    # Only daemon-backed backends can be health-checked; the in-process one
+    # has nothing to check and the OpenAI-compatible one fails loudly on use.
+    health_check = getattr(embedder, "health_check", None)
+    if health_check is not None and not health_check():
         logger.warning("Ollama not available, cannot generate embeddings")
         console.print(
             "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"  # noqa: E501
@@ -692,10 +707,12 @@ def _generate_embeddings() -> None:
         console.print(
             "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"  # noqa: E501
         )
+        console.print(
+            "[dim]Or set embedding_backend: local to embed in-process.[/dim]"
+        )
         return
 
-    logger.info(f"Ollama is available, model {embedding_manager.model} is loaded")
-    resolver = SemanticResolver(db_path=db_path)
+    resolver = SemanticResolver(db_path=db_path, embedder=embedder)
 
     try:
         # Drop existing embeddings table if it exists to ensure fresh start
@@ -738,7 +755,7 @@ def _generate_embeddings() -> None:
             console=console,
         ) as progress:
             task = progress.add_task(
-                f"Processing with {embedding_manager.model}", total=total_docs
+                f"Processing with {embedder.model}", total=total_docs
             )
 
             # Progress callback function
