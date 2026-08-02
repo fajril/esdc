@@ -13,7 +13,9 @@ cosine space; check_or_seed_probe enforces that at runtime.
 """
 from __future__ import annotations
 
+import json
 import logging
+import math
 import threading
 from typing import Any
 
@@ -265,4 +267,73 @@ def get_build_embedder(backend: str | None = None) -> Any:
     raise ValueError(
         f"[Embedding] unknown embedding_backend {name!r}; "
         "expected one of: local, ollama, openai"
+    )
+
+
+# Fixed sentence embedded by every backend to prove they share one cosine
+# space. Never change it without reembedding every vector space.
+PROBE_TEXT = "esdc corpus embedding parity probe"
+
+# Worst measured cross-backend cosine is 0.998656 (ollama <-> mlx 8-bit),
+# so 0.995 leaves ~0.004 of margin for kernel and batch variation while
+# still rejecting real mismatches, which land far below 0.99.
+PROBE_TOLERANCE = 0.995
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity. Scale-invariant, so normalized and raw vectors mix."""
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def check_or_seed_probe(conn: Any, meta_table: str, embedder: Any) -> None:
+    """Verify `embedder` writes into the same space as the stored vectors.
+
+    Seeds the probe when the column is NULL — that is the migration path
+    for vector spaces created before probes existed. No-op when the meta
+    table has no row yet; the caller seeds the pin first.
+
+    Raises:
+        ValueError: the embedder's dimension or direction disagrees with
+            the stored probe beyond PROBE_TOLERANCE.
+    """
+    row = conn.execute(f"SELECT probe_vec FROM {meta_table} LIMIT 1").fetchone()
+    if row is None:
+        return
+
+    current = embedder.generate_embedding(PROBE_TEXT)
+    stored = row[0]
+
+    if stored is None:
+        conn.execute(
+            f"UPDATE {meta_table} SET probe_vec = ?", [json.dumps(current)]
+        )
+        logger.info("[Embedding] parity probe seeded | table=%s", meta_table)
+        return
+
+    ref = json.loads(stored) if isinstance(stored, str) else list(stored)
+
+    if len(ref) != len(current):
+        raise ValueError(
+            f"[Embedding] embedding dimension changed for {meta_table} "
+            f"(stored {len(ref)}, backend produces {len(current)}). The "
+            "stored vectors are not comparable with this backend."
+        )
+
+    sim = cosine(current, ref)
+    if sim < PROBE_TOLERANCE:
+        raise ValueError(
+            f"[Embedding] parity probe failed for {meta_table}: cosine "
+            f"{sim:.6f} against the stored probe is below {PROBE_TOLERANCE}. "
+            f"The backend reporting model={embedder.model!r} is not producing "
+            "vectors in the same space as the stored ones — likely a "
+            "different quantization, pooling mode or model entirely. Check "
+            "`embedding_model`/`embedding_host`, or rebuild this space."
+        )
+    logger.debug(
+        "[Embedding] parity probe ok | table=%s cosine=%.6f", meta_table, sim
     )

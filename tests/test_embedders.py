@@ -2,8 +2,10 @@
 """Shared embedder backends: internal (llama.cpp), Ollama, OpenAI-compatible."""
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
+import duckdb
 import pytest
 
 import esdc.embedders as emb
@@ -261,3 +263,66 @@ def test_factory_unknown_backend_lists_valid_ones():
     assert "lmstudio" in msg
     for name in ("local", "ollama", "openai"):
         assert name in msg
+
+
+def _meta_conn(probe=None, dim=3):
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE m (embedding_model VARCHAR, dim INTEGER, probe_vec JSON)")
+    conn.execute(
+        "INSERT INTO m VALUES (?, ?, ?)",
+        ["qwen3-embedding-0.6b-q8_0", dim, json.dumps(probe) if probe else None],
+    )
+    return conn
+
+
+class _FixedEmbedder:
+    model = "qwen3-embedding-0.6b-q8_0"
+
+    def __init__(self, vec):
+        self._vec = vec
+
+    def generate_embedding(self, text):
+        return list(self._vec)
+
+    def generate_embeddings_batch(self, texts):
+        return [list(self._vec) for _ in texts]
+
+
+def test_probe_constants():
+    assert emb.PROBE_TEXT == "esdc corpus embedding parity probe"
+    assert emb.PROBE_TOLERANCE == 0.995
+
+
+def test_cosine_is_scale_invariant():
+    assert emb.cosine([1.0, 0.0], [5.0, 0.0]) == pytest.approx(1.0)
+
+
+def test_probe_seeds_when_null():
+    conn = _meta_conn(probe=None)
+    emb.check_or_seed_probe(conn, "m", _FixedEmbedder([1.0, 0.0, 0.0]))
+    stored = conn.execute("SELECT probe_vec FROM m").fetchone()[0]
+    assert json.loads(stored) == [1.0, 0.0, 0.0]
+
+
+def test_probe_passes_on_near_identical_vector():
+    conn = _meta_conn(probe=[1.0, 0.0, 0.0])
+    emb.check_or_seed_probe(conn, "m", _FixedEmbedder([0.999, 0.001, 0.0]))
+
+
+def test_probe_raises_on_drifted_vector():
+    conn = _meta_conn(probe=[1.0, 0.0, 0.0])
+    with pytest.raises(ValueError) as exc:
+        emb.check_or_seed_probe(conn, "m", _FixedEmbedder([0.0, 1.0, 0.0]))
+    assert "0.995" in str(exc.value)
+
+
+def test_probe_raises_on_dim_change():
+    conn = _meta_conn(probe=[1.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="dimension"):
+        emb.check_or_seed_probe(conn, "m", _FixedEmbedder([1.0, 0.0]))
+
+
+def test_probe_noop_when_meta_empty():
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE m (embedding_model VARCHAR, dim INTEGER, probe_vec JSON)")
+    emb.check_or_seed_probe(conn, "m", _FixedEmbedder([1.0]))  # must not raise
