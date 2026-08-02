@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import esdc.corpus.embedder as embedder_mod
 import esdc.corpus.reranker as reranker_mod
+import esdc.embedders as embedder_mod
 from esdc.corpus import warmup as w
 from esdc.corpus.reranker import Reranker
 from esdc.corpus.warmup import run_warmup
