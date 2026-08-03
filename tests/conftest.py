@@ -53,19 +53,22 @@ def reset_config_cache():
 def reset_semantic_resolver_cache():
     """Reset the cached SemanticResolver before and after each test.
 
-    esdc.chat.tools._get_semantic_resolver() caches one instance at module
-    scope so its DB-signature pin memo survives across tool calls in
-    production. Tests that patch
+    esdc.chat.tools._get_semantic_resolver() caches one instance per thread
+    (in ``_semantic_resolver_tls``) so its DB-signature pin memo survives
+    across tool calls in production. Tests that patch
     ``esdc.search.semantic_resolver.SemanticResolver`` (real or Mock) need a
     clean slate each time -- otherwise a resolver instance built by an
     earlier test leaks into a later one that expects its own patched class
-    to be used.
+    to be used. Tests run on the main thread, so clearing the current
+    thread's TLS slot is sufficient.
     """
     import esdc.chat.tools as tools_mod
 
-    tools_mod._semantic_resolver = None
+    if hasattr(tools_mod._semantic_resolver_tls, "resolver"):
+        del tools_mod._semantic_resolver_tls.resolver
     yield
-    tools_mod._semantic_resolver = None
+    if hasattr(tools_mod._semantic_resolver_tls, "resolver"):
+        del tools_mod._semantic_resolver_tls.resolver
 
 
 @pytest.fixture(autouse=True)

@@ -547,11 +547,13 @@ class TestSemanticSearchCorpusFanOut:
         assert mock_resolver.hybrid_search.call_count == 1
 
 
-def test_semantic_search_reuses_cached_resolver(monkeypatch):
-    """_get_semantic_resolver() builds one SemanticResolver and reuses it.
+def test_semantic_search_reuses_cached_resolver():
+    """_get_semantic_resolver() builds one SemanticResolver per thread and reuses it.
 
     Focused unit test on the cache getter itself -- no real DuckDB/network
-    path. This is what makes the semantic_meta pin memo (see
+    path. Within a single thread (this test), the resolver is built once and
+    the same instance is returned on repeated calls. This is what makes the
+    semantic_meta pin memo (see
     tests/search/test_semantic_resolver_embedder.py) actually pay off in
     production: semantic_search used to build a fresh SemanticResolver()
     per call, so the per-instance memo never fired.
@@ -560,8 +562,8 @@ def test_semantic_search_reuses_cached_resolver(monkeypatch):
 
     import esdc.chat.tools as tools_mod
 
-    monkeypatch.setattr(tools_mod, "_semantic_resolver", None)
-
+    # conftest's reset_semantic_resolver_cache autouse fixture already clears
+    # the current thread's TLS slot before this test runs.
     with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
         instance = MagicMock()
         MockResolver.return_value = instance
@@ -572,3 +574,41 @@ def test_semantic_search_reuses_cached_resolver(monkeypatch):
     MockResolver.assert_called_once()
     assert first is instance
     assert second is instance
+
+
+def test_semantic_resolver_is_thread_local():
+    """Two different threads must get DISTINCT SemanticResolver instances.
+
+    Regression test for the concurrency race fixed alongside this test: a
+    module-global cached resolver was shared across all ThreadPoolExecutor
+    worker threads that LangChain uses to run the sync semantic_search tool,
+    so concurrent chat requests could share one DuckDBPyConnection (not
+    thread-safe) and race on resolver.close() nulling it mid-query. Caching
+    per-thread (via threading.local()) fixes this: each thread must observe
+    its own resolver instance.
+    """
+    import threading
+    from unittest.mock import MagicMock, patch
+
+    import esdc.chat.tools as tools_mod
+
+    results: dict[int, object] = {}
+
+    def _worker(idx: int) -> None:
+        # Each thread starts with a clean TLS slot (only ever set by this
+        # thread itself, since threading.local() is per-thread storage).
+        resolver = tools_mod._get_semantic_resolver()
+        results[idx] = resolver
+
+    with patch(
+        "esdc.search.semantic_resolver.SemanticResolver",
+        side_effect=lambda *a, **k: MagicMock(),
+    ):
+        threads = [threading.Thread(target=_worker, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert len(results) == 2
+    assert results[0] is not results[1]

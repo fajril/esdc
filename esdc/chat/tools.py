@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import shutil
+import threading
 from typing import Annotated, Any
 
 # Third-party
@@ -185,25 +186,32 @@ def _get_corpus_embedder():
     return _corpus_embedder
 
 
-_semantic_resolver = None
+_semantic_resolver_tls = threading.local()
 
 
 def _get_semantic_resolver():
-    """Lazily create and reuse one SemanticResolver for the semantic_search tool.
+    """Reuse one SemanticResolver PER THREAD for the semantic_search tool.
 
     Reusing the resolver instance (not just the embedder) is what lets its
     DB-signature-keyed semantic_meta pin memo actually pay off: a fresh
     SemanticResolver() per call meant the memo never survived past a single
-    tool invocation. The DuckDB connection stays short-lived regardless --
-    the caller still runs resolver.close() per call, which only nulls the
-    connection and leaves the cached instance (and its pin memo) intact.
+    tool invocation. semantic_search is a sync LangChain tool run on a
+    threadpool worker, and the chat server serves requests concurrently, so
+    a single module-global resolver would let two threads share one
+    DuckDBPyConnection -- a non-thread-safe object -- and race on
+    resolver.close() (thread X nulling self._conn while thread Y is
+    mid-query). Caching per-thread instead keeps the memo win without any
+    cross-thread sharing: each thread gets its own resolver (and its own
+    connection), and resolver.close() in the caller's finally block only
+    ever affects that thread's own connection.
     """
-    global _semantic_resolver
-    if _semantic_resolver is None:
+    resolver = getattr(_semantic_resolver_tls, "resolver", None)
+    if resolver is None:
         from esdc.search.semantic_resolver import SemanticResolver
 
-        _semantic_resolver = SemanticResolver()
-    return _semantic_resolver
+        resolver = SemanticResolver()
+        _semantic_resolver_tls.resolver = resolver
+    return resolver
 
 
 def _get_disk_cache_stats(
