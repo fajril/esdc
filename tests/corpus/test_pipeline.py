@@ -1996,20 +1996,34 @@ def test_commit_no_rule_warning_when_level_already_matches(tmp_path, monkeypatch
 
 
 def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
-    """An exception raised after read_sidecar succeeds (e.g. store.insert_document choking on an unparseable hand-edited doc_date) must not abort the batch -- it's recorded as a per-file failure and the rest of the batch still commits."""
+    """An exception raised after read_sidecar succeeds (e.g. store.insert_document
+    choking on a malformed row) must not abort the batch -- it's recorded as a
+    per-file failure and the rest of the batch still commits.
+
+    Task 7 dropped insert_document's DuckDB `documents` write (now derived via
+    refresh_mirror(), which tolerates a bad doc_date by TRY_CAST-ing it to NULL
+    instead of raising), so an unparseable hand-edited doc_date no longer fails
+    at insert time -- the scenario this test used to rely on. insert_document
+    is monkeypatched to fail for one doc instead, to keep testing the
+    per-file-isolation contract on its own terms.
+    """
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
     patch_entity_resolver(monkeypatch)
 
-    make_sidecar(
-        tmp_path,
-        "bad.pdf",
-        reviewed=True,
-        file_hash="55" * 32,
-        doc_date="31 Februari dua ribu",
-    )
+    bad_hash = "55" * 32
+    make_sidecar(tmp_path, "bad.pdf", reviewed=True, file_hash=bad_hash)
     make_sidecar(tmp_path, "good.pdf", reviewed=True, file_hash="66" * 32)
+
+    original_insert = store.insert_document
+
+    def flaky_insert(doc, chunks):
+        if doc["file_hash"] == bad_hash:
+            raise RuntimeError("simulated insert failure")
+        return original_insert(doc, chunks)
+
+    monkeypatch.setattr(store, "insert_document", flaky_insert)
 
     report = pipeline.run_commit([tmp_path])
 

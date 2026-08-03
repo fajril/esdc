@@ -78,6 +78,7 @@ def test_force_replaces_document(store):
 
 def test_search_returns_inserted_doc(store):
     store.insert_document(DOC, [Chunk(0, "Surat", "persetujuan POD lapangan Duri")])
+    store.refresh_mirror()  # search hydrates/joins off the mirror, not the insert
     store.rebuild_indexes()
     result = store.search("persetujuan POD", limit=5, filters=None)
     assert result["status"] == "success"
@@ -87,6 +88,7 @@ def test_search_returns_inserted_doc(store):
 
 def test_search_filter_excludes(store):
     store.insert_document(DOC, [Chunk(0, None, "persetujuan POD")])
+    store.refresh_mirror()  # filtered search joins the mirror
     store.rebuild_indexes()
     result = store.search("persetujuan", limit=5, filters={"doc_type": "mom"})
     assert result["results"] == []
@@ -96,6 +98,7 @@ def test_search_results_include_doc_topic(store):
     doc = dict(DOC)
     doc["doc_topic"] = ["wpnb"]
     store.insert_document(doc, [Chunk(0, None, "persetujuan POD")])
+    store.refresh_mirror()  # doc_topic is hydrated from the mirror
     store.rebuild_indexes()
     result = store.search("persetujuan", limit=5, filters=None)
     assert result["results"][0]["doc_topic"] == ["wpnb"]
@@ -246,6 +249,7 @@ def test_search_entity_filter_is_case_insensitive_substring(tmp_path: Path):
         doc2 = _doc_variant("d2", "d2.pdf")
         doc2["wk_name"] = ["Bangkanai"]
         store.insert_document(doc2, [Chunk(0, None, "isi d2")])
+        store.refresh_mirror()  # this test queries the DuckDB mirror directly
 
         clause, params = store._build_filter_clause({"wk_name": "rokan"}, "d")
         rows = store._get_connection().execute(
@@ -272,6 +276,7 @@ def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
         doc = _doc_variant("d1", "d1.pdf")
         doc["wk_name"] = ["Rokan"]
         store.insert_document(doc, [Chunk(0, "Report", "drilling report content")])
+        store.refresh_mirror()  # wk_name is hydrated from the mirror
         store.rebuild_indexes()
         result = store.search("drilling")
         assert result["status"] == "success"
@@ -315,6 +320,7 @@ def test_build_filter_clause_doc_topic_case_insensitive_substring(tmp_path: Path
         doc2 = _doc_variant("d2", "d2.pdf")
         doc2["doc_topic"] = ["wpnb"]
         store.insert_document(doc2, [Chunk(0, None, "isi d2")])
+        store.refresh_mirror()  # this test queries the DuckDB mirror directly
 
         clause, params = store._build_filter_clause({"doc_topic": "psc"}, "d")
         rows = store._get_connection().execute(
@@ -335,6 +341,7 @@ def test_search_filter_by_doc_topic_returns_matching_doc_only(tmp_path: Path):
         doc2 = _doc_variant("d2", "d2.pdf")
         doc2["doc_topic"] = ["wpnb"]
         store.insert_document(doc2, [Chunk(0, None, "pengajuan WPNB")])
+        store.refresh_mirror()  # filtered search joins the mirror
         store.rebuild_indexes()
 
         result = store.search(
@@ -411,7 +418,8 @@ def _sqlite_doc_count(tmp_path: Path) -> int:
 def test_insert_writes_sqlite_truth_and_duckdb_mirror(store, tmp_path):
     store.insert_document(DOC, [Chunk(0, "Surat", "isi surat")])
     assert _sqlite_doc_count(tmp_path) == 1
-    # mirror row present for search joins / iris
+    # The mirror row is produced by refresh_mirror(), not by insert itself.
+    store.refresh_mirror()
     n = store._get_connection().execute(
         "SELECT COUNT(*) FROM documents"
     ).fetchone()[0]
@@ -420,13 +428,24 @@ def test_insert_writes_sqlite_truth_and_duckdb_mirror(store, tmp_path):
 
 def test_delete_removes_both_stores(store, tmp_path):
     store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # populate the mirror so there's something to remove
     store.delete_document(DOC["doc_id"])
     assert _sqlite_doc_count(tmp_path) == 0
+    # Chunks are deleted eagerly by delete_document, so search stops
+    # surfacing this doc immediately...
+    assert store.counts() == {"documents": 0, "chunks": 0}
+    # ...but delete_document no longer touches the `documents` mirror row
+    # directly, so it is still there until the next refresh.
+    n = store._get_connection().execute(
+        "SELECT COUNT(*) FROM documents"
+    ).fetchone()[0]
+    assert n == 1
+    # The next refresh rebuilds `documents` from SQLite truth and drops it.
+    store.refresh_mirror()
     n = store._get_connection().execute(
         "SELECT COUNT(*) FROM documents"
     ).fetchone()[0]
     assert n == 0
-    assert store.counts() == {"documents": 0, "chunks": 0}
 
 
 class _RaisingConn:
@@ -531,6 +550,8 @@ def test_fill_blank_entities_fills_null_and_empty_leaves_non_empty(store):
 def test_fill_blank_entities_mirrors_to_duckdb(store):
     doc = _blank_entity_doc()
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # the mirror row must exist for fill_blank_entities
+    # to update it in place
 
     filled = store.fill_blank_entities(doc["doc_id"], {"wk_name": ["Sidecar WK"]})
 
@@ -676,6 +697,7 @@ def test_keyword_search_matches_prefix_terms(store_with_doc_factory):
     store, doc = store_with_doc_factory(
         doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
     )
+    store.refresh_mirror()  # _keyword_search joins the mirror unconditionally
     store.rebuild_indexes()
     results = store._keyword_search("Merak", 10, None)
     assert results, "prefix term must be FTS-searchable"
@@ -891,3 +913,31 @@ def test_get_sqlite_self_heals_missing_raw_entities_metadata_ingested_at(
         assert report.documents == 1
     finally:
         store.close()
+
+
+def test_insert_document_writes_truth_and_chunks_but_not_mirror(tmp_path):
+    """The mirror row is produced by refresh, not by the insert path."""
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "i.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "i.sqlite",
+    )
+    store.ensure_tables()
+    doc = {
+        "doc_id": "d1", "file_name": "a.pdf", "file_path": "/tmp/a.pdf",
+        "file_hash": "h1", "doc_type": "surat", "doc_date": "2026-01-01",
+        "markdown": "# x", "extraction_method": "docling", "embedding_model": "m",
+    }
+    store.insert_document(doc, [Chunk(index=0, section=None, text="hello")])
+
+    conn = store._get_connection()
+    assert conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    assert store.document_exists("h1") is True  # truth has it
+
+    store.refresh_mirror()
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    store.close()

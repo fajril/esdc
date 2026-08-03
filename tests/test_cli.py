@@ -243,6 +243,11 @@ class TestStatusCorpus:
             },
             [Chunk(0, "MoM", "isi mom satu")],
         )
+        # `status corpus` reads the DuckDB `documents` mirror directly (it
+        # never instantiates CorpusStore); insert_document no longer writes
+        # that mirror row, so populate it the same way a real commit batch
+        # does before checking on disk.
+        store.refresh_mirror()
         store.close()
 
         result = runner.invoke(app, ["status", "corpus"])

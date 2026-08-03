@@ -102,6 +102,7 @@ def populated(tool_env: Path) -> Path:
     store.ensure_tables()
     store.insert_document(DOC, [Chunk(0, "Surat", "persetujuan POD lapangan Duri")])
     store.insert_document(LONG_DOC, [Chunk(0, None, "notulen rapat panjang")])
+    store.refresh_mirror()  # search() hydrates/joins off the mirror, not insert
     store.rebuild_indexes()
     store.close()
     return tool_env
@@ -137,6 +138,7 @@ def test_search_documents_doc_topic_filter(tool_env):
     doc = dict(DOC)
     doc["doc_topic"] = ["wpnb"]
     store.insert_document(doc, [Chunk(0, None, "rencana kerja dan anggaran")])
+    store.refresh_mirror()  # search() hydrates/joins off the mirror, not insert
     store.rebuild_indexes()
     store.close()
 

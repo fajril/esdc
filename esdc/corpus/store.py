@@ -8,10 +8,14 @@ the embedding model/dim, and a continuously-maintained ``documents``
 mirror (same name/columns as the old DuckDB-native table) so chunk
 search joins, iris text-to-SQL, and status commands work unchanged.
 
-Every mutation writes both stores in one call; there is no cross-db
-transaction, so the SQLite row is the commit marker: inserts write the
-DuckDB rows first and the SQLite row last, and clear any orphaned DuckDB
-rows for that doc_id before writing.
+Every mutation writes SQLite truth and DuckDB's derived ``document_chunks``
+in one call; there is no cross-db transaction, so the SQLite row is the
+commit marker: inserts write the DuckDB chunk rows first and the SQLite
+row last, clearing any orphaned chunk rows for that doc_id before
+writing. The DuckDB ``documents`` mirror itself is not touched by these
+per-document writes — it is derived data, rebuilt wholesale by
+``refresh_mirror()`` at the end of a batch (see that method and
+``esdc.corpus.mirror``).
 
 Incremental by design: dedupe on ``file_hash``, DELETE never DROP on
 user data — the one exception is ``set_meta`` recreating
@@ -493,11 +497,12 @@ class CorpusStore:
     """
 
     def insert_document(self, doc: dict[str, Any], chunks: list[Chunk]) -> None:
-        """Insert a document (SQLite truth + DuckDB mirror/chunks).
+        """Insert a document (SQLite truth + DuckDB chunks).
 
-        No cross-db transaction exists, so the SQLite row is written LAST
-        as the commit marker; any orphaned DuckDB rows from a previously
-        interrupted write are cleared first.
+        DuckDB holds derived data only: the chunks here, and the
+        ``documents`` mirror via ``refresh_mirror()`` at the end of the
+        batch — this call never writes it. No cross-db transaction
+        exists, so the SQLite row is written LAST as the commit marker.
         """
         conn = self._get_connection()
         sconn = self._get_sqlite()
@@ -512,16 +517,13 @@ class CorpusStore:
         )
         values = self._doc_row_values(doc)
 
+        # DuckDB holds derived data only: chunks here, the `documents`
+        # mirror via refresh_mirror() at the end of the batch. The SQLite
+        # row stays the commit marker, so it is written last.
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(
                 f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc["doc_id"]]
-            )
-            conn.execute(
-                f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc["doc_id"]]
-            )
-            conn.execute(
-                self._DOC_INSERT_SQL_TEMPLATE.format(table=self.DOC_TABLE), values
             )
             if chunks:
                 conn.executemany(
@@ -558,47 +560,27 @@ class CorpusStore:
                     values,
                 )
         except Exception:
-            # SQLite row is the truth marker: roll the mirror back so the
-            # failed insert leaves no half-written document behind.
+            # Truth write failed: drop the chunks we just wrote so no
+            # orphaned embeddings survive. (A later refresh would sweep
+            # them anyway; this keeps the failure local.)
             with contextlib.suppress(Exception):
                 conn.execute(
                     f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?",
                     [doc["doc_id"]],
                 )
-                conn.execute(
-                    f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?",
-                    [doc["doc_id"]],
-                )
             raise
 
     def delete_document(self, doc_id: str) -> None:
-        """Delete a document and its chunks (used by --force and `corpus remove`).
+        """Delete a document: SQLite truth row + DuckDB chunks.
 
-        No cross-db transaction exists, so this honors the same
-        truth-marker rule as ``insert_document``: the DuckDB mirror
-        (chunks + documents row) is deleted FIRST, and the SQLite truth
-        row is deleted LAST.
-
-        If the DuckDB step fails (e.g. the file is locked by another
-        process), this raises and the SQLite row is left untouched — the
-        document stays fully visible via list/get/exists and the delete
-        can simply be retried. If the SQLite step fails after the DuckDB
-        step succeeded, the document is left listed as existing but with
-        no chunks — degraded but honest (no phantom search hits); a
-        `commit --force` re-ingest repairs it.
+        The DuckDB `documents` mirror is derived, so it is not deleted
+        here — the next refresh_mirror() rebuilds it without this row,
+        and sweep_orphan_chunks() would clear any chunks this missed.
+        Chunks are deleted eagerly so a delete takes effect on search
+        immediately rather than at the next refresh.
         """
         conn = self._get_connection()
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            conn.execute(
-                f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id]
-            )
-            conn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-
+        conn.execute(f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id])
         sconn = self._get_sqlite()
         with sconn:
             sconn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
