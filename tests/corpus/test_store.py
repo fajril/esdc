@@ -115,11 +115,21 @@ def test_get_document(store):
 
 def test_list_documents(store):
     store.insert_document(DOC, [Chunk(0, None, "a"), Chunk(1, None, "b")])
+    doc_no_chunks = dict(DOC)
+    doc_no_chunks["doc_id"] = "nochunks1"
+    doc_no_chunks["file_hash"] = "cd" * 32
+    doc_no_chunks["file_name"] = "nochunks.pdf"
+    store.insert_document(doc_no_chunks, [])
     store.refresh_mirror()  # list_documents is a serving read off the mirror
     docs = store.list_documents()
-    assert len(docs) == 1
-    assert docs[0]["doc_id"] == "abc123"
-    assert docs[0]["n_chunks"] == 2
+    by_id = {d["doc_id"]: d for d in docs}
+    assert len(docs) == 2
+    assert by_id["abc123"]["n_chunks"] == 2
+    # A document with zero chunks must still appear in the results, with
+    # n_chunks == 0 (not missing, not None) — the LEFT JOIN + COUNT(c.chunk_id)
+    # must not drop or null out rows with no matching chunks.
+    assert "nochunks1" in by_id
+    assert by_id["nochunks1"]["n_chunks"] == 0
 
 
 def test_clear(store):
@@ -440,18 +450,44 @@ def test_delete_removes_both_stores(store, tmp_path):
     # Chunks are deleted eagerly by delete_document, so search stops
     # surfacing this doc immediately...
     assert store.counts() == {"documents": 0, "chunks": 0}
-    # ...but delete_document no longer touches the `documents` mirror row
-    # directly, so it is still there until the next refresh.
+    # ...and delete_document also removes the `documents` mirror row in
+    # the same DuckDB transaction as the chunk delete, so it is gone
+    # immediately too — not just after the next refresh. get_document/
+    # list_documents/find_doc_ids are serving reads off this mirror, so
+    # leaving the row behind would keep a deleted document visible.
     n = store._get_connection().execute(
         "SELECT COUNT(*) FROM documents"
     ).fetchone()[0]
-    assert n == 1
-    # The next refresh rebuilds `documents` from SQLite truth and drops it.
+    assert n == 0
+    # A subsequent refresh is a no-op here: the truth row is already gone,
+    # so the mirror stays empty.
     store.refresh_mirror()
     n = store._get_connection().execute(
         "SELECT COUNT(*) FROM documents"
     ).fetchone()[0]
     assert n == 0
+
+
+def test_delete_document_removes_mirror_row_without_intervening_refresh(
+    store, tmp_path
+):
+    """Reproduces the Finding 1 bug: insert -> refresh -> delete must make
+    the document disappear from every serving read (get_document,
+    list_documents, find_doc_ids) immediately, with no refresh_mirror()
+    call between the delete and the reads. Before the fix, delete_document
+    left the mirror's `documents` row behind, so these all still returned
+    the deleted document until the next refresh."""
+    store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()
+    assert store.get_document(DOC["doc_id"]) is not None
+
+    store.delete_document(DOC["doc_id"])
+
+    assert store.get_document(DOC["doc_id"]) is None
+    assert DOC["doc_id"] not in {d["doc_id"] for d in store.list_documents()}
+    assert DOC["doc_id"] not in {
+        doc_id for doc_id, _ in store.find_doc_ids({"doc_type": "surat"})
+    }
 
 
 class _RaisingConn:

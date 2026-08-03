@@ -575,16 +575,30 @@ class CorpusStore:
             raise
 
     def delete_document(self, doc_id: str) -> None:
-        """Delete a document: SQLite truth row + DuckDB chunks.
+        """Delete a document: SQLite truth row + DuckDB chunks and mirror row.
 
-        The DuckDB `documents` mirror is derived, so it is not deleted
-        here — the next refresh_mirror() rebuilds it without this row,
-        and sweep_orphan_chunks() would clear any chunks this missed.
-        Chunks are deleted eagerly so a delete takes effect on search
-        immediately rather than at the next refresh.
+        get_document/list_documents/find_doc_ids are serving reads that
+        answer from the DuckDB mirror (see the module docstring's
+        read-path routing rule), so a delete must remove the mirror's
+        `documents` row too, or those calls keep surfacing a deleted
+        document until the next refresh_mirror(). The chunk delete and
+        mirror-row delete run in one DuckDB transaction; this is not a
+        return to the dual-write compensation Task 7 removed — there is
+        no write to compensate, only a delete that the next refresh
+        would perform anyway, so it is idempotent and needs no rollback
+        logic of its own beyond the transaction already here.
         """
         conn = self._get_connection()
-        conn.execute(f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id])
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(
+                f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id]
+            )
+            conn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         sconn = self._get_sqlite()
         with sconn:
             sconn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
@@ -872,11 +886,13 @@ class CorpusStore:
         """Build a parameterized WHERE clause for documents-column filters.
 
         Column names are validated against a hardcoded allowlist before
-        being interpolated; values are always bound via `?`. The same
-        filters work on the DuckDB mirror (search paths) and the SQLite
-        truth table (find_doc_ids); only the case-insensitive LIKE and
-        the year extraction differ per dialect (SQLite LIKE is already
-        case-insensitive for ASCII).
+        being interpolated; values are always bound via `?`. The clause
+        works against either backend's `documents` table: the default
+        `duckdb` dialect serves the DuckDB mirror (search, find_doc_ids
+        both run on DuckDB now), while the `sqlite` dialect is kept for
+        any caller filtering the SQLite truth table directly; only the
+        case-insensitive LIKE and the year extraction differ per dialect
+        (SQLite LIKE is already case-insensitive for ASCII).
         """
         conditions: list[str] = []
         params: list[Any] = []

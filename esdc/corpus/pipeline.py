@@ -1456,9 +1456,11 @@ def run_export(paths: list[Path], all_docs: bool = False) -> CorpusReport:
     frontmatter rebuilt from the row (see ``_sidecar_meta_from_doc``) and
     body set to the row's ``markdown`` column.
 
-    SQLite-only: unlike ``commit``/``reembed``, export never opens DuckDB
-    or the embedder, so it works even when Ollama/the embedding model is
-    unavailable.
+    Matches sidecar paths against the SQLite truth table directly, but
+    ``get_document`` (used to fetch each row's full content) is a serving
+    read off the DuckDB mirror, so this does open DuckDB. It never loads
+    the embedder, unlike ``commit``/``reembed`` — but a document committed
+    since the last ``refresh_mirror()`` won't be found here until one runs.
     """
     report = CorpusReport()
     store = CorpusStore()
