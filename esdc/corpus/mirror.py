@@ -156,11 +156,19 @@ def sweep_orphan_chunks(conn: duckdb.DuckDBPyConnection) -> int:
     it vanishes from `documents` at the next refresh, but its chunks
     would remain searchable — phantom hits pointing at a doc_id that can
     no longer be read. This sweep deletes exactly those.
+
+    Uses a correlated NOT EXISTS rather than NOT IN: SQL's NOT IN against
+    a subquery containing any NULL evaluates to UNKNOWN for every row, so
+    the DELETE would silently match nothing. SQLite permits NULL in a
+    non-INTEGER PRIMARY KEY column, so `documents.doc_id` being declared
+    TEXT PRIMARY KEY does not rule this out. NOT EXISTS has no such
+    landmine.
     """
     try:
         deleted = conn.execute(
-            f"DELETE FROM {CHUNK_TABLE} WHERE doc_id NOT IN "
-            f"(SELECT doc_id FROM {DOC_TABLE}) RETURNING chunk_id"
+            f"DELETE FROM {CHUNK_TABLE} c WHERE NOT EXISTS "
+            f"(SELECT 1 FROM {DOC_TABLE} d WHERE d.doc_id = c.doc_id) "
+            f"RETURNING c.chunk_id"
         ).fetchall()
     except duckdb.CatalogException:
         return 0  # chunks table not created yet (fresh install)
