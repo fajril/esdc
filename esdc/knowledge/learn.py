@@ -223,22 +223,33 @@ def run_learn(
         # independently-pathed CorpusStore.
         from esdc.corpus.mirror import refresh_all
 
-        sqlite_path = Path(
-            sqlite_conn.execute("PRAGMA database_list").fetchone()[2]
-        )
-        # Best-effort: DuckDB is single-writer, so this can lose the write
-        # lock to a concurrent corpus command. Everything above is already
-        # committed to the SQLite truth, so a refresh failure here means
-        # the mirror is stale, not that learn failed -- same non-fatal
-        # contract as the portal's _refresh_mirror_after_save.
-        try:
-            refresh_all(duck_conn, sqlite_path)
-        except Exception as e:
-            logger.warning(
-                "[Learn] mirror_refresh_failed | error=%s -- run "
-                "`esdc corpus sync` to converge",
-                e,
+        sqlite_path_str = sqlite_conn.execute(
+            "PRAGMA database_list"
+        ).fetchone()[2]
+        if not sqlite_path_str:
+            # In-memory sqlite_conn (tests inject this): PRAGMA
+            # database_list's file column is '' for :memory: databases, so
+            # Path('') would resolve to '.' and ATTACH the wrong database,
+            # failing every time. There is no on-disk truth to refresh the
+            # mirror from in that case, so skip rather than attempt-and-warn.
+            logger.debug(
+                "[Learn] sqlite_conn is in-memory, skipping mirror refresh"
             )
+        else:
+            sqlite_path = Path(sqlite_path_str)
+            # Best-effort: DuckDB is single-writer, so this can lose the
+            # write lock to a concurrent corpus command. Everything above is
+            # already committed to the SQLite truth, so a refresh failure
+            # here means the mirror is stale, not that learn failed -- same
+            # non-fatal contract as the portal's _refresh_mirror_after_save.
+            try:
+                refresh_all(duck_conn, sqlite_path)
+            except Exception as e:
+                logger.warning(
+                    "[Learn] mirror_refresh_failed | error=%s -- run "
+                    "`esdc corpus sync` to converge",
+                    e,
+                )
 
         duck_conn.execute("CHECKPOINT")
 
