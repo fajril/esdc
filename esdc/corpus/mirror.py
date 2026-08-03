@@ -36,6 +36,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
@@ -292,3 +293,23 @@ def create_views(conn: duckdb.DuckDBPyConnection) -> list[str]:
         """)
     created.append("v_document")
     return created
+
+
+@dataclass
+class MirrorReport:
+    documents: int = 0
+    orphan_chunks: int = 0
+    registry: dict[str, int] = field(default_factory=dict)
+    views: list[str] = field(default_factory=list)
+
+
+def refresh_all(
+    conn: duckdb.DuckDBPyConnection, sqlite_path: Path
+) -> MirrorReport:
+    """Rebuild every derived table/view in DuckDB from the SQLite truth."""
+    report = MirrorReport()
+    report.documents = refresh_documents(conn, sqlite_path)
+    report.orphan_chunks = sweep_orphan_chunks(conn)
+    report.registry = refresh_registry(conn, sqlite_path)
+    report.views = create_views(conn)
+    return report

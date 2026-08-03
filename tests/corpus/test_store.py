@@ -798,3 +798,33 @@ def test_sample_content_returns_first_chunk(populated_store):
 
 def test_sample_content_missing_doc_returns_none(populated_store):
     assert populated_store.sample_content("does-not-exist") is None
+
+
+def test_refresh_mirror_rebuilds_documents_from_sqlite_truth(tmp_path):
+    """A row written only to the SQLite truth appears in the mirror after refresh."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "m.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "m.sqlite",
+    )
+    store.ensure_tables()
+    sconn = store._get_sqlite()
+    sconn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_path, file_hash, "
+        "doc_type, doc_date, markdown, extraction_method, embedding_model) "
+        "VALUES ('sneaky','s.pdf','/tmp/s.pdf','h1','surat','2026-01-05','# x','docling','m')"
+    )
+    sconn.commit()
+    assert store._get_connection().execute(
+        "SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'"
+    ).fetchone()[0] == 0
+
+    report = store.refresh_mirror()
+
+    assert report.documents == 1
+    assert store._get_connection().execute(
+        "SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'"
+    ).fetchone()[0] == 1
+    store.close()
