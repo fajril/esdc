@@ -240,3 +240,55 @@ def refresh_registry(
             ).fetchone()[0]
     logger.info("[Mirror] registry refreshed | tables=%d", len(copied))
     return copied
+
+
+def create_views(conn: duckdb.DuckDBPyConnection) -> list[str]:
+    """Create the denormalized document/POD views.
+
+    Two grains, both named explicitly:
+
+    - `v_doc_pod_link` — one row per (document, POD). Convenient for
+      joins, but COUNT(*) over it counts LINKS, not documents.
+    - `v_document` — one row per document, POD links aggregated into
+      `linked_pod_ids`. This is the view to count.
+
+    Returns the view names created. If the registry tables are absent
+    (learn never ran) only `v_document` is created, with an empty
+    `linked_pod_ids`.
+    """
+    created: list[str] = []
+    has_links = bool(
+        conn.execute(
+            "SELECT COUNT(*) FROM duckdb_tables() "
+            "WHERE table_name IN ('pod_document', 'm_pod') "
+            "AND database_name = current_database()"
+        ).fetchone()[0]
+        == 2
+    )
+
+    if has_links:
+        conn.execute("""
+            CREATE OR REPLACE VIEW v_doc_pod_link AS
+            SELECT d.doc_id, d.file_name, d.doc_type, d.doc_date, d.subject,
+                   p.pod_id, p.pod_name
+            FROM documents d
+            JOIN pod_document pd ON pd.doc_id = d.doc_id
+            JOIN m_pod p ON p.id = pd.pod_id
+        """)
+        created.append("v_doc_pod_link")
+        conn.execute("""
+            CREATE OR REPLACE VIEW v_document AS
+            SELECT d.*, COALESCE(l.linked_pod_ids, []) AS linked_pod_ids
+            FROM documents d
+            LEFT JOIN (
+                SELECT doc_id, list(pod_id) AS linked_pod_ids
+                FROM v_doc_pod_link GROUP BY doc_id
+            ) l ON l.doc_id = d.doc_id
+        """)
+    else:
+        conn.execute("""
+            CREATE OR REPLACE VIEW v_document AS
+            SELECT d.*, CAST([] AS VARCHAR[]) AS linked_pod_ids FROM documents d
+        """)
+    created.append("v_document")
+    return created

@@ -9,7 +9,12 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from esdc.corpus.mirror import refresh_documents, refresh_registry, sweep_orphan_chunks
+from esdc.corpus.mirror import (
+    create_views,
+    refresh_documents,
+    refresh_registry,
+    sweep_orphan_chunks,
+)
 
 _SQLITE_DOCS = """
 CREATE TABLE documents (
@@ -238,3 +243,42 @@ def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path
     assert "kg_edge" not in copied
     # not just the dict says 0 — the table must actually exist in DuckDB
     assert conn.execute("SELECT COUNT(*) FROM pod_document").fetchone()[0] == 0
+
+
+def test_views_expose_both_grains(tmp_path: Path):
+    path = tmp_path / "both.sqlite"
+    _make_truth(path, [{"doc_id": "d1"}])
+    conn_s = sqlite3.connect(path)
+    conn_s.execute("CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)")
+    conn_s.executemany(
+        "INSERT INTO m_pod VALUES (?,?,?)", [(1, "POD-1", "A"), (2, "POD-2", "B")]
+    )
+    conn_s.execute("CREATE TABLE pod_document (pod_id INTEGER, doc_id TEXT)")
+    conn_s.executemany("INSERT INTO pod_document VALUES (?,?)", [(1, "d1"), (2, "d1")])
+    conn_s.commit()
+    conn_s.close()
+    conn = duckdb.connect()
+    refresh_documents(conn, path)
+    refresh_registry(conn, path)
+
+    created = create_views(conn)
+
+    assert set(created) == {"v_doc_pod_link", "v_document"}
+    # fan-out grain: one row per (document, pod)
+    assert conn.execute("SELECT COUNT(*) FROM v_doc_pod_link").fetchone()[0] == 2
+    # document grain: one row per document, links aggregated
+    assert conn.execute("SELECT COUNT(*) FROM v_document").fetchone()[0] == 1
+    assert sorted(
+        conn.execute("SELECT linked_pod_ids FROM v_document").fetchone()[0]
+    ) == ["POD-1", "POD-2"]
+
+
+def test_views_degrade_when_registry_absent(truth_path: Path):
+    conn = duckdb.connect()
+    refresh_documents(conn, truth_path)
+
+    created = create_views(conn)
+
+    assert created == ["v_document"]
+    assert conn.execute("SELECT COUNT(*) FROM v_document").fetchone()[0] == 2
+    assert conn.execute("SELECT linked_pod_ids FROM v_document LIMIT 1").fetchone()[0] == []
