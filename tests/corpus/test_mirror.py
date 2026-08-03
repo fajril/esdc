@@ -209,3 +209,32 @@ def test_refresh_registry_copies_present_tables_and_skips_absent(tmp_path: Path)
     assert copied["project_pod"] == 1
     assert "kg_edge" not in copied
     assert conn.execute("SELECT pod_name FROM m_pod").fetchone()[0] == "Duri POD I"
+
+
+def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path: Path):
+    """A registry table that exists but holds zero rows (pod_document /
+    pod_revision before `esdc corpus learn` has linked anything) must still
+    be copied and reported with count 0 — distinct from a table that does
+    not exist at all (kg_edge before `learn` has ever run), which must be
+    skipped and must not appear as a key in the returned dict at all.
+    """
+    path = tmp_path / "reg_empty.sqlite"
+    conn_s = sqlite3.connect(path)
+    conn_s.execute(
+        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
+    )
+    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.execute("CREATE TABLE pod_document (pod_id INTEGER, doc_id TEXT)")
+    # pod_document intentionally left empty: the table exists, no rows yet.
+    conn_s.commit()
+    conn_s.close()
+    # kg_edge deliberately absent — learn has never run
+    conn = duckdb.connect()
+
+    copied = refresh_registry(conn, path)
+
+    assert copied["m_pod"] == 1
+    assert copied["pod_document"] == 0
+    assert "kg_edge" not in copied
+    # not just the dict says 0 — the table must actually exist in DuckDB
+    assert conn.execute("SELECT COUNT(*) FROM pod_document").fetchone()[0] == 0

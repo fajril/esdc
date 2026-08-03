@@ -5,6 +5,14 @@ they are rebuilt from the SQLite truth in one statement rather than
 maintained row-by-row. A rebuild either ran or it did not, so there is no
 partially-diverged state to detect or repair.
 
+Beyond `documents`, this module also mirrors the POD registry and
+knowledge-graph tables (see `REGISTRY_TABLES`) so that `execute_sql`,
+which runs against DuckDB, can reach POD/project/institution lookups and
+the learned `kg_edge`/`kg_claim` facts without a cross-database query.
+`refresh_registry` copies each of those tables that exists in the truth
+and skips those that don't; see its own docstring for which tables are
+deliberately excluded from mirroring altogether.
+
 `document_chunks` is NOT derived from SQLite — its embeddings exist only
 in DuckDB — so refresh never rebuilds it and may only delete orphans.
 
@@ -197,6 +205,16 @@ def refresh_registry(
     conn: duckdb.DuckDBPyConnection, sqlite_path: Path
 ) -> dict[str, int]:
     """Copy each registry/knowledge table that exists in the truth.
+
+    Mirrors the POD registry (`r_institution`, `r_pod_type`, `m_pod`,
+    `project_pod`, `pod_document`, `pod_revision`) and the learned
+    knowledge-graph facts (`kg_edge`, `kg_claim`) so `execute_sql` can
+    query them from DuckDB. `kg_proposal` (the human curation queue
+    behind `esdc corpus proposals`) and `learn_state` (per-document
+    idempotency bookkeeping for `esdc corpus learn`) are deliberately
+    left out of `REGISTRY_TABLES` — neither is domain knowledge the chat
+    agent should query, so their absence here is intentional, not an
+    oversight.
 
     kg_edge and kg_claim only exist after `esdc corpus learn` has run, so
     an absent table is skipped rather than raising.
