@@ -1585,9 +1585,9 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
             (json.dumps(["Portal Project"]), doc_id),
         )
     # A real portal save triggers _refresh_mirror_after_save; this direct
-    # SQL write bypasses that, so refresh explicitly (get_document is a
-    # serving read off the mirror, and the merge-only commit below doesn't
-    # trigger a refresh itself since it inserts nothing new).
+    # SQL write bypasses that, so refresh explicitly — get_document is a
+    # serving read off the mirror, and the assertion below runs before the
+    # merge-only commit gets a chance to refresh.
     store.refresh_mirror()
 
     # Re-extract updates the same sidecar: wk_name now populated, and a
