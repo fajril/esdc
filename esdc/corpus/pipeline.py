@@ -1410,7 +1410,7 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
 def _sidecar_meta_from_doc(doc: dict[str, Any]) -> dict[str, Any]:
     """Invert ``run_commit``'s doc-dict -> DB mapping into sidecar frontmatter.
 
-    ``doc`` is a ``CorpusStore.get_document`` row: JSON-array columns
+    ``doc`` is a ``CorpusStore.get_document_by_id`` row: JSON-array columns
     (``doc_topic``, ``wk_name``/``field_name``/``project_name``,
     ``pod_name``, ``suggested_pod_ids``) and JSON-object columns
     (``raw_entities``, ``metadata``) already come back parsed to
