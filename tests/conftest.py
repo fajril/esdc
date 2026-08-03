@@ -50,6 +50,25 @@ def reset_config_cache():
 
 
 @pytest.fixture(autouse=True)
+def reset_semantic_resolver_cache():
+    """Reset the cached SemanticResolver before and after each test.
+
+    esdc.chat.tools._get_semantic_resolver() caches one instance at module
+    scope so its DB-signature pin memo survives across tool calls in
+    production. Tests that patch
+    ``esdc.search.semantic_resolver.SemanticResolver`` (real or Mock) need a
+    clean slate each time -- otherwise a resolver instance built by an
+    earlier test leaks into a later one that expects its own patched class
+    to be used.
+    """
+    import esdc.chat.tools as tools_mod
+
+    tools_mod._semantic_resolver = None
+    yield
+    tools_mod._semantic_resolver = None
+
+
+@pytest.fixture(autouse=True)
 def _mock_provider_config(request):
     """Prevent accidental real LLM calls in tests.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 
 from esdc.embedders import InternalEmbedder
 from esdc.search.semantic_resolver import SemanticResolver
@@ -97,12 +98,33 @@ def test_legacy_space_without_meta_seeds_on_query(tmp_path):
 
 
 def test_pin_check_embeds_probe_only_once(tmp_path):
+    """A stable DB file signature means the memo hits on the second call."""
     r = _seeded(tmp_path, [1.0, 0.0])
     assert r._ensure_semantic_meta() is None
     r._embedder.calls = 0
     assert r._ensure_semantic_meta() is None
     r.close()
     assert r._embedder.calls == 0
+
+
+def test_pin_recheck_on_db_signature_change(tmp_path):
+    """A changed DB signature forces the pin to be re-verified.
+
+    Covers e.g. esdc fetch/reload replacing the DB file underneath a
+    cached resolver, instead of trusting a stale memo.
+    """
+    r = _seeded(tmp_path, [1.0, 0.0])
+    assert r._ensure_semantic_meta() is None
+    r._embedder.calls = 0
+
+    # Simulate the DB file changing underneath the cached resolver by
+    # bumping its mtime, so the recorded signature no longer matches.
+    st = r._db_path.stat()
+    os.utime(r._db_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1))
+
+    assert r._ensure_semantic_meta() is None
+    r.close()
+    assert r._embedder.calls == 1
 
 
 def test_build_writes_the_pin(tmp_path):

@@ -55,7 +55,19 @@ class SemanticResolver:
         self._db_path = Path(db_path)
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._embedder = embedder if embedder is not None else InternalEmbedder()
-        self._pin_verified: bool = False
+        self._pin_verified_sig: tuple[int, int] | None = None
+
+    def _db_signature(self) -> tuple[int, int] | None:
+        """Identity of the DB file: (mtime_ns, size). None if it does not exist.
+
+        Changes when esdc fetch/reload replaces or rewrites esdc.duckdb, which is
+        exactly when a memoized pin check must be re-run.
+        """
+        try:
+            st = self._db_path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
         """Get or create DuckDB connection with VSS extension loaded.
@@ -91,7 +103,8 @@ class SemanticResolver:
             disagrees with the pin, else None. Query paths must degrade
             rather than raise, matching _embeddings_available.
         """
-        if self._pin_verified:
+        sig = self._db_signature()
+        if sig is not None and sig == self._pin_verified_sig:
             return None
 
         from esdc.embedders import PROBE_TEXT, check_or_seed_probe
@@ -115,10 +128,10 @@ class SemanticResolver:
                     "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
                     [self._embedder.model, len(probe), json.dumps(probe)],
                 )
-                self._pin_verified = True
+                self._pin_verified_sig = sig
                 return None
             check_or_seed_probe(conn, self.SEMANTIC_META, self._embedder)
-            self._pin_verified = True
+            self._pin_verified_sig = sig
         except ValueError as e:
             logger.warning("[Semantic] embedding pin mismatch | %s", e)
             return {

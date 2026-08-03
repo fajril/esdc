@@ -185,6 +185,27 @@ def _get_corpus_embedder():
     return _corpus_embedder
 
 
+_semantic_resolver = None
+
+
+def _get_semantic_resolver():
+    """Lazily create and reuse one SemanticResolver for the semantic_search tool.
+
+    Reusing the resolver instance (not just the embedder) is what lets its
+    DB-signature-keyed semantic_meta pin memo actually pay off: a fresh
+    SemanticResolver() per call meant the memo never survived past a single
+    tool invocation. The DuckDB connection stays short-lived regardless --
+    the caller still runs resolver.close() per call, which only nulls the
+    connection and leaves the cached instance (and its pin memo) intact.
+    """
+    global _semantic_resolver
+    if _semantic_resolver is None:
+        from esdc.search.semantic_resolver import SemanticResolver
+
+        _semantic_resolver = SemanticResolver()
+    return _semantic_resolver
+
+
 def _get_disk_cache_stats(
     cache: diskcache.Cache | None,
     cache_dir_name: str,
@@ -1610,8 +1631,6 @@ def semantic_search(
     """
     import json
 
-    from esdc.search.semantic_resolver import SemanticResolver
-
     # Build filters dict from optional parameters
     filters: dict[str, Any] = {}
     if report_year is not None:
@@ -1656,7 +1675,7 @@ def semantic_search(
 
     logger.debug("[CACHE] miss | tool=semantic_search key=%s", cache_key[:16])
 
-    resolver = SemanticResolver()
+    resolver = _get_semantic_resolver()
 
     try:
         remarks_result = resolver.hybrid_search(

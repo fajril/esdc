@@ -545,3 +545,30 @@ class TestSemanticSearchCorpusFanOut:
         assert second == first
         # Cache hit: the second call never reached the remarks search.
         assert mock_resolver.hybrid_search.call_count == 1
+
+
+def test_semantic_search_reuses_cached_resolver(monkeypatch):
+    """_get_semantic_resolver() builds one SemanticResolver and reuses it.
+
+    Focused unit test on the cache getter itself -- no real DuckDB/network
+    path. This is what makes the semantic_meta pin memo (see
+    tests/search/test_semantic_resolver_embedder.py) actually pay off in
+    production: semantic_search used to build a fresh SemanticResolver()
+    per call, so the per-instance memo never fired.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import esdc.chat.tools as tools_mod
+
+    monkeypatch.setattr(tools_mod, "_semantic_resolver", None)
+
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        instance = MagicMock()
+        MockResolver.return_value = instance
+
+        first = tools_mod._get_semantic_resolver()
+        second = tools_mod._get_semantic_resolver()
+
+    MockResolver.assert_called_once()
+    assert first is instance
+    assert second is instance
