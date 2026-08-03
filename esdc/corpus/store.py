@@ -15,10 +15,10 @@ Read-path routing rule — split by purpose, not by read/write:
 * **Deciding reads** (whose result determines a mutation: document_exists
   for ingest dedupe, fingerprint_rows, get_document_by_hash) run against
   SQLite. A stale answer here would re-ingest or double-delete.
-* **Truth-backed reads for fidelity** (not deciding a mutation, but
-  writing to disk what a user diffs: get_document_by_id, used by
-  export's content fetch) also run against SQLite -- a stale mirror
-  read here would overwrite a sidecar with wrong content.
+* **Truth-backed reads** (not deciding a mutation, but writing to disk
+  what a user diffs: get_document_by_id, used by export's content
+  fetch) also run against SQLite -- a stale mirror read here would
+  overwrite a sidecar with wrong content.
 
 Mutations write the SQLite truth; the DuckDB side is rebuilt by
 ``refresh_mirror()`` at the end of each batch (commit, learn, portal
@@ -103,6 +103,26 @@ _EXACT_FILTER_COLUMNS = ("doc_type", "doc_level")
 # Columns on `documents` that store JSON arrays; filtered via case-insensitive
 # substring match over each array element (json_each + ILIKE).
 _JSON_ARRAY_FILTER_COLUMNS = ("wk_name", "field_name", "project_name", "doc_topic")
+
+# Full row shape for `documents`, shared by get_document (DuckDB mirror),
+# get_document_by_id, and get_document_by_hash (both SQLite truth) so the
+# three never drift apart. Order matters only for the DuckDB reader's
+# zip-based dict construction; the SQLite readers key off column name via
+# sqlite3.Row and would tolerate reordering, but keep them in lockstep.
+_DOC_COLUMNS = (
+    "doc_id", "file_name", "file_path", "file_hash", "doc_type",
+    "doc_topic", "doc_number", "doc_date", "subject", "sender",
+    "recipient", "doc_level", "wk_name", "field_name", "project_name",
+    "pod_name", "suggested_pod_ids", "raw_entities", "metadata",
+    "markdown", "extraction_method", "embedding_model", "page_count",
+    "ingested_at",
+)
+# Columns within _DOC_COLUMNS that hold JSON-encoded values and must be
+# parsed back to Python lists/dicts before a row is returned to a caller.
+_DOC_JSON_FIELDS = (
+    "doc_topic", "wk_name", "field_name", "project_name",
+    "pod_name", "suggested_pod_ids", "raw_entities", "metadata",
+)
 
 
 class CorpusStore:
@@ -1189,112 +1209,57 @@ class CorpusStore:
         the module docstring's read-path routing rule.
         """
         conn = self._get_connection()
-        cols = [
-            "doc_id", "file_name", "file_path", "file_hash", "doc_type",
-            "doc_topic", "doc_number", "doc_date", "subject", "sender",
-            "recipient", "doc_level", "wk_name", "field_name", "project_name",
-            "pod_name", "suggested_pod_ids", "raw_entities", "metadata",
-            "markdown", "extraction_method", "embedding_model", "page_count",
-            "ingested_at",
-        ]
         row = conn.execute(
-            f"SELECT {', '.join(cols)} FROM {self.DOC_TABLE} WHERE doc_id = ?",
+            f"SELECT {', '.join(_DOC_COLUMNS)} FROM {self.DOC_TABLE} WHERE doc_id = ?",
             [doc_id],
         ).fetchone()
         if row is None:
             return None
-        doc = dict(zip(cols, row, strict=True))
-        return _parse_json_fields(
-            doc,
-            (
-                "doc_topic",
-                "wk_name",
-                "field_name",
-                "project_name",
-                "pod_name",
-                "suggested_pod_ids",
-                "raw_entities",
-                "metadata",
-            ),
-        )
+        # DuckDB returns plain tuples (no column names attached), unlike
+        # sqlite3.Row below -- zip against the shared column tuple to
+        # rebuild the dict.
+        doc = dict(zip(_DOC_COLUMNS, row, strict=True))
+        return _parse_json_fields(doc, _DOC_JSON_FIELDS)
 
-    def get_document_by_id(self, doc_id: str) -> dict[str, Any] | None:
-        """Fetch a stored document's full row by doc_id (SQLite truth), or None.
+    def _get_document_by(self, column: str, value: Any) -> dict[str, Any] | None:
+        """Fetch a `documents` row from the SQLite truth by one exact-match column.
 
-        Deciding-adjacent truth read for callers that need guaranteed-fresh
-        content rather than the mirror's refresh window -- e.g. export,
-        which rewrites files a user diffs. See the module docstring's
-        read-path routing rule. Returns the same shape as get_document.
+        Shared by get_document_by_id and get_document_by_hash, which are
+        otherwise identical apart from their WHERE column. `column` is
+        always one of our own hardcoded literals, never caller input.
         """
         sconn = self._get_sqlite()
         row = sconn.execute(
             f"""
-            SELECT doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
-                   doc_number, doc_date, subject, sender, recipient,
-                   doc_level, wk_name, field_name, project_name,
-                   pod_name, suggested_pod_ids,
-                   raw_entities, metadata, markdown, extraction_method,
-                   embedding_model, page_count, ingested_at
+            SELECT {', '.join(_DOC_COLUMNS)}
             FROM {self.DOC_TABLE}
-            WHERE doc_id = ?
+            WHERE {column} = ?
             LIMIT 1
             """,
-            [doc_id],
+            [value],
         ).fetchone()
         if row is None:
             return None
 
+        # sqlite3.Row maps by the SQL result's column names (here, the
+        # same _DOC_COLUMNS used to build the SELECT), so dict(row) already
+        # matches the DuckDB reader's zip-based dict above.
         doc = dict(row)
-        _parse_json_fields(
-            doc,
-            (
-                "doc_topic",
-                "wk_name",
-                "field_name",
-                "project_name",
-                "pod_name",
-                "suggested_pod_ids",
-                "raw_entities",
-                "metadata",
-            ),
-        )
-        return doc
+        return _parse_json_fields(doc, _DOC_JSON_FIELDS)
+
+    def get_document_by_id(self, doc_id: str) -> dict[str, Any] | None:
+        """Fetch a stored document's full row by doc_id (SQLite truth), or None.
+
+        Truth-backed read for callers that need guaranteed-fresh
+        content rather than the mirror's refresh window -- e.g. export,
+        which rewrites files a user diffs. See the module docstring's
+        read-path routing rule. Returns the same shape as get_document.
+        """
+        return self._get_document_by("doc_id", doc_id)
 
     def get_document_by_hash(self, file_hash: str) -> dict[str, Any] | None:
         """Fetch a stored document's full row by file_hash (SQLite truth), or None."""
-        sconn = self._get_sqlite()
-        row = sconn.execute(
-            f"""
-            SELECT doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
-                   doc_number, doc_date, subject, sender, recipient,
-                   doc_level, wk_name, field_name, project_name,
-                   pod_name, suggested_pod_ids,
-                   raw_entities, metadata, markdown, extraction_method,
-                   embedding_model, page_count, ingested_at
-            FROM {self.DOC_TABLE}
-            WHERE file_hash = ?
-            LIMIT 1
-            """,
-            [file_hash],
-        ).fetchone()
-        if row is None:
-            return None
-
-        doc = dict(row)
-        _parse_json_fields(
-            doc,
-            (
-                "doc_topic",
-                "wk_name",
-                "field_name",
-                "project_name",
-                "pod_name",
-                "suggested_pod_ids",
-                "raw_entities",
-                "metadata",
-            ),
-        )
-        return doc
+        return self._get_document_by("file_hash", file_hash)
 
     def close(self) -> None:
         """Close the database connections."""

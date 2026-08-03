@@ -664,6 +664,30 @@ def test_get_document_by_hash_returns_row_then_none(store):
     assert got["subject"] == "Persetujuan"
 
 
+def test_get_document_readers_return_same_row_shape(store):
+    """Pin that get_document, get_document_by_id, and get_document_by_hash agree.
+
+    get_document (DuckDB mirror) and get_document_by_id/by_hash (SQLite
+    truth) share one column list + JSON-field set; pin that all three
+    return the same keys so a future column add/rename/remove can't drift
+    one reader out of sync with the other two silently.
+    """
+    store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # get_document is a serving read off the mirror
+
+    by_mirror = store.get_document(DOC["doc_id"])
+    by_id = store.get_document_by_id(DOC["doc_id"])
+    by_hash = store.get_document_by_hash(DOC["file_hash"])
+
+    assert by_mirror is not None
+    assert by_id is not None
+    assert by_hash is not None
+    assert by_mirror.keys() == by_id.keys() == by_hash.keys()
+    # Both SQLite-truth readers hit the exact same row via different
+    # columns -- their contents, not just their keys, must match.
+    assert by_id == by_hash
+
+
 def test_default_embedder_is_internal(monkeypatch, tmp_path):
     from esdc.corpus.embedder import MODEL_ID
 
