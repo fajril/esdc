@@ -160,6 +160,49 @@ def test_openai_sorts_data_by_index(monkeypatch):
     assert e.generate_embeddings_batch(["a", "b", "c"]) == [[1.0], [2.0], [3.0]]
 
 
+def test_openai_raises_on_short_data(monkeypatch):
+    """Fewer entries than requested raises RuntimeError naming the URL.
+
+    Otherwise this surfaces later as an opaque strict-zip ValueError.
+    """
+    payload = {
+        "data": [
+            {"index": 0, "embedding": [1.0]},
+            {"index": 1, "embedding": [2.0]},
+        ]
+    }
+    post = MagicMock(return_value=_http_ok(payload))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embeddings_batch(["a", "b", "c"])
+    assert "http://h:1/v1/embeddings" in str(exc.value)
+
+
+def test_openai_raises_on_empty_data(monkeypatch):
+    """Empty data -> RuntimeError, not an IndexError from data[0]."""
+    post = MagicMock(return_value=_http_ok({"data": []}))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    with pytest.raises(RuntimeError):
+        e.generate_embedding("x")
+
+
+def test_openai_raises_on_duplicate_index(monkeypatch):
+    """Duplicate/out-of-range indexes silently mispair text<->vector; must raise."""
+    payload = {
+        "data": [
+            {"index": 0, "embedding": [1.0]},
+            {"index": 0, "embedding": [2.0]},
+        ]
+    }
+    post = MagicMock(return_value=_http_ok(payload))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    with pytest.raises(RuntimeError):
+        e.generate_embeddings_batch(["a", "b"])
+
+
 def test_openai_omits_auth_header_when_no_key(monkeypatch):
     post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]}))
     monkeypatch.setattr(emb.requests, "post", post)

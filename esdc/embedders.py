@@ -217,6 +217,15 @@ class OpenAIEmbedder:
         # carries its request index. Sorting is not optional — unsorted
         # results silently pair each text with another text's vector.
         ordered = sorted(data, key=lambda e: e.get("index", 0))
+        n = len(batch)
+        if len(ordered) != n or [e.get("index") for e in ordered] != list(range(n)):
+            raise RuntimeError(
+                f"[Embedding] {self.url} returned {len(ordered)} embeddings for a "
+                f"batch of {n} with indexes {[e.get('index') for e in ordered]}; "
+                f"expected exactly 0..{n - 1}. The server response is malformed or "
+                "truncated. Check `embedding_model`/the server, or set "
+                "`embedding_backend: local`."
+            )
         return [[float(x) for x in e["embedding"]] for e in ordered]
 
     def generate_embedding(self, text: str) -> list[float]:
