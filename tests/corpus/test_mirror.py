@@ -134,3 +134,27 @@ def test_refresh_documents_on_empty_truth_table_returns_zero(tmp_path: Path):
     assert types["ingested_at"] == "TIMESTAMP"
     assert types["doc_topic"] == "JSON"
     assert types["field_name"] == "JSON"
+
+
+from esdc.corpus.mirror import sweep_orphan_chunks
+
+
+def test_sweep_orphan_chunks_removes_chunks_of_deleted_documents(truth_path: Path):
+    conn = duckdb.connect()
+    refresh_documents(conn, truth_path)
+    conn.execute(
+        "CREATE TABLE document_chunks (chunk_id VARCHAR, doc_id VARCHAR, "
+        "chunk_index INTEGER, section VARCHAR, chunk_text TEXT, embed_text TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO document_chunks VALUES "
+        "('d1:0000','d1',0,NULL,'t','t'), ('gone:0000','gone',0,NULL,'t','t')"
+    )
+
+    deleted = sweep_orphan_chunks(conn)
+
+    assert deleted == 1
+    assert conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT doc_id FROM document_chunks"
+    ).fetchone()[0] == "d1"

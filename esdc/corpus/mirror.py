@@ -146,3 +146,24 @@ def refresh_documents(
     count = conn.execute(f"SELECT COUNT(*) FROM {DOC_TABLE}").fetchone()[0]
     logger.info("[Mirror] documents refreshed | rows=%d", count)
     return count
+
+
+def sweep_orphan_chunks(conn: duckdb.DuckDBPyConnection) -> int:
+    """Delete chunks whose document no longer exists in the mirror.
+
+    `document_chunks` holds embeddings that exist only in DuckDB and are
+    never rebuilt from SQLite. When a document is deleted from the truth
+    it vanishes from `documents` at the next refresh, but its chunks
+    would remain searchable — phantom hits pointing at a doc_id that can
+    no longer be read. This sweep deletes exactly those.
+    """
+    try:
+        deleted = conn.execute(
+            f"DELETE FROM {CHUNK_TABLE} WHERE doc_id NOT IN "
+            f"(SELECT doc_id FROM {DOC_TABLE}) RETURNING chunk_id"
+        ).fetchall()
+    except duckdb.CatalogException:
+        return 0  # chunks table not created yet (fresh install)
+    if deleted:
+        logger.info("[Mirror] orphan chunks removed | count=%d", len(deleted))
+    return len(deleted)
