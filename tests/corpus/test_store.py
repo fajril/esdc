@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import duckdb
@@ -940,4 +941,62 @@ def test_insert_document_writes_truth_and_chunks_but_not_mirror(tmp_path):
 
     store.refresh_mirror()
     assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    store.close()
+
+
+class _RaisingSqliteConn:
+    """Proxy around a real sqlite3 connection that fails INSERTs into one table.
+
+    Mirrors ``_RaisingConn`` above but for the SQLite side: only the
+    truth-row INSERT fails, so the health-check ``SELECT 1`` that
+    ``_get_sqlite()`` runs on an already-open connection still succeeds.
+    """
+
+    def __init__(self, real, table_to_fail: str):
+        self._real = real
+        self._table_to_fail = table_to_fail
+
+    def execute(self, sql, *args, **kwargs):
+        if "INSERT INTO" in sql and self._table_to_fail in sql:
+            raise sqlite3.OperationalError("truth write failed")
+        return self._real.execute(sql, *args, **kwargs)
+
+    def __enter__(self):
+        self._real.__enter__()
+        return self
+
+    def __exit__(self, *exc_info):
+        return self._real.__exit__(*exc_info)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_insert_document_cleans_up_chunks_when_truth_write_fails(tmp_path):
+    """If the SQLite commit-marker write raises, the chunks written just
+    before it must be cleaned up so no orphaned embeddings survive, and
+    the exception must still propagate (see insert_document's docstring)."""
+    store = CorpusStore(
+        db_path=tmp_path / "fail.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "fail.sqlite",
+    )
+    store.ensure_tables()
+    doc = dict(DOC)
+    doc["doc_id"] = "fails1"
+
+    store._sconn = _RaisingSqliteConn(store._get_sqlite(), store.DOC_TABLE)
+
+    with pytest.raises(sqlite3.OperationalError):
+        store.insert_document(doc, [Chunk(0, "Section", "text")])
+
+    conn = store._get_connection()
+    assert (
+        conn.execute(
+            f"SELECT COUNT(*) FROM {store.CHUNK_TABLE} WHERE doc_id = ?",
+            [doc["doc_id"]],
+        ).fetchone()[0]
+        == 0
+    )
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
     store.close()
