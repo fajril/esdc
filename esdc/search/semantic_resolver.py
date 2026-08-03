@@ -33,6 +33,10 @@ class SemanticResolver:
 
     EMBEDDING_TABLE = "project_embeddings"
     SEMANTIC_META = "semantic_meta"
+    SEMANTIC_META_DDL = (
+        f"CREATE TABLE IF NOT EXISTS {SEMANTIC_META} "
+        "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+    )
     DEFAULT_LIMIT = 10
 
     def __init__(
@@ -111,13 +115,7 @@ class SemanticResolver:
 
         conn = self._get_connection()
         try:
-            conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {self.SEMANTIC_META} (
-                    embedding_model VARCHAR,
-                    dim INTEGER,
-                    probe_vec JSON
-                )
-            """)
+            conn.execute(self.SEMANTIC_META_DDL)
             row = conn.execute(
                 f"SELECT embedding_model FROM {self.SEMANTIC_META} LIMIT 1"
             ).fetchone()
@@ -221,13 +219,7 @@ class SemanticResolver:
 
             from esdc.embedders import PROBE_TEXT
 
-            conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {self.SEMANTIC_META} (
-                    embedding_model VARCHAR,
-                    dim INTEGER,
-                    probe_vec JSON
-                )
-            """)
+            conn.execute(self.SEMANTIC_META_DDL)
             probe = self._embedder.generate_embedding(PROBE_TEXT)
             conn.execute(f"DELETE FROM {self.SEMANTIC_META}")
             conn.execute(
