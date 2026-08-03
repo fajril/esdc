@@ -1084,6 +1084,10 @@ def run_commit(
 
         if any_processed and not dry_run:
             store.rebuild_indexes()
+            # insert_document no longer writes the mirror row (Task 7), so
+            # the mirror is only correct once the batch ends with a
+            # refresh.
+            store.refresh_mirror()
     finally:
         store.close()
 

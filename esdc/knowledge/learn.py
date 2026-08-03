@@ -19,6 +19,7 @@ import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -212,6 +213,21 @@ def run_learn(
                 report.dossiers_skipped += 1
 
         report.proposals_pending = len(store.pending_proposals())
+
+        # insert_document no longer writes the mirror row (Task 7), so the
+        # mirror is only correct once the batch ends with a refresh. There
+        # is no CorpusStore in scope here -- run_learn works directly
+        # against the sqlite_conn/duck_conn it was given (which may be
+        # test-injected, on non-default paths) -- so refresh the mirror
+        # against those same connections rather than opening a second,
+        # independently-pathed CorpusStore.
+        from esdc.corpus.mirror import refresh_all
+
+        sqlite_path = Path(
+            sqlite_conn.execute("PRAGMA database_list").fetchone()[2]
+        )
+        refresh_all(duck_conn, sqlite_path)
+
         duck_conn.execute("CHECKPOINT")
 
         try:

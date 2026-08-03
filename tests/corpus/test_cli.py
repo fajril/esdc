@@ -795,6 +795,42 @@ def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
     )
 
 
+# --- corpus sync: rebuild the DuckDB mirror from the SQLite truth ----------
+
+
+def test_corpus_sync_reports_refreshed_row_count(monkeypatch):
+    """`esdc corpus sync` rebuilds the mirror and reports what it copied."""
+    from esdc.corpus.mirror import MirrorReport
+
+    class FakeStore:
+        def __init__(self):
+            self.ensure_tables_called = False
+
+        def ensure_tables(self):
+            self.ensure_tables_called = True
+
+        def refresh_mirror(self):
+            return MirrorReport(
+                documents=3,
+                orphan_chunks=1,
+                registry={"m_pod": 2, "pod_document": 0},
+                views=["v_document", "v_pod"],
+            )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", lambda: FakeStore())
+
+    result = runner.invoke(app, ["corpus", "sync"])
+
+    assert result.exit_code == 0, result.output
+    assert "documents mirrored: 3" in result.output.lower()
+    assert "orphan chunks removed: 1" in result.output.lower()
+    assert "m_pod: 2" in result.output
+    assert "views: v_document, v_pod" in result.output
+
+
 def test_eval_refresh_reports_changed_count(monkeypatch, tmp_path, fake_store):
     """--refresh reports a "~C changed" segment for docs whose content changed.
 

@@ -6,8 +6,11 @@ tables), `documents` is populated by the corpus ingest pipeline, not the
 portal grid — so inserts/deletes stay rejected here and only the three
 entity columns are editable. SQLite (`esdc.pod_registry.store`) is the
 source of truth; the DuckDB `documents` mirror (`esdc.corpus.store`,
-same file as `Config.get_db_file()`) is best-effort — a mirror failure
-is reported as a warning, never rolls back the SQLite commit.
+same file as `Config.get_db_file()`) is refreshed wholesale
+(`CorpusStore.refresh_mirror()`) after every save — best-effort, since a
+refresh can lose DuckDB's single-writer lock to a running corpus
+command; a failure is reported as a warning, never rolls back the
+SQLite commit.
 
 Name validation mirrors `_validate_entity_overrides` in
 `esdc.corpus.pipeline`: each cell is `;`-separated raw names, each name
@@ -99,7 +102,7 @@ def apply_document_entity_changeset(
     # SAME file the mirror later opens read-write; DuckDB refuses to open a
     # file with two different configurations at once, so the resolver
     # connection MUST be closed (see the finally below) before
-    # _mirror_updates runs.
+    # _refresh_mirror_after_save runs.
     resolver_conn = None
     if resolver is None:
         resolver, resolver_conn = _build_resolver(db_path)
@@ -153,7 +156,9 @@ def apply_document_entity_changeset(
     finally:
         sconn.close()
 
-    warnings = _mirror_updates(db_path, resolved_rows) if resolved_rows else []
+    warnings = (
+        _refresh_mirror_after_save(db_path, sqlite_path) if resolved_rows else []
+    )
 
     return ChangesetResult(
         ok=True,
@@ -247,39 +252,34 @@ def _apply_row_update(
     )
 
 
-def _mirror_updates(
-    db_path: Path | None, resolved_rows: list[dict[str, Any]]
+def _refresh_mirror_after_save(
+    db_path: Path | None, sqlite_path: Path | None
 ) -> list[str]:
-    """Best-effort mirror of the same UPDATEs into the DuckDB documents table.
+    """Rebuild the DuckDB mirror from the just-committed SQLite truth.
 
-    SQLite already committed by the time this runs, so any failure here
-    (missing table, locked file, ...) is reported as a warning, never
-    raised — the save itself already succeeded.
+    Replaces the old row-by-row best-effort UPDATE mirroring: a wholesale
+    rebuild cannot leave the two stores partially diverged. Still
+    non-fatal — DuckDB is single-writer, so a refresh can lose the lock
+    to a running `esdc corpus commit`. The truth is already committed;
+    the next refresh (or `esdc corpus sync`) converges it.
+
+    `sqlite_path` is threaded through explicitly (not left to
+    CorpusStore's default) so this always refreshes from the same SQLite
+    truth `apply_document_entity_changeset` just wrote to, even when the
+    caller passed a non-default path (as the test suite does).
     """
-    from esdc.configs import Config
-    from esdc.dbmanager import get_duckdb_connection
+    from esdc.corpus.store import CorpusStore
 
-    path = db_path or Config.get_db_file()
+    store = None
     try:
-        conn = get_duckdb_connection(path, read_only=False)
+        store = CorpusStore(db_path=db_path, sqlite_path=sqlite_path)
+        store.refresh_mirror()
+        return []
     except Exception as exc:
-        return [f"DuckDB mirror unavailable: {exc}"]
-
-    warnings: list[str] = []
-    try:
-        for row in resolved_rows:
-            fields = row["fields"]
-            set_clause = ", ".join(f"{k} = ?" for k in fields)
-            values = [json.dumps(v) if v is not None else None for v in fields.values()]
-            try:
-                conn.execute(
-                    f"UPDATE documents SET {set_clause} WHERE doc_id = ?",
-                    (*values, row["doc_id"]),
-                )
-            except Exception as exc:
-                warnings.append(
-                    f"DuckDB mirror failed for doc_id {row['doc_id']!r}: {exc}"
-                )
+        return [
+            f"DuckDB mirror refresh deferred: {exc}. "
+            "Run `esdc corpus sync` to converge."
+        ]
     finally:
-        conn.close()
-    return warnings
+        if store is not None:
+            store.close()

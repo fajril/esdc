@@ -2615,6 +2615,25 @@ def proposals() -> None:
     )
 
 
+@corpus_app.command(name="sync")
+def corpus_sync() -> None:
+    """Rebuild DuckDB's derived tables from the SQLite source of truth."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore()
+    try:
+        store.ensure_tables()
+        report = store.refresh_mirror()
+        typer.echo(f"documents mirrored: {report.documents}")
+        if report.orphan_chunks:
+            typer.echo(f"orphan chunks removed: {report.orphan_chunks}")
+        for table, n in sorted(report.registry.items()):
+            typer.echo(f"  {table}: {n}")
+        typer.echo(f"views: {', '.join(report.views)}")
+    finally:
+        store.close()
+
+
 @corpus_app.command(name="status")
 def corpus_status(
     paths: Annotated[

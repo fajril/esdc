@@ -277,21 +277,34 @@ def test_update_with_no_entity_fields_is_a_noop(tmp_path):
 
 
 def test_mirror_failure_returns_warning_but_saves(tmp_path):
+    """A refresh that loses the DuckDB lock degrades to a warning, not a
+    failed save.
+
+    `refresh_mirror()` rebuilds `documents` wholesale (`CREATE OR REPLACE
+    TABLE`), so a missing table no longer reproduces a mirror failure —
+    unlike the old row-by-row UPDATE mirror, it just creates the table.
+    Instead, hold a read-only DuckDB connection open on the same file:
+    DuckDB refuses a second connection under a different configuration,
+    which is exactly what happens if a `esdc corpus commit` (or another
+    portal save) still holds the write lock.
+    """
     sqlite_path = _seed_sqlite(tmp_path)
-    # DuckDB file exists but has no `documents` table -> the mirror UPDATE
-    # raises a catalog error, which must be downgraded to a warning.
-    duckdb_path = tmp_path / "empty.duckdb"
+    duckdb_path = tmp_path / "locked.duckdb"
     duckdb.connect(str(duckdb_path)).close()
+    lock_conn = duckdb.connect(str(duckdb_path), read_only=True)
     resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
 
-    result = apply_document_entity_changeset(
-        {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
-        sqlite_path=sqlite_path,
-        db_path=duckdb_path,
-        resolver=resolver,
-    )
+    try:
+        result = apply_document_entity_changeset(
+            {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
+            sqlite_path=sqlite_path,
+            db_path=duckdb_path,
+            resolver=resolver,
+        )
+    finally:
+        lock_conn.close()
 
     assert result.ok is True
     assert result.warnings
-    assert "D1" in result.warnings[0]
+    assert "esdc corpus sync" in result.warnings[0]
     assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
