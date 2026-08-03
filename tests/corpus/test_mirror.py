@@ -265,6 +265,39 @@ def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path
     assert conn.execute("SELECT COUNT(*) FROM pod_document").fetchone()[0] == 0
 
 
+def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(tmp_path: Path):
+    """A registry table present in one refresh but absent from the truth in
+    a later refresh (older esdc.sqlite restored from backup, truth file
+    swapped, KG state reset) must not leave stale rows sitting in DuckDB
+    forever. The mirror table itself must be dropped, not just skipped.
+    """
+    path = tmp_path / "reg_disappear.sqlite"
+    conn_s = sqlite3.connect(path)
+    conn_s.execute(
+        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
+    )
+    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.commit()
+    conn_s.close()
+    conn = duckdb.connect()
+
+    first = refresh_registry(conn, path)
+
+    assert first["m_pod"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM m_pod").fetchone()[0] == 1
+
+    conn_s = sqlite3.connect(path)
+    conn_s.execute("DROP TABLE m_pod")
+    conn_s.commit()
+    conn_s.close()
+
+    second = refresh_registry(conn, path)
+
+    assert "m_pod" not in second
+    with pytest.raises(duckdb.CatalogException):
+        conn.execute("SELECT COUNT(*) FROM m_pod")
+
+
 def test_views_expose_both_grains(tmp_path: Path):
     path = tmp_path / "both.sqlite"
     _make_truth(path, [{"doc_id": "d1"}])

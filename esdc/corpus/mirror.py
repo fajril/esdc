@@ -9,9 +9,14 @@ Beyond `documents`, this module also mirrors the POD registry and
 knowledge-graph tables (see `REGISTRY_TABLES`) so that `execute_sql`,
 which runs against DuckDB, can reach POD/project/institution lookups and
 the learned `kg_edge`/`kg_claim` facts without a cross-database query.
-`refresh_registry` copies each of those tables that exists in the truth
-and skips those that don't; see its own docstring for which tables are
-deliberately excluded from mirroring altogether.
+`refresh_registry` copies each of those tables that exists in the truth.
+A table absent from the truth is not merely skipped: its DuckDB mirror,
+if one exists from a previous refresh, is DROPped, so a table that
+disappears from the truth (backup restore, truth file swap, KG state
+reset) cannot leave stale rows mirrored in DuckDB forever — the
+no-partially-diverged-state invariant above holds for the registry too.
+See `refresh_registry`'s own docstring for which tables are deliberately
+excluded from mirroring altogether.
 
 `document_chunks` is NOT derived from SQLite — its embeddings exist only
 in DuckDB — so refresh never rebuilds it and may only delete orphans.
@@ -225,7 +230,15 @@ def refresh_registry(
     oversight.
 
     kg_edge and kg_claim only exist after `esdc corpus learn` has run, so
-    an absent table is skipped rather than raising.
+    an absent table does not raise. But absent is not the same as never
+    mirrored: if a table that was previously copied later disappears from
+    the truth (an older `esdc.sqlite` restored from backup, the truth
+    file swapped, KG state reset), its DuckDB copy is DROPped, not left
+    in place. Leaving it would mean `execute_sql` — which runs against
+    DuckDB — keeps serving rows the truth no longer has, with nothing
+    anywhere to warn that they are stale. The returned dict still omits
+    the table's key either way: dropped and never-mirrored look the same
+    to callers checking `table in copied`.
     """
     copied: dict[str, int] = {}
     with attached_truth(conn, sqlite_path) as truth:
@@ -238,7 +251,15 @@ def refresh_registry(
         }
         for table in REGISTRY_TABLES:
             if table not in present:
-                logger.debug("[Mirror] skipping absent table | table=%s", table)
+                # Table names come only from the hardcoded REGISTRY_TABLES
+                # tuple, never from caller input, so f-string interpolation
+                # is safe here — same reasoning as the CREATE OR REPLACE
+                # TABLE below. DROP (not skip) is what stops a table that
+                # has vanished from the truth (backup restore, truth file
+                # swap, KG state reset) from leaving stale rows mirrored in
+                # DuckDB forever; IF EXISTS covers the never-mirrored case.
+                conn.execute(f"DROP TABLE IF EXISTS {table}")
+                logger.info("[Mirror] dropped absent registry table | table=%s", table)
                 continue
             conn.execute(
                 f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM {truth}.{table}"
