@@ -1010,6 +1010,13 @@ def run_commit(
                             report.processed.append(
                                 f"{name} (entities merged: {', '.join(filled)})"
                             )
+                            # fill_blank_entities only writes the SQLite
+                            # truth (no more row-by-row DuckDB mirror
+                            # write); the batch-end refresh below is now
+                            # the only thing that makes the mirror see this
+                            # write, so a merge-only batch must trigger it
+                            # too, not just an insert_document batch.
+                            any_processed = True
                         else:
                             report.skipped.append(f"{name} (already committed)")
                         continue

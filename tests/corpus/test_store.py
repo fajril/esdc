@@ -587,6 +587,10 @@ def test_fill_blank_entities_fills_null_and_empty_leaves_non_empty(store):
     )
 
     assert filled == ["wk_name", "field_name"]
+    # fill_blank_entities only writes the SQLite truth now (no more
+    # row-by-row DuckDB mirror write); refresh before reading it back
+    # through the mirror-backed get_document.
+    store.refresh_mirror()
     result = store.get_document(doc["doc_id"])
     assert result["wk_name"] == ["Sidecar WK"]
     assert result["field_name"] == ["Sidecar Field"]
@@ -597,12 +601,15 @@ def test_fill_blank_entities_fills_null_and_empty_leaves_non_empty(store):
 def test_fill_blank_entities_mirrors_to_duckdb(store):
     doc = _blank_entity_doc()
     store.insert_document(doc, [Chunk(0, None, "isi")])
-    store.refresh_mirror()  # the mirror row must exist for fill_blank_entities
-    # to update it in place
+    store.refresh_mirror()  # the mirror row must exist before fill_blank_entities
 
     filled = store.fill_blank_entities(doc["doc_id"], {"wk_name": ["Sidecar WK"]})
-
     assert filled == ["wk_name"]
+
+    # fill_blank_entities only writes the SQLite truth; the mirror only
+    # reflects it after the next refresh_mirror() (no more row-by-row
+    # dual-write here).
+    store.refresh_mirror()
     mirror_row = (
         store._get_connection()
         .execute("SELECT wk_name FROM documents WHERE doc_id = ?", [doc["doc_id"]])

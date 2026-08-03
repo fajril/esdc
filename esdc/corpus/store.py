@@ -433,8 +433,9 @@ class CorpusStore:
         For each column in ``entities`` (``wk_name``/``field_name``/
         ``project_name``): if the stored SQLite value is NULL or an empty
         array AND the given sidecar value is non-empty, write the sidecar
-        value (JSON array) to SQLite (truth) and the DuckDB mirror
-        (best-effort). A stored value that already holds names — including
+        value (JSON array) to SQLite (truth). The DuckDB mirror picks up
+        the change at the next ``refresh_mirror()``, same as any other
+        truth write. A stored value that already holds names — including
         one edited through the portal — is left untouched. Returns the
         field names actually filled; doc_id not found -> [].
         """
@@ -468,20 +469,6 @@ class CorpusStore:
             sconn.execute(
                 f"UPDATE {self.DOC_TABLE} SET {set_clause} WHERE doc_id = ?",
                 (*values, doc_id),
-            )
-
-        try:
-            conn = self._get_connection()
-            conn.execute(
-                f"UPDATE {self.DOC_TABLE} SET {set_clause} WHERE doc_id = ?",
-                (*values, doc_id),
-            )
-        except Exception as e:
-            logger.warning(
-                "[Corpus] fill_blank_entities DuckDB mirror failed | "
-                "doc_id=%s error=%s",
-                doc_id,
-                e,
             )
 
         return list(updates.keys())
