@@ -105,6 +105,25 @@ def test_failed_doc_is_counted_and_not_marked_learned(sqlite_conn, duck_conn):
     assert report2.docs_processed == 1
 
 
+def test_mirror_refresh_failure_is_warning_not_fatal(sqlite_conn, duck_conn, monkeypatch):
+    """A refresh_all failure (e.g. lost DuckDB write lock) must not abort
+    learn -- everything above is already committed to the SQLite truth by
+    then, so it's a stale mirror, not a failed learn run (same contract as
+    the portal's _refresh_mirror_after_save)."""
+    import esdc.corpus.mirror as mirror
+
+    def boom(conn, path):
+        raise RuntimeError("lock held by another process")
+
+    monkeypatch.setattr(mirror, "refresh_all", boom)
+
+    report = run_learn(
+        sqlite_conn=sqlite_conn, duck_conn=duck_conn, llm_caller=_llm, progress=False
+    )
+    assert report.docs_processed == 3
+    assert report.docs_failed == 0
+
+
 def test_limit_caps_llm_docs(sqlite_conn, duck_conn):
     report = run_learn(
         sqlite_conn=sqlite_conn,

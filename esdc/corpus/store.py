@@ -168,11 +168,23 @@ class CorpusStore:
 
             self._sconn = get_sqlite_connection(self._sqlite_path)
             self._sconn.execute(_SQLITE_DOC_DDL)
-            for col in ("pod_name", "suggested_pod_ids"):
+            for col in (
+                "pod_name",
+                "suggested_pod_ids",
+                "raw_entities",
+                "metadata",
+            ):
                 with contextlib.suppress(sqlite3.OperationalError):
                     self._sconn.execute(
                         f"ALTER TABLE documents ADD COLUMN {col} TEXT"
                     )
+            # ingested_at's DDL default (`DEFAULT (datetime('now'))`) is a
+            # non-constant expression -- SQLite's ADD COLUMN only accepts a
+            # constant default, so self-heal without one rather than
+            # raising. Rows added before this migration simply have a NULL
+            # ingested_at, which TRY_CAST in the mirror already tolerates.
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._sconn.execute("ALTER TABLE documents ADD COLUMN ingested_at TEXT")
             self._sconn.commit()
         return self._sconn
 

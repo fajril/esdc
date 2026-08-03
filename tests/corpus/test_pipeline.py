@@ -1375,6 +1375,36 @@ def test_commit_dedupe_and_force(tmp_path, monkeypatch):
     store.close()
 
 
+def test_commit_mirror_refresh_failure_is_warning_not_fatal(tmp_path, monkeypatch):
+    """A refresh_mirror failure (e.g. lost DuckDB write lock) must not abort
+    commit or fail the batch -- the SQLite truth is already written by
+    then, so it's a stale mirror, not a corrupted commit (same contract
+    as the portal's _refresh_mirror_after_save)."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash="ee" * 32,
+        body="# Doc\nisi dokumen penting",
+    )
+
+    def boom():
+        raise RuntimeError("lock held by another process")
+
+    monkeypatch.setattr(store, "refresh_mirror", boom)
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert report.processed == ["doc.corpus.md"]
+    assert report.failed == {}
+    assert any(
+        "mirror refresh failed" in w and "esdc corpus sync" in w
+        for w in report.warnings
+    )
+    store.close()
+
+
 def test_commit_entity_resolution(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()

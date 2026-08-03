@@ -828,3 +828,66 @@ def test_refresh_mirror_rebuilds_documents_from_sqlite_truth(tmp_path):
         "SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'"
     ).fetchone()[0] == 1
     store.close()
+
+
+def test_get_sqlite_self_heals_missing_raw_entities_metadata_ingested_at(
+    tmp_path: Path,
+):
+    """A SQLite documents table predating raw_entities/metadata/ingested_at
+    self-heals via ALTER on connect.
+
+    refresh_documents' `SELECT * REPLACE (...)` names those three columns
+    explicitly, so a legacy table missing any of them broke every refresh
+    (and, since Task 6, every corpus commit/learn/portal save). The two
+    text columns get the same ADD COLUMN treatment already used for
+    pod_name/suggested_pod_ids; ingested_at is added without its
+    DEFAULT (datetime('now')) clause, since SQLite's ADD COLUMN only
+    accepts a constant default.
+    """
+    import sqlite3
+
+    sqlite_path = tmp_path / "legacy.sqlite"
+    conn = sqlite3.connect(sqlite_path)
+    conn.execute(
+        """
+        CREATE TABLE documents (
+            doc_id TEXT PRIMARY KEY, file_name TEXT NOT NULL,
+            file_path TEXT NOT NULL, file_hash TEXT NOT NULL UNIQUE,
+            doc_type TEXT, doc_topic TEXT, doc_number TEXT, doc_date TEXT,
+            subject TEXT, sender TEXT, recipient TEXT, doc_level TEXT,
+            wk_name TEXT, field_name TEXT, project_name TEXT,
+            pod_name TEXT, suggested_pod_ids TEXT,
+            markdown TEXT NOT NULL, extraction_method TEXT NOT NULL,
+            embedding_model TEXT NOT NULL, page_count INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_path, file_hash, "
+        "markdown, extraction_method, embedding_model) "
+        "VALUES ('legacy1', 'a.pdf', '/a.pdf', 'h1', '# body', 'native', 'm')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = CorpusStore(
+        db_path=tmp_path / "legacy.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=sqlite_path,
+    )
+    try:
+        store.ensure_tables()  # must not crash on the legacy schema
+
+        cols = {
+            row[1]
+            for row in store._get_sqlite()
+            .execute("PRAGMA table_info(documents)")
+            .fetchall()
+        }
+        assert {"raw_entities", "metadata", "ingested_at"} <= cols
+
+        # refresh_mirror's SELECT * REPLACE(...) must not raise either.
+        report = store.refresh_mirror()
+        assert report.documents == 1
+    finally:
+        store.close()

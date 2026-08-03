@@ -1086,8 +1086,20 @@ def run_commit(
             store.rebuild_indexes()
             # insert_document no longer writes the mirror row (Task 7), so
             # the mirror is only correct once the batch ends with a
-            # refresh.
-            store.refresh_mirror()
+            # refresh. The refresh is best-effort: DuckDB is single-writer,
+            # so it can lose the lock to a concurrent corpus command. The
+            # SQLite truth above is already committed, so a refresh failure
+            # here is a stale mirror, not a corrupted commit -- same
+            # non-fatal contract as the portal's
+            # _refresh_mirror_after_save.
+            try:
+                store.refresh_mirror()
+            except Exception as e:
+                logger.warning("[Corpus] mirror refresh failed: %s", e)
+                report.warnings.append(
+                    f"DuckDB mirror refresh failed: {e} — run "
+                    "`esdc corpus sync` to converge"
+                )
     finally:
         store.close()
 
