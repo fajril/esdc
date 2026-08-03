@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 import duckdb
@@ -82,3 +83,54 @@ def test_refresh_documents_wraps_legacy_bare_entity_names(tmp_path: Path):
         "  SELECT 1 FROM json_each(documents.field_name) "
         "  WHERE CAST(value AS VARCHAR) ILIKE '%duri%')"
     ).fetchone()[0] == 1
+
+
+def test_refresh_documents_survives_a_malformed_doc_date(tmp_path, caplog):
+    """One bad date must not fail the whole refresh (TRY_CAST, not CAST)."""
+    path = tmp_path / "malformed.sqlite"
+    _make_truth(
+        path,
+        [
+            {"doc_id": "d1", "doc_date": "2025-03-01"},
+            {"doc_id": "d2", "doc_date": "bukan tanggal"},  # malformed, non-ISO
+            {"doc_id": "d3", "doc_date": "2026-07-01"},
+        ],
+    )
+    conn = duckdb.connect()
+
+    with caplog.at_level("WARNING"):
+        copied = refresh_documents(conn, path)
+
+    assert copied == 3  # the bad row is not dropped, only its doc_date is nulled
+    rows = dict(
+        conn.execute("SELECT doc_id, doc_date FROM documents").fetchall()
+    )
+    assert rows["d1"] == date(2025, 3, 1)
+    assert rows["d2"] is None
+    assert rows["d3"] == date(2026, 7, 1)
+    assert any(
+        "doc_date" in r.message and "count=1" in r.message for r in caplog.records
+    )
+
+
+def test_refresh_documents_on_empty_truth_table_returns_zero(tmp_path: Path):
+    """Fresh-install path: refresh can run before anything is committed."""
+    path = tmp_path / "empty.sqlite"
+    sconn = sqlite3.connect(path)
+    sconn.execute(_SQLITE_DOCS)
+    sconn.commit()
+    sconn.close()
+    conn = duckdb.connect()
+
+    copied = refresh_documents(conn, path)
+
+    assert copied == 0
+    types = dict(
+        conn.execute(
+            "SELECT column_name, column_type FROM (DESCRIBE documents)"
+        ).fetchall()
+    )
+    assert types["doc_date"] == "DATE"
+    assert types["ingested_at"] == "TIMESTAMP"
+    assert types["doc_topic"] == "JSON"
+    assert types["field_name"] == "JSON"

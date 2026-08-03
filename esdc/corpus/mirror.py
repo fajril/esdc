@@ -12,6 +12,15 @@ SQLite is dynamically typed. Copying with a bare `SELECT *` silently
 downgrades `doc_date` to VARCHAR, which breaks `EXTRACT(year FROM ...)`
 in CorpusStore._build_filter_clause. Every type-bearing column is cast
 explicitly below; do not simplify this away.
+
+The `doc_date`/`ingested_at` casts use TRY_CAST rather than CAST: one
+malformed value (a hand-typed, non-ISO `doc_date` anywhere in the truth
+table) must not raise `ConversionException` and abort the whole
+`CREATE OR REPLACE TABLE`, which would leave callers treating a hard
+refresh failure as a mere warning and the mirror silently stale.
+TRY_CAST converts the bad value to NULL and lets the rebuild succeed;
+`refresh_documents` then counts and logs any such rows so the bad data
+stays visible instead of silently disappearing.
 """
 
 from __future__ import annotations
@@ -58,8 +67,8 @@ def _json_cast(col: str) -> str:
 
 DOC_CAST_REPLACE = ",\n    ".join(
     [
-        "CAST(doc_date AS DATE) AS doc_date",
-        "CAST(ingested_at AS TIMESTAMP) AS ingested_at",
+        "TRY_CAST(doc_date AS DATE) AS doc_date",
+        "TRY_CAST(ingested_at AS TIMESTAMP) AS ingested_at",
         *[_json_cast(c) for c in _JSON_COLUMNS],
     ]
 )
@@ -105,6 +114,28 @@ def refresh_documents(
             f"SELECT * REPLACE (\n    {DOC_CAST_REPLACE}\n) "
             f"FROM {truth}.{DOC_TABLE}"
         )
+        # TRY_CAST turns a malformed doc_date/ingested_at into NULL instead
+        # of failing the whole rebuild (see module docstring). That must
+        # not go unnoticed, so count — in one query, joined on doc_id —
+        # rows where the source had a value but the cast produced NULL.
+        bad_doc_date, bad_ingested_at = conn.execute(
+            f"SELECT "
+            f"SUM(CASE WHEN t.doc_date IS NOT NULL AND d.doc_date IS NULL "
+            f"THEN 1 ELSE 0 END), "
+            f"SUM(CASE WHEN t.ingested_at IS NOT NULL AND d.ingested_at IS NULL "
+            f"THEN 1 ELSE 0 END) "
+            f"FROM {truth}.{DOC_TABLE} t JOIN {DOC_TABLE} d ON d.doc_id = t.doc_id"
+        ).fetchone()
+    for column, bad_count in (
+        ("doc_date", bad_doc_date),
+        ("ingested_at", bad_ingested_at),
+    ):
+        if bad_count:
+            logger.warning(
+                "[Mirror] %s failed TRY_CAST and was set NULL | count=%d",
+                column,
+                bad_count,
+            )
     for idx_name, column in _DOC_INDEXES:
         try:
             conn.execute(
