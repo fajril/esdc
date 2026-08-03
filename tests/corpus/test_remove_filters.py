@@ -48,6 +48,9 @@ def store(tmp_path: Path) -> CorpusStore:
     s.insert_document(_doc("aaaa", "letter_a.pdf", "letter", "2019-01-01"), [])
     s.insert_document(_doc("bbbb", "letter_b.pdf", "letter", "2020-01-01"), [])
     s.insert_document(_doc("cccc", "regulation.pdf", "permen", "2019-06-01"), [])
+    # find_doc_ids/get_document are serving reads off the DuckDB mirror
+    # (Task 8); populate it so `corpus remove` can find/check these docs.
+    s.refresh_mirror()
     yield s
     s.close()
 

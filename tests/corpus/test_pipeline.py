@@ -1584,6 +1584,11 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
             "UPDATE documents SET project_name = ? WHERE doc_id = ?",
             (json.dumps(["Portal Project"]), doc_id),
         )
+    # A real portal save triggers _refresh_mirror_after_save; this direct
+    # SQL write bypasses that, so refresh explicitly (get_document is a
+    # serving read off the mirror, and the merge-only commit below doesn't
+    # trigger a refresh itself since it inserts nothing new).
+    store.refresh_mirror()
 
     # Re-extract updates the same sidecar: wk_name now populated, and a
     # DIFFERENT project_name than the portal-edited one.
@@ -2528,6 +2533,9 @@ def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkey
     }
     store1.insert_document(doc_a, [Chunk(0, None, "isi dokumen a")])
     store1.insert_document(doc_b, [Chunk(0, None, "isi dokumen b")])
+    # list_documents/get_document are serving reads off the DuckDB mirror
+    # (Task 8); populate it so run_reembed's list_documents() sees these docs.
+    store1.refresh_mirror()
     store1.close()
 
     store2 = CorpusStore(db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder2())
@@ -2843,6 +2851,10 @@ def test_export_writes_sidecar_reflecting_db_including_portal_edits(
             "UPDATE documents SET wk_name = ?, subject = ? WHERE doc_id = ?",
             (json.dumps(["Portal WK"]), "portal-edited subject", doc_id),
         )
+    # A real portal save triggers _refresh_mirror_after_save; this direct
+    # SQL write bypasses that, so refresh explicitly (get_document, used
+    # internally by run_export, is a serving read off the mirror).
+    store.refresh_mirror()
 
     report = pipeline.run_export([sc])
 

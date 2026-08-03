@@ -107,6 +107,7 @@ def test_search_results_include_doc_topic(store):
 
 def test_get_document(store):
     store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # get_document is a serving read off the mirror
     doc = store.get_document("abc123")
     assert doc["markdown"] == "# Surat\nisi"
     assert store.get_document("nope") is None
@@ -114,6 +115,7 @@ def test_get_document(store):
 
 def test_list_documents(store):
     store.insert_document(DOC, [Chunk(0, None, "a"), Chunk(1, None, "b")])
+    store.refresh_mirror()  # list_documents is a serving read off the mirror
     docs = store.list_documents()
     assert len(docs) == 1
     assert docs[0]["doc_id"] == "abc123"
@@ -288,6 +290,7 @@ def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
 
 def test_insert_and_get_pod_name_round_trip(store):
     store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # get_document/list_documents are serving reads
     got = store.get_document(DOC["doc_id"])
     assert got["pod_name"] == ["POD Mengoepeh"]
     assert got["suggested_pod_ids"] == ["PL-2003-0005-3-2-0"]
@@ -299,6 +302,7 @@ def test_insert_and_get_doc_topic_round_trip(store):
     doc = dict(DOC)
     doc["doc_topic"] = ["psc", "wpnb"]
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # get_document is a serving read off the mirror
     got = store.get_document(doc["doc_id"])
     assert got["doc_topic"] == ["psc", "wpnb"]
 
@@ -307,6 +311,7 @@ def test_list_documents_includes_doc_topic(store):
     doc = dict(DOC)
     doc["doc_topic"] = ["pod_i"]
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # list_documents is a serving read off the mirror
     docs = store.list_documents()
     assert docs[0]["doc_topic"] == ["pod_i"]
 
@@ -501,17 +506,21 @@ def test_orphaned_duckdb_rows_cleared_on_reinsert(store, tmp_path):
     assert store.counts()["chunks"] == 1
 
 
-def test_exists_get_list_read_sqlite(store, tmp_path):
+def test_document_exists_reads_truth_independent_of_mirror_mutation(store, tmp_path):
+    """document_exists (deciding read) is unaffected by mutating the DuckDB
+    mirror directly. get_document/list_documents/find_doc_ids (serving
+    reads) answer from that same mirror, so once it is wiped they go
+    empty/None until the next refresh_mirror() — the inverse of the old
+    contract, where every read here went to sqlite truth."""
 
     store.insert_document(DOC, [Chunk(0, None, "isi")])
-    # Mutate the mirror only; reads must reflect sqlite truth, not the mirror.
+    store.refresh_mirror()  # populate the mirror so there is something to wipe
+    # Mutate the mirror only; document_exists must still see sqlite truth.
     store._get_connection().execute("DELETE FROM documents")
     assert store.document_exists(DOC["file_hash"])
-    assert store.get_document(DOC["doc_id"]) is not None
-    assert len(store.list_documents()) == 1
-    assert store.find_doc_ids({"doc_type": "surat"}) == [
-        (DOC["doc_id"], DOC["file_name"])
-    ]
+    assert store.get_document(DOC["doc_id"]) is None
+    assert store.list_documents() == []
+    assert store.find_doc_ids({"doc_type": "surat"}) == []
 
 
 # --------------------------------------------------------------------------
@@ -530,6 +539,7 @@ def _blank_entity_doc() -> dict:
 def test_fill_blank_entities_fills_null_and_empty_leaves_non_empty(store):
     doc = _blank_entity_doc()
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # mirror row must exist for get_document below
 
     filled = store.fill_blank_entities(
         doc["doc_id"],
@@ -571,6 +581,7 @@ def test_fill_blank_entities_no_blank_fields_returns_empty(store):
     doc["field_name"] = ["Already Set Field"]
     doc["project_name"] = ["Already Set Project"]
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # mirror row must exist for get_document below
 
     filled = store.fill_blank_entities(
         doc["doc_id"],
@@ -591,6 +602,7 @@ def test_fill_blank_entities_no_blank_fields_returns_empty(store):
 def test_fill_blank_entities_empty_sidecar_value_skips(store):
     doc = _blank_entity_doc()
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # mirror row must exist for get_document below
 
     filled = store.fill_blank_entities(
         doc["doc_id"], {"wk_name": None, "field_name": []}
@@ -999,4 +1011,33 @@ def test_insert_document_cleans_up_chunks_when_truth_write_fails(tmp_path):
         == 0
     )
     assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    store.close()
+
+
+def test_serving_reads_use_the_mirror_and_deciding_reads_use_the_truth(tmp_path):
+    """get_document answers from DuckDB; document_exists answers from SQLite."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "r.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "r.sqlite",
+    )
+    store.ensure_tables()
+    sconn = store._get_sqlite()
+    sconn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_path, file_hash, "
+        "doc_type, doc_date, markdown, extraction_method, embedding_model) "
+        "VALUES ('d1','a.pdf','/tmp/a.pdf','h1','surat','2026-01-01','# body','docling','m')"
+    )
+    sconn.commit()
+
+    # deciding read sees the truth immediately
+    assert store.document_exists("h1") is True
+    # serving read does not, until the mirror is refreshed
+    assert store.get_document("d1") is None
+
+    store.refresh_mirror()
+    doc = store.get_document("d1")
+    assert doc is not None and doc["markdown"] == "# body"
     store.close()

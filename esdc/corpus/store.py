@@ -1,21 +1,25 @@
-"""Corpus store: SQLite source of truth + DuckDB search mirror.
+"""Corpus store: SQLite source of truth + DuckDB derived mirror.
 
 ``documents`` (one row per source file, full markdown + metadata) lives
 in the operational SQLite db (``esdc.sqlite``) — the source of truth for
-everything a human writes or corrects. DuckDB keeps ``document_chunks``
-(chunk + embedding, HNSW/FTS indexed), the 1-row ``corpus_meta`` pinning
-the embedding model/dim, and a continuously-maintained ``documents``
-mirror (same name/columns as the old DuckDB-native table) so chunk
-search joins, iris text-to-SQL, and status commands work unchanged.
+everything a human writes or corrects. DuckDB holds derived data only:
+``document_chunks`` (chunk + embedding, HNSW/FTS indexed), the 1-row
+``corpus_meta``, and mirrors of ``documents`` plus the POD registry,
+rebuilt wholesale by ``refresh_mirror()``.
 
-Every mutation writes SQLite truth and DuckDB's derived ``document_chunks``
-in one call; there is no cross-db transaction, so the SQLite row is the
-commit marker: inserts write the DuckDB chunk rows first and the SQLite
-row last, clearing any orphaned chunk rows for that doc_id before
-writing. The DuckDB ``documents`` mirror itself is not touched by these
-per-document writes — it is derived data, rebuilt wholesale by
-``refresh_mirror()`` at the end of a batch (see that method and
-``esdc.corpus.mirror``).
+Read-path routing rule — split by purpose, not by read/write:
+
+* **Serving reads** (answering a user or agent: search, get_document,
+  list_documents, find_doc_ids) run against DuckDB. They tolerate the
+  refresh window.
+* **Deciding reads** (whose result determines a mutation: document_exists
+  for ingest dedupe, fingerprint_rows, get_document_by_hash) run against
+  SQLite. A stale answer here would re-ingest or double-delete.
+
+Mutations write the SQLite truth; the DuckDB side is rebuilt by
+``refresh_mirror()`` at the end of each batch (commit, learn, portal
+save, ``esdc corpus sync``). There is no row-by-row mirroring and so no
+drift to reconcile.
 
 Incremental by design: dedupe on ``file_hash``, DELETE never DROP on
 user data — the one exception is ``set_meta`` recreating
@@ -586,29 +590,35 @@ class CorpusStore:
             sconn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
 
     def list_documents(self) -> list[dict[str, Any]]:
-        """List all documents (SQLite truth) with DuckDB chunk counts, newest first."""
-        sconn = self._get_sqlite()
-        rows = sconn.execute(f"""
-            SELECT
-                doc_id, file_name, doc_type, doc_topic, doc_date,
-                subject, doc_level, wk_name, field_name, project_name,
-                pod_name, suggested_pod_ids,
-                extraction_method, page_count, ingested_at
-            FROM {self.DOC_TABLE}
-            ORDER BY ingested_at DESC, doc_id
+        """List all documents from the DuckDB mirror with chunk counts, newest first.
+
+        Serving read: answers a user/agent, so it uses the mirror. See
+        the module docstring's read-path routing rule. Both `documents`
+        and `document_chunks` live in DuckDB, so the chunk count is a
+        single joined query rather than a second cross-store lookup.
+        """
+        conn = self._get_connection()
+        cols = [
+            "doc_id", "file_name", "doc_type", "doc_topic", "doc_date",
+            "subject", "doc_level", "wk_name", "field_name", "project_name",
+            "pod_name", "suggested_pod_ids",
+            "extraction_method", "page_count", "ingested_at", "n_chunks",
+        ]
+        rows = conn.execute(f"""
+            SELECT d.doc_id, d.file_name, d.doc_type, d.doc_topic, d.doc_date,
+                   d.subject, d.doc_level, d.wk_name, d.field_name,
+                   d.project_name, d.pod_name, d.suggested_pod_ids,
+                   d.extraction_method, d.page_count, d.ingested_at,
+                   COUNT(c.chunk_id) AS n_chunks
+            FROM {self.DOC_TABLE} d
+            LEFT JOIN {self.CHUNK_TABLE} c ON c.doc_id = d.doc_id
+            GROUP BY ALL
+            ORDER BY d.ingested_at DESC, d.doc_id
         """).fetchall()
-        chunk_counts = dict(
-            self._get_connection()
-            .execute(
-                f"SELECT doc_id, COUNT(*) FROM {self.CHUNK_TABLE} GROUP BY doc_id"
-            )
-            .fetchall()
-        )
 
         docs = []
         for row in rows:
-            doc = dict(row)
-            doc["n_chunks"] = chunk_counts.get(doc["doc_id"], 0)
+            doc = dict(zip(cols, row, strict=True))
             _parse_json_fields(
                 doc,
                 (
@@ -658,12 +668,14 @@ class CorpusStore:
     def find_doc_ids(self, filters: dict[str, Any]) -> list[tuple[str, str]]:
         """(doc_id, file_name) pairs matching documents-column filters.
 
-        Same allowlisted filter semantics as search(); empty filters
-        match everything (callers gate destructive use).
+        Serving read: answers a user/agent, so it uses the mirror. See
+        the module docstring's read-path routing rule. Same allowlisted
+        filter semantics as search(); empty filters match everything
+        (callers gate destructive use).
         """
-        sconn = self._get_sqlite()
-        clause, params = self._build_filter_clause(filters, "d", dialect="sqlite")
-        rows = sconn.execute(
+        conn = self._get_connection()
+        clause, params = self._build_filter_clause(filters, "d")
+        rows = conn.execute(
             f"SELECT d.doc_id, d.file_name FROM {self.DOC_TABLE} d "
             f"WHERE 1=1{clause} ORDER BY d.file_name",
             params,
@@ -1151,26 +1163,28 @@ class CorpusStore:
             return {"status": "error", "message": str(e), "results": [], "count": 0}
 
     def get_document(self, doc_id: str) -> dict[str, Any] | None:
-        """Fetch a single document's full row (SQLite truth), or None."""
-        sconn = self._get_sqlite()
-        row = sconn.execute(
-            f"""
-            SELECT doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
-                   doc_number, doc_date, subject, sender, recipient,
-                   doc_level, wk_name, field_name, project_name,
-                   pod_name, suggested_pod_ids,
-                   raw_entities, metadata, markdown, extraction_method,
-                   embedding_model, page_count, ingested_at
-            FROM {self.DOC_TABLE}
-            WHERE doc_id = ?
-            """,
+        """Fetch a single document's full row from the DuckDB mirror.
+
+        Serving read: answers a user/agent, so it uses the mirror. See
+        the module docstring's read-path routing rule.
+        """
+        conn = self._get_connection()
+        cols = [
+            "doc_id", "file_name", "file_path", "file_hash", "doc_type",
+            "doc_topic", "doc_number", "doc_date", "subject", "sender",
+            "recipient", "doc_level", "wk_name", "field_name", "project_name",
+            "pod_name", "suggested_pod_ids", "raw_entities", "metadata",
+            "markdown", "extraction_method", "embedding_model", "page_count",
+            "ingested_at",
+        ]
+        row = conn.execute(
+            f"SELECT {', '.join(cols)} FROM {self.DOC_TABLE} WHERE doc_id = ?",
             [doc_id],
         ).fetchone()
         if row is None:
             return None
-
-        doc = dict(row)
-        _parse_json_fields(
+        doc = dict(zip(cols, row, strict=True))
+        return _parse_json_fields(
             doc,
             (
                 "doc_topic",
@@ -1183,7 +1197,6 @@ class CorpusStore:
                 "metadata",
             ),
         )
-        return doc
 
     def get_document_by_hash(self, file_hash: str) -> dict[str, Any] | None:
         """Fetch a stored document's full row by file_hash (SQLite truth), or None."""
