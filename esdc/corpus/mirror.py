@@ -239,6 +239,13 @@ def refresh_registry(
     anywhere to warn that they are stale. The returned dict still omits
     the table's key either way: dropped and never-mirrored look the same
     to callers checking `table in copied`.
+
+    The drop is only logged when a mirrored copy actually existed to
+    remove. On most installs `kg_edge`/`kg_claim` have never been mirrored
+    at all — `esdc corpus learn` has never run — and that steady state
+    must not log anything above debug on every `corpus commit`/`learn`/
+    `sync`; only a genuine state change (a table that DID exist in DuckDB
+    losing its truth) is worth an info line.
     """
     copied: dict[str, int] = {}
     with attached_truth(conn, sqlite_path) as truth:
@@ -249,6 +256,20 @@ def refresh_registry(
                 [truth],
             ).fetchall()
         }
+        # What DuckDB itself already has mirrored, so "absent from the
+        # truth" can be split into two very different cases below: a stale
+        # copy that must be dropped (and is worth logging) versus a table
+        # that has simply never existed on either side (e.g. kg_edge/
+        # kg_claim before `esdc corpus learn` has ever run), which is the
+        # steady state on most installs and must stay silent. Same filter
+        # form as create_views uses for the main catalog.
+        mirrored = {
+            r[0]
+            for r in conn.execute(
+                "SELECT table_name FROM duckdb_tables() "
+                "WHERE database_name = current_database()"
+            ).fetchall()
+        }
         for table in REGISTRY_TABLES:
             if table not in present:
                 # Table names come only from the hardcoded REGISTRY_TABLES
@@ -257,9 +278,14 @@ def refresh_registry(
                 # TABLE below. DROP (not skip) is what stops a table that
                 # has vanished from the truth (backup restore, truth file
                 # swap, KG state reset) from leaving stale rows mirrored in
-                # DuckDB forever; IF EXISTS covers the never-mirrored case.
-                conn.execute(f"DROP TABLE IF EXISTS {table}")
-                logger.info("[Mirror] dropped absent registry table | table=%s", table)
+                # DuckDB forever. Only do it — and only log it — when a
+                # mirrored copy actually exists; otherwise this is just the
+                # ordinary "never mirrored" case and produces no output.
+                if table in mirrored:
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")
+                    logger.info(
+                        "[Mirror] dropped absent registry table | table=%s", table
+                    )
                 continue
             conn.execute(
                 f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM {truth}.{table}"
@@ -282,8 +308,10 @@ def create_views(conn: duckdb.DuckDBPyConnection) -> list[str]:
       `linked_pod_ids`. This is the view to count.
 
     Returns the view names created. If the registry tables are absent
-    (learn never ran) only `v_document` is created, with an empty
-    `linked_pod_ids`.
+    (learn never ran, or `refresh_registry` just dropped a stale mirror)
+    only `v_document` is created, with an empty `linked_pod_ids`; any
+    `v_doc_pod_link` left over from an earlier refresh is dropped so it
+    cannot dangle and reference a table that no longer exists.
     """
     created: list[str] = []
     has_links = bool(
@@ -315,6 +343,12 @@ def create_views(conn: duckdb.DuckDBPyConnection) -> list[str]:
             ) l ON l.doc_id = d.doc_id
         """)
     else:
+        # A registry table that backed v_doc_pod_link in a previous refresh
+        # may have just been dropped (see refresh_registry). Leaving the
+        # view in place would make it reference a table that no longer
+        # exists, turning any query against it into a CatalogException
+        # instead of returning stale rows.
+        conn.execute("DROP VIEW IF EXISTS v_doc_pod_link")
         conn.execute("""
             CREATE OR REPLACE VIEW v_document AS
             SELECT d.*, CAST([] AS VARCHAR[]) AS linked_pod_ids FROM documents d

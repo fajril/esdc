@@ -11,6 +11,7 @@ import pytest
 
 from esdc.corpus.mirror import (
     create_views,
+    refresh_all,
     refresh_documents,
     refresh_registry,
     sweep_orphan_chunks,
@@ -298,6 +299,61 @@ def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(tmp_pat
         conn.execute("SELECT COUNT(*) FROM m_pod")
 
 
+def test_refresh_registry_stays_silent_when_table_was_never_mirrored(tmp_path: Path, caplog):
+    """kg_edge/kg_claim have never existed in either store on most installs
+    (`esdc corpus learn` has never run) — that is the state of the live
+    database today. Refreshing must not log a "dropped" line for a table
+    that was never there to drop, on this refresh or any subsequent one,
+    since it would read as continuous data loss on every commit/learn/sync.
+    """
+    path = tmp_path / "reg_never_mirrored.sqlite"
+    conn_s = sqlite3.connect(path)
+    conn_s.execute(
+        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
+    )
+    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.commit()
+    conn_s.close()
+    conn = duckdb.connect()
+
+    with caplog.at_level("INFO"):
+        refresh_registry(conn, path)
+        second = refresh_registry(conn, path)  # steady state, run again
+
+    assert "kg_edge" not in second
+    assert not any("dropped" in r.message for r in caplog.records)
+
+
+def test_refresh_registry_logs_when_a_stale_mirror_is_actually_dropped(tmp_path: Path, caplog):
+    """A table that WAS mirrored and then disappears from the truth is a
+    genuine state change — removing mirrored rows — and must still log at
+    info, unlike the never-mirrored case above.
+    """
+    path = tmp_path / "reg_real_drop.sqlite"
+    conn_s = sqlite3.connect(path)
+    conn_s.execute(
+        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
+    )
+    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.commit()
+    conn_s.close()
+    conn = duckdb.connect()
+    refresh_registry(conn, path)
+
+    conn_s = sqlite3.connect(path)
+    conn_s.execute("DROP TABLE m_pod")
+    conn_s.commit()
+    conn_s.close()
+
+    with caplog.at_level("INFO"):
+        second = refresh_registry(conn, path)
+
+    assert "m_pod" not in second
+    assert any(
+        "dropped" in r.message and "m_pod" in r.message for r in caplog.records
+    )
+
+
 def test_views_expose_both_grains(tmp_path: Path):
     path = tmp_path / "both.sqlite"
     _make_truth(path, [{"doc_id": "d1"}])
@@ -335,3 +391,42 @@ def test_views_degrade_when_registry_absent(truth_path: Path):
     assert created == ["v_document"]
     assert conn.execute("SELECT COUNT(*) FROM v_document").fetchone()[0] == 2
     assert conn.execute("SELECT linked_pod_ids FROM v_document LIMIT 1").fetchone()[0] == []
+
+
+def test_refresh_all_drops_dangling_view_when_registry_table_disappears(tmp_path: Path):
+    """Once refresh_registry drops a stale m_pod/pod_document mirror, a
+    v_doc_pod_link left over from an earlier refresh would reference tables
+    that no longer exist. A full refresh_all must clean it up so querying
+    it raises cleanly instead of a CatalogException surprise, while
+    v_document — the view that does not depend on the registry — keeps
+    working.
+    """
+    path = tmp_path / "view_cleanup.sqlite"
+    _make_truth(path, [{"doc_id": "d1"}])
+    conn_s = sqlite3.connect(path)
+    conn_s.execute(
+        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
+    )
+    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.execute("CREATE TABLE pod_document (pod_id INTEGER, doc_id TEXT)")
+    conn_s.execute("INSERT INTO pod_document VALUES (1, 'd1')")
+    conn_s.commit()
+    conn_s.close()
+    conn = duckdb.connect()
+    refresh_documents(conn, path)
+    refresh_registry(conn, path)
+    created = create_views(conn)
+    assert "v_doc_pod_link" in created
+    assert conn.execute("SELECT COUNT(*) FROM v_doc_pod_link").fetchone()[0] == 1
+
+    conn_s = sqlite3.connect(path)
+    conn_s.execute("DROP TABLE m_pod")
+    conn_s.execute("DROP TABLE pod_document")
+    conn_s.commit()
+    conn_s.close()
+
+    refresh_all(conn, path)
+
+    with pytest.raises(duckdb.CatalogException):
+        conn.execute("SELECT COUNT(*) FROM v_doc_pod_link")
+    assert conn.execute("SELECT COUNT(*) FROM v_document").fetchone()[0] == 1
