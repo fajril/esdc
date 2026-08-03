@@ -15,6 +15,10 @@ Read-path routing rule — split by purpose, not by read/write:
 * **Deciding reads** (whose result determines a mutation: document_exists
   for ingest dedupe, fingerprint_rows, get_document_by_hash) run against
   SQLite. A stale answer here would re-ingest or double-delete.
+* **Truth-backed reads for fidelity** (not deciding a mutation, but
+  writing to disk what a user diffs: get_document_by_id, used by
+  export's content fetch) also run against SQLite -- a stale mirror
+  read here would overwrite a sidecar with wrong content.
 
 Mutations write the SQLite truth; the DuckDB side is rebuilt by
 ``refresh_mirror()`` at the end of each batch (commit, learn, portal
@@ -1213,6 +1217,48 @@ class CorpusStore:
                 "metadata",
             ),
         )
+
+    def get_document_by_id(self, doc_id: str) -> dict[str, Any] | None:
+        """Fetch a stored document's full row by doc_id (SQLite truth), or None.
+
+        Deciding-adjacent truth read for callers that need guaranteed-fresh
+        content rather than the mirror's refresh window -- e.g. export,
+        which rewrites files a user diffs. See the module docstring's
+        read-path routing rule. Returns the same shape as get_document.
+        """
+        sconn = self._get_sqlite()
+        row = sconn.execute(
+            f"""
+            SELECT doc_id, file_name, file_path, file_hash, doc_type, doc_topic,
+                   doc_number, doc_date, subject, sender, recipient,
+                   doc_level, wk_name, field_name, project_name,
+                   pod_name, suggested_pod_ids,
+                   raw_entities, metadata, markdown, extraction_method,
+                   embedding_model, page_count, ingested_at
+            FROM {self.DOC_TABLE}
+            WHERE doc_id = ?
+            LIMIT 1
+            """,
+            [doc_id],
+        ).fetchone()
+        if row is None:
+            return None
+
+        doc = dict(row)
+        _parse_json_fields(
+            doc,
+            (
+                "doc_topic",
+                "wk_name",
+                "field_name",
+                "project_name",
+                "pod_name",
+                "suggested_pod_ids",
+                "raw_entities",
+                "metadata",
+            ),
+        )
+        return doc
 
     def get_document_by_hash(self, file_hash: str) -> dict[str, Any] | None:
         """Fetch a stored document's full row by file_hash (SQLite truth), or None."""

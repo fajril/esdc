@@ -2852,8 +2852,10 @@ def test_export_writes_sidecar_reflecting_db_including_portal_edits(
             (json.dumps(["Portal WK"]), "portal-edited subject", doc_id),
         )
     # A real portal save triggers _refresh_mirror_after_save; this direct
-    # SQL write bypasses that, so refresh explicitly (get_document, used
-    # internally by run_export, is a serving read off the mirror).
+    # SQL write bypasses that. run_export now reads the SQLite truth
+    # directly (via get_document_by_id), so this refresh isn't required
+    # for the assertions below -- kept anyway to exercise the normal
+    # post-edit path and keep the mirror in sync too.
     store.refresh_mirror()
 
     report = pipeline.run_export([sc])
@@ -2938,4 +2940,41 @@ def test_export_all_covers_every_committed_row(tmp_path, monkeypatch):
 
     assert sorted(report.processed) == ["a.corpus.md", "b.corpus.md"]
     assert report.failed == {}
+    store.close()
+
+
+def test_export_reads_truth_when_mirror_is_empty(tmp_path, monkeypatch):
+    """Export's content fetch must come from the SQLite truth, not the
+    DuckDB mirror: a fresh install or a refresh that lost the DuckDB
+    single-writer lock leaves `documents` empty/stale in DuckDB while the
+    truth already has every byte. Simulate that by making refresh_mirror
+    a no-op for the commit, so the mirror never gets the row, then assert
+    export still finds the document and writes the correct markdown."""
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    monkeypatch.setattr(store, "refresh_mirror", lambda: None)
+
+    sc = make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash="dd" * 32,
+        body="# Doc\nisi dokumen penting",
+    )
+    commit_report = pipeline.run_commit([tmp_path])
+    assert commit_report.processed == ["doc.corpus.md"]
+
+    # The mirror never got the row: refresh_mirror was a no-op above.
+    doc_id = ("dd" * 32)[:16]
+    assert store.get_document(doc_id) is None
+
+    report = pipeline.run_export([sc])
+
+    assert report.processed == ["doc.corpus.md"]
+    assert report.failed == {}
+    _meta, body = read_sidecar(sc)
+    assert "isi dokumen penting" in body
     store.close()

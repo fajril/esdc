@@ -1456,11 +1456,13 @@ def run_export(paths: list[Path], all_docs: bool = False) -> CorpusReport:
     frontmatter rebuilt from the row (see ``_sidecar_meta_from_doc``) and
     body set to the row's ``markdown`` column.
 
-    Matches sidecar paths against the SQLite truth table directly, but
-    ``get_document`` (used to fetch each row's full content) is a serving
-    read off the DuckDB mirror, so this does open DuckDB. It never loads
-    the embedder, unlike ``commit``/``reembed`` — but a document committed
-    since the last ``refresh_mirror()`` won't be found here until one runs.
+    Both target resolution and each row's full content (via
+    ``CorpusStore.get_document_by_id``) read the SQLite truth directly,
+    never the DuckDB mirror: export rewrites sidecar files a user diffs,
+    so a stale or empty mirror (fresh install, or a refresh that lost the
+    DuckDB single-writer lock) must not produce a false "document not
+    found" or write stale content. It never loads the embedder or opens
+    DuckDB, unlike ``commit``/``reembed``.
     """
     report = CorpusReport()
     store = CorpusStore()
@@ -1489,7 +1491,7 @@ def run_export(paths: list[Path], all_docs: bool = False) -> CorpusReport:
         for doc_id, path in targets:
             name = path.name
             try:
-                doc = store.get_document(doc_id)
+                doc = store.get_document_by_id(doc_id)
                 if doc is None:
                     report.failed[name] = "document not found"
                     continue
