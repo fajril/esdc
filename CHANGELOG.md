@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Corpus: SQLite truth, DuckDB mirror
+
+- `documents` now lives in the operational SQLite db (`esdc.sqlite`) as the
+  source of truth for everything a human writes or corrects; DuckDB holds
+  derived data only — chunk embeddings, a wholesale-rebuilt mirror of
+  `documents`, and mirrors of the POD registry and knowledge-graph tables
+  (`m_pod`, `project_pod`, `pod_document`, `pod_revision`, `kg_edge`,
+  `kg_claim`, ...), all now queryable from DuckDB (`execute_sql`, iris
+  chat tools) alongside the rest of the corpus. Mutations write SQLite;
+  `refresh_mirror()` rebuilds the DuckDB side wholesale at the end of each
+  batch (commit, learn, portal save, `esdc corpus sync`) — there is no
+  row-by-row mirroring and so no drift to reconcile.
+- New `esdc corpus sync` — rebuilds the DuckDB mirror on demand (documents,
+  POD registry, knowledge-graph tables, orphan chunk sweep) without running
+  a commit or learn.
+- Read-path routing rule: serving reads (`search`, `get_document`,
+  `list_documents`, `find_doc_ids`) answer from the DuckDB mirror and
+  tolerate its refresh window; deciding reads (`document_exists`,
+  `fingerprint_rows`, `get_document_by_hash`) and truth-backed reads
+  (`get_document_by_id`, used by export) go straight to the SQLite truth so
+  a stale mirror can never cause a re-ingest, a double-delete, or an export
+  overwriting a sidecar with stale content.
+
 ### Embedding backends
 
 **Changed:** `embedding_model` no longer selects the Ollama tag. The `local`
