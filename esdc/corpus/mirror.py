@@ -175,3 +175,50 @@ def sweep_orphan_chunks(conn: duckdb.DuckDBPyConnection) -> int:
     if deleted:
         logger.info("[Mirror] orphan chunks removed | count=%d", len(deleted))
     return len(deleted)
+
+
+# Relational tables that live only in SQLite. Mirroring them verbatim is
+# what lets execute_sql (which runs on DuckDB) reach the POD registry and
+# the learned knowledge graph at all. They are small — hundreds to low
+# thousands of rows — so a wholesale copy is cheaper than any sync.
+REGISTRY_TABLES = (
+    "r_institution",
+    "r_pod_type",
+    "m_pod",
+    "project_pod",
+    "pod_document",
+    "pod_revision",
+    "kg_edge",
+    "kg_claim",
+)
+
+
+def refresh_registry(
+    conn: duckdb.DuckDBPyConnection, sqlite_path: Path
+) -> dict[str, int]:
+    """Copy each registry/knowledge table that exists in the truth.
+
+    kg_edge and kg_claim only exist after `esdc corpus learn` has run, so
+    an absent table is skipped rather than raising.
+    """
+    copied: dict[str, int] = {}
+    with attached_truth(conn, sqlite_path) as truth:
+        present = {
+            r[0]
+            for r in conn.execute(
+                "SELECT table_name FROM duckdb_tables() WHERE database_name = ?",
+                [truth],
+            ).fetchall()
+        }
+        for table in REGISTRY_TABLES:
+            if table not in present:
+                logger.debug("[Mirror] skipping absent table | table=%s", table)
+                continue
+            conn.execute(
+                f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM {truth}.{table}"
+            )
+            copied[table] = conn.execute(
+                f"SELECT COUNT(*) FROM {table}"
+            ).fetchone()[0]
+    logger.info("[Mirror] registry refreshed | tables=%d", len(copied))
+    return copied

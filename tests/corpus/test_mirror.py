@@ -9,7 +9,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from esdc.corpus.mirror import refresh_documents, sweep_orphan_chunks
+from esdc.corpus.mirror import refresh_documents, refresh_registry, sweep_orphan_chunks
 
 _SQLITE_DOCS = """
 CREATE TABLE documents (
@@ -189,3 +189,23 @@ def test_sweep_orphan_chunks_on_fresh_install_returns_zero(truth_path: Path):
     refresh_documents(conn, truth_path)
 
     assert sweep_orphan_chunks(conn) == 0
+
+
+def test_refresh_registry_copies_present_tables_and_skips_absent(tmp_path: Path):
+    path = tmp_path / "reg.sqlite"
+    conn_s = sqlite3.connect(path)
+    conn_s.execute("CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)")
+    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.execute("CREATE TABLE project_pod (pod_id INTEGER, project_id TEXT)")
+    conn_s.execute("INSERT INTO project_pod VALUES (1, 'PRJ-1')")
+    conn_s.commit()
+    conn_s.close()
+    # kg_edge deliberately absent — learn has never run
+    conn = duckdb.connect()
+
+    copied = refresh_registry(conn, path)
+
+    assert copied["m_pod"] == 1
+    assert copied["project_pod"] == 1
+    assert "kg_edge" not in copied
+    assert conn.execute("SELECT pod_name FROM m_pod").fetchone()[0] == "Duri POD I"
