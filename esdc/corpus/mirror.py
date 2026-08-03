@@ -101,7 +101,14 @@ def attached_truth(
     with contextlib.suppress(Exception):
         conn.execute("INSTALL sqlite")
     conn.execute("LOAD sqlite")
-    conn.execute(f"ATTACH '{sqlite_path}' AS {alias} (TYPE sqlite, READ_ONLY)")
+    # Load-bearing escape: ATTACH cannot take a `?` bind parameter for the
+    # file path, so sqlite_path is the ONLY non-bound value in this
+    # statement. It derives from Config.get_db_dir(), i.e. from a config
+    # file, and an ordinary home directory can contain an apostrophe (e.g.
+    # /Users/O'Brien/.esdc). Doubling single quotes is what keeps it a safe
+    # SQL string literal — do not remove.
+    escaped_path = str(sqlite_path).replace("'", "''")
+    conn.execute(f"ATTACH '{escaped_path}' AS {alias} (TYPE sqlite, READ_ONLY)")
     try:
         yield alias
     finally:

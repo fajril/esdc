@@ -118,6 +118,26 @@ def test_refresh_documents_survives_a_malformed_doc_date(tmp_path, caplog):
     )
 
 
+def test_refresh_documents_survives_apostrophe_in_truth_path(tmp_path: Path):
+    """A truth DB living under a directory containing an apostrophe (an
+    ordinary macOS home directory, e.g. /Users/O'Brien/.esdc) must not break
+    ATTACH. Unescaped interpolation of the path into the ATTACH statement
+    would raise a DuckDB syntax/parser error here.
+    """
+    quirky_dir = tmp_path / "O'Brien"
+    quirky_dir.mkdir()
+    path = quirky_dir / "truth.sqlite"
+    _make_truth(path, [{"doc_id": "d1"}, {"doc_id": "d2", "doc_date": "2026-07-01"}])
+    conn = duckdb.connect()
+
+    copied = refresh_documents(conn, path)
+
+    assert copied == 2
+    rows = dict(conn.execute("SELECT doc_id, doc_date FROM documents").fetchall())
+    assert set(rows) == {"d1", "d2"}
+    assert rows["d2"] == date(2026, 7, 1)
+
+
 def test_refresh_documents_on_empty_truth_table_returns_zero(tmp_path: Path):
     """Fresh-install path: refresh can run before anything is committed."""
     path = tmp_path / "empty.sqlite"
