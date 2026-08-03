@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 SENSITIVE_KEYS = frozenset({"api_key"})
 
 ENUM_CHOICES: dict[str, list[str]] = {
+    "embedding_backend": ["local", "ollama", "openai"],
     "tool_format": ["native", "markdown", "auto"],
     "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "logging.server.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -39,6 +40,23 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "logging.chat.level": "Log level for the chat component",
     "semantic_search.embedding_batch_size": ("Number of embeddings per batch (10-500)"),
     "embedding_host": "Ollama host URL for embeddings (default: localhost)",
+    "embedding_backend": (
+        "Where bulk embedding generation runs for every vector space "
+        "('ollama' [default] = Ollama daemon at embedding_host, 'local' = "
+        "in-process llama.cpp with no daemon, 'openai' = any "
+        "OpenAI-compatible /v1/embeddings server). Query-time similarity "
+        "always runs locally regardless of this setting."
+    ),
+    "embedding_model": (
+        "Wire model id for the 'openai' embedding backend, as that server "
+        "names it (e.g. Qwen3-Embedding-0.6B-8bit); ignored by the 'local' "
+        "and 'ollama' backends, which pin their model in code"
+    ),
+    "embedding_api_key": (
+        "Bearer token for the 'openai' embedding backend "
+        "('' = send no Authorization header, which is what LM Studio and a "
+        "bare llama-server expect)"
+    ),
     "corpus.ocr_model": "Ollama vision model used for OCR of scanned pages",
     "corpus.metadata_model": (
         "Text LLM for metadata pre-fill at extract time ('main' = default "
@@ -59,8 +77,21 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     ),
     "corpus.chunk_size": "Max characters per corpus chunk",
     "corpus.chunk_overlap": "Characters carried over between corpus chunks",
+    "corpus.rerank": (
+        "Enable local cross-encoder rerank stage over RRF search results "
+        "(off by default; first use downloads the model, ~1 GB)"
+    ),
+    "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
+    "corpus.rerank_model": (
+        "Reranker GGUF id run in-process via llama.cpp "
+        "(default ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
+    ),
     "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
     "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
+    "corpus.n_gpu_layers": (
+        "llama.cpp GPU offload for corpus embed/rerank "
+        "(-1=auto: all layers if a GPU is present else CPU; 0=force CPU)"
+    ),
     "corpus.min_chars_per_page": (
         "Text-layer character threshold below which a page counts as scanned"
     ),
@@ -79,7 +110,10 @@ KEY_DESCRIPTIONS: dict[str, str] = {
 # provider CRUD flows, not by flat key editing.
 MODEL_SECTIONS: dict[str, list[str]] = {
     "Embeddings": [
+        "embedding_backend",
         "embedding_host",
+        "embedding_model",
+        "embedding_api_key",
         "semantic_search.embedding_batch_size",
     ],
     "Corpus models": [
@@ -98,9 +132,13 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
     "Corpus processing": [
         "corpus.chunk_size",
         "corpus.chunk_overlap",
+        "corpus.rerank",
+        "corpus.rerank_pool",
+        "corpus.rerank_model",
         "corpus.ocr_dpi",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
+        "corpus.n_gpu_layers",
     ],
     "Logging": [
         "logging.level",
@@ -151,6 +189,11 @@ class Config:
     def get_config_file(cls) -> Path:
         """Return the config file path (~/.esdc/config.yaml)."""
         return cls.get_config_dir() / "config.yaml"
+
+    @classmethod
+    def get_corpus_queries_path(cls) -> Path:
+        """Return the eval query set path (~/.esdc/corpus_queries.jsonl)."""
+        return cls.get_config_dir() / "corpus_queries.jsonl"
 
     @classmethod
     def _default_db_file(cls) -> Path:
@@ -856,9 +899,69 @@ class Config:
         config = cls._load_config() or {}
         return config.get("embedding_host") or None
 
+    @classmethod
+    def get_embedding_backend(cls) -> str:
+        """Get the bulk-generation embedding backend.
+
+        Priority:
+        1. ESDC_EMBEDDING_BACKEND environment variable
+        2. config.yaml: embedding_backend
+        3. "ollama" (default)
+
+        Query-time similarity ignores this and always runs locally.
+
+        Returns:
+            One of "local", "ollama", "openai" (lowercased, stripped).
+        """
+        raw = os.environ.get("ESDC_EMBEDDING_BACKEND")
+        if not raw:
+            config = cls._load_config() or {}
+            raw = config.get("embedding_backend") or "ollama"
+        return str(raw).strip().lower()
+
+    @classmethod
+    def get_embedding_model(cls) -> str:
+        """Get the wire model id for the 'openai' embedding backend.
+
+        Priority:
+        1. ESDC_EMBEDDING_MODEL environment variable
+        2. config.yaml: embedding_model
+        3. "" (empty — the openai backend rejects this at construction)
+
+        Ignored by the 'local' and 'ollama' backends, which pin their model.
+        """
+        env_model = os.environ.get("ESDC_EMBEDDING_MODEL")
+        if env_model:
+            return env_model
+        config = cls._load_config() or {}
+        return str(config.get("embedding_model") or "")
+
+    @classmethod
+    def get_embedding_api_key(cls) -> str:
+        """Get the bearer token for the 'openai' embedding backend.
+
+        Priority:
+        1. ESDC_EMBEDDING_API_KEY environment variable
+        2. config.yaml: embedding_api_key
+        3. "" (no Authorization header sent)
+        """
+        env_key = os.environ.get("ESDC_EMBEDDING_API_KEY")
+        if env_key:
+            return env_key
+        config = cls._load_config() or {}
+        return str(config.get("embedding_api_key") or "")
+
     CORPUS_DEFAULTS = {
         "chunk_size": 3000,  # max chars per chunk (~750 tokens)
         "chunk_overlap": 300,  # chars carried over between chunks
+        # rerank: second-stage cross-encoder over the RRF top pool.
+        # Off by default until `esdc corpus eval` justifies it; first use
+        # downloads the model (~1 GB, cached).
+        "rerank": False,
+        "rerank_pool": 30,  # candidates scored per query when rerank is on
+        # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
+        # not stored), so safe to change without reembedding.
+        "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
         "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
         # metadata_model: text LLM for metadata extraction; "main" = default
         # chat provider, "" = use ocr_model on the rendered first page
@@ -873,6 +976,12 @@ class Config:
         # ollama_host: Ollama server for corpus OCR + Ollama-named text
         # models; "" = local daemon (http://127.0.0.1:11434)
         "ollama_host": "",
+        # n_gpu_layers: llama.cpp GPU offload for corpus embed/rerank.
+        # -1 (default) = offload all layers when a GPU backend is present
+        # (Metal on the mac wheel, CUDA on a cuXXX wheel), and fall back to
+        # CPU otherwise — inert/no-op on the CPU-only wheel (a GPU-less VPS
+        # just runs on CPU). Set 0 to force CPU. Runtime-only, never stored.
+        "n_gpu_layers": -1,
     }
 
     @classmethod
@@ -1033,6 +1142,9 @@ class Config:
                 "embedding_batch_size": 100,
             },
             "embedding_host": None,
+            "embedding_backend": "ollama",
+            "embedding_model": "",
+            "embedding_api_key": "",
             "corpus": dict(cls.CORPUS_DEFAULTS),
             "phoenix": {
                 "enabled": False,
@@ -1131,6 +1243,8 @@ class Config:
         {
             "api.verify_ssl",
             "logging.file.enabled",
+            "corpus.rerank",
+            "phoenix.enabled",
         }
     )
 
@@ -1139,6 +1253,13 @@ class Config:
             "cache.sql_ttl",
             "logging.file.backup_count",
             "semantic_search.embedding_batch_size",
+            "corpus.rerank_pool",
+            "corpus.chunk_size",
+            "corpus.chunk_overlap",
+            "corpus.ocr_dpi",
+            "corpus.num_ctx",
+            "corpus.min_chars_per_page",
+            "corpus.n_gpu_layers",
         }
     )
 

@@ -54,6 +54,7 @@ from rich.progress import (
     BarColumn,
     DownloadColumn,
     Progress,
+    SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
@@ -608,6 +609,13 @@ def reload(
             help="Only regenerate embeddings, skip data reload.",
         ),
     ] = False,
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
 ) -> None:
     """Reload data from binary files and save it to a file.
 
@@ -621,13 +629,15 @@ def reload(
         only rebuild FTS and B-tree indexes without reloading data.
         no_embeddings: If True, skip semantic embeddings generation.
         embeddings_only: If True, only regenerate embeddings without reloading data.
+        embed_backend: Override embedding_backend for this run
+        (local, ollama or openai).
 
     Returns:
         None
     """
     # Handle embeddings-only mode
     if embeddings_only:
-        _generate_embeddings()
+        _generate_embeddings(embed_backend=embed_backend)
         return
 
     # Handle reindex-only mode
@@ -655,13 +665,17 @@ def reload(
 
     # Generate embeddings after reload (unless disabled)
     if not no_embeddings:
-        _generate_embeddings()
+        _generate_embeddings(embed_backend=embed_backend)
 
 
-def _generate_embeddings() -> None:
-    """Generate semantic embeddings for project_remarks with progress bar."""
+def _generate_embeddings(embed_backend: str | None = None) -> None:
+    """Generate semantic embeddings for project_remarks with progress bar.
+
+    ``embed_backend`` overrides the ``embedding_backend`` config key for
+    this run only. Query-time similarity always runs locally regardless.
+    """
     from esdc.configs import Config
-    from esdc.search.embedding_manager import EmbeddingManager
+    from esdc.embedders import get_build_embedder
     from esdc.search.semantic_resolver import SemanticResolver
 
     logger = logging.getLogger(__name__)
@@ -679,11 +693,13 @@ def _generate_embeddings() -> None:
         )
         return
 
-    # Check if Ollama is available
-    embedding_manager = EmbeddingManager()
-    logger.info(f"Initialized embedding manager with model: {embedding_manager.model}")
+    embedder = get_build_embedder(embed_backend)
+    logger.info(f"Initialized embedder with model: {embedder.model}")
 
-    if not embedding_manager.health_check():
+    # Only daemon-backed backends can be health-checked; the in-process one
+    # has nothing to check and the OpenAI-compatible one fails loudly on use.
+    health_check = getattr(embedder, "health_check", None)
+    if health_check is not None and not health_check():
         logger.warning("Ollama not available, cannot generate embeddings")
         console.print(
             "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"  # noqa: E501
@@ -691,10 +707,12 @@ def _generate_embeddings() -> None:
         console.print(
             "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"  # noqa: E501
         )
+        console.print(
+            "[dim]Or set embedding_backend: local to embed in-process.[/dim]"
+        )
         return
 
-    logger.info(f"Ollama is available, model {embedding_manager.model} is loaded")
-    resolver = SemanticResolver(db_path=db_path)
+    resolver = SemanticResolver(db_path=db_path, embedder=embedder)
 
     try:
         # Drop existing embeddings table if it exists to ensure fresh start
@@ -737,7 +755,7 @@ def _generate_embeddings() -> None:
             console=console,
         ) as progress:
             task = progress.add_task(
-                f"Processing with {embedding_manager.model}", total=total_docs
+                f"Processing with {embedder.model}", total=total_docs
             )
 
             # Progress callback function
@@ -2461,6 +2479,13 @@ def commit(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Validate and report without writing.")
     ] = False,
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
 ) -> None:
     """Ingest reviewed .corpus.md sidecars into the searchable corpus (step 2 of 2)."""
     from esdc.corpus.pipeline import run_commit
@@ -2471,8 +2496,10 @@ def commit(
             skip_review=skip_review,
             force=force,
             dry_run=dry_run,
+            embed_backend=embed_backend,
         )
-    except ValueError as e:  # e.g. embedding-model mismatch -> `corpus reembed`
+    except (ValueError, RuntimeError) as e:
+        # e.g. embedding-model mismatch -> `corpus reembed`
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
     _print_corpus_report(report)
@@ -2953,11 +2980,23 @@ def export(
 
 
 @corpus_app.command()
-def reembed() -> None:
+def reembed(
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
+) -> None:
     """Rebuild chunk embeddings for the whole corpus after an embedding-model change."""
     from esdc.corpus.pipeline import run_reembed
 
-    report = run_reembed()
+    try:
+        report = run_reembed(embed_backend=embed_backend)
+    except (ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     _print_corpus_report(report)
     typer.echo(
         f"Re-embedded {len(report.processed)} document(s) "
@@ -2965,6 +3004,206 @@ def reembed() -> None:
     )
 
 
+@corpus_app.command(name="eval")
+def corpus_eval(
+    queries: Annotated[
+        Path | None,
+        typer.Argument(
+            help="JSONL query set (default: ~/.esdc/corpus_queries.jsonl)",
+        ),
+    ] = None,
+    init: Annotated[
+        bool,
+        typer.Option(
+            "--init",
+            help="Generate query set (auto-sized from --margin unless "
+            "--samples given).",
+        ),
+    ] = False,
+    samples: Annotated[
+        int | None,
+        typer.Option(
+            "--samples", "-n", help="Explicit sample size for --init (default: auto)."
+        ),
+    ] = None,
+    refresh: Annotated[
+        bool,
+        typer.Option("--refresh", help="Incrementally sync query set to corpus."),
+    ] = False,
+    margin: Annotated[
+        float, typer.Option("--margin", help="CI half-width for auto sample size.")
+    ] = 0.05,
+    seed: Annotated[int, typer.Option("--seed", help="Sampling seed.")] = 42,
+    ks: str = typer.Option("1,5,10", "--k", help="Comma-separated k values"),
+    rerank: bool | None = typer.Option(
+        None,
+        "--rerank/--no-rerank",
+        help="Force rerank on/off (default: corpus.rerank config)",
+    ),
+) -> None:
+    """Score retrieval quality (Pass@k, latency) against a query set.
+
+    With no query set present, run `--init` first to generate one.
+    """
+    from esdc.corpus.evaluate import run_eval
+    from esdc.corpus.query_gen import (
+        generate,
+        read_query_file,
+        reconcile,
+        write_query_file,
+    )
+    from esdc.corpus.sampling import corpus_fingerprint
+    from esdc.corpus.store import CorpusStore
+
+    path = queries or Config.get_corpus_queries_path()
+    k_values = tuple(int(k.strip()) for k in ks.split(",") if k.strip())
+
+    def _llm_call():
+        cfg = Config.get_provider_config()
+        if not cfg:
+            typer.echo(
+                "Error: no LLM provider configured; query synthesis needs one.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        import esdc.providers as providers
+
+        llm = providers.create_llm_from_config(cfg)
+        return lambda prompt: str(llm.invoke(prompt).content)
+
+    def _progress_run(fn):
+        with Progress(
+            SpinnerColumn(),
+            *Progress.get_default_columns(),
+            TimeElapsedColumn(),
+        ) as progress:
+            task = progress.add_task("[cyan]Synthesizing queries...", total=None)
+
+            def cb(done: int, total: int) -> None:
+                progress.update(task, total=total, completed=done)
+
+            return fn(cb)
+
+    if init or refresh:
+        if refresh and not path.exists():
+            typer.echo(
+                f"No query set at {path}. Run: esdc corpus eval --init", err=True
+            )
+            raise typer.Exit(1)
+        store = CorpusStore()
+        try:
+            call = _llm_call()
+            if init:
+                rows, meta = _progress_run(
+                    lambda cb: generate(
+                        store, call, margin=margin,
+                        n=samples, seed=seed, ks=k_values, progress_cb=cb,
+                    )
+                )
+                write_query_file(path, rows, meta)
+                rich.print(f"Generated {len(rows)} queries → {path}")
+            else:  # --refresh
+                old_rows, old_meta = read_query_file(path)
+                rows, meta = _progress_run(
+                    lambda cb: reconcile(
+                        store, call, old_rows, old_meta, seed=seed, progress_cb=cb,
+                    )
+                )
+                write_query_file(path, rows, meta)
+                old_ids = {r["expected"][0] for r in old_rows}
+                new_ids = {r["expected"][0] for r in rows}
+                added = len(new_ids - old_ids)
+                removed = len(old_ids - new_ids)
+                old_by_id = {
+                    r["expected"][0]: r.get("file_hash")
+                    for r in old_rows if r.get("expected")
+                }
+                new_by_id = {
+                    r["expected"][0]: r.get("file_hash")
+                    for r in rows if r.get("expected")
+                }
+                changed = sum(
+                    1
+                    for d in (old_by_id.keys() & new_by_id.keys())
+                    if old_by_id[d] and new_by_id[d] and old_by_id[d] != new_by_id[d]
+                )
+                rich.print(
+                    f"Refreshed: +{added} new, -{removed} removed, "
+                    f"~{changed} changed → {len(rows)} queries"
+                )
+        finally:
+            store.close()
+    else:
+        if not path.exists():
+            typer.echo(
+                f"No query set at {path}. Run: esdc corpus eval --init", err=True
+            )
+            raise typer.Exit(1)
+        _rows, meta = read_query_file(path)
+        if meta is None:
+            rich.print(
+                "[yellow]Legacy query file (no fingerprint); "
+                "scoring as-is.[/yellow]"
+            )
+        else:
+            store = CorpusStore()
+            try:
+                fp_rows = store.fingerprint_rows()
+                live = corpus_fingerprint(fp_rows)
+                live_ids = {r[0] for r in fp_rows}
+            finally:
+                store.close()
+            if live != meta.fingerprint:
+                live_hash = dict(fp_rows)
+                existing_ids = {r["expected"][0] for r in _rows if r.get("expected")}
+                added = len(live_ids - existing_ids)
+                removed = len(existing_ids - live_ids)
+                changed = sum(
+                    1
+                    for r in _rows
+                    if r.get("expected")
+                    and r["expected"][0] in live_hash
+                    and r.get("file_hash")
+                    and r["file_hash"] != live_hash[r["expected"][0]]
+                )
+                typer.echo(
+                    f"Corpus changed (+{added} new, -{removed} removed, "
+                    f"~{changed} changed). Rerun with --refresh or --init.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+    report = run_eval(path, ks=k_values, rerank=rerank)
+    rich.print(f"Queries scored: {report.n_queries}")
+    for k in k_values:
+        pct = report.pass_at.get(k, 0.0) * 100
+        rich.print(f"  Pass@{k}: {pct:.1f}%")
+    rich.print(f"  Mean latency: {report.mean_latency_ms:.0f} ms")
+    for f in report.failures:
+        rich.print(f"[yellow]  skipped: {f}[/yellow]")
+    if not report.n_queries:
+        raise typer.Exit(code=1)
+
+
+@corpus_app.command(name="warmup")
+def corpus_warmup(
+    rerank: bool | None = typer.Option(
+        None,
+        "--rerank/--no-rerank",
+        help="Also warm the reranker (default: corpus.rerank config)",
+    ),
+) -> None:
+    """Pre-download corpus models (embedder + optional reranker) for offline use."""
+    from esdc.corpus.warmup import run_warmup
+
+    results = run_warmup(rerank=rerank)
+    failed = False
+    for r in results:
+        mark = "[green]OK[/green]" if r.ok else "[red]FAIL[/red]"
+        rich.print(f"{mark} {r.component}: {r.model} — {r.detail}")
+        failed = failed or not r.ok
+    if failed:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

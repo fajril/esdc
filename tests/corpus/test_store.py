@@ -4,7 +4,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from esdc.corpus.chunker import Chunk
+from esdc.corpus.chunker import Chunk, chunk_markdown
 from esdc.corpus.store import CorpusStore
 
 
@@ -126,7 +126,7 @@ def test_clear(store):
 
 def test_replace_chunks(store):
     store.insert_document(DOC, [Chunk(0, None, "lama")])
-    store.replace_chunks("abc123", [Chunk(0, None, "baru"), Chunk(1, None, "baru2")])
+    store.replace_chunks(DOC, [Chunk(0, None, "baru"), Chunk(1, None, "baru2")])
     assert store.counts() == {"documents": 1, "chunks": 2}
 
 
@@ -592,4 +592,209 @@ def test_get_document_by_hash_returns_row_then_none(store):
     assert got["file_hash"] == DOC["file_hash"]
     assert got["doc_date"] == DOC["doc_date"]
     assert got["subject"] == "Persetujuan"
+
+
+def test_default_embedder_is_internal(monkeypatch, tmp_path):
+    from esdc.corpus.embedder import MODEL_ID
+
+    store = CorpusStore(
+        db_path=tmp_path / "corpus.duckdb", sqlite_path=tmp_path / "esdc.sqlite"
+    )
+    assert store._embedder.model == MODEL_ID
+    assert type(store._embedder).__name__ == "InternalEmbedder"
     assert store.get_document_by_hash("deadbeef") is None
+
+
+# --------------------------------------------------------------------------
+# embed_text: contextual prefix drives embeddings + FTS (chunk_text stays
+# display-only)
+# --------------------------------------------------------------------------
+
+
+class RecordingEmbedder:
+    model = "fake-model"
+
+    def __init__(self):
+        self.batch_calls = []
+
+    def generate_embedding(self, text):
+        return [0.1] * 8
+
+    def generate_embeddings_batch(self, texts):
+        self.batch_calls.append(list(texts))
+        return [[0.1] * 8 for _ in texts]
+
+
+@pytest.fixture
+def store_with_doc_factory(tmp_path):
+    stores = []
+
+    def factory(chunk_size=3000, **doc_fields):
+        store = CorpusStore(
+            db_path=tmp_path / "corpus.duckdb",
+            embedder=RecordingEmbedder(),
+            sqlite_path=tmp_path / "esdc.sqlite",
+        )
+        store.ensure_tables()
+        doc = dict(DOC)
+        doc.update(doc_fields)
+        chunks = chunk_markdown(doc["markdown"], chunk_size, min(300, chunk_size - 1))
+        store.insert_document(doc, chunks)
+        stores.append(store)
+        return store, doc
+
+    yield factory
+    for s in stores:
+        s.close()
+
+
+def test_insert_stores_contextual_embed_text(store_with_doc_factory):
+    """embed_text = prefix + section + chunk text; chunk_text untouched."""
+    store, doc = store_with_doc_factory(
+        doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
+    )
+    row = store._get_connection().execute(
+        "SELECT chunk_text, embed_text FROM document_chunks LIMIT 1"
+    ).fetchone()
+    chunk_text, embed_text = row
+    assert "Merak" in embed_text
+    assert embed_text.endswith(chunk_text)
+    assert "Merak |" not in chunk_text  # display text has no prefix
+
+
+def test_embedder_receives_contextual_text(store_with_doc_factory):
+    """The vector is computed from embed_text, not chunk_text."""
+    store, doc = store_with_doc_factory(
+        doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
+    )
+    embedded_texts = store._embedder.batch_calls[-1]
+    assert all("Merak" in t for t in embedded_texts)
+
+
+def test_keyword_search_matches_prefix_terms(store_with_doc_factory):
+    """FTS runs over embed_text: doc-level entity terms hit every chunk."""
+    store, doc = store_with_doc_factory(
+        doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
+    )
+    store.rebuild_indexes()
+    results = store._keyword_search("Merak", 10, None)
+    assert results, "prefix term must be FTS-searchable"
+    assert results[0]["embed_text"]
+
+
+def test_search_over_retrieves_before_rrf(store_with_doc_factory, monkeypatch):
+    store, _ = store_with_doc_factory(subject="Pengembangan Merak")
+    seen = {}
+
+    orig_vec = store._vector_search
+
+    def spy_vector(embedding, limit, filters):
+        seen["pool"] = limit
+        return orig_vec(embedding, limit, filters)
+
+    monkeypatch.setattr(store, "_vector_search", spy_vector)
+    store.rebuild_indexes()
+    store.search("produksi", limit=5)
+    assert seen["pool"] == 50  # max(5 * 2, 50)
+
+
+def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
+    import esdc.corpus.reranker as reranker_mod
+    from esdc.corpus.reranker import Reranker
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+    class ReverseModel:
+        def __init__(self):
+            self.i = 0
+
+        def embed(self, prompt):
+            self.i += 1
+            return [float(self.i), 0.0]  # later candidate wins
+
+    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: ReverseModel())
+
+    # chunk_size=20 forces the two sections into separate chunks so the
+    # reranker has something to reorder.
+    store, _ = store_with_doc_factory(
+        chunk_size=20,
+        subject="Pengembangan Merak",
+        markdown="# A\n\nalpha konten\n\n# B\n\nbeta konten",
+    )
+    store.rebuild_indexes()
+    baseline = store.search("konten", limit=2, rerank=False)
+    reranked = store.search("konten", limit=2, rerank=True)
+    assert reranked["status"] == "success"
+    base_ids = [r["doc_id"] + r["chunk_text"] for r in baseline["results"]]
+    rer_ids = [r["doc_id"] + r["chunk_text"] for r in reranked["results"]]
+    assert rer_ids == list(reversed(base_ids))
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+
+def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatch):
+    import esdc.corpus.reranker as reranker_mod
+    from esdc.corpus.reranker import Reranker
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+    def boom():
+        raise RuntimeError("model missing")
+
+    monkeypatch.setattr(reranker_mod, "_load_reranker", boom)
+
+    store, _ = store_with_doc_factory(subject="Pengembangan Merak")
+    store.rebuild_indexes()
+    result = store.search("produksi", limit=5, rerank=True)
+    assert result["status"] in ("success", "no_results")  # never error
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+
+def test_corpus_config_isolated_in_tests():
+    """Config isolation: search() must not read the real ~/.esdc config.
+
+    search()'s _maybe_rerank calls Config.get_corpus_config(); the
+    autouse _isolated_db_dirs fixture in conftest.py must also patch
+    _load_config so tests never read the real ~/.esdc/config.yaml. If a
+    dev machine has corpus.rerank: true set, an un-isolated test would
+    trigger a real cross-encoder download and reorder search results.
+    """
+    from esdc.configs import Config
+
+    assert Config.get_corpus_config()["rerank"] is False
+
+
+# --------------------------------------------------------------------------
+# Read helpers for eval query generation
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def populated_store(store):
+    store.insert_document(DOC, [Chunk(0, "Surat", "isi surat persetujuan")])
+    return store
+
+
+def test_fingerprint_rows_returns_doc_id_and_hash(populated_store):
+    rows = populated_store.fingerprint_rows()
+    assert all(len(r) == 2 for r in rows)
+    ids = {r[0] for r in rows}
+    assert ids  # non-empty; matches inserted docs
+
+
+def test_sample_content_returns_first_chunk(populated_store):
+    any_id = populated_store.fingerprint_rows()[0][0]
+    content = populated_store.sample_content(any_id)
+    assert content["doc_id"] == any_id
+    assert "doc_type" in content and "subject" in content
+    assert isinstance(content["chunk_text"], str)
+    assert content["file_hash"] == DOC["file_hash"]
+
+
+def test_sample_content_missing_doc_returns_none(populated_store):
+    assert populated_store.sample_content("does-not-exist") is None

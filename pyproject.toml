@@ -40,6 +40,11 @@ dependencies = [
     "tiktoken>=0.12.0",
     # Direct APIs
     "ollama>=0.4.0",
+    # Corpus embeddings + rerank: llama.cpp in-process, Qwen3 GGUFs (no daemon).
+    # Prebuilt wheels: https://abetlen.github.io/llama-cpp-python/whl/<cpu|metal|cuda>
+    # GGUF download/cache for corpus models (imported by corpus/llama_backend)
+    "huggingface-hub>=0.23.0",
+    "llama-cpp-python>=0.3.0",
     "click>=8.0.0",
     # Web server
     "fastapi>=0.100.0",
@@ -158,6 +163,29 @@ dev = [
     "pandas-stubs>=2.2.2",
     "types-requests>=2.33.0.20260402",
     "types-tabulate>=0.10.0.20260308",
+]
+
+# llama-cpp-python: pull abetlen's PREBUILT wheels via `uv sync` instead of
+# compiling from source (cmake + C++ toolchain, slow + risks CI timeouts).
+# Platform markers pick the right binary: metal on macOS (keeps GPU offload
+# available — still CPU by default via corpus.n_gpu_layers=0) and cpu on
+# Linux/CI. Any other platform falls back to the PyPI sdist (source build).
+# Indexes are `explicit` so they serve ONLY the package pinned to them below;
+# nothing else in the tree resolves through them.
+[[tool.uv.index]]
+name = "llama-cpp-metal"
+url = "https://abetlen.github.io/llama-cpp-python/whl/metal"
+explicit = true
+
+[[tool.uv.index]]
+name = "llama-cpp-cpu"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+llama-cpp-python = [
+    { index = "llama-cpp-metal", marker = "sys_platform == 'darwin'" },
+    { index = "llama-cpp-cpu", marker = "sys_platform == 'linux'" },
 ]
 
 [tool.pytest.ini_options]

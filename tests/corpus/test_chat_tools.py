@@ -1,9 +1,10 @@
 """Tests for the iris chat tools `search_documents` and `read_document`.
 
-Monkeypatch choice: the tools construct ``CorpusStore()`` with defaults,
-which resolve ``db_path`` via ``Config.get_db_file()`` and the embedder via
-``esdc.search.embedding_manager.EmbeddingManager`` (lazily imported inside
-``CorpusStore.__init__``). We patch both module attributes so the real
+Monkeypatch choice: the tools construct ``CorpusStore()`` via
+``_get_corpus_embedder()``, which resolves ``db_path`` via
+``Config.get_db_file()`` and the embedder via
+``esdc.corpus.embedder.InternalEmbedder`` (lazily imported inside
+``_get_corpus_embedder``). We patch both module attributes so the real
 constructor path is exercised against a tmp DuckDB with a FakeEmbedder.
 The tool result cache is redirected to a tmp diskcache for isolation.
 """
@@ -12,6 +13,7 @@ import json
 from pathlib import Path
 
 import diskcache
+import duckdb
 import pytest
 
 from esdc.corpus.chunker import Chunk
@@ -80,11 +82,12 @@ def tool_env(tmp_path: Path, monkeypatch):
     from esdc.configs import Config
 
     tools_mod = importlib.import_module("esdc.chat.tools")
-    em = importlib.import_module("esdc.search.embedding_manager")
+    embedder_mod = importlib.import_module("esdc.corpus.embedder")
 
     db_path = tmp_path / "corpus.duckdb"
     monkeypatch.setattr(Config, "get_db_file", classmethod(lambda cls: db_path))
-    monkeypatch.setattr(em, "EmbeddingManager", FakeEmbedder)
+    monkeypatch.setattr(embedder_mod, "InternalEmbedder", FakeEmbedder)
+    monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
     cache = diskcache.Cache(str(tmp_path / "tool_cache"))
     monkeypatch.setattr(tools_mod, "_get_tool_cache", lambda: cache)
@@ -156,6 +159,36 @@ def test_search_documents_empty_db_not_available(tool_env):
     assert result["status"] == "not_available"
     assert "esdc corpus extract" in result["message"]
     assert "esdc corpus commit" in result["message"]
+
+
+def test_search_documents_survives_missing_embed_text_column(populated):
+    """Simulate an upgraded install missing the embed_text column.
+
+    A pre-branch DuckDB has document_chunks
+    populated but lacks the embed_text column that this branch's
+    `_vector_search` now selects. `search_documents` builds its own
+    CorpusStore and must self-heal via `ensure_tables()` before calling
+    `store.search(...)`; without that call, DuckDB's Binder error
+    ("column embed_text not found") is caught and every chat search
+    returns status="error" until a corpus CLI command happens to run
+    `_open_corpus_store()` first. This test fails on unpatched
+    `search_documents` (proven: reverting the tools.py fix reproduces the
+    "error" status here).
+    """
+    from esdc.chat.tools import search_documents
+
+    conn = duckdb.connect(str(populated))
+    conn.execute("INSTALL vss")
+    conn.execute("LOAD vss")
+    conn.execute("SET hnsw_enable_experimental_persistence = true")
+    # The HNSW index blocks dropping any column positioned before it;
+    # drop it first (search() rebuilds via a sequential scan just fine).
+    conn.execute("DROP INDEX IF EXISTS idx_hnsw_chunks")
+    conn.execute("ALTER TABLE document_chunks DROP COLUMN embed_text")
+    conn.close()
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
+    assert result["status"] in ("success", "no_results")
 
 
 def test_read_document_returns_markdown_and_metadata(populated):
@@ -294,7 +327,7 @@ def test_search_documents_reuses_embedder(tool_env, monkeypatch):
 
     monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
     monkeypatch.setattr(
-        "esdc.search.embedding_manager.EmbeddingManager", _CountingEmbedder
+        "esdc.corpus.embedder.InternalEmbedder", _CountingEmbedder
     )
     # invalidate the tool cache so both calls hit the store
     tools_mod.invalidate_tool_cache()
@@ -512,3 +545,70 @@ class TestSemanticSearchCorpusFanOut:
         assert second == first
         # Cache hit: the second call never reached the remarks search.
         assert mock_resolver.hybrid_search.call_count == 1
+
+
+def test_semantic_search_reuses_cached_resolver():
+    """_get_semantic_resolver() builds one SemanticResolver per thread and reuses it.
+
+    Focused unit test on the cache getter itself -- no real DuckDB/network
+    path. Within a single thread (this test), the resolver is built once and
+    the same instance is returned on repeated calls. This is what makes the
+    semantic_meta pin memo (see
+    tests/search/test_semantic_resolver_embedder.py) actually pay off in
+    production: semantic_search used to build a fresh SemanticResolver()
+    per call, so the per-instance memo never fired.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import esdc.chat.tools as tools_mod
+
+    # conftest's reset_semantic_resolver_cache autouse fixture already clears
+    # the current thread's TLS slot before this test runs.
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        instance = MagicMock()
+        MockResolver.return_value = instance
+
+        first = tools_mod._get_semantic_resolver()
+        second = tools_mod._get_semantic_resolver()
+
+    MockResolver.assert_called_once()
+    assert first is instance
+    assert second is instance
+
+
+def test_semantic_resolver_is_thread_local():
+    """Two different threads must get DISTINCT SemanticResolver instances.
+
+    Regression test for the concurrency race fixed alongside this test: a
+    module-global cached resolver was shared across all ThreadPoolExecutor
+    worker threads that LangChain uses to run the sync semantic_search tool,
+    so concurrent chat requests could share one DuckDBPyConnection (not
+    thread-safe) and race on resolver.close() nulling it mid-query. Caching
+    per-thread (via threading.local()) fixes this: each thread must observe
+    its own resolver instance.
+    """
+    import threading
+    from unittest.mock import MagicMock, patch
+
+    import esdc.chat.tools as tools_mod
+
+    results: dict[int, object] = {}
+
+    def _worker(idx: int) -> None:
+        # Each thread starts with a clean TLS slot (only ever set by this
+        # thread itself, since threading.local() is per-thread storage).
+        resolver = tools_mod._get_semantic_resolver()
+        results[idx] = resolver
+
+    with patch(
+        "esdc.search.semantic_resolver.SemanticResolver",
+        side_effect=lambda *a, **k: MagicMock(),
+    ):
+        threads = [threading.Thread(target=_worker, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert len(results) == 2
+    assert results[0] is not results[1]

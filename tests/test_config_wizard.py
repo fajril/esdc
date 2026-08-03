@@ -8,7 +8,7 @@ from esdc.config_wizard import (
     _prompt_for_config_value,
     run_wizard,
 )
-from esdc.configs import KEY_DESCRIPTIONS, MODEL_SECTIONS, SETTINGS_SECTIONS
+from esdc.configs import KEY_DESCRIPTIONS, MODEL_SECTIONS, SETTINGS_SECTIONS, Config
 
 
 class TestMaskValue:
@@ -56,6 +56,12 @@ class TestPromptForConfigValue:
         mock_text.return_value.ask.return_value = "42"
         result = _prompt_for_config_value("cache.sql_ttl", 3600)
         assert result == 42
+
+    @patch("esdc.config_wizard.questionary.text")
+    def test_integer_corpus_num_ctx(self, mock_text):
+        mock_text.return_value.ask.return_value = "4096"
+        result = _prompt_for_config_value("corpus.num_ctx", 16384)
+        assert result == 4096
 
 
 class TestFetchModels:
@@ -614,3 +620,69 @@ class TestCorpusModelPicker:
         mock_select.return_value.ask.return_value = "main"
         result = _prompt_for_config_value("corpus.metadata_model", "main")
         assert result == "main"
+
+
+class TestRerankKeyWidgets:
+    """corpus.rerank* keys must use int/bool/select widgets, not generic text."""
+
+    @patch("esdc.config_wizard.questionary.text")
+    def test_rerank_pool_edit_returns_int(self, mock_text):
+        mock_text.return_value.ask.return_value = "50"
+        result = _prompt_for_config_value("corpus.rerank_pool", 30)
+        assert result == 50
+        assert isinstance(result, int)
+
+    def test_rerank_pool_in_int_keys(self):
+        assert "corpus.rerank_pool" in Config.INT_KEYS
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_rerank_edit_returns_bool(self, mock_select):
+        mock_select.return_value.ask.return_value = "True"
+        result = _prompt_for_config_value("corpus.rerank", False)
+        assert result is True
+        assert isinstance(result, bool)
+
+    def test_rerank_in_boolean_keys(self):
+        assert "corpus.rerank" in Config.BOOLEAN_KEYS
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_rerank_model_offers_curated_choices(self, mock_select):
+        mock_select.return_value.ask.return_value = (
+            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        )
+        result = _prompt_for_config_value(
+            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        )
+        choices = mock_select.call_args.kwargs["choices"]
+        values = [c.value for c in choices]
+        assert "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF" in values
+        assert "__custom__" in values
+        assert result == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_rerank_model_selecting_default(self, mock_select):
+        mock_select.return_value.ask.return_value = (
+            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        )
+        result = _prompt_for_config_value(
+            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        )
+        assert result == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+
+    @patch("esdc.config_wizard.questionary.text")
+    @patch("esdc.config_wizard.questionary.select")
+    def test_rerank_model_custom_falls_through_to_text(
+        self, mock_select, mock_text
+    ):
+        mock_select.return_value.ask.return_value = "__custom__"
+        mock_text.return_value.ask.return_value = "my-custom-reranker"
+        result = _prompt_for_config_value(
+            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        )
+        assert result == "my-custom-reranker"
+
+    def test_coerce_rerank_pool_to_int(self):
+        assert Config._coerce_value("corpus.rerank_pool", "30") == 30
+
+    def test_coerce_rerank_to_bool(self):
+        assert Config._coerce_value("corpus.rerank", "true") is True

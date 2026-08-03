@@ -5,6 +5,7 @@ thin-CLI contract: bad flags and pipeline ValueErrors exit 1 with a
 clean "Error:" line instead of a traceback.
 """
 
+import pytest
 from typer.testing import CliRunner
 
 import esdc.esdc as esdc_cli
@@ -546,3 +547,292 @@ def test_rename_yes_applies(tmp_path, monkeypatch):
     result = runner.invoke(app, ["corpus", "rename", str(tmp_path), "--yes"])
     assert result.exit_code == 0
     assert captured["apply"] is True
+
+
+# --- corpus eval: --init/--refresh + staleness gate -------------------------
+
+
+class _FakeEvalStore:
+    """Fake CorpusStore satisfying both the CLI and run_eval call paths.
+
+    Combines the query-gen FakeStore (test_query_gen.py) and the
+    evaluate FakeStore (test_evaluate.py) — corpus_eval and run_eval both
+    instantiate `esdc.corpus.store.CorpusStore` internally, so a single
+    fake must satisfy both call paths.
+    """
+
+    def __init__(self, docs):
+        self._docs = {d["doc_id"]: d for d in docs}
+
+    def list_documents(self):
+        return [
+            {"doc_id": d["doc_id"], "doc_type": d["doc_type"], "subject": d["subject"]}
+            for d in self._docs.values()
+        ]
+
+    def fingerprint_rows(self):
+        return [(d["doc_id"], d["file_hash"]) for d in self._docs.values()]
+
+    def sample_content(self, doc_id):
+        return self._docs.get(doc_id)
+
+    def search(self, query, limit=10, filters=None, rerank=None):
+        doc_id = next(iter(self._docs))
+        return {
+            "status": "success",
+            "results": [{"doc_id": doc_id, "file_name": f"{doc_id}.pdf"}],
+            "count": 1,
+        }
+
+    def close(self):
+        pass
+
+
+def _eval_docs():
+    return [
+        {
+            "doc_id": f"letter-{i}", "doc_type": "letter",
+            "subject": f"subject {i}", "file_hash": f"h{i}",
+            "chunk_text": f"body {i}",
+        }
+        for i in range(3)
+    ]
+
+
+@pytest.fixture
+def fake_store(monkeypatch):
+    store = _FakeEvalStore(_eval_docs())
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", lambda: store)
+    return store
+
+
+@pytest.fixture
+def fake_llm(monkeypatch):
+    class _Resp:
+        content = "generated query?"
+
+    class _FakeLLM:
+        def invoke(self, prompt):
+            return _Resp()
+
+    monkeypatch.setattr(
+        "esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM()
+    )
+    return _FakeLLM()
+
+
+def _patch_queries_path(monkeypatch, path):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config, "get_corpus_queries_path", classmethod(lambda cls: path)
+    )
+
+
+def _patch_provider_config(monkeypatch):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config,
+        "get_provider_config",
+        classmethod(lambda cls: {"provider_type": "fake", "model": "x"}),
+    )
+
+
+def test_eval_missing_file_errors(monkeypatch, tmp_path):
+    _patch_queries_path(monkeypatch, tmp_path / "corpus_queries.jsonl")
+
+    result = runner.invoke(app, ["corpus", "eval"])
+    assert result.exit_code == 1
+    assert "--init" in result.output
+
+
+def test_eval_init_generates_and_scores(
+    monkeypatch, tmp_path, fake_store, fake_llm
+):
+    """`--init` with no value must auto-size (the primary default workflow)."""
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    _patch_provider_config(monkeypatch)
+
+    result = runner.invoke(app, ["corpus", "eval", "--init"])
+    assert result.exit_code == 0, result.output
+    assert "Generated" in result.output
+    assert path.exists()
+
+
+def test_eval_init_with_explicit_samples(
+    monkeypatch, tmp_path, fake_store, fake_llm
+):
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    _patch_provider_config(monkeypatch)
+
+    result = runner.invoke(app, ["corpus", "eval", "--init", "--samples", "2"])
+    assert result.exit_code == 0, result.output
+    assert "Generated" in result.output
+    assert path.exists()
+
+
+def test_eval_refresh_missing_file_errors(monkeypatch, tmp_path):
+    """--refresh on a missing file must error cleanly.
+
+    Must not raise a FileNotFoundError traceback.
+    """
+    _patch_queries_path(monkeypatch, tmp_path / "corpus_queries.jsonl")
+
+    result = runner.invoke(app, ["corpus", "eval", "--refresh"])
+    assert result.exit_code == 1
+    assert "--init" in result.output
+    assert result.exception is None or isinstance(
+        result.exception, SystemExit
+    )
+
+
+def test_eval_stale_fingerprint_blocks(monkeypatch, tmp_path, fake_store):
+    from esdc.corpus.query_gen import QueryMeta, write_query_file
+
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    meta = QueryMeta(
+        fingerprint="deadbeef", margin=0.05, n=1, ks=[1, 5, 10],
+        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+    )
+    write_query_file(path, [{"query": "q", "expected": ["letter-0"]}], meta)
+
+    result = runner.invoke(app, ["corpus", "eval"])
+    assert result.exit_code == 1
+    assert "Corpus changed" in result.output
+
+
+def test_eval_stale_reports_changed_doc(monkeypatch, tmp_path, fake_store):
+    """A doc re-ingested with edited content (same doc_id, new file_hash).
+
+    Must be reported as "~1 changed", not folded into +added/-removed.
+    """
+    from esdc.corpus.query_gen import QueryMeta, write_query_file
+
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+
+    # Same doc_ids as the live store (no additions/removals), but letter-0's
+    # recorded file_hash ("OLD-HASH") no longer matches the store's current
+    # hash ("h0") — simulating a content edit under the same doc_id.
+    rows = [
+        {"query": "q0", "expected": ["letter-0"], "file_hash": "OLD-HASH"},
+        {"query": "q1", "expected": ["letter-1"], "file_hash": "h1"},
+        {"query": "q2", "expected": ["letter-2"], "file_hash": "h2"},
+    ]
+    meta = QueryMeta(
+        fingerprint="stale-fp",  # deliberately not matching the live fingerprint
+        margin=0.05, n=3, ks=[1, 5, 10],
+        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+    )
+    write_query_file(path, rows, meta)
+
+    result = runner.invoke(app, ["corpus", "eval"])
+    assert result.exit_code == 1
+    assert "Corpus changed" in result.output
+    assert "+0 new" in result.output
+    assert "-0 removed" in result.output
+    assert "~1 changed" in result.output
+
+
+def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
+    """--refresh reconciles against a mutated live corpus and prints delta.
+
+    Reads the query file, reconciles against the (mutated) live corpus,
+    writes the updated file, and prints the +added/-removed delta.
+    """
+    from esdc.corpus.query_gen import QueryMeta, read_query_file, write_query_file
+    from esdc.corpus.sampling import corpus_fingerprint
+
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    _patch_provider_config(monkeypatch)
+
+    # Query file matching the store's current (3-doc) fingerprint.
+    old_rows = [
+        {"query": f"q{i}", "expected": [f"letter-{i}"]} for i in range(3)
+    ]
+    meta = QueryMeta(
+        fingerprint=corpus_fingerprint(fake_store.fingerprint_rows()),
+        margin=0.05, n=3, ks=[1, 5, 10],
+        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+    )
+    write_query_file(path, old_rows, meta)
+
+    # Mutate the corpus: drop letter-2, add letter-3 -> fingerprint changes.
+    del fake_store._docs["letter-2"]
+    fake_store._docs["letter-3"] = {
+        "doc_id": "letter-3", "doc_type": "letter", "subject": "subject 3",
+        "file_hash": "h3", "chunk_text": "body 3",
+    }
+
+    class _Resp:
+        content = "refreshed query?"
+
+    class _FakeLLM:
+        def invoke(self, prompt):
+            return _Resp()
+
+    monkeypatch.setattr(
+        "esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM()
+    )
+
+    result = runner.invoke(app, ["corpus", "eval", "--refresh"])
+    assert result.exit_code == 0, result.output
+    assert "Refreshed:" in result.output
+    assert "+1 new" in result.output
+    assert "-1 removed" in result.output
+
+    new_rows, new_meta = read_query_file(path)
+    new_ids = {r["expected"][0] for r in new_rows}
+    assert "letter-2" not in new_ids
+    assert "letter-3" in new_ids
+    assert new_meta.fingerprint == corpus_fingerprint(
+        fake_store.fingerprint_rows()
+    )
+
+
+def test_eval_refresh_reports_changed_count(monkeypatch, tmp_path, fake_store):
+    """--refresh reports a "~C changed" segment for docs whose content changed.
+
+    Same doc_id, new file_hash, between the old and new query file.
+    """
+    from esdc.corpus.query_gen import QueryMeta, write_query_file
+
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    _patch_provider_config(monkeypatch)
+
+    # Query file recording a stale file_hash for letter-0; the live store's
+    # sample_content/fingerprint_rows for letter-0 report "h0".
+    old_rows = [
+        {"query": "q0", "expected": ["letter-0"], "file_hash": "OLD-HASH"},
+        {"query": "q1", "expected": ["letter-1"], "file_hash": "h1"},
+        {"query": "q2", "expected": ["letter-2"], "file_hash": "h2"},
+    ]
+    meta = QueryMeta(
+        fingerprint="stale-fp", margin=0.05, n=3, ks=[1, 5, 10],
+        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+    )
+    write_query_file(path, old_rows, meta)
+
+    class _Resp:
+        content = "refreshed query?"
+
+    class _FakeLLM:
+        def invoke(self, prompt):
+            return _Resp()
+
+    monkeypatch.setattr(
+        "esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM()
+    )
+
+    result = runner.invoke(app, ["corpus", "eval", "--refresh"])
+    assert result.exit_code == 0, result.output
+    assert "Refreshed:" in result.output
+    assert "+0 new" in result.output
+    assert "-0 removed" in result.output
+    assert "~1 changed" in result.output

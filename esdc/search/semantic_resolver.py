@@ -7,6 +7,7 @@ using vector embeddings and HNSW index for fast similarity search.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any
 import duckdb
 
 from esdc.configs import Config
-from esdc.search.embedding_manager import EmbeddingManager
+from esdc.embedders import InternalEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -31,19 +32,46 @@ class SemanticResolver:
     """
 
     EMBEDDING_TABLE = "project_embeddings"
+    SEMANTIC_META = "semantic_meta"
+    SEMANTIC_META_DDL = (
+        f"CREATE TABLE IF NOT EXISTS {SEMANTIC_META} "
+        "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+    )
     DEFAULT_LIMIT = 10
 
     def __init__(
         self,
         db_path: Path | str | None = None,
-        model: str | None = None,
+        embedder: Any | None = None,
     ) -> None:
-        """Initialize with DuckDB connection and EmbeddingManager."""
+        """Initialize with a DuckDB connection and an embedder.
+
+        Args:
+            db_path: DuckDB file. Defaults to Config.get_db_file().
+            embedder: Object with generate_embedding /
+                generate_embeddings_batch and a `.model` attribute.
+                Defaults to the in-process llama.cpp embedder — query-time
+                similarity always runs locally, with no daemon. Generation
+                call sites inject a backend from get_build_embedder.
+        """
         if db_path is None:
             db_path = Config.get_db_file()
         self._db_path = Path(db_path)
         self._conn: duckdb.DuckDBPyConnection | None = None
-        self._embedding_manager = EmbeddingManager(model=model)
+        self._embedder = embedder if embedder is not None else InternalEmbedder()
+        self._pin_verified_sig: tuple[int, int] | None = None
+
+    def _db_signature(self) -> tuple[int, int] | None:
+        """Identity of the DB file: (mtime_ns, size). None if it does not exist.
+
+        Changes when esdc fetch/reload replaces or rewrites esdc.duckdb, which is
+        exactly when a memoized pin check must be re-run.
+        """
+        try:
+            st = self._db_path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
         """Get or create DuckDB connection with VSS extension loaded.
@@ -67,6 +95,55 @@ class SemanticResolver:
             self._conn.execute("LOAD vss")
             logger.debug("[Semantic] DuckDB connection established with VSS extension")
         return self._conn
+
+    def _ensure_semantic_meta(self) -> dict[str, Any] | None:
+        """Pin this space's embedding model and verify the active embedder.
+
+        Creates and seeds semantic_meta when missing — project_embeddings
+        predates the pin, so a legacy space adopts one on first use.
+
+        Returns:
+            The ``not_available`` response dict when the active embedder
+            disagrees with the pin, else None. Query paths must degrade
+            rather than raise, matching _embeddings_available.
+        """
+        sig = self._db_signature()
+        if sig is not None and sig == self._pin_verified_sig:
+            return None
+
+        from esdc.embedders import PROBE_TEXT, check_or_seed_probe
+
+        conn = self._get_connection()
+        try:
+            conn.execute(self.SEMANTIC_META_DDL)
+            row = conn.execute(
+                f"SELECT embedding_model FROM {self.SEMANTIC_META} LIMIT 1"
+            ).fetchone()
+            if row is None:
+                probe = self._embedder.generate_embedding(PROBE_TEXT)
+                conn.execute(
+                    f"INSERT INTO {self.SEMANTIC_META} "
+                    "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
+                    [self._embedder.model, len(probe), json.dumps(probe)],
+                )
+                self._pin_verified_sig = sig
+                return None
+            check_or_seed_probe(conn, self.SEMANTIC_META, self._embedder)
+            self._pin_verified_sig = sig
+        except ValueError as e:
+            logger.warning("[Semantic] embedding pin mismatch | %s", e)
+            return {
+                "status": "not_available",
+                "message": (
+                    "Stored project embeddings were built with a different "
+                    "embedding model. Run 'esdc reload --embeddings-only' to "
+                    "rebuild them."
+                ),
+                "results": [],
+            }
+        except Exception as e:  # pragma: no cover - DB-level failure
+            logger.debug("[Semantic] pin check skipped | %s", e)
+        return None
 
     def build_embeddings_table(self) -> bool:
         """Create embeddings table and HNSW index.
@@ -105,7 +182,7 @@ class SemanticResolver:
 
             # Detect embedding dimension by generating a test embedding
             logger.info("[Semantic] detecting embedding dimension from model")
-            test_embedding = self._embedding_manager.generate_embedding("test")
+            test_embedding = self._embedder.generate_embedding("test")
             embedding_dim = len(test_embedding)
             logger.info(f"[Semantic] detected embedding dimension: {embedding_dim}")
 
@@ -139,6 +216,17 @@ class SemanticResolver:
 
             # Create B-tree indexes on embedding contextual columns for fast filtering
             self._create_embedding_indexes()
+
+            from esdc.embedders import PROBE_TEXT
+
+            conn.execute(self.SEMANTIC_META_DDL)
+            probe = self._embedder.generate_embedding(PROBE_TEXT)
+            conn.execute(f"DELETE FROM {self.SEMANTIC_META}")
+            conn.execute(
+                f"INSERT INTO {self.SEMANTIC_META} "
+                "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
+                [self._embedder.model, embedding_dim, json.dumps(probe)],
+            )
 
             logger.info(
                 "[Semantic] embeddings table created with dimension %d", embedding_dim
@@ -232,7 +320,7 @@ class SemanticResolver:
                 texts = [row[16] for row in batch]
 
                 # Generate embeddings
-                embeddings = self._embedding_manager.generate_embeddings_batch(texts)
+                embeddings = self._embedder.generate_embeddings_batch(texts)
 
                 # Store in DuckDB with all contextual columns using bulk insert
                 data_to_insert = []
@@ -379,8 +467,12 @@ class SemanticResolver:
         if unavailable is not None:
             return unavailable
 
+        mismatch = self._ensure_semantic_meta()
+        if mismatch is not None:
+            return mismatch
+
         # Generate query embedding
-        query_embedding = self._embedding_manager.generate_embedding(query)
+        query_embedding = self._embedder.generate_embedding(query)
 
         return self.search_by_embedding(query_embedding, limit, filters)
 
@@ -783,7 +875,11 @@ class SemanticResolver:
             Dict with status, count, results
         """
         # Check if embeddings are available
-        query_embedding = self._embedding_manager.generate_embedding(query)
+        mismatch = self._ensure_semantic_meta()
+        if mismatch is not None:
+            return mismatch
+
+        query_embedding = self._embedder.generate_embedding(query)
 
         semantic_results_raw = self.search_by_embedding(
             query_embedding, limit * 2, filters

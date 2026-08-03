@@ -295,6 +295,34 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
             ).ask()
         return selected
 
+    # 2b. Reranker model key? Curated GGUF choice (llama.cpp registry) +
+    # custom escape. Keep in sync with esdc/corpus/reranker.py.
+    if key == "corpus.rerank_model":
+        choices = [
+            questionary.Choice(
+                "Qwen3-Reranker-0.6B Q8_0 (default, llama.cpp GGUF)",
+                value="ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
+            ),
+            questionary.Choice("Custom…", value="__custom__"),
+        ]
+        default_choice = next(
+            (c for c in choices if c.value == str(current)), choices[0]
+        )
+        selected = questionary.select(
+            label,
+            choices=choices,
+            default=default_choice,
+            instruction=instruction,
+            style=_WIZARD_STYLE,
+        ).ask()
+        if selected == "__custom__":
+            return questionary.text(
+                f"{label} — model name:",
+                default=str(current),
+                style=_WIZARD_STYLE,
+            ).ask()
+        return selected
+
     # 3. Enum key?
     if key in ENUM_CHOICES:
         choices = ENUM_CHOICES[key]

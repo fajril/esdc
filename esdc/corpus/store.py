@@ -108,9 +108,9 @@ class CorpusStore:
         Args:
             db_path: DuckDB file path. Defaults to Config.get_db_file().
             embedder: Object with generate_embedding/generate_embeddings_batch
-                and a `.model` attribute. Defaults to a lazily-imported
-                EmbeddingManager() so importing this module does not
-                require ollama to be installed.
+                and a `.model` attribute. Defaults to the internal llama.cpp
+                Qwen3 embedder (esdc.corpus.embedder.InternalEmbedder) — no
+                Ollama daemon needed for corpus commit/search.
             sqlite_path: Operational SQLite db holding the documents
                 source of truth. Defaults to the shared esdc.sqlite.
         """
@@ -122,9 +122,9 @@ class CorpusStore:
         self._sconn: sqlite3.Connection | None = None
 
         if embedder is None:
-            from esdc.search.embedding_manager import EmbeddingManager
+            from esdc.corpus.embedder import InternalEmbedder
 
-            embedder = EmbeddingManager()
+            embedder = InternalEmbedder()
         self._embedder = embedder
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
@@ -183,7 +183,7 @@ class CorpusStore:
 
         When ``validate_model=False`` (default), skips the embedder probe
         if tables already exist so read-only commands like ``corpus list``
-        work without Ollama running. Pass ``validate_model=True`` from
+        work without loading the embedding model. Pass ``validate_model=True`` from
         write paths (commit, reembed) to detect model mismatches.
         """
         conn = self._get_connection()
@@ -258,15 +258,24 @@ class CorpusStore:
                 chunk_index INTEGER NOT NULL,
                 section VARCHAR,
                 chunk_text TEXT NOT NULL,
+                embed_text TEXT,
                 embedding FLOAT[{dim}]
             )
         """)
+        conn.execute(
+            f"ALTER TABLE {self.CHUNK_TABLE} ADD COLUMN IF NOT EXISTS embed_text TEXT"
+        )
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {self.META_TABLE} (
                 embedding_model VARCHAR NOT NULL,
                 dim INTEGER NOT NULL
             )
         """)
+        # probe_vec added after corpus_meta shipped; ALTER keeps existing
+        # corpora intact (same approach as embed_text / doc_topic).
+        conn.execute(
+            f"ALTER TABLE {self.META_TABLE} ADD COLUMN IF NOT EXISTS probe_vec JSON"
+        )
 
         if tables_exist:
             if validate_model:
@@ -302,6 +311,13 @@ class CorpusStore:
                     f"Existing chunk embeddings are no longer comparable. "
                     f"Run `esdc corpus reembed` to rebuild them."
                 )
+
+        if validate_model:
+            # Write paths only: proves this embedder shares a cosine space
+            # with whatever produced the stored vectors. Seeds on first run.
+            from esdc.embedders import check_or_seed_probe
+
+            check_or_seed_probe(conn, self.META_TABLE, self._embedder)
 
         self._migrate_legacy_entity_columns()
         self._create_document_indexes()
@@ -470,8 +486,15 @@ class CorpusStore:
         """
         conn = self._get_connection()
         sconn = self._get_sqlite()
-        texts = [c.text for c in chunks]
-        embeddings = self._embedder.generate_embeddings_batch(texts) if texts else []
+        from esdc.corpus.context import build_context_prefix, build_embed_text
+
+        prefix = build_context_prefix(doc)
+        embed_texts = [build_embed_text(prefix, c.section, c.text) for c in chunks]
+        embeddings = (
+            self._embedder.generate_embeddings_batch(embed_texts)
+            if embed_texts
+            else []
+        )
         values = self._doc_row_values(doc)
 
         conn.execute("BEGIN TRANSACTION")
@@ -489,8 +512,9 @@ class CorpusStore:
                 conn.executemany(
                     f"""
                     INSERT INTO {self.CHUNK_TABLE} (
-                        chunk_id, doc_id, chunk_index, section, chunk_text, embedding
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        chunk_id, doc_id, chunk_index, section, chunk_text,
+                        embed_text, embedding
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         [
@@ -499,9 +523,12 @@ class CorpusStore:
                             chunk.index,
                             chunk.section,
                             chunk.text,
+                            embed_text,
                             embedding,
                         ]
-                        for chunk, embedding in zip(chunks, embeddings, strict=True)
+                        for chunk, embed_text, embedding in zip(
+                            chunks, embed_texts, embeddings, strict=True
+                        )
                     ],
                 )
             conn.execute("COMMIT")
@@ -599,6 +626,38 @@ class CorpusStore:
             docs.append(doc)
         return docs
 
+    def fingerprint_rows(self) -> list[tuple[str, str]]:
+        """(doc_id, file_hash) for every document — input to corpus_fingerprint."""
+        sconn = self._get_sqlite()
+        rows = sconn.execute(
+            f"SELECT doc_id, file_hash FROM {self.DOC_TABLE}"
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def sample_content(self, doc_id: str) -> dict[str, Any] | None:
+        """doc_type + subject + first chunk text for one doc, for query synthesis."""
+        sconn = self._get_sqlite()
+        row = sconn.execute(
+            f"SELECT doc_id, doc_type, subject, file_hash FROM {self.DOC_TABLE} "
+            f"WHERE doc_id = ?",
+            (doc_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        doc = dict(row)
+        chunk = (
+            self._get_connection()
+            .execute(
+                f"SELECT chunk_text FROM {self.CHUNK_TABLE} "
+                f"WHERE doc_id = ? ORDER BY chunk_index LIMIT 1",
+                [doc_id],
+            )
+            .fetchone()
+        )
+        doc["chunk_text"] = chunk[0] if chunk else ""
+        doc["subject"] = doc.get("subject") or ""
+        return doc
+
     def find_doc_ids(self, filters: dict[str, Any]) -> list[tuple[str, str]]:
         """(doc_id, file_name) pairs matching documents-column filters.
 
@@ -633,24 +692,35 @@ class CorpusStore:
 
         return counts
 
-    def replace_chunks(self, doc_id: str, chunks: list[Chunk]) -> None:
+    def replace_chunks(self, doc: dict[str, Any], chunks: list[Chunk]) -> None:
         """Replace all chunks for a document (used by `corpus reembed`)."""
+        from esdc.corpus.context import build_context_prefix, build_embed_text
+
+        doc_id = doc["doc_id"]
         conn = self._get_connection()
-        texts = [c.text for c in chunks]
-        embeddings = self._embedder.generate_embeddings_batch(texts) if texts else []
+        prefix = build_context_prefix(doc)
+        embed_texts = [build_embed_text(prefix, c.section, c.text) for c in chunks]
+        embeddings = (
+            self._embedder.generate_embeddings_batch(embed_texts)
+            if embed_texts
+            else []
+        )
 
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(
                 f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id]
             )
-            for chunk, embedding in zip(chunks, embeddings, strict=True):
+            for chunk, embed_text, embedding in zip(
+                chunks, embed_texts, embeddings, strict=True
+            ):
                 chunk_id = f"{doc_id}:{chunk.index:04d}"
                 conn.execute(
                     f"""
                     INSERT INTO {self.CHUNK_TABLE} (
-                        chunk_id, doc_id, chunk_index, section, chunk_text, embedding
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        chunk_id, doc_id, chunk_index, section, chunk_text,
+                        embed_text, embedding
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         chunk_id,
@@ -658,6 +728,7 @@ class CorpusStore:
                         chunk.index,
                         chunk.section,
                         chunk.text,
+                        embed_text,
                         embedding,
                     ],
                 )
@@ -690,12 +761,17 @@ class CorpusStore:
 
         dim_changed = existing is not None and existing[1] != dim
 
+        from esdc.embedders import PROBE_TEXT
+
+        probe = json.dumps(self._embedder.generate_embedding(PROBE_TEXT))
+
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(f"DELETE FROM {self.META_TABLE}")
             conn.execute(
-                f"INSERT INTO {self.META_TABLE} (embedding_model, dim) VALUES (?, ?)",
-                [embedding_model, dim],
+                f"INSERT INTO {self.META_TABLE} "
+                "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
+                [embedding_model, dim, probe],
             )
             if dim_changed:
                 logger.info(
@@ -712,6 +788,7 @@ class CorpusStore:
                         chunk_index INTEGER NOT NULL,
                         section VARCHAR,
                         chunk_text TEXT NOT NULL,
+                        embed_text TEXT,
                         embedding FLOAT[{dim}]
                     )
                 """)
@@ -742,7 +819,7 @@ class CorpusStore:
         try:
             conn.execute(
                 f"PRAGMA create_fts_index("
-                f"'{self.CHUNK_TABLE}', 'chunk_id', 'chunk_text', overwrite=1)"
+                f"'{self.CHUNK_TABLE}', 'chunk_id', 'embed_text', overwrite=1)"
             )
             logger.info("[Corpus] FTS index created")
         except Exception as e:
@@ -819,7 +896,8 @@ class CorpusStore:
 
         if filter_clause:
             sql = f"""
-                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, {distance}
+                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, c.embed_text,
+                    {distance}
                 FROM {self.CHUNK_TABLE} c
                 JOIN {self.DOC_TABLE} d ON d.doc_id = c.doc_id
                 WHERE 1=1{filter_clause}
@@ -828,7 +906,8 @@ class CorpusStore:
             """
         else:
             sql = f"""
-                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, {distance}
+                SELECT c.chunk_id, c.doc_id, c.section, c.chunk_text, c.embed_text,
+                    {distance}
                 FROM {self.CHUNK_TABLE} c
                 ORDER BY dist ASC
                 LIMIT ?
@@ -841,7 +920,8 @@ class CorpusStore:
                 "doc_id": row[1],
                 "section": row[2],
                 "chunk_text": row[3],
-                "similarity": 1 - row[4],
+                "embed_text": row[4],
+                "similarity": 1 - row[5],
             }
             for row in rows
         ]
@@ -859,7 +939,7 @@ class CorpusStore:
 
         sql = f"""
             SELECT
-                c.chunk_id, c.doc_id, c.section, c.chunk_text,
+                c.chunk_id, c.doc_id, c.section, c.chunk_text, c.embed_text,
                 fts_main_{self.CHUNK_TABLE}.match_bm25(
                     c.chunk_id, '{escaped_query}'
                 ) AS bm25_score
@@ -879,7 +959,8 @@ class CorpusStore:
                 "doc_id": row[1],
                 "section": row[2],
                 "chunk_text": row[3],
-                "bm25_score": round(float(row[4] or 0), 4),
+                "embed_text": row[4],
+                "bm25_score": round(float(row[5] or 0), 4),
             }
             for row in rows
         ]
@@ -911,8 +992,51 @@ class CorpusStore:
 
         return sorted(scored.values(), key=lambda x: x["score"], reverse=True)
 
+    def _maybe_rerank(
+        self,
+        query: str,
+        merged: list[dict[str, Any]],
+        rerank: bool | None,
+    ) -> list[dict[str, Any]]:
+        """Reorder the top of the RRF list with the local cross-encoder.
+
+        rerank=None reads corpus.rerank from config; an explicit bool
+        overrides it (the eval harness compares both modes). Any failure
+        keeps RRF order — rerank never breaks search.
+        """
+        cfg = Config.get_corpus_config()
+        enabled = cfg.get("rerank", False) if rerank is None else rerank
+        if not enabled or len(merged) <= 1:
+            return merged
+
+        from esdc.corpus.reranker import Reranker
+
+        rr = Reranker.get()
+        if rr is None:
+            return merged
+
+        pool = min(int(cfg.get("rerank_pool", 30)), len(merged))
+        top = merged[:pool]
+        try:
+            scores = rr.rerank(
+                query, [r.get("embed_text") or r["chunk_text"] for r in top]
+            )
+        except Exception as e:
+            logger.warning(
+                "[Corpus] rerank failed, keeping RRF order | error=%s", e
+            )
+            return merged
+        for r, s in zip(top, scores, strict=True):
+            r["rerank_score"] = s
+        top.sort(key=lambda r: r["rerank_score"], reverse=True)
+        return top + merged[pool:]
+
     def search(
-        self, query: str, limit: int = 10, filters: dict[str, Any] | None = None
+        self,
+        query: str,
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+        rerank: bool | None = None,
     ) -> dict[str, Any]:
         """Hybrid (vector + BM25) search over document_chunks.
 
@@ -940,18 +1064,22 @@ class CorpusStore:
                     "count": 0,
                 }
 
+            # Over-retrieve before RRF: a wider pool costs little here and
+            # feeds both the fusion and the optional reranker.
+            pool = max(limit * 2, 50)
             query_embedding = self._embedder.generate_embedding(query)
-            vector_results = self._vector_search(query_embedding, limit * 2, filters)
+            vector_results = self._vector_search(query_embedding, pool, filters)
 
             try:
-                keyword_results = self._keyword_search(query, limit * 2, filters)
+                keyword_results = self._keyword_search(query, pool, filters)
             except Exception as e:
                 logger.warning(
                     "[Corpus] keyword search failed, using vector-only | error=%s", e
                 )
                 keyword_results = []
 
-            merged = self._merge_rrf(vector_results, keyword_results)[:limit]
+            merged = self._merge_rrf(vector_results, keyword_results)
+            merged = self._maybe_rerank(query, merged, rerank)[:limit]
 
             if not merged:
                 return {"status": "no_results", "results": [], "count": 0}

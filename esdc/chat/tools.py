@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import shutil
+import threading
 from typing import Annotated, Any
 
 # Third-party
@@ -170,19 +171,47 @@ _corpus_embedder = None
 
 
 def _get_corpus_embedder():
-    """Lazily create and reuse one EmbeddingManager for corpus tools.
+    """Lazily create and reuse one InternalEmbedder for corpus tools.
 
-    The embedder is a stateless HTTP client; recreating it per tool call
-    wasted setup time. The CorpusStore/DuckDB connection is deliberately
-    NOT cached (short-lived connections avoid file-lock conflicts with
-    the corpus CLI).
+    The embedder loads an in-process llama.cpp Qwen3 embedding model; recreating it per
+    tool call wasted setup time. The CorpusStore/DuckDB connection is
+    deliberately NOT cached (short-lived connections avoid file-lock
+    conflicts with the corpus CLI).
     """
     global _corpus_embedder
     if _corpus_embedder is None:
-        from esdc.search.embedding_manager import EmbeddingManager
+        from esdc.corpus.embedder import InternalEmbedder
 
-        _corpus_embedder = EmbeddingManager()
+        _corpus_embedder = InternalEmbedder()
     return _corpus_embedder
+
+
+_semantic_resolver_tls = threading.local()
+
+
+def _get_semantic_resolver():
+    """Reuse one SemanticResolver PER THREAD for the semantic_search tool.
+
+    Reusing the resolver instance (not just the embedder) is what lets its
+    DB-signature-keyed semantic_meta pin memo actually pay off: a fresh
+    SemanticResolver() per call meant the memo never survived past a single
+    tool invocation. semantic_search is a sync LangChain tool run on a
+    threadpool worker, and the chat server serves requests concurrently, so
+    a single module-global resolver would let two threads share one
+    DuckDBPyConnection -- a non-thread-safe object -- and race on
+    resolver.close() (thread X nulling self._conn while thread Y is
+    mid-query). Caching per-thread instead keeps the memo win without any
+    cross-thread sharing: each thread gets its own resolver (and its own
+    connection), and resolver.close() in the caller's finally block only
+    ever affects that thread's own connection.
+    """
+    resolver = getattr(_semantic_resolver_tls, "resolver", None)
+    if resolver is None:
+        from esdc.search.semantic_resolver import SemanticResolver
+
+        resolver = SemanticResolver()
+        _semantic_resolver_tls.resolver = resolver
+    return resolver
 
 
 def _get_disk_cache_stats(
@@ -1610,8 +1639,6 @@ def semantic_search(
     """
     import json
 
-    from esdc.search.semantic_resolver import SemanticResolver
-
     # Build filters dict from optional parameters
     filters: dict[str, Any] = {}
     if report_year is not None:
@@ -1656,7 +1683,7 @@ def semantic_search(
 
     logger.debug("[CACHE] miss | tool=semantic_search key=%s", cache_key[:16])
 
-    resolver = SemanticResolver()
+    resolver = _get_semantic_resolver()
 
     try:
         remarks_result = resolver.hybrid_search(
@@ -1926,6 +1953,13 @@ def search_documents(
         from esdc.corpus.store import CorpusStore
 
         store = CorpusStore(embedder=_get_corpus_embedder())
+        # Mirror the CLI's _open_corpus_store: heal schema drift (e.g. a
+        # pre-branch DuckDB missing the embed_text column) before search
+        # runs its SELECT, so an upgraded install doesn't error on every
+        # chat search until the user happens to run a corpus CLI command.
+        # validate_model stays False (default) — chat search must not
+        # hard-fail on an embedding-model mismatch.
+        store.ensure_tables()
         result = store.search(
             query=query,
             limit=limit,

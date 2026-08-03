@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Embedding backends
+
+**Changed:** `embedding_model` no longer selects the Ollama tag. The `local`
+and `ollama` backends pin their model in code; only `openai` reads the key.
+Anyone who had it set moves to `qwen3-embedding:0.6b` for project
+embeddings on their next `esdc reload --embeddings-only`.
+
+**Changed:** `esdc corpus commit` and `esdc corpus reembed` now use the
+shared `embedding_backend`, which defaults to `ollama`. Set
+`embedding_backend: local` to keep embedding in-process with no daemon.
+
+**Fixed:** semantic project search no longer requires a reachable Ollama —
+queries embed locally.
+
+### Corpus retrieval overhaul
+
+- Embeddings are now internal (fastembed ONNX, pinned `intfloat/multilingual-e5-large`) — corpus
+  commit/search no longer needs an Ollama daemon. Existing corpora: run
+  `esdc corpus reembed` once (the commit command will tell you).
+- Contextual retrieval: each chunk is embedded and FTS-indexed with its
+  document context (doc type, subject, entities, section) prepended, so
+  queries mixing topic + entity rank the right document. Display text is
+  unchanged.
+- Search over-retrieves (min 50 candidates per path) before RRF fusion.
+- Optional local reranker (`corpus.rerank: true`, default off): fastembed
+  cross-encoder reorders the top `corpus.rerank_pool` (default 30) candidates.
+  The model is configurable via `corpus.rerank_model` — default
+  `jinaai/jina-reranker-v2-base-multilingual` (CC-BY-NC, non-commercial); set
+  `BAAI/bge-reranker-v2-m3` (Apache-2.0, Bahasa Indonesia) for commercial use,
+  registered on demand from a fastembed-compatible ONNX (no torch pulled in).
+- New `esdc corpus eval <queries.jsonl>` scores retrieval Pass@k and latency;
+  use `--rerank/--no-rerank` to compare modes.
+- New `esdc corpus warmup` pre-downloads the embedder and (with `--rerank`) the
+  reranker model for offline/air-gapped setups. Model weights are cached under
+  `~/.esdc/models` (follows `ESDC_CONFIG_DIR`) instead of the volatile system
+  temp dir, so a warmed model survives reboots and tmp purges.
+
 ## [0.8.0] - 2026-07-22
 
 ### Added

@@ -247,3 +247,57 @@ class TestWizardSectionCoverage:
         }
         orphans = self._editable_flat_keys() - grouped_keys
         assert orphans == set()
+
+
+class TestBooleanAndIntKeyCoercion:
+    """Guard the coercion sets that drive the wizard and YAML/env parsing.
+
+    BOOLEAN_KEYS/INT_KEYS membership drives both wizard widget selection
+    and Config._coerce_value's YAML/env normalization. A key whose default is
+    bool/int but missing from these sets is silently saved/read as a string.
+    """
+
+    def test_phoenix_enabled_in_boolean_keys(self):
+        assert "phoenix.enabled" in Config.BOOLEAN_KEYS
+
+    def test_corpus_int_keys_in_int_keys(self):
+        expected = {
+            "corpus.chunk_size",
+            "corpus.chunk_overlap",
+            "corpus.ocr_dpi",
+            "corpus.num_ctx",
+            "corpus.min_chars_per_page",
+        }
+        assert expected <= Config.INT_KEYS
+
+    def test_coerce_phoenix_enabled_true(self):
+        assert Config._coerce_value("phoenix.enabled", "true") is True
+
+    def test_coerce_phoenix_enabled_false(self):
+        assert Config._coerce_value("phoenix.enabled", "false") is False
+
+    def test_coerce_corpus_chunk_size(self):
+        assert Config._coerce_value("corpus.chunk_size", "3000") == 3000
+
+    def test_coerce_corpus_ocr_dpi(self):
+        assert Config._coerce_value("corpus.ocr_dpi", "200") == 200
+
+    def test_coerce_malformed_int_stays_string(self):
+        assert Config._coerce_value("corpus.chunk_size", "abc") == "abc"
+
+    def test_all_bool_and_int_defaults_are_registered(self):
+        """Completeness guard over every default key.
+
+        Bool defaults must land in BOOLEAN_KEYS and int defaults must land
+        in INT_KEYS, so no sibling gap can reappear (floats like
+        corpus.min_image_area are excluded on purpose).
+        """
+        flat_defaults = Config._flatten(Config.get_defaults())
+        flat_defaults.update(
+            {f"corpus.{k}": v for k, v in Config.CORPUS_DEFAULTS.items()}
+        )
+        for key, value in flat_defaults.items():
+            if isinstance(value, bool):
+                assert key in Config.BOOLEAN_KEYS, f"{key} missing from BOOLEAN_KEYS"
+            elif isinstance(value, int):
+                assert key in Config.INT_KEYS, f"{key} missing from INT_KEYS"

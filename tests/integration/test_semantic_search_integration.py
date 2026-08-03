@@ -44,7 +44,7 @@ def test_end_to_end_semantic_search():
     conn.close()
 
     # Test 1: Generate embeddings
-    resolver = SemanticResolver(model="qwen3-embedding:0.6b")
+    resolver = SemanticResolver()
     resolver.build_embeddings_table()
 
     result = resolver.generate_and_store_embeddings(batch_size=50)
