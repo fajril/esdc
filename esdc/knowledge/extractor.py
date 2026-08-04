@@ -12,7 +12,6 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from esdc.knowledge.guideline import Guideline, build_extraction_prompt
@@ -35,7 +34,7 @@ def _dump_raw_response(raw: str, doc_meta: dict[str, Any], reason: str) -> str |
         dump_dir = Config.get_cache_dir() / "extract_failures"
         dump_dir.mkdir(parents=True, exist_ok=True)
         doc_id = str(doc_meta.get("doc_id") or "unknown")
-        path = Path(dump_dir) / f"{time.strftime('%Y%m%d-%H%M%S')}-{doc_id}.txt"
+        path = dump_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{doc_id}.txt"
         path.write_text(
             f"# reason: {reason}\n"
             f"# doc_id: {doc_id}\n"
@@ -151,9 +150,6 @@ def extract_knowledge(
             f"LLM response contained invalid JSON: {raw[:100]}"
             + (f" | raw dumped to {dump}" if dump else "")
         ) from e
-
-    if not isinstance(parsed_dict, dict):
-        raise ValueError(f"LLM response JSON is not an object: {raw[:100]}")
 
     return ExtractionResult(
         entities=_clean_entities(
