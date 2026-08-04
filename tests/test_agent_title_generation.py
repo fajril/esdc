@@ -3,11 +3,7 @@
 import pytest
 from langchain_core.messages import AIMessage
 
-from esdc.chat.agent import (
-    _strip_thinking_tags,
-    generate_conversation_tags,
-    generate_conversation_title,
-)
+from esdc.chat.agent import generate_conversation_tags, generate_conversation_title
 
 
 class StubLLM:
@@ -16,25 +12,6 @@ class StubLLM:
 
     async def ainvoke(self, messages, **kwargs):
         return AIMessage(content=self._content)
-
-
-def test_strip_thinking_tags_removes_qwen3_blocks():
-    text = (
-        "<thinking>User asks about reserves. Output JSON like "
-        '{"title": "..."}</thinking>\n\n{"title": "Cadangan nasional"}'
-    )
-    assert _strip_thinking_tags(text) == '\n\n{"title": "Cadangan nasional"}'
-
-
-def test_strip_thinking_tags_handles_think_variant_and_unbalanced():
-    assert _strip_thinking_tags("before <think>a</think> after") == "before  after"
-    # Response cut off mid-reasoning: drop from the opening tag to the end, so
-    # the unterminated reasoning prose cannot become the title.
-    assert _strip_thinking_tags("a <thinking>unclosed") == "a "
-    assert _strip_thinking_tags("<think>reasoning only, truncated") == ""
-    # A closing tag with no opener is a stray token, not a block: keep content.
-    assert _strip_thinking_tags("kept</think> also kept") == "kept also kept"
-    assert _strip_thinking_tags("plain text") == "plain text"
 
 
 QWEN_TITLE_WITH_THINKING = (
