@@ -1869,6 +1869,11 @@ _DOC_TOPIC_VALUES = enum_values("doc_topic")
 _DOC_SCHEMA_CONTEXT = render_tool_context()
 
 
+def _doc_filters_from_args(**kwargs: Any) -> dict[str, Any]:
+    """Collect the non-None corpus filter arguments into a filters dict."""
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
 @tool("Document Search")
 def search_documents(
     query: Annotated[
@@ -1925,20 +1930,14 @@ def search_documents(
     - search_documents("rencana kerja", doc_topic="wpnb") -> WP&B documents
     - search_documents("berita acara serah terima", year=2025) -> 2025 BA docs
     """
-    # Build filters dict from optional parameters
-    filters: dict[str, Any] = {}
-    if doc_type is not None:
-        filters["doc_type"] = doc_type
-    if doc_topic is not None:
-        filters["doc_topic"] = doc_topic
-    if year is not None:
-        filters["year"] = year
-    if wk_name is not None:
-        filters["wk_name"] = wk_name
-    if field_name is not None:
-        filters["field_name"] = field_name
-    if project_name is not None:
-        filters["project_name"] = project_name
+    filters = _doc_filters_from_args(
+        doc_type=doc_type,
+        doc_topic=doc_topic,
+        year=year,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+    )
 
     cache = _get_tool_cache()
     cache_key = _tool_cache_key("search_documents", query=query, limit=limit, **filters)
@@ -2005,6 +2004,149 @@ def search_documents(
 # `run_command.description = ...` does.
 search_documents.description = (
     search_documents.description
+    + "\n\nDocument metadata schema:\n"
+    + _DOC_SCHEMA_CONTEXT
+)
+
+
+@tool("Document Aggregator")
+def aggregate_documents(
+    query: Annotated[
+        str | None,
+        "Term or phrase to match in document BODY text. Leave empty for a "
+        "pure metadata count/list by doc_type/doc_topic/year/entity.",
+    ] = None,
+    mode: Annotated[
+        str, "'count' (exhaustive total) or 'list' (deduped documents + count)."
+    ] = "count",
+    match: Annotated[
+        str,
+        "'keyword' = literal, conjunctive, body-text only (trustworthy count). "
+        "'semantic' = similarity threshold (approximate, flagged).",
+    ] = "keyword",
+    group_by: Annotated[
+        str | None,
+        "Facet dimension: year, doc_type, doc_level, doc_topic, wk_name, "
+        "field_name, project_name.",
+    ] = None,
+    similarity_threshold: Annotated[
+        float, "Semantic cutoff 0-1. Ignored when match='keyword'."
+    ] = 0.5,
+    limit: Annotated[
+        int, "Max documents returned in list mode. Counts are always exhaustive."
+    ] = 50,
+    doc_type: Annotated[str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."] = None,
+    doc_topic: Annotated[
+        str | None, f"Filter by business topic: {', '.join(_DOC_TOPIC_VALUES)}."
+    ] = None,
+    doc_level: Annotated[str | None, "Filter by document level."] = None,
+    year: Annotated[int | None, "Filter by document year."] = None,
+    wk_name: Annotated[str | None, "Filter by working area (ILIKE pattern)."] = None,
+    field_name: Annotated[str | None, "Filter by field name (ILIKE pattern)."] = None,
+    project_name: Annotated[
+        str | None, "Filter by project name (ILIKE pattern)."
+    ] = None,
+) -> str:
+    """Count or list ALL documents matching a criterion — not the top few.
+
+    Use this tool when:
+    - The user asks HOW MANY documents: "berapa dokumen ...", "how many
+      documents ..."
+    - The user asks WHICH documents, exhaustively: "dokumen apa saja ...",
+      "dokumen mana saja ...", "list all documents that ..."
+    - The user wants a breakdown by year/type/topic/entity (use group_by)
+
+    DO NOT use search_documents for these — it returns only the top few
+    passages, so any count derived from it is wrong.
+
+    match="keyword" (default) is literal and conjunctive: every term must
+    appear in the SAME passage of the document body, so a multi-term query
+    counts documents discussing those terms together. Use it for concrete
+    words ("separator"). match="semantic" finds paraphrases ("akan onstream
+    di 2026") but its count depends on similarity_threshold, so the result
+    is flagged "approximate": true — say so when reporting it.
+
+    Offshore/onshore is a SQL attribute, not a document field: use
+    execute_sql with is_offshore for that, not this tool.
+
+    Returns:
+    JSON string with status, mode, match, approximate, count, and either
+    doc_ids (count mode) or documents (list mode), plus facets when
+    group_by is set. Facets over multi-valued columns (doc_topic,
+    wk_name, field_name, project_name) are flagged multi_valued and do
+    NOT sum to count.
+
+    Examples:
+    - aggregate_documents("separator", mode="list") -> every doc mentioning it
+    - aggregate_documents("akan onstream 2026", match="semantic", year=2026)
+    - aggregate_documents(mode="count", doc_topic="pod", group_by="year")
+    """
+    filters = _doc_filters_from_args(
+        doc_type=doc_type,
+        doc_topic=doc_topic,
+        doc_level=doc_level,
+        year=year,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+    )
+
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "aggregate_documents",
+        query=query,
+        mode=mode,
+        match=match,
+        group_by=group_by,
+        similarity_threshold=similarity_threshold,
+        limit=limit,
+        **filters,
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=aggregate_documents key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    store = None
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        store = CorpusStore(embedder=_get_corpus_embedder())
+        store.ensure_tables()
+        result = store.aggregate(
+            query=query,
+            mode=mode,
+            match=match,
+            group_by=group_by,
+            similarity_threshold=similarity_threshold,
+            limit=limit,
+            filters=filters if filters else None,
+        )
+
+        if result.get("status") == "not_available":
+            hint = (
+                "Run: esdc corpus extract <folder>, review the sidecars, "
+                "then esdc corpus commit <folder>"
+            )
+            store_msg = result.get("message")
+            result["message"] = f"{store_msg} {hint}" if store_msg else hint
+
+        result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        if result.get("status") in ("success", "no_results"):
+            cache.set(cache_key, result_str)
+        return result_str
+
+    except Exception as e:
+        logger.error("[DocAggregate] tool failed | query=%s error=%s", query, e)
+        return json.dumps({"status": "error", "message": str(e), "query": query})
+    finally:
+        if store is not None:
+            store.close()
+
+
+# Same reasoning as search_documents.description above: the LLM-facing
+# text is `.description`, captured at decoration time.
+aggregate_documents.description = (
+    aggregate_documents.description
     + "\n\nDocument metadata schema:\n"
     + _DOC_SCHEMA_CONTEXT
 )

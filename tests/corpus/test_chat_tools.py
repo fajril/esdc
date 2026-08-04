@@ -163,6 +163,36 @@ def test_search_documents_empty_db_not_available(tool_env):
     assert "esdc corpus commit" in result["message"]
 
 
+def test_aggregate_documents_counts_exhaustively(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"query": "persetujuan", "mode": "count"})
+    )
+    assert result["status"] in ("success", "no_results")
+    assert result["match"] == "keyword"
+    assert result["approximate"] is False
+    assert "count" in result
+
+
+def test_aggregate_documents_metadata_only_filter(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "list", "doc_type": "surat"})
+    )
+    assert result["count"] == 2  # both DOC and LONG_DOC are doc_type=surat
+    assert len(result["documents"]) == 2
+
+
+def test_aggregate_documents_not_available_carries_ingest_hint(tool_env):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(aggregate_documents.invoke({"query": "apapun"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
+
+
 def test_search_documents_survives_missing_embed_text_column(populated):
     """Simulate an upgraded install missing the embed_text column.
 

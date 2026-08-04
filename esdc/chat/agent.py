@@ -32,6 +32,7 @@ from esdc.chat.query_classifier import (
 from esdc.chat.skills import discover_skills, inject_skills_into_prompt
 from esdc.chat.smart_query import simple_data_query
 from esdc.chat.tools import (
+    aggregate_documents,
     entity_resolver,
     execute_sql,
     explore_entity,
@@ -498,6 +499,7 @@ def create_agent(
             semantic_search,
             search_documents,
             read_document,
+            aggregate_documents,
             execute_sql,
             get_schema,
             list_tables,
