@@ -1376,10 +1376,13 @@ def test_commit_dedupe_and_force(tmp_path, monkeypatch):
 
 
 def test_commit_mirror_refresh_failure_is_warning_not_fatal(tmp_path, monkeypatch):
-    """A refresh_mirror failure (e.g. lost DuckDB write lock) must not abort
+    """A refresh_mirror failure during commit degrades to a warning, not a fatal error.
+
+    A refresh_mirror failure (e.g. lost DuckDB write lock) must not abort
     commit or fail the batch -- the SQLite truth is already written by
     then, so it's a stale mirror, not a corrupted commit (same contract
-    as the portal's _refresh_mirror_after_save)."""
+    as the portal's _refresh_mirror_after_save).
+    """
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
@@ -2001,7 +2004,9 @@ def test_commit_no_rule_warning_when_level_already_matches(tmp_path, monkeypatch
 
 
 def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
-    """An exception raised after read_sidecar succeeds (e.g. store.insert_document
+    """An exception after read_sidecar succeeds is isolated to its own file, not the batch.
+
+    An exception raised after read_sidecar succeeds (e.g. store.insert_document
     choking on a malformed row) must not abort the batch -- it's recorded as a
     per-file failure and the rest of the batch still commits.
 
@@ -2944,12 +2949,15 @@ def test_export_all_covers_every_committed_row(tmp_path, monkeypatch):
 
 
 def test_export_reads_truth_when_mirror_is_empty(tmp_path, monkeypatch):
-    """Export's content fetch must come from the SQLite truth, not the
+    """Export reads document content from the SQLite truth even when the mirror is empty.
+
+    Export's content fetch must come from the SQLite truth, not the
     DuckDB mirror: a fresh install or a refresh that lost the DuckDB
     single-writer lock leaves `documents` empty/stale in DuckDB while the
     truth already has every byte. Simulate that by making refresh_mirror
     a no-op for the commit, so the mirror never gets the row, then assert
-    export still finds the document and writes the correct markdown."""
+    export still finds the document and writes the correct markdown.
+    """
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)

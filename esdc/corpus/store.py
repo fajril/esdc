@@ -975,7 +975,7 @@ class CorpusStore:
         except Exception as e:
             logger.error("[Corpus] FTS index failed | error=%s", e)
 
-    def refresh_mirror(self) -> "MirrorReport":
+    def refresh_mirror(self) -> MirrorReport:
         """Rebuild the DuckDB derived tables from the SQLite truth.
 
         The mirror is derived data: this replaces it wholesale rather

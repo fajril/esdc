@@ -471,12 +471,15 @@ def test_delete_removes_both_stores(store, tmp_path):
 def test_delete_document_removes_mirror_row_without_intervening_refresh(
     store, tmp_path
 ):
-    """Reproduces the Finding 1 bug: insert -> refresh -> delete must make
+    """delete_document removes the mirror row immediately, with no refresh in between.
+
+    Reproduces the Finding 1 bug: insert -> refresh -> delete must make
     the document disappear from every serving read (get_document,
     list_documents, find_doc_ids) immediately, with no refresh_mirror()
     call between the delete and the reads. Before the fix, delete_document
     left the mirror's `documents` row behind, so these all still returned
-    the deleted document until the next refresh."""
+    the deleted document until the next refresh.
+    """
     store.insert_document(DOC, [Chunk(0, None, "isi")])
     store.refresh_mirror()
     assert store.get_document(DOC["doc_id"]) is not None
@@ -543,12 +546,13 @@ def test_orphaned_duckdb_rows_cleared_on_reinsert(store, tmp_path):
 
 
 def test_document_exists_reads_truth_independent_of_mirror_mutation(store, tmp_path):
-    """document_exists (deciding read) is unaffected by mutating the DuckDB
-    mirror directly. get_document/list_documents/find_doc_ids (serving
+    """document_exists (deciding read) is unaffected by mutating the DuckDB mirror directly.
+
+    get_document/list_documents/find_doc_ids (serving
     reads) answer from that same mirror, so once it is wiped they go
     empty/None until the next refresh_mirror() — the inverse of the old
-    contract, where every read here went to sqlite truth."""
-
+    contract, where every read here went to sqlite truth.
+    """
     store.insert_document(DOC, [Chunk(0, None, "isi")])
     store.refresh_mirror()  # populate the mirror so there is something to wipe
     # Mutate the mirror only; document_exists must still see sqlite truth.
@@ -935,7 +939,9 @@ def test_refresh_mirror_rebuilds_documents_from_sqlite_truth(tmp_path):
 def test_get_sqlite_self_heals_missing_raw_entities_metadata_ingested_at(
     tmp_path: Path,
 ):
-    """A SQLite documents table predating raw_entities/metadata/ingested_at
+    """A legacy documents table self-heals its missing columns via ALTER on connect.
+
+    A SQLite documents table predating raw_entities/metadata/ingested_at
     self-heals via ALTER on connect.
 
     refresh_documents' `SELECT * REPLACE (...)` names those three columns
@@ -1052,9 +1058,12 @@ class _RaisingSqliteConn:
 
 
 def test_insert_document_cleans_up_chunks_when_truth_write_fails(tmp_path):
-    """If the SQLite commit-marker write raises, the chunks written just
+    """insert_document cleans up already-written chunks when the truth write fails.
+
+    If the SQLite commit-marker write raises, the chunks written just
     before it must be cleaned up so no orphaned embeddings survive, and
-    the exception must still propagate (see insert_document's docstring)."""
+    the exception must still propagate (see insert_document's docstring).
+    """
     store = CorpusStore(
         db_path=tmp_path / "fail.duckdb",
         embedder=FakeEmbedder(),

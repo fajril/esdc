@@ -284,8 +284,7 @@ def test_documents_save_unknown_name_rejected_422(monkeypatch, tmp_path):
 
 
 def test_documents_save_warnings_passthrough(monkeypatch, tmp_path):
-    """A refresh that loses the DuckDB lock degrades to a warning, not a
-    failed save.
+    """A refresh that loses the DuckDB lock degrades to a warning, not a failed save.
 
     `refresh_mirror()` rebuilds `documents` wholesale (`CREATE OR REPLACE
     TABLE`), so a missing mirror table no longer reproduces a failure --

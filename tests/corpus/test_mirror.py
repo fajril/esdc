@@ -120,7 +120,9 @@ def test_refresh_documents_survives_a_malformed_doc_date(tmp_path, caplog):
 
 
 def test_refresh_documents_survives_apostrophe_in_truth_path(tmp_path: Path):
-    """A truth DB living under a directory containing an apostrophe (an
+    """refresh_documents tolerates an apostrophe in the truth DB's path.
+
+    A truth DB living under a directory containing an apostrophe (an
     ordinary macOS home directory, e.g. /Users/O'Brien/.esdc) must not break
     ATTACH. Unescaped interpolation of the path into the ATTACH statement
     would raise a DuckDB syntax/parser error here.
@@ -184,7 +186,9 @@ def test_sweep_orphan_chunks_removes_chunks_of_deleted_documents(truth_path: Pat
 
 
 def test_sweep_orphan_chunks_survives_a_null_doc_id_in_documents(truth_path: Path):
-    """NOT IN against a subquery containing a NULL is UNKNOWN for every row,
+    """sweep_orphan_chunks still removes orphans when documents has a NULL doc_id.
+
+    NOT IN against a subquery containing a NULL is UNKNOWN for every row,
     so it would silently delete nothing. NOT EXISTS must not have that
     landmine: the orphan is still removed and the non-orphan survives.
     """
@@ -235,7 +239,9 @@ def test_refresh_registry_copies_present_tables_and_skips_absent(tmp_path: Path)
 
 
 def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path: Path):
-    """A registry table that exists but holds zero rows (kg_edge right
+    """refresh_registry distinguishes an empty-but-present table from an absent one.
+
+    A registry table that exists but holds zero rows (kg_edge right
     after `esdc corpus learn` creates its schema but before anything has
     been written) must still be copied and reported with count 0 —
     distinct from a table that does not exist at all (kg_claim, before
@@ -260,7 +266,9 @@ def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path
 
 
 def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(tmp_path: Path):
-    """A registry table present in one refresh but absent from the truth in
+    """refresh_registry drops the mirror table when its truth table disappears.
+
+    A registry table present in one refresh but absent from the truth in
     a later refresh (older esdc.sqlite restored from backup, truth file
     swapped, KG state reset) must not leave stale rows sitting in DuckDB
     forever. The mirror table itself must be dropped, not just skipped.
@@ -291,7 +299,9 @@ def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(tmp_pat
 
 
 def test_refresh_registry_stays_silent_when_table_was_never_mirrored(tmp_path: Path, caplog):
-    """kg_edge/kg_claim have never existed in either store on most installs
+    """refresh_registry stays silent about a table that was never mirrored.
+
+    kg_edge/kg_claim have never existed in either store on most installs
     (`esdc corpus learn` has never run) — that is the state of the live
     database today. Refreshing must not log a "dropped" line for a table
     that was never there to drop, on this refresh or any subsequent one,
@@ -314,7 +324,9 @@ def test_refresh_registry_stays_silent_when_table_was_never_mirrored(tmp_path: P
 
 
 def test_refresh_registry_logs_when_a_stale_mirror_is_actually_dropped(tmp_path: Path, caplog):
-    """A table that WAS mirrored and then disappears from the truth is a
+    """refresh_registry logs when it actually drops a stale mirror table.
+
+    A table that WAS mirrored and then disappears from the truth is a
     genuine state change — removing mirrored rows — and must still log at
     info, unlike the never-mirrored case above.
     """
@@ -342,7 +354,9 @@ def test_refresh_registry_logs_when_a_stale_mirror_is_actually_dropped(tmp_path:
 
 
 def test_refresh_registry_no_longer_raw_mirrors_pod_tables(tmp_path: Path):
-    """m_pod, r_institution, r_pod_type, project_pod, pod_document, and
+    """refresh_registry no longer raw-mirrors the POD tables.
+
+    m_pod, r_institution, r_pod_type, project_pod, pod_document, and
     pod_revision are real operational SQLite tables — present in the
     truth on every production install — but `publish_pod_registry` now
     owns their read-side DuckDB shapes (see the module docstring).
@@ -387,7 +401,9 @@ def test_refresh_registry_no_longer_raw_mirrors_pod_tables(tmp_path: Path):
 def test_refresh_registry_retires_stale_pod_mirrors_from_a_pre_fix_database(
     tmp_path: Path, caplog
 ):
-    """A database refreshed by the pre-fix build of this module has raw
+    """refresh_registry retires stale raw POD mirrors left by the pre-fix build.
+
+    A database refreshed by the pre-fix build of this module has raw
     copies of the six POD tables sitting in DuckDB, including a
     `pod_document` with the wrong BIGINT surrogate `pod_id` clobbering
     what `publish_pod_registry` produces under the same table name. The
@@ -430,7 +446,9 @@ def test_refresh_registry_retires_stale_pod_mirrors_from_a_pre_fix_database(
 
 
 def test_views_expose_both_grains(tmp_path: Path):
-    """create_views joins the *published* pod_registry/pod_document tables
+    """create_views' v_doc_pod_link/v_document expose both the link and document grain.
+
+    create_views joins the *published* pod_registry/pod_document tables
     (canonical VARCHAR pod_id) now, not the raw m_pod/pod_document SQLite
     shapes — those are built directly here rather than via refresh_registry,
     which no longer produces them at all (see
@@ -474,7 +492,9 @@ def test_views_degrade_when_registry_absent(truth_path: Path):
 
 
 def test_refresh_all_produces_canonical_varchar_pod_id_not_bigint_fk(tmp_path: Path):
-    """Regression test. refresh_registry used to raw-mirror pod_document
+    """refresh_all leaves pod_document with the canonical VARCHAR pod_id, not a BIGINT fk.
+
+    Regression test. refresh_registry used to raw-mirror pod_document
     (pod_id BIGINT — the m_pod.id surrogate foreign key) on top of whatever
     publish_pod_registry had published under the same table name (pod_id
     VARCHAR — the canonical PL-YYYY-XXXX-A-B-R id that
@@ -516,7 +536,9 @@ def test_refresh_all_produces_canonical_varchar_pod_id_not_bigint_fk(tmp_path: P
 
 
 def test_refresh_all_repairs_a_pre_fix_database(tmp_path: Path):
-    """End-to-end repair check for the exact state a user's live database
+    """refresh_all fully repairs a pre-fix database's stale raw POD mirrors.
+
+    End-to-end repair check for the exact state a user's live database
     is in today: a pre-fix build's raw POD mirrors (including a
     BIGINT-keyed pod_document and a v_doc_pod_link view built by joining
     the raw m_pod/pod_document) sitting in DuckDB. A single refresh_all

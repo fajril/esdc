@@ -277,8 +277,7 @@ def test_update_with_no_entity_fields_is_a_noop(tmp_path):
 
 
 def test_mirror_failure_returns_warning_but_saves(tmp_path):
-    """A refresh that loses the DuckDB lock degrades to a warning, not a
-    failed save.
+    """A refresh that loses the DuckDB lock degrades to a warning, not a failed save.
 
     `refresh_mirror()` rebuilds `documents` wholesale (`CREATE OR REPLACE
     TABLE`), so a missing table no longer reproduces a mirror failure —
