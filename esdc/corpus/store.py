@@ -166,7 +166,16 @@ def _trim_snippet(
 _EXACT_FILTER_COLUMNS = ("doc_type", "doc_level")
 # Columns on `documents` that store JSON arrays; filtered via case-insensitive
 # substring match over each array element (json_each + ILIKE).
-_JSON_ARRAY_FILTER_COLUMNS = ("wk_name", "field_name", "project_name", "doc_topic")
+_JSON_ARRAY_FILTER_COLUMNS = (
+    "wk_name", "field_name", "project_name", "doc_topic", "pod_name",
+)
+# Free-text columns filtered by case-insensitive substring. These hold long
+# institutional strings -- a sender reads
+# "PERTAMINA BADAN PEMBINAAN PENGUSAHAAN KONTRAKTOR ASING..." -- so exact
+# match would never hit and only a substring is usable. Interpolated into
+# SQL by name, so this tuple is the allowlist: never add a caller-supplied
+# column here.
+_TEXT_FILTER_COLUMNS = ("sender", "recipient", "subject", "doc_number")
 
 # Full row shape for `documents`, shared by get_document (DuckDB mirror),
 # get_document_by_id, and get_document_by_hash (both SQLite truth) so the
@@ -1031,6 +1040,10 @@ class CorpusStore:
                     f"EXISTS (SELECT 1 FROM json_each({table_alias}.{col}) "
                     f"WHERE CAST(value AS VARCHAR) {like} '%' || ? || '%')"
                 )
+                params.append(str(filters[col]))
+        for col in _TEXT_FILTER_COLUMNS:
+            if filters.get(col):
+                conditions.append(f"{table_alias}.{col} {like} '%' || ? || '%'")
                 params.append(str(filters[col]))
         if filters.get("year"):
             if dialect == "duckdb":

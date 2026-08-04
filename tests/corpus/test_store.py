@@ -1474,4 +1474,57 @@ def test_aggregate_on_empty_corpus_is_not_available(tmp_path):
     result = store.aggregate("apapun", mode="count")
 
     assert result["status"] == "not_available"
+
+
+def test_build_filter_clause_supports_text_substring_columns(tmp_path):
+    """sender/recipient/subject/doc_number filter by case-insensitive substring.
+
+    Stored values are long institutional strings ("PERTAMINA BADAN
+    PEMBINAAN PENGUSAHAAN KONTRAKTOR ASING..."), so an exact match would
+    never hit; substring is the only usable form.
+    """
+    store = CorpusStore(
+        db_path=tmp_path / "tf.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "tf.sqlite",
+    )
+    clause, params = store._build_filter_clause(
+        {"sender": "pertamina", "recipient": "skk"}, "d"
+    )
+
+    assert "d.sender ILIKE" in clause
+    assert "d.recipient ILIKE" in clause
+    assert params == ["pertamina", "skk"]
+    store.close()
+
+
+def test_build_filter_clause_supports_pod_name(tmp_path):
+    """pod_name is a JSON array column like wk_name; it filters the same way."""
+    store = CorpusStore(
+        db_path=tmp_path / "pn.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "pn.sqlite",
+    )
+    clause, params = store._build_filter_clause({"pod_name": "Bekasap"}, "d")
+
+    assert "json_each(d.pod_name)" in clause
+    assert params == ["Bekasap"]
+    store.close()
+
+
+def test_build_filter_clause_unchanged_without_new_keys(tmp_path):
+    """Existing callers (search, find_doc_ids) see byte-identical output."""
+    store = CorpusStore(
+        db_path=tmp_path / "un.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "un.sqlite",
+    )
+    clause, params = store._build_filter_clause(
+        {"doc_type": "surat", "field_name": "Duri"}, "d"
+    )
+
+    assert clause.startswith(" AND d.doc_type = ?")
+    assert "sender" not in clause
+    assert params == ["surat", "Duri"]
+    store.close()
     store.close()
