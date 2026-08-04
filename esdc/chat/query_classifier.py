@@ -198,6 +198,12 @@ class QueryClassifier:
             r"revisi\s+\d+",
             r"persetujuan\s+(?:pod|wp&?b|afe|poffd|pofd)",
         ],
+        "document_enumeration": [
+            r"berapa\s+(?:banyak\s+)?dokumen",
+            r"dokumen\s+(?:apa|mana)\s+saja",
+            r"how\s+many\s+documents",
+            r"(?:list|show)\s+all\s+documents",
+        ],
     }
 
     # Spatial patterns
@@ -430,6 +436,7 @@ def get_tools_for_classification(classification: QueryClassification) -> list[st
         "Timeseries Column Guide",
         "Document Search",
         "Document Reader",
+        "Document Aggregator",
     ] + _SCHEMA_TOOLS
 
     if classification.query_type in (
@@ -538,6 +545,16 @@ def format_classification_for_prompt(classification: QueryClassification) -> str
         )
         lines.append(
             "- If no results: tell the user no matching documents are ingested"
+        )
+        lines.append(
+            "- For 'berapa dokumen / dokumen apa saja / dokumen mana saja': "
+            "call aggregate_documents, NOT search_documents (which returns "
+            "only the top few)"
+        )
+        lines.append(
+            "- aggregate_documents: match='keyword' for a literal term, "
+            "match='semantic' for a paraphrased concept; say so if the "
+            "result is flagged approximate"
         )
 
     lines.append("")
