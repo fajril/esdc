@@ -1277,12 +1277,71 @@ def test_aggregate_semantic_is_flagged_and_monotonic(agg_store):
         "separator", mode="count", match="semantic", similarity_threshold=0.0
     )
     high = agg_store.aggregate(
-        "separator", mode="count", match="semantic", similarity_threshold=0.99
+        "separator", mode="count", match="semantic", similarity_threshold=0.97
     )
 
     assert low["approximate"] is True
     assert low["match"] == "semantic"
-    assert high["count"] <= low["count"]
+    # Strict: a real threshold must actually narrow the doc set, not just
+    # sit at the same ceiling as 0.0 (the historical bug: pool cap, not
+    # threshold, decided the count).
+    assert high["count"] < low["count"]
+    assert low["count"] == 3
+    assert high["count"] == 1
+
+
+def test_aggregate_semantic_limit_does_not_change_count(tmp_path):
+    """`limit` pages `list` mode only; it must never gate `mode="count"`.
+
+    Regression guard for the top-K-pool bug: on a corpus bigger than the
+    old `max(limit * 4, 200)` pool, a small `limit` used to silently
+    shrink the semantic count. Uses filters to force _vector_search's
+    JOIN/sequential-scan branch (deterministic, unlike the unfiltered
+    HNSW-index path which is approximate even at large LIMITs).
+    """
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "big.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "big.sqlite",
+    )
+    store.ensure_tables()
+    base = {
+        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
+        "extraction_method": "docling", "embedding_model": "fake-model",
+    }
+    letters = "abcdefghijklmnopqrstuvwxyz"
+
+    def word(i):
+        return "".join(letters[(i + k) % 26] for k in range(3 + (i % 5)))
+
+    n_docs = 250
+    for i in range(n_docs):
+        store.insert_document(
+            {**base, "doc_id": f"doc{i}", "file_name": f"f{i}.pdf",
+             "file_hash": format(i, "064x"), "subject": "Subjek acak",
+             "markdown": "# x"},
+            [Chunk(0, None, f"separator {word(i)}")],
+        )
+    store.rebuild_indexes()
+    store.refresh_mirror()
+
+    filters = {"doc_type": "surat"}
+    small_limit = store.aggregate(
+        "separator", mode="count", match="semantic",
+        similarity_threshold=0.0, limit=1, filters=filters,
+    )
+    large_limit = store.aggregate(
+        "separator", mode="count", match="semantic",
+        similarity_threshold=0.0, limit=1000, filters=filters,
+    )
+
+    assert small_limit["count"] == n_docs
+    assert large_limit["count"] == n_docs
+    assert small_limit["count"] == large_limit["count"]
+    store.close()
 
 
 def test_aggregate_list_mode_returns_documents_capped_by_limit(agg_store):

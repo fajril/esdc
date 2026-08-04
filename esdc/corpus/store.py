@@ -1312,7 +1312,7 @@ class CorpusStore:
                 match_used, approximate = "metadata", False
             elif match == "semantic":
                 doc_ids, snippets = self._aggregate_semantic(
-                    query, similarity_threshold, limit, filters
+                    query, similarity_threshold, filters
                 )
                 match_used, approximate = "semantic", True
             else:
@@ -1395,29 +1395,52 @@ class CorpusStore:
         self,
         query: str,
         similarity_threshold: float,
-        limit: int,
         filters: dict[str, Any] | None,
     ) -> tuple[list[str], dict[str, str]]:
-        """Threshold-based doc matching over a large vector pool.
+        """Exhaustive, threshold-based doc matching over cosine similarity.
 
-        Approximate by construction: the count depends on the threshold,
-        so aggregate() flags the result. The filtered branch of
-        _vector_search is a deliberate sequential scan (the HNSW rewrite
-        does not survive a JOIN), so keep the pool bounded.
+        Every chunk in the corpus is scored against the query embedding
+        (no top-K pool first) and a document matches iff its best chunk's
+        similarity is >= similarity_threshold. That threshold is the only
+        thing that decides which documents match — approximate by
+        construction, since it's a human-chosen cutoff, which is why
+        aggregate() still flags this path. `limit` is deliberately NOT a
+        parameter here: it pages `list` mode in aggregate() and must
+        never influence which documents match. An earlier version took a
+        `max(limit * 4, 200)` top-K pool and applied the threshold to it,
+        which made the count a function of `limit` and left the threshold
+        inert on any corpus larger than the pool — do not reintroduce a
+        pool.
+
+        Like _aggregate_keyword, always JOINs documents so the filter
+        clause applies and the scan is a plain sequential scan — same
+        deliberate tradeoff _vector_search's filtered branch already
+        makes (the HNSW rewrite only fires for an unjoined, LIMIT-bound
+        ORDER BY, which is also approximate/non-exhaustive on ties, so it
+        would be wrong for a threshold count regardless of speed).
         """
-        pool = max(limit * 4, 200)
+        conn = self._get_connection()
+        filter_clause, filter_params = self._build_filter_clause(filters, "d")
         query_embedding = self._embedder.generate_embedding(query)
-        chunks = self._vector_search(query_embedding, pool, filters)
+        dim = len(query_embedding)
+        similarity = f"(1 - array_cosine_distance(c.embedding, ?::FLOAT[{dim}]))"
 
-        best: dict[str, tuple[float, str]] = {}
-        for chunk in chunks:
-            if chunk["similarity"] < similarity_threshold:
-                continue
-            doc_id = chunk["doc_id"]
-            if doc_id not in best or chunk["similarity"] > best[doc_id][0]:
-                best[doc_id] = (chunk["similarity"], chunk["chunk_text"])
-        doc_ids = sorted(best)
-        return doc_ids, {d: best[d][1] for d in doc_ids}
+        sql = f"""
+            WITH scored AS (
+                SELECT c.doc_id, c.chunk_text, {similarity} AS similarity
+                FROM {self.CHUNK_TABLE} c
+                JOIN {self.DOC_TABLE} d ON d.doc_id = c.doc_id
+                WHERE 1=1{filter_clause}
+            )
+            SELECT doc_id, arg_max(chunk_text, similarity) AS snippet
+            FROM scored
+            GROUP BY doc_id
+            HAVING max(similarity) >= ?
+            ORDER BY doc_id
+        """
+        params = [query_embedding, *filter_params, similarity_threshold]
+        rows = conn.execute(sql, params).fetchall()
+        return [r[0] for r in rows], {r[0]: r[1] for r in rows}
 
     # group_by dimensions and how they aggregate. JSON-array columns expand
     # via json_each, so a document contributes to several buckets and the
