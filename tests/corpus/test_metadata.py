@@ -1,4 +1,3 @@
-
 from esdc.chat.domain_knowledge import doc_schema
 from esdc.corpus import metadata
 from esdc.corpus.metadata import (
@@ -170,7 +169,9 @@ def test_llm_extract_includes_filename_hint():
         return "{}"
 
     metadata.llm_extract("body text", caller, filename="letter-2024.pdf")
-    assert "Filename (may hint doc_type/date/subject): letter-2024.pdf" in seen["prompt"]
+    assert (
+        "Filename (may hint doc_type/date/subject): letter-2024.pdf" in seen["prompt"]
+    )
     assert "body text" in seen["prompt"]
 
 
@@ -324,3 +325,52 @@ def test_normalize_metadata_no_rule_types_and_topics_untouched():
     assert out["doc_type"] == "letter"
     assert out["doc_topic"] == ["gsa"]
     assert out["doc_level"] == "wk"
+
+
+# --------------------------------------------------------------------------
+# reasoning block handling (Qwen3, DeepSeek-R1)
+# --------------------------------------------------------------------------
+
+
+def test_parse_llm_json_strips_thinking_block_with_braces():
+    # Reasoning models include <thinking>…</thinking> blocks in content.
+    # The block contains braces that defeat the greedy \{.*\} regex if not
+    # stripped first: it matches from the first { in <thinking> to the last
+    # } in the JSON, consuming part of the reasoning, then fails to parse.
+    raw = """<thinking>
+    Let me analyze this document structure. I see { and } braces in the reasoning.
+    The actual JSON should come after.
+    </thinking>
+    {"doc_type": "letter"}"""
+    assert parse_llm_json(raw) == {"doc_type": "letter"}
+
+
+def test_parse_llm_json_strips_unclosed_thinking_block():
+    # Token limit or model cutoff mid-reasoning: opening tag with no close.
+    # Everything from <thinking> onward is reasoning prose, not payload.
+    raw = """{"doc_type": "contract"}
+
+    <thinking>
+    This document seems to be about..."""
+    assert parse_llm_json(raw) == {"doc_type": "contract"}
+
+
+def test_parse_llm_json_strips_stray_closing_tag():
+    # Edge case: stray closing tag with no opener (unlikely, but covered).
+    raw = '{"doc_type": "note"} </thinking>'
+    assert parse_llm_json(raw) == {"doc_type": "note"}
+
+
+def test_parse_llm_json_no_tags_unchanged():
+    # Existing behavior: tag-free input is unaffected.
+    raw = '{"doc_type": "book"}'
+    assert parse_llm_json(raw) == {"doc_type": "book"}
+
+
+def test_parse_llm_json_thinking_with_invalid_json_still_returns_empty():
+    # Thinking block stripped, but resulting content is still unparseable.
+    raw = """<thinking>
+    Some reasoning with { and } inside.
+    </thinking>
+    not valid json at all"""
+    assert parse_llm_json(raw) == {}
