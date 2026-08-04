@@ -85,6 +85,25 @@ def test_synthesize_query_uses_caller():
     assert "isi" in seen["prompt"]       # chunk grounded in prompt
 
 
+def test_synthesize_query_strips_reasoning_block():
+    """A reasoning-model response must not become the benchmark query text.
+
+    Pre-fix, `synthesize_query` only did `call(prompt).strip()`: the
+    `<think>...</think>` block and its prose would survive into the query
+    file verbatim (a leading/trailing plain `.strip()` cannot remove an
+    embedded tagged block), silently corrupting every later Pass@k number.
+    """
+
+    def cap(prompt):
+        think = "<think>The user wants a search query about reserves.</think>\n"
+        return think + "apa isi surat cadangan?"
+
+    out = synthesize_query(cap, subject="Surat X", chunk_text="isi")
+    assert out == "apa isi surat cadangan?"
+    assert "<think>" not in out
+    assert "search query" not in out
+
+
 def test_generate_one_row_per_sampled_doc_with_meta():
     store = FakeStore(_docs(50))
     rows, meta = generate(store, _call, margin=0.10, seed=42)
