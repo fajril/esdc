@@ -2076,6 +2076,18 @@ def aggregate_documents(
     wk_name, field_name, project_name) are flagged multi_valued and do
     NOT sum to count.
 
+    `count` is ALWAYS the complete, exhaustive total over every matching
+    document — it never shrinks because of `limit`. The doc_ids/documents
+    ARRAY, however, is capped at `limit` items. When the array holds
+    fewer items than `count`, the payload adds `returned` (items in the
+    array) and `truncated: true`, plus a `note` string spelling out that
+    the array is a partial page. NEVER report `returned` or the array's
+    length as if it were the answer to "how many" — always report `count`,
+    and when `truncated` is true, say the list you're showing is partial
+    (e.g. "150 documents match; showing the first 50") rather than
+    presenting the partial array as the complete set. Raise `limit` or add
+    filters if the user needs to see more of the array itself.
+
     Examples:
     - aggregate_documents("separator", mode="list") -> every doc mentioning it
     - aggregate_documents("akan onstream 2026", match="semantic", year=2026)

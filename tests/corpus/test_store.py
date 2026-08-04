@@ -1368,6 +1368,99 @@ def test_aggregate_json_facet_is_flagged_multi_valued(agg_store):
     assert result["facets"]["multi_valued"] is True
 
 
+@pytest.fixture
+def many_docs_store(tmp_path):
+    """5 documents with long 'separator' bodies, for truncation tests.
+
+    Enough documents to exercise limit-driven truncation in both list and
+    count modes, and a chunk long enough (~1900 chars) to prove snippet
+    trimming actually shrinks it.
+    """
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "many.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "many.sqlite",
+    )
+    store.ensure_tables()
+    base = {
+        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
+        "extraction_method": "docling", "embedding_model": "fake-model",
+    }
+    for i in range(5):
+        store.insert_document(
+            {**base, "doc_id": f"d{i}", "file_name": f"f{i}.pdf",
+             "file_hash": format(i, "064x"), "subject": "Surat",
+             "markdown": "# x"},
+            [Chunk(0, None, f"pemasangan separator unit {i} " * 60)],
+        )
+    store.rebuild_indexes()
+    store.refresh_mirror()
+    yield store
+    store.close()
+
+
+def test_aggregate_list_mode_truncated_flags_and_note(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="list", match="keyword", limit=2
+    )
+
+    assert result["count"] == 5  # exhaustive total, unaffected by limit
+    assert result["returned"] == 2
+    assert result["truncated"] is True
+    assert len(result["documents"]) == 2
+    assert "note" in result
+    assert "5" in result["note"]
+
+
+def test_aggregate_list_mode_not_truncated_has_no_misleading_note(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="list", match="keyword", limit=10
+    )
+
+    assert result["count"] == 5
+    assert result["returned"] == 5
+    assert result["truncated"] is False
+    assert "note" not in result
+
+
+def test_aggregate_count_mode_doc_ids_bounded_by_limit(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="count", match="keyword", limit=2
+    )
+
+    assert result["count"] == 5  # exhaustive, unaffected by limit
+    assert len(result["doc_ids"]) == 2  # bounded
+    assert result["returned"] == 2
+    assert result["truncated"] is True
+    assert "note" in result
+
+
+def test_aggregate_count_mode_doc_ids_not_truncated_when_under_limit(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="count", match="keyword", limit=50
+    )
+
+    assert result["count"] == 5
+    assert len(result["doc_ids"]) == 5
+    assert result["returned"] == 5
+    assert result["truncated"] is False
+    assert "note" not in result
+
+
+def test_aggregate_matched_snippet_is_trimmed_and_contains_term(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="list", match="keyword", limit=1
+    )
+
+    snippet = result["documents"][0]["matched_snippet"]
+    assert snippet is not None
+    assert len(snippet) < 500  # materially shorter than the ~1900-char chunk
+    assert "separator" in snippet.lower()
+
+
 def test_aggregate_on_empty_corpus_is_not_available(tmp_path):
     from esdc.corpus.store import CorpusStore
 

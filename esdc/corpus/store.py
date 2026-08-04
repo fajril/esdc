@@ -115,6 +115,53 @@ def _header_matches(embed_text: str, prefix: str) -> bool:
     return header == prefix or header.startswith(prefix + " | ")
 
 
+def _trim_snippet(
+    text: str | None, query: str | None, width: int = 300
+) -> str | None:
+    """Match-centred excerpt of a chunk, trimmed to ``width`` chars.
+
+    _aggregate_keyword/_aggregate_semantic pick the snippet via
+    ``arg_max(chunk_text, ...)``, which hands back the ENTIRE matching
+    chunk (up to the chunker's ~3000-char cap) — measured at 89% of a
+    50-document `list` payload on the live corpus. Trimming here, at the
+    single point aggregate() assembles `documents`, is one place to get
+    it right rather than duplicating the logic in both aggregate
+    functions, and it only runs over the page actually returned (<=
+    `limit` documents) rather than every match in the corpus.
+
+    Centers the excerpt on the first occurrence of the query's first
+    term so the returned text actually shows why the document matched,
+    instead of an arbitrary chunk-start slice. `query=None` (the
+    metadata-only path) has no term to center on, so a leading excerpt is
+    used instead. Ellipses mark whichever side was cut, so the excerpt is
+    never mistaken for the full chunk.
+    """
+    if text is None:
+        return None
+    if len(text) <= width:
+        return text
+
+    idx = 0
+    if query:
+        terms = [t for t in query.split() if t]
+        if terms:
+            pos = text.lower().find(terms[0].lower())
+            if pos != -1:
+                idx = pos
+
+    half = width // 2
+    start = max(0, idx - half)
+    end = min(len(text), start + width)
+    start = max(0, end - width)
+
+    excerpt = text[start:end]
+    if start > 0:
+        excerpt = "..." + excerpt
+    if end < len(text):
+        excerpt = excerpt + "..."
+    return excerpt
+
+
 # Columns on `documents` that may be filtered by exact match in search().
 _EXACT_FILTER_COLUMNS = ("doc_type", "doc_level")
 # Columns on `documents` that store JSON arrays; filtered via case-insensitive
@@ -1271,6 +1318,23 @@ class CorpusStore:
             logger.error("[Corpus] search failed | error=%s", e)
             return {"status": "error", "message": str(e), "results": [], "count": 0}
 
+    @staticmethod
+    def _truncation_note(field: str, total: int, returned: int) -> str:
+        """Note shown whenever a payload list is a partial page of the total.
+
+        Shared wording for list-mode `documents` and count-mode `doc_ids`
+        so an agent reading either payload gets the same instruction: the
+        `count` field is exhaustive regardless of how many items are in
+        the array, and raising `limit` (or narrowing with `filters`) is
+        how to see the rest. Never present the array itself as exhaustive.
+        """
+        return (
+            f"count ({total}) is the complete, exhaustive total. The "
+            f"'{field}' array below holds only {returned} of them — a "
+            f"partial page, not the full set. Raise `limit` or narrow with "
+            f"`filters` to see more; do not report {returned} as the answer."
+        )
+
     def aggregate(
         self,
         query: str | None,
@@ -1335,11 +1399,29 @@ class CorpusStore:
             hydrated = self._hydrate_docs(page)
             result["documents"] = [
                 {**hydrated.get(doc_id, {"doc_id": doc_id}),
-                 "matched_snippet": snippets.get(doc_id)}
+                 "matched_snippet": _trim_snippet(snippets.get(doc_id), query)}
                 for doc_id in page
             ]
+            result["returned"] = len(page)
+            result["truncated"] = len(doc_ids) > limit
+            if result["truncated"]:
+                result["note"] = self._truncation_note(
+                    "documents", len(doc_ids), len(page)
+                )
         else:
-            result["doc_ids"] = doc_ids
+            # count/facets stay exhaustive: `count` above is len(doc_ids),
+            # the FULL match set, computed before this branch and never
+            # touched by `limit`. Only the doc_ids array we hand back is
+            # paged — some callers use it, so it isn't dropped outright,
+            # just bounded the same way list mode's `documents` is.
+            page = doc_ids[:limit]
+            result["doc_ids"] = page
+            result["returned"] = len(page)
+            result["truncated"] = len(doc_ids) > limit
+            if result["truncated"]:
+                result["note"] = self._truncation_note(
+                    "doc_ids", len(doc_ids), len(page)
+                )
 
         if group_by:
             try:

@@ -185,6 +185,31 @@ def test_aggregate_documents_metadata_only_filter(populated):
     assert len(result["documents"]) == 2
 
 
+def test_aggregate_documents_list_mode_truncated_flags(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "list", "doc_type": "surat", "limit": 1})
+    )
+    assert result["count"] == 2  # both DOC and LONG_DOC are doc_type=surat
+    assert result["returned"] == 1
+    assert result["truncated"] is True
+    assert "note" in result
+
+
+def test_aggregate_documents_count_mode_doc_ids_bounded(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "count", "doc_type": "surat", "limit": 1})
+    )
+    assert result["count"] == 2
+    assert len(result["doc_ids"]) == 1
+    assert result["returned"] == 1
+    assert result["truncated"] is True
+    assert "note" in result
+
+
 def test_aggregate_documents_not_available_carries_ingest_hint(tool_env):
     from esdc.chat.tools import aggregate_documents
 
