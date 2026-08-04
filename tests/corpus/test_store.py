@@ -1272,25 +1272,18 @@ def test_aggregate_metadata_only_counts_by_filter(agg_store):
     assert result["match"] == "metadata"
 
 
-def test_aggregate_semantic_is_flagged_and_monotonic(agg_store):
-    low = agg_store.aggregate(
-        "separator", mode="count", match="semantic", similarity_threshold=0.0
-    )
-    high = agg_store.aggregate(
-        "separator", mode="count", match="semantic", similarity_threshold=0.97
+def test_aggregate_semantic_mode_is_flagged_and_ranked(agg_store):
+    result = agg_store.aggregate(
+        "separator", mode="count", match="semantic", semantic_candidates=3
     )
 
-    assert low["approximate"] is True
-    assert low["match"] == "semantic"
-    # Strict: a real threshold must actually narrow the doc set, not just
-    # sit at the same ceiling as 0.0 (the historical bug: pool cap, not
-    # threshold, decided the count).
-    assert high["count"] < low["count"]
-    assert low["count"] == 3
-    assert high["count"] == 1
+    assert result["approximate"] is True
+    assert result["match"] == "semantic"
+    assert result["count"] == len(result["semantic_candidates"])
+    assert result["count"] <= 3
 
 
-def test_aggregate_semantic_limit_does_not_change_count(tmp_path):
+def test_aggregate_semantic_candidates_not_limit_controls_the_ranking(tmp_path):
     """`limit` pages `list` mode only; it must never gate `mode="count"`.
 
     Regression guard for the top-K-pool bug: on a corpus bigger than the
@@ -1329,18 +1322,16 @@ def test_aggregate_semantic_limit_does_not_change_count(tmp_path):
     store.refresh_mirror()
 
     filters = {"doc_type": "surat"}
-    small_limit = store.aggregate(
+    a = store.aggregate(
         "separator", mode="count", match="semantic",
-        similarity_threshold=0.0, limit=1, filters=filters,
+        semantic_candidates=5, limit=1, filters=filters,
     )
-    large_limit = store.aggregate(
+    b = store.aggregate(
         "separator", mode="count", match="semantic",
-        similarity_threshold=0.0, limit=1000, filters=filters,
+        semantic_candidates=5, limit=1000, filters=filters,
     )
 
-    assert small_limit["count"] == n_docs
-    assert large_limit["count"] == n_docs
-    assert small_limit["count"] == large_limit["count"]
+    assert a["count"] == b["count"] == 5, "limit must not touch the ranking size"
     store.close()
 
 
@@ -1366,6 +1357,88 @@ def test_aggregate_json_facet_is_flagged_multi_valued(agg_store):
     result = agg_store.aggregate(None, mode="count", group_by="doc_topic")
 
     assert result["facets"]["multi_valued"] is True
+
+
+def test_aggregate_semantic_returns_ranked_scored_candidates(agg_store):
+    rows = agg_store._aggregate_semantic("separator", candidates=3, filters=None)
+
+    assert len(rows) <= 3
+    assert {"doc_id", "similarity", "snippet"} <= set(rows[0])
+    scores = [r["similarity"] for r in rows]
+    assert scores == sorted(scores, reverse=True), "must be ranked, best first"
+
+
+def test_aggregate_semantic_candidates_caps_the_list(agg_store):
+    one = agg_store._aggregate_semantic("separator", candidates=1, filters=None)
+    two = agg_store._aggregate_semantic("separator", candidates=2, filters=None)
+
+    assert len(one) == 1
+    assert len(two) == 2
+    assert one[0]["doc_id"] == two[0]["doc_id"], "same ranking, just truncated"
+
+
+def test_aggregate_semantic_honours_filters(agg_store):
+    """A filter that excludes everything yields no candidates."""
+    rows = agg_store._aggregate_semantic(
+        "separator", candidates=10, filters={"doc_type": "zzz-nope"}
+    )
+
+    assert rows == []
+
+
+def test_aggregate_hybrid_count_is_the_exact_total(agg_store):
+    """Hybrid never inflates count with semantic-only documents."""
+    kw = agg_store.aggregate("separator", mode="count", match="keyword")
+    hy = agg_store.aggregate("separator", mode="count", match="hybrid")
+
+    assert hy["count"] == kw["count"]
+    assert hy["approximate"] is False, "the headline total is still exact"
+    assert hy["doc_ids"] == kw["doc_ids"]
+
+
+def test_aggregate_hybrid_provenance_reports_only_stable_numbers(agg_store):
+    """Provenance carries the exact total and the ranking size, nothing else."""
+    result = agg_store.aggregate("separator", mode="count", match="hybrid")
+
+    p = result["provenance"]
+    assert set(p) == {"exact_total", "semantic_extra", "semantic_extra_is_a_ranking"}
+    assert p["exact_total"] == result["count"]
+    assert p["semantic_extra_is_a_ranking"] is True
+
+
+def test_aggregate_hybrid_provenance_exposes_no_knob_dependent_counts(agg_store):
+    """Only the ranking size may move with semantic_candidates; the total may not.
+
+    A keyword_only/both split was deliberately removed: measured on the
+    live corpus it swung 29/5 to 7/27 purely with semantic_candidates
+    while count stayed at 34, which is an artifact of the parameter, not
+    a property of the corpus — the same trap similarity_threshold was.
+    """
+    small = agg_store.aggregate(
+        "separator", mode="count", match="hybrid", semantic_candidates=1
+    )
+    large = agg_store.aggregate(
+        "separator", mode="count", match="hybrid", semantic_candidates=50
+    )
+
+    assert small["count"] == large["count"]
+    assert small["provenance"]["exact_total"] == large["provenance"]["exact_total"]
+    moving = {
+        k
+        for k in small["provenance"]
+        if small["provenance"][k] != large["provenance"][k]
+    }
+    assert moving <= {"semantic_extra"}, f"knob-dependent keys leaked: {moving}"
+
+
+def test_aggregate_hybrid_semantic_candidates_exclude_keyword_hits(agg_store):
+    """The tail is what keyword missed; exact hits are never repeated in it."""
+    result = agg_store.aggregate("separator", mode="count", match="hybrid")
+
+    kw_ids = set(result["doc_ids"])
+    tail_ids = {c["doc_id"] for c in result["semantic_candidates"]}
+    assert not (kw_ids & tail_ids)
+    assert len(tail_ids) == result["provenance"]["semantic_extra"]
 
 
 @pytest.fixture

@@ -2129,7 +2129,6 @@ def aggregate_documents(
         mode=mode,
         match=match,
         group_by=group_by,
-        similarity_threshold=similarity_threshold,
         limit=limit,
         **filters,
     )
@@ -2148,7 +2147,6 @@ def aggregate_documents(
             mode=mode,
             match=match,
             group_by=group_by,
-            similarity_threshold=similarity_threshold,
             limit=limit,
             filters=filters if filters else None,
         )

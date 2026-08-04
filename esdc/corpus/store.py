@@ -1352,9 +1352,9 @@ class CorpusStore:
         self,
         query: str | None,
         mode: str = "count",
-        match: str = "keyword",
+        match: str = "hybrid",
         group_by: str | None = None,
-        similarity_threshold: float = 0.5,
+        semantic_candidates: int = 20,
         limit: int = 50,
         filters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -1364,12 +1364,22 @@ class CorpusStore:
         results are deduped to doc_id. Never raises — an empty corpus is
         reported as not_available, other failures as error.
 
-        match="keyword" is literal and conjunctive: BM25 selects
-        candidates, then every query term must also appear in
-        chunk_text. That second step matters because the FTS index is
-        built on embed_text, which prepends the document's type, subject
-        and entity names to EVERY chunk — without it, a term appearing
-        only in a subject line would be counted as a body mention.
+        match="keyword" is literal and conjunctive over document body
+        text: BM25 selects candidates, then every query term must also
+        appear in chunk_text of the SAME chunk. That confinement matters
+        because the FTS index is built on embed_text, which prepends the
+        document's type, subject and entity names to EVERY chunk --
+        without it, a term appearing only in a subject line would count
+        as a body mention.
+
+        match="hybrid" (default) keeps that exact count as `count` and
+        additionally returns the top semantically-similar documents the
+        keyword pass MISSED, as `semantic_candidates` with scores, plus a
+        `provenance` breakdown. The headline number stays reproducible;
+        the semantic tail is offered for review, never folded in.
+
+        match="semantic" returns only the ranking. There `count` means
+        "candidates returned", not a total, and approximate is True.
 
         The conjunction is evaluated within ONE chunk, so a multi-term
         query counts documents that discuss the terms together, not
@@ -1383,18 +1393,36 @@ class CorpusStore:
         if unavailable is not None:
             return unavailable
 
+        semantic_rows: list[dict[str, Any]] = []
         try:
             if query is None:
                 doc_ids, snippets = self._aggregate_metadata(filters)
                 match_used, approximate = "metadata", False
             elif match == "semantic":
-                doc_ids, snippets = self._aggregate_semantic(
-                    query, similarity_threshold, filters
+                semantic_rows = self._aggregate_semantic(
+                    query, semantic_candidates, filters
                 )
+                doc_ids = [r["doc_id"] for r in semantic_rows]
+                snippets = {r["doc_id"]: r["snippet"] for r in semantic_rows}
                 match_used, approximate = "semantic", True
             else:
                 doc_ids, snippets = self._aggregate_keyword(query, filters)
                 match_used, approximate = "keyword", False
+                if match == "hybrid":
+                    # The tail is what keyword missed. Ask for the overlap
+                    # too (candidates + len(doc_ids)) so that after
+                    # subtracting the keyword hits there are still up to
+                    # `semantic_candidates` genuinely new documents left,
+                    # rather than a tail silently shortened by however many
+                    # of the top-ranked ones keyword already found.
+                    ranked = self._aggregate_semantic(
+                        query, semantic_candidates + len(doc_ids), filters
+                    )
+                    kw_set = set(doc_ids)
+                    semantic_rows = [
+                        r for r in ranked if r["doc_id"] not in kw_set
+                    ][:semantic_candidates]
+                    match_used = "hybrid"
         except Exception as e:
             logger.error("[Corpus] aggregate failed | error=%s", e)
             return {"status": "error", "message": str(e), "count": 0}
@@ -1435,6 +1463,38 @@ class CorpusStore:
                 result["note"] = self._truncation_note(
                     "doc_ids", len(doc_ids), len(page)
                 )
+
+        if match_used == "hybrid":
+            # Only two numbers here are properties of the corpus rather
+            # than of the caller's parameters, so only two are reported.
+            #
+            # `exact_total` is a real count: every document whose body
+            # literally contains the terms. `semantic_extra` is the SIZE
+            # OF A RANKING the caller asked for -- request 200 candidates
+            # and it returns 200, which says nothing about how many
+            # documents are "semantically related". It is labelled as a
+            # ranking so the model cannot report it as a total.
+            #
+            # Deliberately NOT reported: a keyword_only/both split. The
+            # overlap between the exact hits and the semantic top-N moves
+            # with semantic_candidates (measured: 29/5 at N=5 versus 7/27
+            # at N=200 for the same query and the same count of 34), so
+            # it is an artifact of the knob, not a finding -- the same
+            # trap the removed similarity_threshold represented.
+            result["provenance"] = {
+                "exact_total": len(doc_ids),
+                "semantic_extra": len(semantic_rows),
+                "semantic_extra_is_a_ranking": True,
+            }
+        if semantic_rows:
+            result["semantic_candidates"] = [
+                {
+                    "doc_id": r["doc_id"],
+                    "similarity": r["similarity"],
+                    "matched_snippet": _trim_snippet(r["snippet"], query),
+                }
+                for r in semantic_rows
+            ]
 
         if group_by:
             try:
@@ -1489,30 +1549,25 @@ class CorpusStore:
     def _aggregate_semantic(
         self,
         query: str,
-        similarity_threshold: float,
+        candidates: int,
         filters: dict[str, Any] | None,
-    ) -> tuple[list[str], dict[str, str]]:
-        """Exhaustive, threshold-based doc matching over cosine similarity.
+    ) -> list[dict[str, Any]]:
+        """Top-`candidates` documents by cosine similarity, best first.
 
-        Every chunk in the corpus is scored against the query embedding
-        (no top-K pool first) and a document matches iff its best chunk's
-        similarity is >= similarity_threshold. That threshold is the only
-        thing that decides which documents match — approximate by
-        construction, since it's a human-chosen cutoff, which is why
-        aggregate() still flags this path. `limit` is deliberately NOT a
-        parameter here: it pages `list` mode in aggregate() and must
-        never influence which documents match. An earlier version took a
-        `max(limit * 4, 200)` top-K pool and applied the threshold to it,
-        which made the count a function of `limit` and left the threshold
-        inert on any corpus larger than the pool — do not reintroduce a
-        pool.
+        Returns a RANKING, never a set, and deliberately takes no
+        similarity threshold. Measured over ten real queries on the live
+        corpus, per-document max similarity tops out between 0.530
+        ("separator") and 0.706 ("sumur eksplorasi"), and a single 0.5
+        cutoff selects 6 documents for the first and 342 for the second.
+        The absolute score tracks the query's own embedding scale, not
+        document relevance, so no fixed threshold means the same thing
+        twice and any count derived from one is an artifact. Rank within
+        a single query IS stable, so rank is what callers get, with the
+        score attached so they can say how close each match was.
 
-        Like _aggregate_keyword, always JOINs documents so the filter
-        clause applies and the scan is a plain sequential scan — same
-        deliberate tradeoff _vector_search's filtered branch already
-        makes (the HNSW rewrite only fires for an unjoined, LIMIT-bound
-        ORDER BY, which is also approximate/non-exhaustive on ties, so it
-        would be wrong for a threshold count regardless of speed).
+        Scores every chunk (no top-K pool applied before scoring — see
+        the pool-cap regression fixed in commit ad92fb8), dedups to the
+        best chunk per document, then truncates the ranking.
         """
         conn = self._get_connection()
         filter_clause, filter_params = self._build_filter_clause(filters, "d")
@@ -1527,15 +1582,20 @@ class CorpusStore:
                 JOIN {self.DOC_TABLE} d ON d.doc_id = c.doc_id
                 WHERE 1=1{filter_clause}
             )
-            SELECT doc_id, arg_max(chunk_text, similarity) AS snippet
+            SELECT doc_id,
+                   max(similarity) AS similarity,
+                   arg_max(chunk_text, similarity) AS snippet
             FROM scored
             GROUP BY doc_id
-            HAVING max(similarity) >= ?
-            ORDER BY doc_id
+            ORDER BY similarity DESC, doc_id
+            LIMIT ?
         """
-        params = [query_embedding, *filter_params, similarity_threshold]
+        params = [query_embedding, *filter_params, candidates]
         rows = conn.execute(sql, params).fetchall()
-        return [r[0] for r in rows], {r[0]: r[1] for r in rows}
+        return [
+            {"doc_id": r[0], "similarity": round(float(r[1]), 4), "snippet": r[2]}
+            for r in rows
+        ]
 
     # group_by dimensions and how they aggregate. JSON-array columns expand
     # via json_each, so a document contributes to several buckets and the
