@@ -872,3 +872,92 @@ def test_eval_refresh_reports_changed_count(monkeypatch, tmp_path, fake_store):
     assert "+0 new" in result.output
     assert "-0 removed" in result.output
     assert "~1 changed" in result.output
+
+
+def test_reembed_stale_only_processes_flagged_documents(monkeypatch):
+    """--stale re-embeds the detector's list, not the whole corpus."""
+    from esdc.corpus.pipeline import CorpusReport
+
+    calls: dict[str, list[str]] = {}
+
+    class _Store:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def ensure_tables(self, *args, **kwargs):
+            return None
+
+        def stale_embed_docs(self):
+            return ["d1", "d2"]
+
+        def close(self):
+            return None
+
+    def _fake_reembed_documents(doc_ids, store=None):
+        calls["doc_ids"] = list(doc_ids)
+        report = CorpusReport()
+        report.processed = list(doc_ids)
+        report.embedding_model = "fake-model"
+        return report
+
+    def _fail_full_reembed(*args, **kwargs):
+        raise AssertionError("--stale must not run the whole-corpus re-embed")
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _Store)
+    monkeypatch.setattr(
+        "esdc.corpus.pipeline.run_reembed_documents", _fake_reembed_documents
+    )
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed", _fail_full_reembed)
+
+    result = runner.invoke(app, ["corpus", "reembed", "--stale"])
+
+    assert result.exit_code == 0, result.output
+    assert calls["doc_ids"] == ["d1", "d2"]
+    assert "2 stale document" in result.output
+
+
+def test_reembed_stale_reports_a_clean_corpus_without_reembedding(monkeypatch):
+    """Nothing stale -> say so and stop; never start the embedder."""
+
+    class _Store:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def ensure_tables(self, *args, **kwargs):
+            return None
+
+        def stale_embed_docs(self):
+            return []
+
+        def close(self):
+            return None
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("nothing is stale; no re-embed should run")
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _Store)
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fail)
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed", _fail)
+
+    result = runner.invoke(app, ["corpus", "reembed", "--stale"])
+
+    assert result.exit_code == 0, result.output
+    assert "No stale documents" in result.output
+
+
+def test_reembed_stale_rejects_an_embed_backend_override(monkeypatch):
+    """Mixing models within one corpus is refused, not silently ignored."""
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("must exit before touching the store or embedder")
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _fail)
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fail)
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed", _fail)
+
+    result = runner.invoke(
+        app, ["corpus", "reembed", "--stale", "--embed-backend", "ollama"]
+    )
+
+    assert result.exit_code == 1
+    assert "--embed-backend applies only to a full re-embed" in result.output
