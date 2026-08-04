@@ -1141,3 +1141,49 @@ def test_bm25_predicate_includes_filter_clause(tmp_path):
     assert "d.doc_type = ?" in clause
     assert params == ["surat"]
     store.close()
+
+
+def test_hydrate_docs_returns_parsed_metadata(tmp_path):
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "h.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "h.sqlite",
+    )
+    store.ensure_tables()
+    store.insert_document(
+        {
+            "doc_id": "d1", "file_name": "a.pdf", "file_path": "/x/a.pdf",
+            "file_hash": "ab" * 32, "doc_type": "surat",
+            "field_name": ["Duri"], "doc_date": "2026-01-05",
+            "markdown": "# x", "extraction_method": "docling",
+            "embedding_model": "fake-model",
+        },
+        [Chunk(0, None, "isi")],
+    )
+    store.refresh_mirror()
+
+    docs = store._hydrate_docs(["d1"])
+
+    assert docs["d1"]["file_name"] == "a.pdf"
+    assert docs["d1"]["field_name"] == ["Duri"]  # parsed, not a JSON string
+    store.close()
+
+
+def test_corpus_unavailable_on_empty_corpus(tmp_path):
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "u.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "u.sqlite",
+    )
+    store.ensure_tables()
+
+    payload = store._corpus_unavailable()
+
+    assert payload is not None
+    assert payload["status"] == "not_available"
+    store.close()

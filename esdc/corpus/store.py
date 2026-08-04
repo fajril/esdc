@@ -1160,6 +1160,51 @@ class CorpusStore:
         top.sort(key=lambda r: r["rerank_score"], reverse=True)
         return top + merged[pool:]
 
+    _DOC_META_COLUMNS = (
+        "doc_id", "file_name", "doc_type", "doc_topic", "doc_date", "subject",
+        "wk_name", "field_name", "project_name",
+    )
+
+    def _hydrate_docs(self, doc_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """doc_id -> document metadata, JSON array columns parsed."""
+        if not doc_ids:
+            return {}
+        conn = self._get_connection()
+        placeholders = ", ".join("?" for _ in doc_ids)
+        rows = conn.execute(
+            f"SELECT {', '.join(self._DOC_META_COLUMNS)} FROM {self.DOC_TABLE} "
+            f"WHERE doc_id IN ({placeholders})",
+            doc_ids,
+        ).fetchall()
+        docs: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            doc = dict(zip(self._DOC_META_COLUMNS, row, strict=True))
+            _parse_json_fields(
+                doc, ("doc_topic", "wk_name", "field_name", "project_name")
+            )
+            docs[doc["doc_id"]] = doc
+        return docs
+
+    def _corpus_unavailable(self) -> dict[str, Any] | None:
+        """not_available payload when there is nothing to search, else None."""
+        try:
+            n_chunks = self._count(self.CHUNK_TABLE)
+        except Exception:
+            return {
+                "status": "not_available",
+                "message": "Corpus not initialized. Run `esdc corpus commit` first.",
+                "results": [],
+                "count": 0,
+            }
+        if n_chunks == 0:
+            return {
+                "status": "not_available",
+                "message": "No documents in corpus yet.",
+                "results": [],
+                "count": 0,
+            }
+        return None
+
     def search(
         self,
         query: str,
@@ -1172,27 +1217,11 @@ class CorpusStore:
         Never raises: missing tables/indexes are reported as
         status="not_available"; other failures as status="error".
         """
-        conn = self._get_connection()
+        unavailable = self._corpus_unavailable()
+        if unavailable is not None:
+            return unavailable
 
         try:
-            n_chunks = self._count(self.CHUNK_TABLE)
-        except Exception:
-            return {
-                "status": "not_available",
-                "message": "Corpus not initialized. Run `esdc corpus commit` first.",
-                "results": [],
-                "count": 0,
-            }
-
-        try:
-            if n_chunks == 0:
-                return {
-                    "status": "not_available",
-                    "message": "No documents in corpus yet.",
-                    "results": [],
-                    "count": 0,
-                }
-
             # Over-retrieve before RRF: a wider pool costs little here and
             # feeds both the fusion and the optional reranker.
             pool = max(limit * 2, 50)
@@ -1214,27 +1243,7 @@ class CorpusStore:
                 return {"status": "no_results", "results": [], "count": 0}
 
             doc_ids = list({r["doc_id"] for r in merged})
-            placeholders = ", ".join("?" for _ in doc_ids)
-            doc_rows = conn.execute(
-                f"""
-                SELECT doc_id, file_name, doc_type, doc_topic, doc_date, subject,
-                       wk_name, field_name, project_name
-                FROM {self.DOC_TABLE}
-                WHERE doc_id IN ({placeholders})
-                """,
-                doc_ids,
-            ).fetchall()
-            doc_cols = [
-                "doc_id", "file_name", "doc_type", "doc_topic", "doc_date", "subject",
-                "wk_name", "field_name", "project_name",
-            ]
-            docs_by_id = {}
-            for row in doc_rows:
-                doc = dict(zip(doc_cols, row, strict=True))
-                _parse_json_fields(
-                    doc, ("doc_topic", "wk_name", "field_name", "project_name")
-                )
-                docs_by_id[row[0]] = doc
+            docs_by_id = self._hydrate_docs(doc_ids)
 
             results = []
             for r in merged:
