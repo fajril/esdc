@@ -7,12 +7,48 @@ ids happens in esdc.knowledge.resolver.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from esdc.knowledge.guideline import Guideline, build_extraction_prompt
+
+logger = logging.getLogger(__name__)
+
+
+def _dump_raw_response(raw: str, doc_meta: dict[str, Any], reason: str) -> str | None:
+    """Write an unparseable LLM response to disk; return the path, or None.
+
+    The exception message truncates to 100 chars, which is not enough to tell a
+    reasoning-prefixed response (JSON present, wrong slice taken) from one where
+    the model never emitted JSON at all. Diagnostics must never break the run,
+    so every failure here is swallowed.
+    """
+    try:
+        from esdc.configs import Config
+
+        dump_dir = Config.get_cache_dir() / "extract_failures"
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        doc_id = str(doc_meta.get("doc_id") or "unknown")
+        path = Path(dump_dir) / f"{time.strftime('%Y%m%d-%H%M%S')}-{doc_id}.txt"
+        path.write_text(
+            f"# reason: {reason}\n"
+            f"# doc_id: {doc_id}\n"
+            f"# response_len: {len(raw)}\n"
+            f"# has_think_open: {'<think' in raw.lower()}\n"
+            f"# has_think_close: {'</think' in raw.lower()}\n"
+            f"# brace_open: {raw.count('{')} brace_close: {raw.count('}')}\n"
+            f"{'-' * 70}\n{raw}",
+            encoding="utf-8",
+        )
+        return str(path)
+    except Exception:
+        logger.debug("[Extract] raw_dump_failed", exc_info=True)
+        return None
 
 
 @dataclass
@@ -95,12 +131,20 @@ def extract_knowledge(
     # 2. {..} found but fails to parse (unquoted keys, trailing commas, etc.)
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
-        raise ValueError(f"LLM response contained no valid JSON: {raw[:100]}")
+        dump = _dump_raw_response(raw, doc_meta, "no_json_object")
+        raise ValueError(
+            f"LLM response contained no valid JSON: {raw[:100]}"
+            + (f" | raw dumped to {dump}" if dump else "")
+        )
 
     try:
         parsed_dict = json.loads(match.group(0))
     except json.JSONDecodeError as e:
-        raise ValueError(f"LLM response contained invalid JSON: {raw[:100]}") from e
+        dump = _dump_raw_response(raw, doc_meta, "json_decode_error")
+        raise ValueError(
+            f"LLM response contained invalid JSON: {raw[:100]}"
+            + (f" | raw dumped to {dump}" if dump else "")
+        ) from e
 
     if not isinstance(parsed_dict, dict):
         raise ValueError(f"LLM response JSON is not an object: {raw[:100]}")
