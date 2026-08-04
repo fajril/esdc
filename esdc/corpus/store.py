@@ -98,6 +98,23 @@ def _parse_json_fields(doc: dict[str, Any], keys: tuple[str, ...]) -> dict[str, 
     return doc
 
 
+def _header_matches(embed_text: str, prefix: str) -> bool:
+    """True when embed_text's header segment was built from this prefix.
+
+    build_embed_text joins prefix and section with ' | ' and separates the
+    header from the body with a blank line, so the header is either the
+    prefix exactly or the prefix followed by ' | <section>'.
+
+    Comparing the whole segment rather than embed_text.startswith(prefix)
+    is what catches a name SHORTENED to a prefix of itself: renaming a
+    field 'Duri' -> 'Dur' leaves the old text still starting with the new
+    prefix, and a startswith check would report that document as current
+    forever.
+    """
+    header = embed_text.split("\n\n", 1)[0]
+    return header == prefix or header.startswith(prefix + " | ")
+
+
 # Columns on `documents` that may be filtered by exact match in search().
 _EXACT_FILTER_COLUMNS = ("doc_type", "doc_level")
 # Columns on `documents` that store JSON arrays; filtered via case-insensitive
@@ -689,6 +706,49 @@ class CorpusStore:
         doc["chunk_text"] = chunk[0] if chunk else ""
         doc["subject"] = doc.get("subject") or ""
         return doc
+
+    def stale_embed_docs(self) -> list[str]:
+        """doc_ids whose chunks carry an out-of-date context prefix.
+
+        embed_text is derived: build_context_prefix(doc) + section +
+        chunk_text. Editing a document's entities changes the correct
+        prefix but leaves the chunks untouched, so search keeps matching
+        the old names. Rather than tracking a dirty flag, staleness is
+        recomputed here by comparing what each chunk stores against what
+        the current document row implies.
+
+        Reads the DuckDB `documents` mirror, so it only sees entity edits
+        that have already been through refresh_mirror(). That is the
+        intended contract: an unrefreshed mirror is the mirror's problem,
+        not a staleness signal.
+        """
+        from esdc.corpus.context import build_context_prefix
+
+        conn = self._get_connection()
+        rows = conn.execute(f"""
+            SELECT d.doc_id, d.doc_type, d.doc_topic, d.subject, d.wk_name,
+                   d.field_name, d.project_name, d.pod_name,
+                   ANY_VALUE(c.embed_text) AS sample_embed_text
+            FROM {self.DOC_TABLE} d
+            JOIN {self.CHUNK_TABLE} c ON c.doc_id = d.doc_id
+            GROUP BY ALL
+        """).fetchall()
+
+        cols = (
+            "doc_id", "doc_type", "doc_topic", "subject", "wk_name",
+            "field_name", "project_name", "pod_name", "sample_embed_text",
+        )
+        stale: list[str] = []
+        for row in rows:
+            doc = dict(zip(cols, row, strict=True))
+            embed_text = doc.pop("sample_embed_text") or ""
+            _parse_json_fields(
+                doc, ("doc_topic", "wk_name", "field_name", "project_name", "pod_name")
+            )
+            expected = build_context_prefix(doc)
+            if expected and not _header_matches(embed_text, expected):
+                stale.append(doc["doc_id"])
+        return sorted(stale)
 
     def find_doc_ids(self, filters: dict[str, Any]) -> list[tuple[str, str]]:
         """(doc_id, file_name) pairs matching documents-column filters.
