@@ -1042,28 +1042,41 @@ class CorpusStore:
             for row in rows
         ]
 
+    def _bm25_predicate(
+        self,
+        query: str,
+        filters: dict[str, Any] | None,
+        alias: str = "c",
+    ) -> tuple[str, str, list[Any]]:
+        """Build the FTS match expression plus the documents filter clause.
+
+        Load-bearing escape: the FTS match_bm25 macro cannot take a `?`
+        bind parameter, so the query text is the ONLY non-bound value in
+        this module. Doubling single quotes is what keeps it a safe SQL
+        string literal — do not remove, and do not reimplement this
+        anywhere else.
+        """
+        escaped_query = query.replace("'", "''")
+        match_expr = (
+            f"fts_main_{self.CHUNK_TABLE}.match_bm25("
+            f"{alias}.chunk_id, '{escaped_query}')"
+        )
+        filter_clause, filter_params = self._build_filter_clause(filters, "d")
+        return match_expr, filter_clause, filter_params
+
     def _keyword_search(
         self, query: str, limit: int, filters: dict[str, Any] | None
     ) -> list[dict[str, Any]]:
         conn = self._get_connection()
-        # Load-bearing escape: the FTS match_bm25 macro cannot take a `?`
-        # bind parameter, so the query text is the ONLY non-bound value in
-        # this module. Doubling single quotes is what keeps it a safe SQL
-        # string literal — do not remove.
-        escaped_query = query.replace("'", "''")
-        filter_clause, filter_params = self._build_filter_clause(filters, "d")
+        match_expr, filter_clause, filter_params = self._bm25_predicate(query, filters)
 
         sql = f"""
             SELECT
                 c.chunk_id, c.doc_id, c.section, c.chunk_text, c.embed_text,
-                fts_main_{self.CHUNK_TABLE}.match_bm25(
-                    c.chunk_id, '{escaped_query}'
-                ) AS bm25_score
+                {match_expr} AS bm25_score
             FROM {self.CHUNK_TABLE} c
             JOIN {self.DOC_TABLE} d ON d.doc_id = c.doc_id
-            WHERE fts_main_{self.CHUNK_TABLE}.match_bm25(
-                c.chunk_id, '{escaped_query}'
-            ) IS NOT NULL{filter_clause}
+            WHERE {match_expr} IS NOT NULL{filter_clause}
             ORDER BY bm25_score DESC
             LIMIT ?
         """

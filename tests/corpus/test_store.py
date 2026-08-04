@@ -1108,3 +1108,36 @@ def test_serving_reads_use_the_mirror_and_deciding_reads_use_the_truth(tmp_path)
     doc = store.get_document("d1")
     assert doc is not None and doc["markdown"] == "# body"
     store.close()
+
+
+def test_bm25_predicate_escapes_single_quotes(tmp_path):
+    """The escaping invariant lives in one place and survives extraction."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "q.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "q.sqlite",
+    )
+    match_expr, clause, params = store._bm25_predicate("O'Brien", None)
+
+    assert "O''Brien" in match_expr
+    assert "match_bm25" in match_expr
+    assert clause == ""
+    assert params == []
+    store.close()
+
+
+def test_bm25_predicate_includes_filter_clause(tmp_path):
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "q2.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "q2.sqlite",
+    )
+    _, clause, params = store._bm25_predicate("pod", {"doc_type": "surat"})
+
+    assert "d.doc_type = ?" in clause
+    assert params == ["surat"]
+    store.close()
