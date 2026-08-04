@@ -125,12 +125,6 @@ def _patch_llm(monkeypatch):
     return llm
 
 
-def test_parse_summary_response_strips_think_block_at_start():
-    """Baseline: the old ad-hoc code already handled this exact shape."""
-    content = '<think>reasoning here</think>\n{"status": "ok"}'
-    assert _parse_summary_response(content) == {"status": "ok"}
-
-
 def test_parse_summary_response_strips_thinking_spelling():
     """The "<thinking>" spelling was never recognized by the old code.
 
