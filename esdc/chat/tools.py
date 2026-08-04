@@ -2051,10 +2051,14 @@ def aggregate_documents(
     pod_name: Annotated[str | None, "Filter by POD name (ILIKE pattern)."] = None,
     sender: Annotated[
         str | None,
-        "Filter by sending party, substring match (e.g. 'Pertamina', 'SKK').",
+        "Filter by sending party ('dari X'), substring match. On an approval "
+        "letter the SENDER is the approving authority, so 'disetujui oleh "
+        "Menteri ESDM' means sender='Menteri ESDM' (also SKK Migas, BPMA).",
     ] = None,
     recipient: Annotated[
-        str | None, "Filter by receiving party, substring match."
+        str | None,
+        "Filter by receiving party ('untuk X' / 'kepada X'), substring match. "
+        "On an approval letter this is the KKKS being approved.",
     ] = None,
     subject: Annotated[
         str | None, "Filter by letter subject line, substring match."
