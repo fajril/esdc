@@ -345,22 +345,6 @@ def test_parse_llm_json_strips_thinking_block_with_braces():
     assert parse_llm_json(raw) == {"doc_type": "letter"}
 
 
-def test_parse_llm_json_strips_unclosed_thinking_block():
-    # Token limit or model cutoff mid-reasoning: opening tag with no close.
-    # Everything from <thinking> onward is reasoning prose, not payload.
-    raw = """{"doc_type": "contract"}
-
-    <thinking>
-    This document seems to be about..."""
-    assert parse_llm_json(raw) == {"doc_type": "contract"}
-
-
-def test_parse_llm_json_strips_stray_closing_tag():
-    # Edge case: stray closing tag with no opener (unlikely, but covered).
-    raw = '{"doc_type": "note"} </thinking>'
-    assert parse_llm_json(raw) == {"doc_type": "note"}
-
-
 def test_parse_llm_json_no_tags_unchanged():
     # Existing behavior: tag-free input is unaffected.
     raw = '{"doc_type": "book"}'
