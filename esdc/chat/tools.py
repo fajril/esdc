@@ -2021,17 +2021,19 @@ def aggregate_documents(
     ] = "count",
     match: Annotated[
         str,
-        "'keyword' = literal, conjunctive, body-text only (trustworthy count). "
-        "'semantic' = similarity threshold (approximate, flagged).",
-    ] = "keyword",
+        "'hybrid' (default) = exact count plus semantically-similar "
+        "candidates. 'keyword' = exact only. 'semantic' = ranking only.",
+    ] = "hybrid",
     group_by: Annotated[
         str | None,
         "Facet dimension: year, doc_type, doc_level, doc_topic, wk_name, "
         "field_name, project_name.",
     ] = None,
-    similarity_threshold: Annotated[
-        float, "Semantic cutoff 0-1. Ignored when match='keyword'."
-    ] = 0.5,
+    semantic_candidates: Annotated[
+        int,
+        "How many semantically-similar documents to return alongside the "
+        "exact count. Does not affect count.",
+    ] = 20,
     limit: Annotated[
         int, "Max documents returned in list mode. Counts are always exhaustive."
     ] = 50,
@@ -2073,12 +2075,31 @@ def aggregate_documents(
     DO NOT use search_documents for these — it returns only the top few
     passages, so any count derived from it is wrong.
 
-    match="keyword" (default) is literal and conjunctive: every term must
-    appear in the SAME passage of the document body, so a multi-term query
-    counts documents discussing those terms together. Use it for concrete
-    words ("separator"). match="semantic" finds paraphrases ("akan onstream
-    di 2026") but its count depends on similarity_threshold, so the result
-    is flagged "approximate": true — say so when reporting it.
+    match="hybrid" (default) gives you both: `count` is the EXACT number
+    of documents whose body literally contains every query term, and
+    `semantic_candidates` lists documents that are semantically related
+    but did NOT contain the terms, each with a similarity score.
+
+    How to report a hybrid result:
+    - `count` is the answer. It is exact, reproducible, and safe to state
+      as a number.
+    - `semantic_candidates` are SUGGESTIONS, not part of the count. Say
+      "N documents contain the term; M others appear related and may be
+      worth reviewing". Never add the two together into one figure.
+    - `provenance.exact_total` equals `count` and is a real total.
+      `provenance.semantic_extra` is how many candidates were RETURNED —
+      the size of a ranking you requested, not a measurement. Ask for 200
+      and it says 200. Never report it as "200 related documents exist".
+
+    match="keyword" skips the semantic pass entirely when you only want
+    the defensible count. match="semantic" returns just the ranking; there
+    `count` means "candidates returned", NOT a total, and approximate is
+    true -- say so.
+
+    There is no similarity threshold: absolute similarity scores are not
+    comparable between queries (a 0.5 cutoff selects 6 documents for one
+    query and 342 for another on this corpus), so the semantic side is
+    always a ranking, capped by semantic_candidates.
 
     Offshore/onshore is a SQL attribute, not a document field: use
     execute_sql with is_offshore for that, not this tool.
@@ -2129,6 +2150,7 @@ def aggregate_documents(
         mode=mode,
         match=match,
         group_by=group_by,
+        semantic_candidates=semantic_candidates,
         limit=limit,
         **filters,
     )
@@ -2147,6 +2169,7 @@ def aggregate_documents(
             mode=mode,
             match=match,
             group_by=group_by,
+            semantic_candidates=semantic_candidates,
             limit=limit,
             filters=filters if filters else None,
         )
@@ -2179,6 +2202,15 @@ aggregate_documents.description = (
     + "\n\nDocument metadata schema:\n"
     + _DOC_SCHEMA_CONTEXT
 )
+
+# `similarity_threshold` was removed rather than deprecated (see the
+# docstring above): a caller that still passes it must get a loud error,
+# not a silent no-op. Pydantic v2's default is to ignore unrecognized
+# fields, so without this the removed kwarg would be dropped quietly and
+# the caller would never learn it did nothing. Forbidding extras on this
+# tool's schema turns that into a ValidationError.
+aggregate_documents.args_schema.model_config["extra"] = "forbid"
+aggregate_documents.args_schema.model_rebuild(force=True)
 
 
 @tool("Document Reader")

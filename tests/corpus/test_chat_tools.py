@@ -170,7 +170,7 @@ def test_aggregate_documents_counts_exhaustively(populated):
         aggregate_documents.invoke({"query": "persetujuan", "mode": "count"})
     )
     assert result["status"] in ("success", "no_results")
-    assert result["match"] == "keyword"
+    assert result["match"] == "hybrid"  # tool default flipped in Task 5
     assert result["approximate"] is False
     assert "count" in result
 
@@ -696,3 +696,49 @@ def test_aggregate_documents_filters_by_pod_name(populated):
     )
 
     assert result["count"] == 0
+
+
+def test_aggregate_documents_defaults_to_hybrid_with_provenance(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(aggregate_documents.invoke({"query": "persetujuan"}))
+
+    assert result["match"] == "hybrid"
+    assert result["approximate"] is False
+    assert set(result["provenance"]) == {
+        "exact_total", "semantic_extra", "semantic_extra_is_a_ranking",
+    }
+    assert result["provenance"]["exact_total"] == result["count"]
+
+
+def test_aggregate_documents_semantic_candidates_carry_scores(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke(
+            {"query": "persetujuan", "semantic_candidates": 2}
+        )
+    )
+
+    for cand in result.get("semantic_candidates", []):
+        assert 0.0 <= cand["similarity"] <= 1.0
+        assert "matched_snippet" in cand
+
+
+def test_aggregate_documents_rejects_similarity_threshold(populated):
+    """The removed parameter must not silently succeed as a no-op.
+
+    LangChain's generated arg schema ignores unknown fields by default,
+    so deleting the parameter alone would have left a caller passing it
+    a silently unchanged result — the exact false-precision failure the
+    threshold was removed for. `extra="forbid"` on this tool's schema is
+    what turns it into a loud ValidationError instead.
+    """
+    from pydantic import ValidationError
+
+    from esdc.chat.tools import aggregate_documents
+
+    with pytest.raises(ValidationError, match="similarity_threshold"):
+        aggregate_documents.invoke(
+            {"query": "persetujuan", "similarity_threshold": 0.5}
+        )

@@ -552,9 +552,9 @@ def format_classification_for_prompt(classification: QueryClassification) -> str
             "only the top few)"
         )
         lines.append(
-            "- aggregate_documents: match='keyword' for a literal term, "
-            "match='semantic' for a paraphrased concept; say so if the "
-            "result is flagged approximate"
+            "- aggregate_documents returns an exact `count` plus separate "
+            "`semantic_candidates`; report the count as the answer and the "
+            "candidates as related documents, never summed"
         )
 
     lines.append("")
