@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -54,6 +55,30 @@ from esdc.chat.tools import (
 logger = logging.getLogger("esdc.chat.agent")
 
 MAX_TOOL_CALLS = 50
+
+# Reasoning models (e.g. Qwen3 with thinking enabled) embed thinking blocks
+# directly in content. Strip them before any parsing so tags never leak
+# into generated titles/tags.
+_THINKING_BLOCK_RE = re.compile(
+    r"<(?P<tag>thinking|think)>.*?</(?P=tag)>",
+    re.DOTALL | re.IGNORECASE,
+)
+_UNCLOSED_THINKING_RE = re.compile(
+    r"<(?:thinking|think)>.*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+_THINKING_TAG_RE = re.compile(r"</?(?:thinking|think)>", re.IGNORECASE)
+
+
+def _strip_thinking_tags(text: str) -> str:
+    """Remove reasoning blocks (Qwen3 ``<thinking>…</thinking>``) from content."""
+    # Balanced blocks first. An opening tag still standing afterwards means the
+    # response was cut off mid-reasoning (token limit), so everything from it to
+    # the end is reasoning: drop it rather than let the prose become the title.
+    # The last pass clears any stray closing tag left with no opener.
+    text = _THINKING_BLOCK_RE.sub("", text)
+    text = _UNCLOSED_THINKING_RE.sub("", text)
+    return _THINKING_TAG_RE.sub("", text)
 
 
 _context_length_cache: dict[str, int] = {}
@@ -328,6 +353,7 @@ async def generate_conversation_title(
         )
 
         raw_text = str(response.content).strip() if response.content else ""
+        raw_text = _strip_thinking_tags(raw_text)
 
         # Parse JSON title
         title = ""
@@ -425,6 +451,7 @@ async def generate_conversation_tags(
         )
 
         raw_text = str(response.content).strip() if response.content else ""
+        raw_text = _strip_thinking_tags(raw_text)
 
         # Parse JSON tags
         tags = ""

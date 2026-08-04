@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Chat
+
+**Fixed:** conversation titles and tags no longer contain raw reasoning. With a
+reasoning model that embeds thinking in the message content (Qwen3 via
+llama.cpp/vLLM, DeepSeek-R1), the `<thinking>` block reliably defeated the JSON
+slice in `generate_conversation_title` / `generate_conversation_tags` — the
+model reasons about the requested `{"title": "…"}` format, so the block itself
+contains braces — and the plain-text fallback then copied the whole tagged
+response into the title. Thinking blocks are now stripped before parsing. A
+response cut off mid-reasoning (no closing tag) yields an empty title rather
+than leaking the reasoning prose. Models that carry reasoning in a separate
+field (Ollama, OpenAI o-series, Gemini) are unaffected — the strip is a no-op
+when no tags are present.
+
 ### Corpus: SQLite truth, DuckDB mirror
 
 - `documents` now lives in the operational SQLite db (`esdc.sqlite`) as the
