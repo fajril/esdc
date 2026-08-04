@@ -1271,6 +1271,202 @@ class CorpusStore:
             logger.error("[Corpus] search failed | error=%s", e)
             return {"status": "error", "message": str(e), "results": [], "count": 0}
 
+    def aggregate(
+        self,
+        query: str | None,
+        mode: str = "count",
+        match: str = "keyword",
+        group_by: str | None = None,
+        similarity_threshold: float = 0.5,
+        limit: int = 50,
+        filters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Exhaustive, document-level counting/listing over the corpus.
+
+        Differs from search() in exactly two ways: no top-K cap, and
+        results are deduped to doc_id. Never raises — an empty corpus is
+        reported as not_available, other failures as error.
+
+        match="keyword" is literal and conjunctive: BM25 selects
+        candidates, then every query term must also appear in
+        chunk_text. That second step matters because the FTS index is
+        built on embed_text, which prepends the document's type, subject
+        and entity names to EVERY chunk — without it, a term appearing
+        only in a subject line would be counted as a body mention.
+
+        The conjunction is evaluated within ONE chunk, so a multi-term
+        query counts documents that discuss the terms together, not
+        documents that merely contain all of them somewhere. Deliberate —
+        "dokumen yang menyebutkan X Y" asks for documents where X and Y
+        are discussed together, not ones that happen to contain both
+        tokens forty pages apart. Doc-level conjunction (one EXISTS per
+        term) is the alternative and was not chosen.
+        """
+        unavailable = self._corpus_unavailable()
+        if unavailable is not None:
+            return unavailable
+
+        try:
+            if query is None:
+                doc_ids, snippets = self._aggregate_metadata(filters)
+                match_used, approximate = "metadata", False
+            elif match == "semantic":
+                doc_ids, snippets = self._aggregate_semantic(
+                    query, similarity_threshold, limit, filters
+                )
+                match_used, approximate = "semantic", True
+            else:
+                doc_ids, snippets = self._aggregate_keyword(query, filters)
+                match_used, approximate = "keyword", False
+        except Exception as e:
+            logger.error("[Corpus] aggregate failed | error=%s", e)
+            return {"status": "error", "message": str(e), "count": 0}
+
+        result: dict[str, Any] = {
+            "status": "success" if doc_ids else "no_results",
+            "mode": mode,
+            "match": match_used,
+            "approximate": approximate,
+            "count": len(doc_ids),
+        }
+
+        if mode == "list":
+            page = doc_ids[:limit]
+            hydrated = self._hydrate_docs(page)
+            result["documents"] = [
+                {**hydrated.get(doc_id, {"doc_id": doc_id}),
+                 "matched_snippet": snippets.get(doc_id)}
+                for doc_id in page
+            ]
+        else:
+            result["doc_ids"] = doc_ids
+
+        if group_by:
+            try:
+                result["facets"] = self._facets(doc_ids, group_by)
+            except ValueError as e:
+                result["facets_error"] = str(e)
+
+        return result
+
+    def _aggregate_metadata(
+        self, filters: dict[str, Any] | None
+    ) -> tuple[list[str], dict[str, str]]:
+        """Filter-only aggregation over the documents mirror."""
+        conn = self._get_connection()
+        clause, params = self._build_filter_clause(filters, "d")
+        rows = conn.execute(
+            f"SELECT d.doc_id FROM {self.DOC_TABLE} d WHERE 1=1{clause} "
+            f"ORDER BY d.doc_id",
+            params,
+        ).fetchall()
+        return [r[0] for r in rows], {}
+
+    def _aggregate_keyword(
+        self, query: str, filters: dict[str, Any] | None
+    ) -> tuple[list[str], dict[str, str]]:
+        """Exhaustive literal, conjunctive, body-text-only doc matching.
+
+        The ILIKE terms are ANDed within a single chunk row, so all terms
+        must co-occur in one passage. GROUP BY doc_id then dedups, which
+        is what makes the count a document count rather than a hit count.
+        """
+        conn = self._get_connection()
+        match_expr, filter_clause, filter_params = self._bm25_predicate(query, filters)
+
+        terms = [t for t in query.split() if t]
+        literal_clause = "".join(
+            " AND c.chunk_text ILIKE '%' || ? || '%'" for _ in terms
+        )
+
+        sql = f"""
+            SELECT c.doc_id,
+                   arg_max(c.chunk_text, {match_expr}) AS snippet
+            FROM {self.CHUNK_TABLE} c
+            JOIN {self.DOC_TABLE} d ON d.doc_id = c.doc_id
+            WHERE {match_expr} IS NOT NULL{filter_clause}{literal_clause}
+            GROUP BY c.doc_id
+            ORDER BY c.doc_id
+        """
+        rows = conn.execute(sql, [*filter_params, *terms]).fetchall()
+        return [r[0] for r in rows], {r[0]: r[1] for r in rows}
+
+    def _aggregate_semantic(
+        self,
+        query: str,
+        similarity_threshold: float,
+        limit: int,
+        filters: dict[str, Any] | None,
+    ) -> tuple[list[str], dict[str, str]]:
+        """Threshold-based doc matching over a large vector pool.
+
+        Approximate by construction: the count depends on the threshold,
+        so aggregate() flags the result. The filtered branch of
+        _vector_search is a deliberate sequential scan (the HNSW rewrite
+        does not survive a JOIN), so keep the pool bounded.
+        """
+        pool = max(limit * 4, 200)
+        query_embedding = self._embedder.generate_embedding(query)
+        chunks = self._vector_search(query_embedding, pool, filters)
+
+        best: dict[str, tuple[float, str]] = {}
+        for chunk in chunks:
+            if chunk["similarity"] < similarity_threshold:
+                continue
+            doc_id = chunk["doc_id"]
+            if doc_id not in best or chunk["similarity"] > best[doc_id][0]:
+                best[doc_id] = (chunk["similarity"], chunk["chunk_text"])
+        doc_ids = sorted(best)
+        return doc_ids, {d: best[d][1] for d in doc_ids}
+
+    # group_by dimensions and how they aggregate. JSON-array columns expand
+    # via json_each, so a document contributes to several buckets and the
+    # buckets do NOT sum to the document count.
+    _SCALAR_FACETS = ("doc_type", "doc_level")
+    _JSON_FACETS = ("doc_topic", "wk_name", "field_name", "project_name")
+
+    def _facets(self, doc_ids: list[str], group_by: str) -> dict[str, Any]:
+        """Group the matched document set by one dimension."""
+        if not doc_ids:
+            return {"dimension": group_by, "multi_valued": False, "values": {}}
+        conn = self._get_connection()
+        placeholders = ", ".join("?" for _ in doc_ids)
+
+        if group_by == "year":
+            sql = (
+                f"SELECT CAST(EXTRACT(year FROM d.doc_date) AS VARCHAR), COUNT(*) "
+                f"FROM {self.DOC_TABLE} d WHERE d.doc_id IN ({placeholders}) "
+                f"AND d.doc_date IS NOT NULL GROUP BY 1 ORDER BY 1"
+            )
+            multi = False
+        elif group_by in self._SCALAR_FACETS:
+            sql = (
+                f"SELECT CAST(d.{group_by} AS VARCHAR), COUNT(*) "
+                f"FROM {self.DOC_TABLE} d WHERE d.doc_id IN ({placeholders}) "
+                f"GROUP BY 1 ORDER BY 1"
+            )
+            multi = False
+        elif group_by in self._JSON_FACETS:
+            sql = (
+                f"SELECT json_extract_string(j.value, '$'), "
+                f"COUNT(DISTINCT d.doc_id) "
+                f"FROM {self.DOC_TABLE} d, json_each(d.{group_by}) j "
+                f"WHERE d.doc_id IN ({placeholders}) GROUP BY 1 ORDER BY 1"
+            )
+            multi = True
+        else:
+            raise ValueError(
+                f"unsupported group_by '{group_by}'; use one of: year, "
+                f"{', '.join(self._SCALAR_FACETS + self._JSON_FACETS)}"
+            )
+
+        rows = conn.execute(sql, doc_ids).fetchall()
+        return {
+            "dimension": group_by,
+            "multi_valued": multi,
+            "values": {str(r[0]): r[1] for r in rows if r[0] is not None},
+        }
+
     def get_document(self, doc_id: str) -> dict[str, Any] | None:
         """Fetch a single document's full row from the DuckDB mirror.
 

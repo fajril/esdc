@@ -1187,3 +1187,139 @@ def test_corpus_unavailable_on_empty_corpus(tmp_path):
     assert payload is not None
     assert payload["status"] == "not_available"
     store.close()
+
+
+@pytest.fixture
+def agg_store(tmp_path):
+    """Corpus where 'separator' appears in one body and one subject only."""
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "agg.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "agg.sqlite",
+    )
+    store.ensure_tables()
+    base = {
+        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
+        "extraction_method": "docling", "embedding_model": "fake-model",
+    }
+    # body mentions separator, twice -> must still count once
+    store.insert_document(
+        {**base, "doc_id": "body1", "file_name": "b1.pdf", "file_hash": "a" * 64,
+         "subject": "Surat biasa", "markdown": "# x"},
+        [Chunk(0, None, "pemasangan separator di lapangan"),
+         Chunk(1, None, "separator kedua disebut lagi")],
+    )
+    # subject mentions separator, body does not -> must NOT count
+    store.insert_document(
+        {**base, "doc_id": "subj1", "file_name": "s1.pdf", "file_hash": "b" * 64,
+         "subject": "Pengadaan separator", "markdown": "# y"},
+        [Chunk(0, None, "isi tentang pompa dan pipa")],
+    )
+    # unrelated
+    store.insert_document(
+        {**base, "doc_id": "other", "file_name": "o.pdf", "file_hash": "c" * 64,
+         "subject": "Lain lain", "doc_type": "mom", "markdown": "# z"},
+        [Chunk(0, None, "rapat bulanan")],
+    )
+    store.rebuild_indexes()
+    store.refresh_mirror()
+    yield store
+    store.close()
+
+
+def test_aggregate_keyword_count_dedups_and_ignores_metadata_prefix(agg_store):
+    result = agg_store.aggregate("separator", mode="count", match="keyword")
+
+    assert result["status"] == "success"
+    assert result["match"] == "keyword"
+    assert result["approximate"] is False
+    # body1 counted once despite two matching chunks; subj1 excluded
+    assert result["count"] == 1
+    assert result["doc_ids"] == ["body1"]
+
+
+def test_aggregate_keyword_is_conjunctive(agg_store):
+    result = agg_store.aggregate("separator pompa", mode="count", match="keyword")
+
+    # no single chunk contains both terms
+    assert result["count"] == 0
+    assert result["status"] == "no_results"
+
+
+def test_aggregate_keyword_conjunction_is_within_one_chunk(agg_store):
+    """Terms split across two chunks of the same document do NOT match.
+
+    body1 has 'separator' in chunk 0 and 'kedua' in chunk 1. Documented
+    behavior, not an accident — see the plan's "embed_text trap" section.
+    """
+    result = agg_store.aggregate("separator kedua", mode="count", match="keyword")
+
+    assert result["count"] == 1  # chunk 1 holds 'separator kedua' together
+    assert (
+        agg_store.aggregate("pemasangan kedua", mode="count", match="keyword")["count"]
+        == 0
+    )  # 'pemasangan' is chunk 0, 'kedua' is chunk 1
+
+
+def test_aggregate_metadata_only_counts_by_filter(agg_store):
+    result = agg_store.aggregate(None, mode="count", filters={"doc_type": "surat"})
+
+    assert result["count"] == 2
+    assert result["approximate"] is False
+    assert result["match"] == "metadata"
+
+
+def test_aggregate_semantic_is_flagged_and_monotonic(agg_store):
+    low = agg_store.aggregate(
+        "separator", mode="count", match="semantic", similarity_threshold=0.0
+    )
+    high = agg_store.aggregate(
+        "separator", mode="count", match="semantic", similarity_threshold=0.99
+    )
+
+    assert low["approximate"] is True
+    assert low["match"] == "semantic"
+    assert high["count"] <= low["count"]
+
+
+def test_aggregate_list_mode_returns_documents_capped_by_limit(agg_store):
+    result = agg_store.aggregate(None, mode="list", limit=2)
+
+    assert result["count"] == 3          # full total, uncapped
+    assert len(result["documents"]) == 2  # page capped by limit
+    assert {"doc_id", "file_name", "subject"} <= set(result["documents"][0])
+
+
+def test_aggregate_scalar_facet_sums_to_total(agg_store):
+    result = agg_store.aggregate(None, mode="count", group_by="doc_type")
+
+    facets = result["facets"]
+    assert facets["dimension"] == "doc_type"
+    assert facets["multi_valued"] is False
+    assert sum(facets["values"].values()) == result["count"]
+    assert facets["values"]["surat"] == 2
+
+
+def test_aggregate_json_facet_is_flagged_multi_valued(agg_store):
+    result = agg_store.aggregate(None, mode="count", group_by="doc_topic")
+
+    assert result["facets"]["multi_valued"] is True
+
+
+def test_aggregate_on_empty_corpus_is_not_available(tmp_path):
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "empty2.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "empty2.sqlite",
+    )
+    store.ensure_tables()
+
+    result = store.aggregate("apapun", mode="count")
+
+    assert result["status"] == "not_available"
+    store.close()
