@@ -94,3 +94,21 @@ def test_stale_embed_docs_flags_a_name_shortened_to_its_own_prefix(
     _edit_field_name(store, "d1", '["Dur"]')
 
     assert store.stale_embed_docs() == ["d1"]
+
+
+def test_run_reembed_documents_refreshes_the_prefix(store: CorpusStore):
+    from esdc.corpus.pipeline import run_reembed_documents
+
+    _edit_field_name(store, "d1", '["Duri Field"]')
+    assert store.stale_embed_docs() == ["d1"]
+
+    report = run_reembed_documents(["d1"], store=store)
+
+    assert report.processed == ["s.pdf"]
+    assert report.failed == {}
+    assert store.stale_embed_docs() == []
+    embed_text = store._get_connection().execute(
+        "SELECT embed_text FROM document_chunks WHERE doc_id = 'd1'"
+    ).fetchone()[0]
+    assert "Duri Field" in embed_text
+    assert "isi surat" in embed_text  # chunk_text preserved

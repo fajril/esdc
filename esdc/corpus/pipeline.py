@@ -1414,6 +1414,64 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
     return report
 
 
+def run_reembed_documents(
+    doc_ids: list[str], store: CorpusStore | None = None
+) -> CorpusReport:
+    """Re-chunk and re-embed only the named documents.
+
+    Used after a metadata edit changes the context prefix baked into
+    embed_text. The embedding model is unchanged, so unlike run_reembed
+    this never calls set_meta and never re-pins corpus_meta.
+
+    Reads each document through CorpusStore.get_document, i.e. from the
+    DuckDB mirror. A caller that has just written entity names to the
+    SQLite truth MUST refresh the mirror before calling this, or the
+    re-embed faithfully reproduces the values it was meant to replace.
+
+    Ends in rebuild_indexes(), which rebuilds FTS and HNSW over every
+    chunk in the corpus — DuckDB's FTS index is not incremental, so
+    skipping it would drop the re-embedded chunks out of BM25 entirely.
+    Call this once per batch; never once per document inside a loop.
+
+    Pass an already-open ``store`` to reuse its connections and embedder;
+    otherwise one is created and closed here.
+    """
+    report = CorpusReport()
+    if not doc_ids:
+        # Nothing to do, and rebuild_indexes() below is a whole-corpus
+        # reindex — an empty call must not pay for it.
+        return report
+
+    owned = store is None
+    if store is None:
+        store = CorpusStore()
+    try:
+        if owned:
+            store.ensure_tables()
+        report.embedding_model = store._embedder.model
+        cfg = Config.get_corpus_config()
+        for doc_id in doc_ids:
+            name = doc_id
+            try:
+                doc = store.get_document(doc_id)
+                if doc is None:
+                    report.failed[name] = "document not found"
+                    continue
+                name = doc.get("file_name") or doc_id
+                chunks = chunk_markdown(
+                    doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
+                )
+                store.replace_chunks(doc, chunks)
+                report.processed.append(name)
+            except Exception as e:
+                report.failed[name] = str(e)
+        store.rebuild_indexes()
+    finally:
+        if owned:
+            store.close()
+    return report
+
+
 def _sidecar_meta_from_doc(doc: dict[str, Any]) -> dict[str, Any]:
     """Invert ``run_commit``'s doc-dict -> DB mapping into sidecar frontmatter.
 
