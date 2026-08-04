@@ -308,3 +308,73 @@ def test_mirror_failure_returns_warning_but_saves(tmp_path):
     assert result.warnings
     assert "esdc corpus sync" in result.warnings[0]
     assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
+
+
+def test_entity_save_reembeds_edited_documents(monkeypatch, tmp_path):
+    """The edited doc_ids are handed to the re-embed pass after commit."""
+    from esdc.corpus.pipeline import CorpusReport
+
+    seen: dict[str, object] = {}
+
+    def _fake(doc_ids, store=None):
+        seen["doc_ids"] = list(doc_ids)
+        seen["store"] = store
+        return CorpusReport()
+
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fake)
+
+    sqlite_path = _seed_sqlite(tmp_path)
+    duckdb_path = _make_duckdb_mirror(tmp_path)
+    resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
+
+    result = apply_document_entity_changeset(
+        {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
+        sqlite_path=sqlite_path,
+        db_path=duckdb_path,
+        resolver=resolver,
+    )
+
+    assert result.ok is True
+    assert seen["doc_ids"] == ["D1"]
+    # The store must carry the caller's paths. Asserting merely that it is
+    # not None would also pass for a default-constructed CorpusStore, which
+    # is exactly the bug this guards: that one targets the user's real
+    # ~/.esdc databases and would re-embed the live corpus during tests.
+    store = seen["store"]
+    assert store is not None
+    assert store._db_path == duckdb_path
+    assert store._sqlite_path == sqlite_path
+
+
+def test_entity_save_skips_reembed_when_the_mirror_refresh_failed(
+    monkeypatch, tmp_path
+):
+    """A stale mirror must not be baked into fresh-looking chunks."""
+    from esdc.portal import document_entities
+
+    called = False
+
+    def _fake(doc_ids, store=None):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fake)
+    monkeypatch.setattr(
+        document_entities,
+        "_refresh_mirror_after_save",
+        lambda *a, **k: ["DuckDB mirror refresh deferred: locked."],
+    )
+
+    sqlite_path = _seed_sqlite(tmp_path)
+    duckdb_path = _make_duckdb_mirror(tmp_path)
+    resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
+
+    result = apply_document_entity_changeset(
+        {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
+        sqlite_path=sqlite_path,
+        db_path=duckdb_path,
+        resolver=resolver,
+    )
+
+    assert called is False
+    assert any("reembed --stale" in w for w in result.warnings)

@@ -12,6 +12,15 @@ refresh can lose DuckDB's single-writer lock to a running corpus
 command; a failure is reported as a warning, never rolls back the
 SQLite commit.
 
+Once the mirror refresh succeeds, the edited documents' chunks are
+re-embedded (`_reembed_edited`) so `document_chunks.embed_text` — which
+bakes in the entity names via `build_context_prefix` — stops carrying
+the pre-edit names. A failed or skipped mirror refresh means the
+re-embed is skipped too (it reads document metadata from the mirror);
+`esdc corpus reembed --stale` is the fallback in both cases. Like the
+mirror refresh, a re-embed failure is reported as a warning and never
+rolls back the SQLite commit.
+
 Name validation mirrors `_validate_entity_overrides` in
 `esdc.corpus.pipeline`: each cell is `;`-separated raw names, each name
 is resolved against `EntityResolver.resolve_name`, and 0-match names are
@@ -156,9 +165,19 @@ def apply_document_entity_changeset(
     finally:
         sconn.close()
 
-    warnings = (
-        _refresh_mirror_after_save(db_path, sqlite_path) if resolved_rows else []
-    )
+    warnings: list[str] = []
+    if resolved_rows:
+        warnings = _refresh_mirror_after_save(db_path, sqlite_path)
+        # Only re-embed once the mirror actually converged — see
+        # _reembed_edited's docstring for why a stale mirror is worse than
+        # skipping the re-embed entirely.
+        if not warnings:
+            warnings = _reembed_edited(resolved_rows, db_path, sqlite_path)
+        else:
+            warnings.append(
+                "Chunk re-embedding skipped because the mirror is stale. "
+                "Run `esdc corpus reembed --stale` after `esdc corpus sync`."
+            )
 
     return ChangesetResult(
         ok=True,
@@ -283,3 +302,59 @@ def _refresh_mirror_after_save(
     finally:
         if store is not None:
             store.close()
+
+
+def _reembed_edited(
+    resolved_rows: list[dict[str, Any]],
+    db_path: Path | None,
+    sqlite_path: Path | None,
+) -> list[str]:
+    """Re-embed documents whose entity names just changed.
+
+    embed_text bakes the document's entities into every chunk, so an
+    entity correction that stops at the mirror would leave search matching
+    the old names. The SQLite truth is already committed when this runs,
+    so a failure is reported as a warning and repaired later by
+    `esdc corpus reembed --stale` — never a failed save.
+
+    MUST run after _refresh_mirror_after_save and only when that refresh
+    succeeded: run_reembed_documents reads each document's metadata from
+    the DuckDB mirror, so re-embedding against a stale one would rebuild
+    the chunks from exactly the pre-edit names this save replaced — and
+    unlike doing nothing, it would leave chunks the staleness detector
+    then reports as current.
+
+    Both paths are threaded into the store for the same reason
+    _refresh_mirror_after_save threads them (see its docstring): a
+    default-constructed CorpusStore targets ~/.esdc regardless of what the
+    caller asked for.
+
+    First call in a portal process loads the llama.cpp embedding model
+    (seconds), and the re-embed ends in a whole-corpus index rebuild.
+    Latency only — the save is already durable.
+    """
+    doc_ids = sorted({row["doc_id"] for row in resolved_rows})
+    if not doc_ids:
+        return []
+
+    from esdc.corpus.pipeline import run_reembed_documents
+    from esdc.corpus.store import CorpusStore
+
+    store = None
+    try:
+        store = CorpusStore(db_path=db_path, sqlite_path=sqlite_path)
+        store.ensure_tables()
+        report = run_reembed_documents(doc_ids, store=store)
+    except Exception as exc:
+        return [
+            f"Re-embedding deferred for {len(doc_ids)} document(s): {exc}. "
+            "Run `esdc corpus reembed --stale`."
+        ]
+    finally:
+        if store is not None:
+            store.close()
+    return [
+        f"Re-embed failed for {name}: {err}. "
+        "Run `esdc corpus reembed --stale`."
+        for name, err in report.failed.items()
+    ]
