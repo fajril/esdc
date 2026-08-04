@@ -669,3 +669,30 @@ def test_semantic_resolver_is_thread_local():
 
     assert len(results) == 2
     assert results[0] is not results[1]
+
+
+def test_aggregate_documents_filters_by_sender(populated):
+    """The 'but it is from X' follow-up: narrow a count by the sending party."""
+    from esdc.chat.tools import aggregate_documents
+
+    # DOC's sender is "SKK"; 'skk' proves the match is case-insensitive
+    # substring, which is the only usable form against the real corpus
+    # where senders read "PERTAMINA BADAN PEMBINAAN PENGUSAHAAN...".
+    hit = json.loads(aggregate_documents.invoke({"mode": "count", "sender": "skk"}))
+    miss = json.loads(
+        aggregate_documents.invoke({"mode": "count", "sender": "zzz-no-such-party"})
+    )
+
+    assert hit["count"] >= 1
+    assert miss["count"] == 0
+    assert miss["status"] == "no_results"
+
+
+def test_aggregate_documents_filters_by_pod_name(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "count", "pod_name": "zzz-no-such-pod"})
+    )
+
+    assert result["count"] == 0

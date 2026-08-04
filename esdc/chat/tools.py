@@ -2046,6 +2046,20 @@ def aggregate_documents(
     project_name: Annotated[
         str | None, "Filter by project name (ILIKE pattern)."
     ] = None,
+    pod_name: Annotated[str | None, "Filter by POD name (ILIKE pattern)."] = None,
+    sender: Annotated[
+        str | None,
+        "Filter by sending party, substring match (e.g. 'Pertamina', 'SKK').",
+    ] = None,
+    recipient: Annotated[
+        str | None, "Filter by receiving party, substring match."
+    ] = None,
+    subject: Annotated[
+        str | None, "Filter by letter subject line, substring match."
+    ] = None,
+    doc_number: Annotated[
+        str | None, "Filter by document/letter number, substring match."
+    ] = None,
 ) -> str:
     """Count or list ALL documents matching a criterion — not the top few.
 
@@ -2101,6 +2115,11 @@ def aggregate_documents(
         wk_name=wk_name,
         field_name=field_name,
         project_name=project_name,
+        pod_name=pod_name,
+        sender=sender,
+        recipient=recipient,
+        subject=subject,
+        doc_number=doc_number,
     )
 
     cache = _get_tool_cache()
