@@ -951,6 +951,7 @@ def run_commit(
 
     store = CorpusStore(embedder=get_build_embedder(embed_backend))
     any_processed = False
+    merged_doc_ids: list[str] = []
     try:
         # also needed to reach the conn for canonical names
         store.ensure_tables(validate_model=True)
@@ -1017,6 +1018,11 @@ def run_commit(
                             # write, so a merge-only batch must trigger it
                             # too, not just an insert_document batch.
                             any_processed = True
+                            # The merged names are baked into every chunk's
+                            # embed_text prefix, so those chunks are now
+                            # stale. Collected here, re-embedded once after
+                            # the batch-end mirror refresh.
+                            merged_doc_ids.append((file_hash or "")[:16])
                         else:
                             report.skipped.append(f"{name} (already committed)")
                         continue
@@ -1107,6 +1113,37 @@ def run_commit(
                     f"DuckDB mirror refresh failed: {e} — run "
                     "`esdc corpus sync` to converge"
                 )
+                if merged_doc_ids:
+                    # `corpus sync` converges the mirror but never touches
+                    # chunks, so without this the user fixes the mirror and
+                    # is never told the chunks are still on the old names.
+                    report.warnings.append(
+                        f"Chunk re-embed skipped for {len(merged_doc_ids)} "
+                        "merged document(s) because the mirror is stale — run "
+                        "`esdc corpus reembed --stale` after `esdc corpus sync`"
+                    )
+            else:
+                # Only once the mirror carries the merged names: the
+                # re-embed reads document metadata from it, so running
+                # this after a FAILED refresh would rebuild the chunks
+                # from exactly the stale values it is meant to replace.
+                # Its own rebuild_indexes() supersedes the one above.
+                if merged_doc_ids:
+                    try:
+                        reembed_report = run_reembed_documents(
+                            merged_doc_ids, store=store
+                        )
+                        report.warnings.extend(
+                            f"re-embed failed for {name}: {err} — run "
+                            "`esdc corpus reembed --stale`"
+                            for name, err in reembed_report.failed.items()
+                        )
+                    except Exception as e:
+                        logger.warning("[Corpus] re-embed after merge failed: %s", e)
+                        report.warnings.append(
+                            f"Chunk re-embed after entity merge failed: {e} — "
+                            "run `esdc corpus reembed --stale`"
+                        )
     finally:
         store.close()
 

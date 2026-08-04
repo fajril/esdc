@@ -112,3 +112,63 @@ def test_run_reembed_documents_refreshes_the_prefix(store: CorpusStore):
     ).fetchone()[0]
     assert "Duri Field" in embed_text
     assert "isi surat" in embed_text  # chunk_text preserved
+
+
+def test_commit_reembeds_documents_whose_blank_entities_it_merged(
+    tmp_path: Path, monkeypatch
+):
+    """A merge-only commit batch must not leave the chunks on the old prefix.
+
+    Setup copied verbatim from
+    tests/corpus/test_pipeline.py::test_commit_already_committed_fills_blank_and_preserves_portal_edit
+    (search that module for "entities merged") — only the assertions differ:
+    this test checks embed_text convergence instead of the merged column
+    values.
+    """
+    from esdc.corpus import pipeline
+    from tests.corpus.test_pipeline import (
+        make_sidecar,
+        make_store,
+        patch_entity_resolver,
+        patch_store_factory,
+    )
+
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(
+        monkeypatch,
+        matches={"Minas": {"entity_type": "field_name", "name": "Minas", "confidence": 1.0}},
+    )
+
+    file_hash = "cc" * 32
+    doc_id = file_hash[:16]
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        field_name=None,
+    )
+    report1 = pipeline.run_commit([tmp_path])
+    assert report1.processed == ["doc.corpus.md"]
+    assert store.get_document(doc_id)["field_name"] is None
+
+    # Re-extract updates the same sidecar: field_name now populated.
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash=file_hash,
+        field_name="Minas",
+    )
+
+    report2 = pipeline.run_commit([tmp_path])
+
+    assert any("entities merged" in p for p in report2.processed)
+    assert store.stale_embed_docs() == []
+    embed_text = store._get_connection().execute(
+        "SELECT embed_text FROM document_chunks WHERE doc_id = ?", (doc_id,)
+    ).fetchone()[0]
+    assert "Minas" in embed_text
+    store.close()
