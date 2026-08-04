@@ -220,50 +220,43 @@ def test_sweep_orphan_chunks_on_fresh_install_returns_zero(truth_path: Path):
 def test_refresh_registry_copies_present_tables_and_skips_absent(tmp_path: Path):
     path = tmp_path / "reg.sqlite"
     conn_s = sqlite3.connect(path)
-    conn_s.execute("CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)")
-    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
-    conn_s.execute("CREATE TABLE project_pod (pod_id INTEGER, project_id TEXT)")
-    conn_s.execute("INSERT INTO project_pod VALUES (1, 'PRJ-1')")
+    conn_s.execute("CREATE TABLE kg_edge (src_id TEXT, rel TEXT, dst_id TEXT)")
+    conn_s.execute("INSERT INTO kg_edge VALUES ('POD I Duri', 'ABOUT_POD', 'POD-1')")
     conn_s.commit()
     conn_s.close()
-    # kg_edge deliberately absent — learn has never run
+    # kg_claim deliberately absent — learn has never run
     conn = duckdb.connect()
 
     copied = refresh_registry(conn, path)
 
-    assert copied["m_pod"] == 1
-    assert copied["project_pod"] == 1
-    assert "kg_edge" not in copied
-    assert conn.execute("SELECT pod_name FROM m_pod").fetchone()[0] == "Duri POD I"
+    assert copied == {"kg_edge": 1}
+    assert "kg_claim" not in copied
+    assert conn.execute("SELECT dst_id FROM kg_edge").fetchone()[0] == "POD-1"
 
 
 def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path: Path):
-    """A registry table that exists but holds zero rows (pod_document /
-    pod_revision before `esdc corpus learn` has linked anything) must still
-    be copied and reported with count 0 — distinct from a table that does
-    not exist at all (kg_edge before `learn` has ever run), which must be
-    skipped and must not appear as a key in the returned dict at all.
+    """A registry table that exists but holds zero rows (kg_edge right
+    after `esdc corpus learn` creates its schema but before anything has
+    been written) must still be copied and reported with count 0 —
+    distinct from a table that does not exist at all (kg_claim, before
+    `learn` has ever run), which must be skipped and must not appear as a
+    key in the returned dict at all.
     """
     path = tmp_path / "reg_empty.sqlite"
     conn_s = sqlite3.connect(path)
-    conn_s.execute(
-        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
-    )
-    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
-    conn_s.execute("CREATE TABLE pod_document (pod_id INTEGER, doc_id TEXT)")
-    # pod_document intentionally left empty: the table exists, no rows yet.
+    conn_s.execute("CREATE TABLE kg_edge (src_id TEXT, rel TEXT, dst_id TEXT)")
+    # kg_edge intentionally left empty: the table exists, no rows yet.
     conn_s.commit()
     conn_s.close()
-    # kg_edge deliberately absent — learn has never run
+    # kg_claim deliberately absent
     conn = duckdb.connect()
 
     copied = refresh_registry(conn, path)
 
-    assert copied["m_pod"] == 1
-    assert copied["pod_document"] == 0
-    assert "kg_edge" not in copied
+    assert copied == {"kg_edge": 0}
+    assert "kg_claim" not in copied
     # not just the dict says 0 — the table must actually exist in DuckDB
-    assert conn.execute("SELECT COUNT(*) FROM pod_document").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()[0] == 0
 
 
 def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(tmp_path: Path):
@@ -274,29 +267,27 @@ def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(tmp_pat
     """
     path = tmp_path / "reg_disappear.sqlite"
     conn_s = sqlite3.connect(path)
-    conn_s.execute(
-        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
-    )
-    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.execute("CREATE TABLE kg_edge (src_id TEXT, rel TEXT, dst_id TEXT)")
+    conn_s.execute("INSERT INTO kg_edge VALUES ('POD I Duri', 'ABOUT_POD', 'POD-1')")
     conn_s.commit()
     conn_s.close()
     conn = duckdb.connect()
 
     first = refresh_registry(conn, path)
 
-    assert first["m_pod"] == 1
-    assert conn.execute("SELECT COUNT(*) FROM m_pod").fetchone()[0] == 1
+    assert first["kg_edge"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()[0] == 1
 
     conn_s = sqlite3.connect(path)
-    conn_s.execute("DROP TABLE m_pod")
+    conn_s.execute("DROP TABLE kg_edge")
     conn_s.commit()
     conn_s.close()
 
     second = refresh_registry(conn, path)
 
-    assert "m_pod" not in second
+    assert "kg_edge" not in second
     with pytest.raises(duckdb.CatalogException):
-        conn.execute("SELECT COUNT(*) FROM m_pod")
+        conn.execute("SELECT COUNT(*) FROM kg_edge")
 
 
 def test_refresh_registry_stays_silent_when_table_was_never_mirrored(tmp_path: Path, caplog):
@@ -308,10 +299,8 @@ def test_refresh_registry_stays_silent_when_table_was_never_mirrored(tmp_path: P
     """
     path = tmp_path / "reg_never_mirrored.sqlite"
     conn_s = sqlite3.connect(path)
-    conn_s.execute(
-        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
-    )
-    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.execute("CREATE TABLE kg_edge (src_id TEXT, rel TEXT, dst_id TEXT)")
+    conn_s.execute("INSERT INTO kg_edge VALUES ('POD I Duri', 'ABOUT_POD', 'POD-1')")
     conn_s.commit()
     conn_s.close()
     conn = duckdb.connect()
@@ -320,7 +309,7 @@ def test_refresh_registry_stays_silent_when_table_was_never_mirrored(tmp_path: P
         refresh_registry(conn, path)
         second = refresh_registry(conn, path)  # steady state, run again
 
-    assert "kg_edge" not in second
+    assert "kg_claim" not in second
     assert not any("dropped" in r.message for r in caplog.records)
 
 
@@ -331,44 +320,135 @@ def test_refresh_registry_logs_when_a_stale_mirror_is_actually_dropped(tmp_path:
     """
     path = tmp_path / "reg_real_drop.sqlite"
     conn_s = sqlite3.connect(path)
-    conn_s.execute(
-        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
-    )
-    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
+    conn_s.execute("CREATE TABLE kg_edge (src_id TEXT, rel TEXT, dst_id TEXT)")
+    conn_s.execute("INSERT INTO kg_edge VALUES ('POD I Duri', 'ABOUT_POD', 'POD-1')")
     conn_s.commit()
     conn_s.close()
     conn = duckdb.connect()
     refresh_registry(conn, path)
 
     conn_s = sqlite3.connect(path)
-    conn_s.execute("DROP TABLE m_pod")
+    conn_s.execute("DROP TABLE kg_edge")
     conn_s.commit()
     conn_s.close()
 
     with caplog.at_level("INFO"):
         second = refresh_registry(conn, path)
 
-    assert "m_pod" not in second
+    assert "kg_edge" not in second
     assert any(
-        "dropped" in r.message and "m_pod" in r.message for r in caplog.records
+        "dropped" in r.message and "kg_edge" in r.message for r in caplog.records
     )
 
 
-def test_views_expose_both_grains(tmp_path: Path):
-    path = tmp_path / "both.sqlite"
-    _make_truth(path, [{"doc_id": "d1"}])
+def test_refresh_registry_no_longer_raw_mirrors_pod_tables(tmp_path: Path):
+    """m_pod, r_institution, r_pod_type, project_pod, pod_document, and
+    pod_revision are real operational SQLite tables — present in the
+    truth on every production install — but `publish_pod_registry` now
+    owns their read-side DuckDB shapes (see the module docstring).
+    `refresh_registry` must not raw-copy any of them even though they
+    exist and hold rows in the truth.
+    """
+    path = tmp_path / "pod_present.sqlite"
     conn_s = sqlite3.connect(path)
-    conn_s.execute("CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)")
-    conn_s.executemany(
-        "INSERT INTO m_pod VALUES (?,?,?)", [(1, "POD-1", "A"), (2, "POD-2", "B")]
+    conn_s.execute("CREATE TABLE r_institution (code INTEGER, institution TEXT)")
+    conn_s.execute("INSERT INTO r_institution VALUES (2, 'SKK Migas')")
+    conn_s.execute("CREATE TABLE r_pod_type (code INTEGER, pod_type TEXT)")
+    conn_s.execute("INSERT INTO r_pod_type VALUES (2, 'POD I')")
+    conn_s.execute(
+        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT, "
+        "institution_code INTEGER, pod_type_code INTEGER)"
     )
+    conn_s.execute(
+        "INSERT INTO m_pod VALUES (1, 'PL-2019-0001-2-2-0', 'Duri POD I', 2, 2)"
+    )
+    conn_s.execute("CREATE TABLE project_pod (pod_id INTEGER, project_id TEXT)")
+    conn_s.execute("INSERT INTO project_pod VALUES (1, 'PRJ-1')")
     conn_s.execute("CREATE TABLE pod_document (pod_id INTEGER, doc_id TEXT)")
-    conn_s.executemany("INSERT INTO pod_document VALUES (?,?)", [(1, "d1"), (2, "d1")])
+    conn_s.execute("INSERT INTO pod_document VALUES (1, 'd1')")
+    conn_s.execute(
+        "CREATE TABLE pod_revision (successor_id TEXT, predecessor_id TEXT)"
+    )
     conn_s.commit()
     conn_s.close()
     conn = duckdb.connect()
+
+    copied = refresh_registry(conn, path)
+
+    assert copied == {}
+    for table in (
+        "m_pod", "r_institution", "r_pod_type", "project_pod",
+        "pod_document", "pod_revision",
+    ):
+        with pytest.raises(duckdb.CatalogException):
+            conn.execute(f"SELECT * FROM {table}")
+
+
+def test_refresh_registry_retires_stale_pod_mirrors_from_a_pre_fix_database(
+    tmp_path: Path, caplog
+):
+    """A database refreshed by the pre-fix build of this module has raw
+    copies of the six POD tables sitting in DuckDB, including a
+    `pod_document` with the wrong BIGINT surrogate `pod_id` clobbering
+    what `publish_pod_registry` produces under the same table name. The
+    very next `refresh_registry` call must drop every one of them, using
+    the same stale-table drop mechanism this module already had for a
+    table vanishing from the truth — this is what repairs a user's live
+    database on their next `esdc corpus sync`.
+    """
+    path = tmp_path / "pod_present.sqlite"
+    conn_s = sqlite3.connect(path)
+    conn_s.execute("CREATE TABLE r_institution (code INTEGER, institution TEXT)")
+    conn_s.execute("INSERT INTO r_institution VALUES (2, 'SKK Migas')")
+    conn_s.commit()
+    conn_s.close()
+    conn = duckdb.connect()
+    # Simulate exactly what the pre-fix refresh_registry left behind.
+    conn.execute("CREATE TABLE r_institution (code INTEGER, institution VARCHAR)")
+    conn.execute("CREATE TABLE r_pod_type (code INTEGER, pod_type VARCHAR)")
+    conn.execute("CREATE TABLE m_pod (id INTEGER, pod_id VARCHAR)")
+    conn.execute("CREATE TABLE project_pod (pod_id INTEGER, project_id VARCHAR)")
+    conn.execute(
+        "CREATE TABLE pod_revision (successor_id VARCHAR, predecessor_id VARCHAR)"
+    )
+    conn.execute("CREATE TABLE pod_document (pod_id BIGINT, doc_id VARCHAR)")
+    conn.execute("INSERT INTO pod_document VALUES (1, 'd1')")
+
+    with caplog.at_level("INFO"):
+        copied = refresh_registry(conn, path)
+
+    assert copied == {}
+    for table in (
+        "m_pod", "r_institution", "r_pod_type", "project_pod",
+        "pod_document", "pod_revision",
+    ):
+        with pytest.raises(duckdb.CatalogException):
+            conn.execute(f"SELECT * FROM {table}")
+    assert sum(
+        1 for r in caplog.records if "dropped retired registry table" in r.message
+    ) == 6
+
+
+def test_views_expose_both_grains(tmp_path: Path):
+    """create_views joins the *published* pod_registry/pod_document tables
+    (canonical VARCHAR pod_id) now, not the raw m_pod/pod_document SQLite
+    shapes — those are built directly here rather than via refresh_registry,
+    which no longer produces them at all (see
+    test_refresh_registry_no_longer_raw_mirrors_pod_tables).
+    """
+    path = tmp_path / "both.sqlite"
+    _make_truth(path, [{"doc_id": "d1"}])
+    conn = duckdb.connect()
     refresh_documents(conn, path)
-    refresh_registry(conn, path)
+    conn.execute("CREATE TABLE pod_registry (pod_id VARCHAR, pod_name VARCHAR)")
+    conn.executemany(
+        "INSERT INTO pod_registry VALUES (?, ?)",
+        [("POD-1", "A"), ("POD-2", "B")],
+    )
+    conn.execute("CREATE TABLE pod_document (pod_id VARCHAR, doc_id VARCHAR)")
+    conn.executemany(
+        "INSERT INTO pod_document VALUES (?, ?)", [("POD-1", "d1"), ("POD-2", "d1")]
+    )
 
     created = create_views(conn)
 
@@ -393,40 +473,106 @@ def test_views_degrade_when_registry_absent(truth_path: Path):
     assert conn.execute("SELECT linked_pod_ids FROM v_document LIMIT 1").fetchone()[0] == []
 
 
-def test_refresh_all_drops_dangling_view_when_registry_table_disappears(tmp_path: Path):
-    """Once refresh_registry drops a stale m_pod/pod_document mirror, a
-    v_doc_pod_link left over from an earlier refresh would reference tables
-    that no longer exist. A full refresh_all must clean it up so querying
-    it raises cleanly instead of a CatalogException surprise, while
-    v_document — the view that does not depend on the registry — keeps
-    working.
+def test_refresh_all_produces_canonical_varchar_pod_id_not_bigint_fk(tmp_path: Path):
+    """Regression test. refresh_registry used to raw-mirror pod_document
+    (pod_id BIGINT — the m_pod.id surrogate foreign key) on top of whatever
+    publish_pod_registry had published under the same table name (pod_id
+    VARCHAR — the canonical PL-YYYY-XXXX-A-B-R id that
+    pod_registry_schema.yaml documents to the chat agent). A full
+    refresh_all must leave pod_document holding the published VARCHAR
+    shape with the canonical id, not the surrogate BIGINT one.
     """
-    path = tmp_path / "view_cleanup.sqlite"
+    from esdc.pod_registry.store import get_sqlite_connection
+
+    path = tmp_path / "truth.sqlite"
     _make_truth(path, [{"doc_id": "d1"}])
-    conn_s = sqlite3.connect(path)
+    conn_s = get_sqlite_connection(path)
     conn_s.execute(
-        "CREATE TABLE m_pod (id INTEGER PRIMARY KEY, pod_id TEXT, pod_name TEXT)"
+        "INSERT INTO r_institution (code, institution) VALUES (2, 'SKK Migas')"
     )
-    conn_s.execute("INSERT INTO m_pod VALUES (1, 'POD-1', 'Duri POD I')")
-    conn_s.execute("CREATE TABLE pod_document (pod_id INTEGER, doc_id TEXT)")
-    conn_s.execute("INSERT INTO pod_document VALUES (1, 'd1')")
+    conn_s.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD I')")
+    conn_s.execute(
+        "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
+        " institution_code, pod_type_code, rev_num, approval_seq)"
+        " VALUES (1, 'PL-2019-0001-2-2-0', 'Duri POD I', 'SRT-1', '2019-05-01',"
+        " 2, 2, 0, 1)"
+    )
+    conn_s.execute("INSERT INTO pod_document (pod_id, doc_id) VALUES (1, 'd1')")
     conn_s.commit()
     conn_s.close()
     conn = duckdb.connect()
-    refresh_documents(conn, path)
-    refresh_registry(conn, path)
-    created = create_views(conn)
-    assert "v_doc_pod_link" in created
-    assert conn.execute("SELECT COUNT(*) FROM v_doc_pod_link").fetchone()[0] == 1
-
-    conn_s = sqlite3.connect(path)
-    conn_s.execute("DROP TABLE m_pod")
-    conn_s.execute("DROP TABLE pod_document")
-    conn_s.commit()
-    conn_s.close()
 
     refresh_all(conn, path)
 
-    with pytest.raises(duckdb.CatalogException):
-        conn.execute("SELECT COUNT(*) FROM v_doc_pod_link")
-    assert conn.execute("SELECT COUNT(*) FROM v_document").fetchone()[0] == 1
+    col_type = dict(
+        conn.execute(
+            "SELECT column_name, column_type FROM (DESCRIBE pod_document)"
+        ).fetchall()
+    )["pod_id"]
+    assert col_type == "VARCHAR"
+    assert conn.execute("SELECT pod_id, doc_id FROM pod_document").fetchall() == [
+        ("PL-2019-0001-2-2-0", "d1")
+    ]
+
+
+def test_refresh_all_repairs_a_pre_fix_database(tmp_path: Path):
+    """End-to-end repair check for the exact state a user's live database
+    is in today: a pre-fix build's raw POD mirrors (including a
+    BIGINT-keyed pod_document and a v_doc_pod_link view built by joining
+    the raw m_pod/pod_document) sitting in DuckDB. A single refresh_all
+    must retire the six raw tables, publish pod_registry/pod_project/
+    pod_document under the canonical VARCHAR pod_id shape, and rebuild
+    both views against the published tables so neither dangles nor keeps
+    serving stale rows.
+    """
+    from esdc.pod_registry.store import get_sqlite_connection
+
+    path = tmp_path / "truth.sqlite"
+    _make_truth(path, [{"doc_id": "d1"}])
+    conn_s = get_sqlite_connection(path)
+    conn_s.execute(
+        "INSERT INTO r_institution (code, institution) VALUES (2, 'SKK Migas')"
+    )
+    conn_s.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD I')")
+    conn_s.execute(
+        "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
+        " institution_code, pod_type_code, rev_num, approval_seq)"
+        " VALUES (1, 'PL-2019-0001-2-2-0', 'Duri POD I', 'SRT-1', '2019-05-01',"
+        " 2, 2, 0, 1)"
+    )
+    conn_s.execute("INSERT INTO pod_document (pod_id, doc_id) VALUES (1, 'd1')")
+    conn_s.commit()
+    conn_s.close()
+
+    conn = duckdb.connect()
+    refresh_documents(conn, path)
+    # Simulate exactly what the pre-fix build left in DuckDB: raw mirrors
+    # plus the view create_views used to build from them.
+    conn.execute("CREATE TABLE m_pod (id INTEGER, pod_id VARCHAR, pod_name VARCHAR)")
+    conn.execute("INSERT INTO m_pod VALUES (1, 'PL-2019-0001-2-2-0', 'Duri POD I')")
+    conn.execute("CREATE TABLE pod_document (pod_id BIGINT, doc_id VARCHAR)")
+    conn.execute("INSERT INTO pod_document VALUES (1, 'd1')")
+    conn.execute("""
+        CREATE VIEW v_doc_pod_link AS
+        SELECT d.doc_id, p.pod_id, p.pod_name FROM documents d
+        JOIN pod_document pd ON pd.doc_id = d.doc_id
+        JOIN m_pod p ON p.id = pd.pod_id
+    """)
+
+    refresh_all(conn, path)
+
+    for table in ("m_pod", "r_institution", "r_pod_type", "project_pod", "pod_revision"):
+        with pytest.raises(duckdb.CatalogException):
+            conn.execute(f"SELECT * FROM {table}")
+    col_type = dict(
+        conn.execute(
+            "SELECT column_name, column_type FROM (DESCRIBE pod_document)"
+        ).fetchall()
+    )["pod_id"]
+    assert col_type == "VARCHAR"
+    assert conn.execute("SELECT doc_id, pod_id FROM v_doc_pod_link").fetchall() == [
+        ("d1", "PL-2019-0001-2-2-0")
+    ]
+    assert conn.execute("SELECT linked_pod_ids FROM v_document").fetchone()[0] == [
+        "PL-2019-0001-2-2-0"
+    ]
