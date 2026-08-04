@@ -893,7 +893,7 @@ def test_reembed_stale_only_processes_flagged_documents(monkeypatch):
         def close(self):
             return None
 
-    def _fake_reembed_documents(doc_ids, store=None):
+    def _fake_reembed_documents(doc_ids, store=None, progress=False):
         calls["doc_ids"] = list(doc_ids)
         report = CorpusReport()
         report.processed = list(doc_ids)

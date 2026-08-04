@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1428,21 +1428,29 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
         report.embedding_model = new_model
 
         cfg = Config.get_corpus_config()
-        for summary in store.list_documents():
-            doc_id = summary["doc_id"]
-            name = summary.get("file_name") or doc_id
-            try:
-                doc = store.get_document(doc_id)
-                if doc is None:
-                    report.failed[name] = "document not found"
-                    continue
-                chunks = chunk_markdown(
-                    doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
-                )
-                store.replace_chunks(doc, chunks)
-                report.processed.append(name)
-            except Exception as e:
-                report.failed[name] = str(e)
+        documents = store.list_documents()
+        with _progress_with_status("reembed", len(documents), "docs") as p:
+            for summary in documents:
+                doc_id = summary["doc_id"]
+                name = summary.get("file_name") or doc_id
+                p.file(name)
+                try:
+                    p.status("read document")
+                    doc = store.get_document(doc_id)
+                    if doc is None:
+                        report.failed[name] = "document not found"
+                        continue
+                    p.status("chunk markdown")
+                    chunks = chunk_markdown(
+                        doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
+                    )
+                    p.status("embed + replace")
+                    store.replace_chunks(doc, chunks)
+                    report.processed.append(name)
+                except Exception as e:
+                    report.failed[name] = str(e)
+                finally:
+                    p.advance()
 
         store.rebuild_indexes()
     finally:
@@ -1452,7 +1460,9 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
 
 
 def run_reembed_documents(
-    doc_ids: list[str], store: CorpusStore | None = None
+    doc_ids: list[str],
+    store: CorpusStore | None = None,
+    progress: bool = False,
 ) -> CorpusReport:
     """Re-chunk and re-embed only the named documents.
 
@@ -1472,6 +1482,12 @@ def run_reembed_documents(
 
     Pass an already-open ``store`` to reuse its connections and embedder;
     otherwise one is created and closed here.
+
+    ``progress=True`` renders the same two-line file-count bar as
+    ``commit``/``extract`` (bar + current file/phase); it defaults off
+    because the commit-merge and portal-save callers run inside their own
+    output contexts and must not flash a bar. The CLI ``--stale`` path
+    passes ``progress=True``.
     """
     report = CorpusReport()
     if not doc_ids:
@@ -1487,21 +1503,37 @@ def run_reembed_documents(
             store.ensure_tables()
         report.embedding_model = store._embedder.model
         cfg = Config.get_corpus_config()
-        for doc_id in doc_ids:
-            name = doc_id
-            try:
-                doc = store.get_document(doc_id)
-                if doc is None:
-                    report.failed[name] = "document not found"
-                    continue
-                name = doc.get("file_name") or doc_id
-                chunks = chunk_markdown(
-                    doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
-                )
-                store.replace_chunks(doc, chunks)
-                report.processed.append(name)
-            except Exception as e:
-                report.failed[name] = str(e)
+        with (
+            _progress_with_status("reembed", len(doc_ids), "docs")
+            if progress
+            else nullcontext()
+        ) as p:
+            for doc_id in doc_ids:
+                name = doc_id
+                if progress:
+                    p.file(name)
+                try:
+                    if progress:
+                        p.status("read document")
+                    doc = store.get_document(doc_id)
+                    if doc is None:
+                        report.failed[name] = "document not found"
+                        continue
+                    name = doc.get("file_name") or doc_id
+                    if progress:
+                        p.status("chunk markdown")
+                    chunks = chunk_markdown(
+                        doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
+                    )
+                    if progress:
+                        p.status("embed + replace")
+                    store.replace_chunks(doc, chunks)
+                    report.processed.append(name)
+                except Exception as e:
+                    report.failed[name] = str(e)
+                finally:
+                    if progress:
+                        p.advance()
         store.rebuild_indexes()
     finally:
         if owned:

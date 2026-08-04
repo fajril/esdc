@@ -3039,7 +3039,7 @@ def reembed(
             if not doc_ids:
                 typer.echo("No stale documents — every chunk prefix is current.")
                 return
-            report = run_reembed_documents(doc_ids, store=store)
+            report = run_reembed_documents(doc_ids, store=store, progress=True)
         finally:
             store.close()
         _print_corpus_report(report)
