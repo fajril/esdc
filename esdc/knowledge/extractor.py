@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from esdc.knowledge.guideline import Guideline, build_extraction_prompt
+from esdc.llm_text import strip_thinking_tags
 
 logger = logging.getLogger(__name__)
 
@@ -125,11 +126,16 @@ def extract_knowledge(
     prompt = build_extraction_prompt(guideline, doc_meta, markdown)
     raw = llm_caller(prompt)
 
+    # Strip reasoning blocks before matching, to prevent greedy {.*} from
+    # matching from a brace inside <think>…</think> to the closing brace
+    # of the real JSON. Keep original raw for all diagnostics.
+    candidate = strip_thinking_tags(raw)
+
     # Validate that the response contains valid JSON before parsing.
     # This ensures we raise ValueError for both:
     # 1. No {..} object found at all
     # 2. {..} found but fails to parse (unquoted keys, trailing commas, etc.)
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    match = re.search(r"\{.*\}", candidate, re.DOTALL)
     if not match:
         dump = _dump_raw_response(raw, doc_meta, "no_json_object")
         raise ValueError(
