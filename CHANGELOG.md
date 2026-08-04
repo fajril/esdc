@@ -21,6 +21,40 @@ than leaking the reasoning prose. Models that carry reasoning in a separate
 field (Ollama, OpenAI o-series, Gemini) are unaffected — the strip is a no-op
 when no tags are present.
 
+### Reasoning models: thinking blocks no longer corrupt LLM output
+
+**Fixed:** every place the app parses or stores an LLM's text response now
+strips `<think>`/`<thinking>` blocks first, via the new shared
+`esdc.llm_text.strip_thinking_tags`. Models that keep reasoning in a separate
+field (Ollama, OpenAI o-series, Gemini) are unaffected; the strip is a no-op
+on tag-free text.
+
+This mattered most for `esdc corpus learn`, where ten consecutive documents
+failed with `LLM response contained invalid JSON`. The extraction prompt asks
+for a JSON object, so the model's reasoning discusses that schema and contains
+braces — the greedy `{.*}` match then started *inside* the reasoning prose and
+produced an unparseable slice. All ten captured responses recover with the fix.
+
+Sites corrected:
+
+- `esdc corpus learn` knowledge extraction — documents were dropped from the
+  knowledge graph with only a logged error.
+- `esdc corpus extract` metadata (`parse_llm_json`) — failed **silently**,
+  returning `{}`, so documents were committed with blank metadata.
+- POD dossier generation — reasoning prose was persisted verbatim into
+  `knowledge_dossiers`. Because dossiers are gated on `source_hash`, a polluted
+  dossier was not regenerated on later runs without `--force`.
+- `esdc corpus eval --init` query synthesis — reasoning prose was written into
+  the benchmark query file, silently invalidating every Pass@k number computed
+  from it.
+- OCR cleanup passes and strategic-summary parsing, which each carried their
+  own partial or missing handling.
+
+**Added:** unparseable knowledge-extraction responses are now written in full
+to `<cache>/extract_failures/`, with the reason, response length, think-tag
+presence, and brace counts recorded — the 100-character error excerpt could not
+distinguish a reasoning-prefixed response from one with no JSON at all.
+
 ### Corpus: SQLite truth, DuckDB mirror
 
 - `documents` now lives in the operational SQLite db (`esdc.sqlite`) as the
