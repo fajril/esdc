@@ -21,6 +21,15 @@ than leaking the reasoning prose. Models that carry reasoning in a separate
 field (Ollama, OpenAI o-series, Gemini) are unaffected — the strip is a no-op
 when no tags are present.
 
+**Fixed:** chat requests now carry exactly one system message, always first.
+The query-classifier strategy (and tool-limit nudges / compaction summaries)
+used to be appended as extra `SystemMessage`s after the user message;
+Qwen3.x chat templates (e.g. Qwen3.6-27B) reject any system message that is
+not the first message, which llama.cpp surfaced as HTTP 400 "Unable to
+generate parser for this template ... System message must be at the
+beginning". Trailing system content is now merged into the leading system
+prompt.
+
 ### Reasoning models: thinking blocks no longer corrupt LLM output
 
 **Fixed:** every place the app parses or stores an LLM's text response now
@@ -91,6 +100,16 @@ shared `embedding_backend`, which defaults to `ollama`. Set
 
 **Fixed:** semantic project search no longer requires a reachable Ollama —
 queries embed locally.
+
+**Fixed:** processes that load a llama.cpp model no longer abort with exit 134
+on macOS. ggml-metal's dylib destructor runs at `exit()` and asserts every
+residency set was released; the embedding and reranker singletons were never
+closed, so any live model reference at interpreter shutdown — pytest's
+retained tracebacks, a background thread parked inside an inference call —
+left Metal buffers alive and the process died with SIGABRT *after* its work
+had finished and its output had printed. Both singletons now free the model from
+an `atexit` handler, taking the load and inference locks with a timeout so a
+close never races a thread mid-load or mid-`embed()`.
 
 ### Corpus retrieval overhaul
 
