@@ -3092,6 +3092,12 @@ def corpus_eval(
     ] = 0.05,
     seed: Annotated[int, typer.Option("--seed", help="Sampling seed.")] = 42,
     ks: str = typer.Option("1,5,10", "--k", help="Comma-separated k values"),
+    classes: str = typer.Option(
+        "lookup,cross_reference,thematic",
+        "--classes",
+        help="Query classes to generate with --init "
+        "(negatives are hand-authored, never generated)",
+    ),
     rerank: bool | None = typer.Option(
         None,
         "--rerank/--no-rerank",
@@ -3102,9 +3108,12 @@ def corpus_eval(
 
     With no query set present, run `--init` first to generate one.
     """
-    from esdc.corpus.evaluate import run_eval
+    import esdc.corpus.evaluate as evaluate_mod
     from esdc.corpus.query_gen import (
+        _make_meta,
         generate,
+        generate_cross_reference,
+        generate_thematic,
         read_query_file,
         reconcile,
         write_query_file,
@@ -3150,6 +3159,7 @@ def corpus_eval(
         store = CorpusStore()
         try:
             call = _llm_call()
+            wanted = {c.strip() for c in classes.split(",") if c.strip()}
             if init:
                 rows, meta = _progress_run(
                     lambda cb: generate(
@@ -3157,18 +3167,37 @@ def corpus_eval(
                         n=samples, seed=seed, ks=k_values, progress_cb=cb,
                     )
                 )
+                if "cross_reference" in wanted:
+                    rows += generate_cross_reference(store, call, seed=seed)
+                if "thematic" in wanted:
+                    rows += generate_thematic(store, call, seed=seed)
+                # meta.n must count every class, not just the lookup pass.
+                meta = _make_meta(store, rows, margin, k_values)
                 write_query_file(path, rows, meta)
                 rich.print(f"Generated {len(rows)} queries → {path}")
             else:  # --refresh
-                old_rows, old_meta = read_query_file(path)
+                all_old, old_meta = read_query_file(path)
+                # reconcile keys on expected[0], which is meaningless for a
+                # multi-document row and destructive for a negative one
+                # (expected == []). Only lookup rows go through it.
+                old_rows = [
+                    r for r in all_old
+                    if str(r.get("class") or "lookup_legacy").startswith("lookup")
+                ]
+                carried = [r for r in all_old if r not in old_rows]
                 rows, meta = _progress_run(
                     lambda cb: reconcile(
                         store, call, old_rows, old_meta, seed=seed, progress_cb=cb,
                     )
                 )
+                rows = rows + carried
+                meta = _make_meta(store, rows, meta.margin, meta.ks)
                 write_query_file(path, rows, meta)
-                old_ids = {r["expected"][0] for r in old_rows}
-                new_ids = {r["expected"][0] for r in rows}
+                # Delta is reported over the lookup rows only — the carried
+                # classes are untouched by definition.
+                new_lookup = [r for r in rows if r not in carried]
+                old_ids = {r["expected"][0] for r in old_rows if r.get("expected")}
+                new_ids = {r["expected"][0] for r in new_lookup if r.get("expected")}
                 added = len(new_ids - old_ids)
                 removed = len(old_ids - new_ids)
                 old_by_id = {
@@ -3177,7 +3206,7 @@ def corpus_eval(
                 }
                 new_by_id = {
                     r["expected"][0]: r.get("file_hash")
-                    for r in rows if r.get("expected")
+                    for r in new_lookup if r.get("expected")
                 }
                 changed = sum(
                     1
@@ -3230,11 +3259,31 @@ def corpus_eval(
                 )
                 raise typer.Exit(1)
 
-    report = run_eval(path, ks=k_values, rerank=rerank)
+    report = evaluate_mod.run_eval(path, ks=k_values, rerank=rerank)
     rich.print(f"Queries scored: {report.n_queries}")
-    for k in k_values:
-        pct = report.pass_at.get(k, 0.0) * 100
-        rich.print(f"  Pass@{k}: {pct:.1f}%")
+    for cls in sorted(report.by_class):
+        cr = report.by_class[cls]
+        rich.print(f"\n[bold]{cls}[/bold] (n={cr.n_queries})")
+        for k in k_values:
+            if k in cr.pass_at:
+                rich.print(f"  Pass@{k}:   {cr.pass_at[k] * 100:.1f}%")
+            if k in cr.recall_at:
+                rich.print(f"  Recall@{k}: {cr.recall_at[k] * 100:.1f}%")
+        if cr.abstention is not None:
+            rich.print(f"  Abstention: {cr.abstention * 100:.1f}%")
+        elif cls == "negative":
+            rich.print("  Abstention: not scored (needs --rerank)")
+    if report.by_class:
+        # Blended across classes of unequal difficulty — kept for
+        # continuity, dimmed so nobody quotes it across set versions.
+        blended = report.pass_at.get(k_values[0], 0.0) * 100
+        rich.print(
+            f"\n[dim]All classes blended (not comparable across query-set "
+            f"versions): Pass@{k_values[0]} {blended:.1f}%[/dim]"
+        )
+    else:
+        for k in k_values:
+            rich.print(f"  Pass@{k}: {report.pass_at.get(k, 0.0) * 100:.1f}%")
     rich.print(f"  Mean latency: {report.mean_latency_ms:.0f} ms")
     for f in report.failures:
         rich.print(f"[yellow]  skipped: {f}[/yellow]")

@@ -576,6 +576,9 @@ class _FakeEvalStore:
     def sample_content(self, doc_id, chunk_seed=None):
         return self._docs.get(doc_id)
 
+    def document_bodies(self):
+        return [(d["doc_id"], "", d.get("chunk_text", "")) for d in self._docs.values()]
+
     def search(self, query, limit=10, filters=None, rerank=None):
         doc_id = next(iter(self._docs))
         return {
@@ -672,6 +675,87 @@ def test_eval_init_with_explicit_samples(
     assert result.exit_code == 0, result.output
     assert "Generated" in result.output
     assert path.exists()
+
+
+def test_eval_reports_per_class(monkeypatch, tmp_path):
+    import esdc.corpus.evaluate as evaluate_mod
+    from esdc.corpus.evaluate import ClassReport, EvalReport
+
+    path = tmp_path / "queries.jsonl"
+    path.write_text(
+        '{"query": "q", "expected": ["d"], "class": "lookup"}\n', encoding="utf-8"
+    )
+    report = EvalReport(
+        n_queries=1,
+        pass_at={1: 1.0},
+        mean_latency_ms=12.0,
+        by_class={
+            "lookup": ClassReport(n_queries=1, pass_at={1: 1.0}),
+            "cross_reference": ClassReport(
+                n_queries=2, pass_at={1: 0.5}, recall_at={1: 0.25}
+            ),
+        },
+    )
+    monkeypatch.setattr(evaluate_mod, "run_eval", lambda *a, **kw: report)
+
+    result = runner.invoke(app, ["corpus", "eval", str(path), "--k", "1"])
+    assert result.exit_code == 0, result.output
+    assert "lookup" in result.output
+    assert "cross_reference" in result.output
+    assert "Recall@1" in result.output
+
+
+def test_eval_reports_negative_abstention_hint(monkeypatch, tmp_path):
+    import esdc.corpus.evaluate as evaluate_mod
+    from esdc.corpus.evaluate import ClassReport, EvalReport
+
+    path = tmp_path / "queries.jsonl"
+    path.write_text(
+        '{"query": "q", "expected": [], "class": "negative"}\n', encoding="utf-8"
+    )
+    report = EvalReport(
+        n_queries=1,
+        by_class={"negative": ClassReport(n_queries=1, abstention=None)},
+    )
+    monkeypatch.setattr(evaluate_mod, "run_eval", lambda *a, **kw: report)
+
+    result = runner.invoke(app, ["corpus", "eval", str(path), "--k", "1"])
+    assert result.exit_code == 0, result.output
+    assert "--rerank" in result.output
+
+
+def test_eval_refresh_preserves_non_lookup_rows(
+    monkeypatch, tmp_path, fake_store, fake_llm
+):
+    """reconcile keys on expected[0]; it must never see a multi-doc or negative row."""
+    import json
+
+    from esdc.corpus.sampling import corpus_fingerprint
+
+    path = tmp_path / "corpus_queries.jsonl"
+    _patch_queries_path(monkeypatch, path)
+    _patch_provider_config(monkeypatch)
+    meta = {
+        "fingerprint": corpus_fingerprint(fake_store.fingerprint_rows()),
+        "margin": 0.05, "n": 3, "ks": [1],
+        "embedding_model": "qwen3", "generated_at": "2026-08-05T00:00:00",
+    }
+    path.write_text(
+        json.dumps({"_meta": meta})
+        + '\n{"query": "l", "expected": ["letter-0"], "class": "lookup",'
+          ' "file_hash": "h0"}\n'
+          '{"query": "x", "expected": ["letter-0", "letter-1"],'
+          ' "class": "cross_reference"}\n'
+          '{"query": "n", "expected": [], "class": "negative"}\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["corpus", "eval", "--refresh"])
+    assert result.exit_code == 0, result.output
+    rows = [json.loads(x) for x in path.read_text().splitlines()[1:]]
+    classes = [r.get("class") for r in rows]
+    assert "negative" in classes
+    assert "cross_reference" in classes
 
 
 def test_eval_refresh_missing_file_errors(monkeypatch, tmp_path):
