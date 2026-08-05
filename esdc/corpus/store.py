@@ -740,6 +740,20 @@ class CorpusStore:
         ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
+    def document_bodies(self) -> list[tuple[str, str, str]]:
+        """(doc_id, doc_number, markdown) for every document.
+
+        Build-time read for citation scanning: markdown is only in the
+        SQLite truth table, and the scan needs whole bodies rather than
+        chunks.
+        """
+        sconn = self._get_sqlite()
+        rows = sconn.execute(
+            f"SELECT doc_id, COALESCE(doc_number, ''), COALESCE(markdown, '') "
+            f"FROM {self.DOC_TABLE}"
+        ).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
+
     def sample_content(
         self, doc_id: str, chunk_seed: str | None = None
     ) -> dict[str, Any] | None:

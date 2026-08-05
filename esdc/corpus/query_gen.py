@@ -7,6 +7,7 @@ docs/superpowers/specs/2026-07-25-dynamic-corpus-queries-design.md.
 from __future__ import annotations
 
 import json
+import random
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -153,6 +154,52 @@ def generate(
     doc_ids = sample_docs(by_type, alloc, seed=seed)
     rows = _synthesize_rows(store, call, doc_ids, progress_cb)
     return rows, _make_meta(store, rows, margin, ks)
+
+
+_CROSS_REF_PROMPT = """You are building a retrieval benchmark for an Indonesian \
+oil & gas correspondence corpus. One letter follows up on an earlier letter. \
+Write ONE realistic search query a user would type when they want BOTH letters \
+— the original and the follow-up. Do not mention any letter number. Write in \
+Indonesian. Return only the query text.
+
+Follow-up letter excerpt:
+{chunk}
+
+Query:"""
+
+
+def generate_cross_reference(
+    store, call: Callable[[str], str], limit: int = 30, seed: int = 42
+) -> list[dict]:
+    """Query rows for document pairs linked by a letter-number citation."""
+    from esdc.corpus.citations import extract_letter_numbers, normalize_letter_number
+
+    bodies = store.document_bodies()
+    by_number: dict[str, str] = {}
+    for doc_id, doc_number, _md in bodies:
+        norm = normalize_letter_number(doc_number)
+        if norm:
+            by_number.setdefault(norm, doc_id)
+
+    pairs: list[tuple[str, str, str]] = []  # (citing, cited, excerpt)
+    for doc_id, _num, markdown in bodies:
+        for cited_num in extract_letter_numbers(markdown):
+            cited_id = by_number.get(cited_num)
+            if cited_id and cited_id != doc_id:
+                pairs.append((doc_id, cited_id, markdown[:1500]))
+                break  # one query per citing document
+
+    random.Random(seed).shuffle(pairs)
+    rows: list[dict] = []
+    for citing, cited, excerpt in pairs[:limit]:
+        query = strip_thinking_tags(
+            call(_CROSS_REF_PROMPT.format(chunk=excerpt))
+        ).strip()
+        if query:
+            rows.append(
+                {"query": query, "expected": [citing, cited], "class": "cross_reference"}
+            )
+    return rows
 
 
 def reconcile(

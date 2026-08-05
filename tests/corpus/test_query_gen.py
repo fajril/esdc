@@ -1,6 +1,7 @@
 from esdc.corpus.query_gen import (
     QueryMeta,
     generate,
+    generate_cross_reference,
     read_query_file,
     reconcile,
     synthesize_query,
@@ -243,3 +244,52 @@ def test_reconcile_keeps_legacy_row_without_file_hash():
     new_rows, _ = reconcile(store, _call, rows, meta, seed=1)
     assert legacy_row in new_rows
     assert sum(1 for r in new_rows if r["expected"][0] == legacy_id) == 1
+
+
+# --------------------------------------------------------------------------
+# Task 6: cross-reference query generation
+# --------------------------------------------------------------------------
+
+
+class BodyStore:
+    def __init__(self, bodies):
+        self._bodies = bodies  # list of (doc_id, doc_number, markdown)
+
+    def document_bodies(self):
+        return self._bodies
+
+
+def test_cross_reference_pairs_citing_and_cited():
+    bodies = [
+        ("doc-a", "SRT-0100/SKKO0000/2016/S1", "isi surat pertama"),
+        (
+            "doc-b",
+            "SRT-0200/SKKO0000/2017/S1",
+            "Menindaklanjuti surat No. SRT- 0100 /SKKO0000/2016/S1 tanggal ...",
+        ),
+    ]
+    rows = generate_cross_reference(BodyStore(bodies), lambda p: "surat lanjutan apa?")
+    assert len(rows) == 1
+    assert rows[0]["class"] == "cross_reference"
+    assert set(rows[0]["expected"]) == {"doc-a", "doc-b"}
+
+
+def test_cross_reference_ignores_self_citation():
+    bodies = [
+        ("doc-a", "SRT-0100/SKKO0000/2016/S1", "surat ini SRT-0100/SKKO0000/2016/S1"),
+    ]
+    assert generate_cross_reference(BodyStore(bodies), lambda p: "q") == []
+
+
+def test_cross_reference_respects_limit():
+    # Middle segment must be >=2 chars: LETTER_NUM_RE requires it (real
+    # nomor surat codes are multi-char, e.g. "SKKO0000"; a single-char
+    # segment like "X" is correctly rejected, matching the plain-ratio
+    # exclusion tested in test_citations.py).
+    bodies = [("doc-0", "SRT-0000/XX/2016/S1", "")]
+    for i in range(1, 6):
+        bodies.append(
+            (f"doc-{i}", f"SRT-000{i}/XX/2016/S1", "lihat SRT-0000/XX/2016/S1")
+        )
+    rows = generate_cross_reference(BodyStore(bodies), lambda p: "q", limit=3)
+    assert len(rows) == 3

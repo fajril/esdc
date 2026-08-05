@@ -976,6 +976,17 @@ def test_sample_content_missing_doc_returns_none(populated_store):
     assert populated_store.sample_content("does-not-exist") is None
 
 
+def test_document_bodies_returns_id_number_and_markdown(populated_store):
+    rows = populated_store.document_bodies()
+    assert rows
+    doc_id, doc_number, markdown = rows[0]
+    assert isinstance(doc_id, str)
+    assert isinstance(markdown, str)
+    assert doc_id == DOC["doc_id"]
+    assert doc_number == DOC["doc_number"]
+    assert markdown == DOC["markdown"]
+
+
 def test_refresh_mirror_rebuilds_documents_from_sqlite_truth(tmp_path):
     """A row written only to the SQLite truth appears in the mirror after refresh."""
     from esdc.corpus.store import CorpusStore
