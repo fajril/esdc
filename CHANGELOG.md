@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Knowledge graph
+
+**Fixed:** `esdc corpus learn` now links documents to their fields and working
+areas. `documents.field_name` and `wk_name` are stored as JSON array strings
+(`'["Gebang"]'`, `'["DAYUNG", "GELAM", "LETANG"]'`), but the deterministic
+linker compared them as scalars — the lookup key `'["gebang"]'` could never
+match a canonical name keyed `'gebang'`, so `ABOUT_FIELD` and `ABOUT_WK` edges
+had never been produced even once. Both columns are now parsed as arrays and
+every element is matched, so a document naming six fields gets six edges. On a
+972-document corpus this adds ~2 180 edges and drops the number of documents
+with no graph edge at all from 371 to 43; of the 43 remaining, 27 are
+regulations that carry no entity metadata by nature.
+
 ### Chat
 
 **Fixed:** conversation titles and tags no longer contain raw reasoning. With a

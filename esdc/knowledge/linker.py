@@ -13,6 +13,7 @@ from typing import Any
 
 import duckdb
 
+from esdc.corpus.context import _as_list
 from esdc.corpus.pod_matcher import _norm
 from esdc.knowledge.store import Edge, KnowledgeStore
 
@@ -114,9 +115,8 @@ def run_deterministic_linking(
             ("field_name", "ABOUT_FIELD", "field", fields),
             ("wk_name", "ABOUT_WK", "working_area", wks),
         ):
-            value = doc[col]
-            if value:
-                canonical = canon.get(str(value).strip().lower())
+            for name in _as_list(doc[col]):
+                canonical = canon.get(name.strip().lower())
                 if canonical:
                     edges.append(
                         Edge(

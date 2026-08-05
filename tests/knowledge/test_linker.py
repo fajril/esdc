@@ -50,6 +50,60 @@ def test_field_and_wk_metadata_exact_edges_use_canonical_names(sqlite_conn, duck
     assert store.edges_for("document", "DOC-C") == []
 
 
+def _insert_doc(conn, doc_id, wk_name, field_name):
+    conn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_hash, doc_type, "
+        "doc_number, wk_name, field_name) VALUES (?, ?, ?, 'letter', ?, ?, ?)",
+        (doc_id, f"{doc_id}.pdf", f"hash-{doc_id}", f"NO-{doc_id}",
+         wk_name, field_name),
+    )
+    conn.commit()
+
+
+def test_json_array_metadata_produces_edges(sqlite_conn, duck_conn):
+    """Production stores these columns as JSON arrays, not bare strings."""
+    _insert_doc(sqlite_conn, "DOC-J", '["Rokan"]', '["Duri"]')
+    store, _ = _run(sqlite_conn, duck_conn)
+    edges = store.edges_for("document", "DOC-J")
+    assert any(e.rel == "ABOUT_FIELD" and e.dst_id == "Duri" for e in edges)
+    assert any(e.rel == "ABOUT_WK" and e.dst_id == "Rokan" for e in edges)
+
+
+def test_json_array_with_several_values_links_each(sqlite_conn, duck_conn):
+    _insert_doc(sqlite_conn, "DOC-M", '["Rokan"]', '["Duri", "Kampung Baru"]')
+    store, _ = _run(sqlite_conn, duck_conn)
+    fields = sorted(
+        e.dst_id for e in store.edges_for("document", "DOC-M")
+        if e.rel == "ABOUT_FIELD"
+    )
+    assert fields == ["Duri", "Kampung Baru"]
+
+
+def test_json_array_values_are_matched_case_insensitively(sqlite_conn, duck_conn):
+    _insert_doc(sqlite_conn, "DOC-U", '["ROKAN"]', '["duri"]')
+    store, _ = _run(sqlite_conn, duck_conn)
+    edges = store.edges_for("document", "DOC-U")
+    assert any(e.rel == "ABOUT_FIELD" and e.dst_id == "Duri" for e in edges)
+    assert any(e.rel == "ABOUT_WK" and e.dst_id == "Rokan" for e in edges)
+
+
+def test_unknown_and_empty_metadata_values_produce_no_edge(sqlite_conn, duck_conn):
+    _insert_doc(sqlite_conn, "DOC-N", '["Tidak Ada WK"]', "[]")
+    store, _ = _run(sqlite_conn, duck_conn)
+    assert store.edges_for("document", "DOC-N") == []
+
+
+def test_unparseable_metadata_value_is_treated_as_a_plain_name(
+    sqlite_conn, duck_conn
+):
+    """A malformed JSON string must not raise; it falls back to the raw value."""
+    _insert_doc(sqlite_conn, "DOC-X", '["Rokan', "Duri")
+    store, _ = _run(sqlite_conn, duck_conn)
+    edges = store.edges_for("document", "DOC-X")
+    assert any(e.rel == "ABOUT_FIELD" and e.dst_id == "Duri" for e in edges)
+    assert not any(e.rel == "ABOUT_WK" for e in edges)
+
+
 def test_registry_edges_projects_revisions_hierarchy(sqlite_conn, duck_conn):
     store, _ = _run(sqlite_conn, duck_conn)
     pod1 = store.edges_for("pod", "PL-2019-0001-2-2-0")
