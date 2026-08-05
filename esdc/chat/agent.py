@@ -622,6 +622,49 @@ def create_agent(
                 tool_call_count,
             )
 
+        # Qwen-family chat templates (Qwen3.x, e.g. Qwen3.6-27B) reject ANY
+        # system message that is not the very first message: the template
+        # raises a Jinja exception ("System message must be at the
+        # beginning") which llama.cpp surfaces as HTTP 400 "Unable to
+        # generate parser for this template. Automatic parser generation
+        # failed". Trailing system messages here are the classifier
+        # strategy, tool-limit nudges, and compaction summaries, so merge
+        # all of their content into the leading system prompt. Providers
+        # that support mid-conversation system messages keep their current
+        # placement; an unknown model is treated as strict (a single
+        # leading system message works on every template).
+        if model_name is None or "qwen" in str(model_name).lower():
+            leading_system = messages_with_system[0]
+            trailing_system_text: list[str] = []
+            merged_messages = [leading_system]
+            for msg in messages_with_system[1:]:
+                if isinstance(msg, SystemMessage):
+                    if isinstance(msg.content, str):
+                        if msg.content:
+                            trailing_system_text.append(msg.content)
+                        # Empty system messages are noise; dropped.
+                    else:
+                        # Non-text content can't merge into the prompt
+                        # text; keep it in place so no content vanishes,
+                        # though a strict Qwen template may reject it.
+                        merged_messages.append(msg)
+                        logger.warning(
+                            "[AGENT] kept trailing SystemMessage with non-text "
+                            "content in place (Qwen template may reject it)"
+                        )
+                else:
+                    merged_messages.append(msg)
+            if trailing_system_text:
+                merged_system_content = "\n\n".join(
+                    [str(leading_system.content), *trailing_system_text]
+                )
+                merged_messages[0] = SystemMessage(content=merged_system_content)
+                messages_with_system = merged_messages
+                logger.info(
+                    "[AGENT] merged %d trailing SystemMessage(s) into leading system prompt",
+                    len(trailing_system_text),
+                )
+
         allowed_tools = state.get("allowed_tools", list(all_tools.keys()))
         selected_tools = [
             all_tools[name] for name in allowed_tools if name in all_tools
