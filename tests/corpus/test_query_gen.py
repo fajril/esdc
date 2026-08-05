@@ -2,6 +2,7 @@ from esdc.corpus.query_gen import (
     QueryMeta,
     generate,
     generate_cross_reference,
+    generate_thematic,
     read_query_file,
     reconcile,
     synthesize_query,
@@ -293,3 +294,48 @@ def test_cross_reference_respects_limit():
         )
     rows = generate_cross_reference(BodyStore(bodies), lambda p: "q", limit=3)
     assert len(rows) == 3
+
+
+# --------------------------------------------------------------------------
+# Task 7: thematic query generation
+# --------------------------------------------------------------------------
+
+
+class ThemeStore:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def list_documents(self):
+        return self._docs
+
+
+def _theme_doc(doc_id, wk, year, subject):
+    return {
+        "doc_id": doc_id, "doc_type": "letter", "subject": subject,
+        "wk_name": [wk], "doc_date": f"{year}-06-01",
+    }
+
+
+def test_thematic_groups_by_wk_and_year():
+    docs = [_theme_doc(f"d{i}", "Rokan (2019)", 2019, f"Persetujuan POD {i}")
+            for i in range(6)]
+    rows = generate_thematic(ThemeStore(docs), lambda p: "apa isu utama di Rokan 2019?")
+    assert len(rows) == 1
+    assert rows[0]["class"] == "thematic"
+    assert len(rows[0]["expected"]) == 6
+    assert rows[0]["seed_filter"] == {"wk_name": "Rokan (2019)", "year": 2019}
+
+
+def test_thematic_skips_groups_below_min():
+    docs = [_theme_doc(f"d{i}", "Jabung", 2020, f"S{i}") for i in range(3)]
+    assert generate_thematic(ThemeStore(docs), lambda p: "q", min_group=5) == []
+
+
+def test_thematic_skips_docs_without_wk_or_date():
+    docs = [
+        {"doc_id": "d1", "doc_type": "letter", "subject": "S", "wk_name": [],
+         "doc_date": "2020-01-01"},
+        {"doc_id": "d2", "doc_type": "letter", "subject": "S", "wk_name": ["X"],
+         "doc_date": None},
+    ]
+    assert generate_thematic(ThemeStore(docs), lambda p: "q", min_group=1) == []

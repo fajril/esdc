@@ -202,6 +202,56 @@ def generate_cross_reference(
     return rows
 
 
+_THEMATIC_PROMPT = """You are building a retrieval benchmark for an Indonesian \
+oil & gas correspondence corpus. Below are the subjects of several letters that \
+share a working area and a year. Write ONE realistic thematic question a user \
+would type when they want to understand what these letters are collectively \
+about. The question must NOT name any single letter. Write in Indonesian. \
+Return only the query text.
+
+Subjects:
+{subjects}
+
+Query:"""
+
+
+def generate_thematic(
+    store,
+    call: Callable[[str], str],
+    min_group: int = 5,
+    limit: int = 20,
+    seed: int = 42,
+) -> list[dict]:
+    """Query rows for metadata-defined themes (working area + year)."""
+    groups: dict[tuple[str, int], list[dict]] = {}
+    for d in store.list_documents():
+        wks = d.get("wk_name") or []
+        date = d.get("doc_date")
+        if not wks or not date:
+            continue
+        year = int(str(date)[:4])
+        groups.setdefault((str(wks[0]), year), []).append(d)
+
+    eligible = [(k, v) for k, v in groups.items() if len(v) >= min_group]
+    eligible.sort(key=lambda kv: (kv[0][0], kv[0][1]))
+    random.Random(seed).shuffle(eligible)
+
+    rows: list[dict] = []
+    for (wk, year), docs in eligible[:limit]:
+        subjects = "\n".join(f"- {d.get('subject') or ''}" for d in docs[:15])
+        query = strip_thinking_tags(
+            call(_THEMATIC_PROMPT.format(subjects=subjects))
+        ).strip()
+        if query:
+            rows.append({
+                "query": query,
+                "expected": [d["doc_id"] for d in docs],
+                "class": "thematic",
+                "seed_filter": {"wk_name": wk, "year": year},
+            })
+    return rows
+
+
 def reconcile(
     store,
     call: Callable[[str], str],
