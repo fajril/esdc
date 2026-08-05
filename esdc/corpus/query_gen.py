@@ -55,12 +55,17 @@ def read_query_file(path: Path) -> tuple[list[dict], QueryMeta | None]:
     return rows, meta
 
 
-_PROMPT = """You are building a retrieval benchmark for an Indonesian oil & gas \
-document corpus. Given a document's subject and an excerpt, write ONE realistic \
-search query a user would type to find THIS document. Match the language of the \
-source (Indonesian or English). Return only the query text, no quotes, no prefix.
-
-Subject: {subject}
+# The document's subject is deliberately NOT in this prompt.
+# build_context_prefix stamps the subject onto every chunk's embed_text,
+# which is what both the vector index and the FTS index are built on — a
+# query synthesized from the subject is a paraphrase of indexed metadata,
+# and the benchmark ends up scoring itself.
+_LOOKUP_PROMPT = """You are building a retrieval benchmark for an Indonesian \
+oil & gas document corpus. Given an EXCERPT from one document, write ONE \
+realistic search query a user would type to find THIS document. Base the query \
+only on what the excerpt says — do not invent a title. Match the language of \
+the source (Indonesian or English). Return only the query text, no quotes, no \
+prefix.
 
 Excerpt:
 {chunk}
@@ -68,11 +73,9 @@ Excerpt:
 Query:"""
 
 
-def synthesize_query(
-    call: Callable[[str], str], subject: str, chunk_text: str
-) -> str:
-    """Ask the LLM for one realistic query grounded in this document."""
-    prompt = _PROMPT.format(subject=subject or "(none)", chunk=chunk_text[:1500])
+def synthesize_query(call: Callable[[str], str], chunk_text: str) -> str:
+    """Ask the LLM for one realistic query grounded in this excerpt."""
+    prompt = _LOOKUP_PROMPT.format(chunk=chunk_text[:1500])
     return strip_thinking_tags(call(prompt)).strip()
 
 
@@ -100,14 +103,17 @@ def _synthesize_rows(
     rows: list[dict] = []
     total = len(doc_ids)
     for i, doc_id in enumerate(doc_ids, 1):
-        content = store.sample_content(doc_id)
+        # Seeded on doc_id: the first chunk of a letter is the letterhead,
+        # so a benchmark built from it asks about the header block.
+        content = store.sample_content(doc_id, chunk_seed=doc_id)
         if content is None:
             continue
-        query = synthesize_query(call, content["subject"], content["chunk_text"])
+        query = synthesize_query(call, content["chunk_text"])
         rows.append(
             {
                 "query": query,
                 "expected": [doc_id],
+                "class": "lookup",
                 "file_hash": content.get("file_hash", ""),
             }
         )

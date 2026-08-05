@@ -55,7 +55,7 @@ class FakeStore:
     def fingerprint_rows(self):
         return [(d["doc_id"], d["file_hash"]) for d in self._docs.values()]
 
-    def sample_content(self, doc_id):
+    def sample_content(self, doc_id, chunk_seed=None):
         return self._docs.get(doc_id)
 
 
@@ -79,10 +79,32 @@ def test_synthesize_query_uses_caller():
     def cap(prompt):
         seen["prompt"] = prompt
         return "  a question?  "
-    out = synthesize_query(cap, subject="Surat X", chunk_text="isi")
-    assert out == "a question?"          # stripped
-    assert "Surat X" in seen["prompt"]   # subject grounded in prompt
-    assert "isi" in seen["prompt"]       # chunk grounded in prompt
+    out = synthesize_query(cap, "isi surat tentang cadangan")
+    assert out == "a question?"                          # stripped
+    assert "isi surat tentang cadangan" in seen["prompt"]  # chunk grounded
+
+
+def test_lookup_prompt_never_contains_the_subject():
+    """The subject is stamped onto every chunk's embed_text by the context.
+
+    prefix, so a query synthesized from it is a paraphrase of indexed
+    metadata and the benchmark scores itself.
+    """
+    seen = {}
+
+    def cap(prompt):
+        seen["prompt"] = prompt
+        return "berapa cadangan terbukti lapangan itu?"
+
+    out = synthesize_query(cap, "isi surat tentang cadangan")
+    assert out == "berapa cadangan terbukti lapangan itu?"
+    assert "Subject:" not in seen["prompt"]
+
+
+def test_generated_rows_carry_lookup_class():
+    store = FakeStore(_docs(1))
+    rows, _meta = generate(store, _call, n=1)
+    assert rows[0]["class"] == "lookup"
 
 
 def test_synthesize_query_strips_reasoning_block():
@@ -98,7 +120,7 @@ def test_synthesize_query_strips_reasoning_block():
         think = "<think>The user wants a search query about reserves.</think>\n"
         return think + "apa isi surat cadangan?"
 
-    out = synthesize_query(cap, subject="Surat X", chunk_text="isi")
+    out = synthesize_query(cap, "isi")
     assert out == "apa isi surat cadangan?"
     assert "<think>" not in out
     assert "search query" not in out

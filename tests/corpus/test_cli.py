@@ -573,7 +573,7 @@ class _FakeEvalStore:
     def fingerprint_rows(self):
         return [(d["doc_id"], d["file_hash"]) for d in self._docs.values()]
 
-    def sample_content(self, doc_id):
+    def sample_content(self, doc_id, chunk_seed=None):
         return self._docs.get(doc_id)
 
     def search(self, query, limit=10, filters=None, rerank=None):

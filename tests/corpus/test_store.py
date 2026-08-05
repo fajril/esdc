@@ -840,6 +840,39 @@ def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
     Reranker._failed = False
 
 
+def test_sample_content_default_is_first_chunk(store_with_doc_factory):
+    store, doc = store_with_doc_factory(
+        chunk_size=20, markdown="# A\n\nalpha satu\n\n# B\n\nbeta dua"
+    )
+    got = store.sample_content(doc["doc_id"])
+    first = store._get_connection().execute(
+        "SELECT chunk_text FROM document_chunks ORDER BY chunk_index LIMIT 1"
+    ).fetchone()[0]
+    assert got["chunk_text"] == first
+
+
+def test_sample_content_seeded_pick_is_deterministic(store_with_doc_factory):
+    store, doc = store_with_doc_factory(
+        chunk_size=20, markdown="# A\n\nalpha satu\n\n# B\n\nbeta dua"
+    )
+    doc_id = doc["doc_id"]
+    a = store.sample_content(doc_id, chunk_seed=doc_id)
+    b = store.sample_content(doc_id, chunk_seed=doc_id)
+    assert a["chunk_text"] == b["chunk_text"]
+    assert a["chunk_text"]
+
+
+def test_sample_content_seed_can_select_a_later_chunk(store_with_doc_factory):
+    store, doc = store_with_doc_factory(
+        chunk_size=20, markdown="# A\n\nalpha satu\n\n# B\n\nbeta dua"
+    )
+    texts = {
+        store.sample_content(doc["doc_id"], chunk_seed=s)["chunk_text"]
+        for s in ("a", "b", "c", "d", "e", "f", "g", "h")
+    }
+    assert len(texts) > 1  # the seed actually varies the pick
+
+
 def test_search_surfaces_rerank_score(store_with_doc_factory, monkeypatch):
     """rerank_score must reach the payload; evaluate.py needs it for negatives."""
     import esdc.corpus.reranker as reranker_mod

@@ -38,6 +38,7 @@ merge) rather than inventing new syntax.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import sqlite3
@@ -739,8 +740,16 @@ class CorpusStore:
         ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
-    def sample_content(self, doc_id: str) -> dict[str, Any] | None:
-        """doc_type + subject + first chunk text for one doc, for query synthesis."""
+    def sample_content(
+        self, doc_id: str, chunk_seed: str | None = None
+    ) -> dict[str, Any] | None:
+        """doc_type + subject + one chunk's text for one doc, for query synthesis.
+
+        chunk_seed=None returns the first chunk. Given a seed, one chunk
+        is picked deterministically from the whole document: the first
+        chunk of a letter is the letterhead, which yields a benchmark
+        query about the header block rather than about the substance.
+        """
         sconn = self._get_sqlite()
         row = sconn.execute(
             f"SELECT doc_id, doc_type, subject, file_hash FROM {self.DOC_TABLE} "
@@ -750,16 +759,22 @@ class CorpusStore:
         if row is None:
             return None
         doc = dict(row)
-        chunk = (
+        rows = (
             self._get_connection()
             .execute(
                 f"SELECT chunk_text FROM {self.CHUNK_TABLE} "
-                f"WHERE doc_id = ? ORDER BY chunk_index LIMIT 1",
+                f"WHERE doc_id = ? ORDER BY chunk_index",
                 [doc_id],
             )
-            .fetchone()
+            .fetchall()
         )
-        doc["chunk_text"] = chunk[0] if chunk else ""
+        if not rows:
+            doc["chunk_text"] = ""
+        elif chunk_seed is None:
+            doc["chunk_text"] = rows[0][0]
+        else:
+            digest = hashlib.sha1(chunk_seed.encode("utf-8")).hexdigest()
+            doc["chunk_text"] = rows[int(digest, 16) % len(rows)][0]
         doc["subject"] = doc.get("subject") or ""
         return doc
 
