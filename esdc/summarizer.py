@@ -26,6 +26,7 @@ from esdc.configs import Config
 from esdc.console import console
 from esdc.db_security import _load_sql_script
 from esdc.dbmanager import _ensure_duckdb_database, get_duckdb_connection
+from esdc.llm_text import strip_thinking_tags
 
 logger = logging.getLogger(__name__)
 
@@ -1976,11 +1977,7 @@ def _repair_json(raw: str) -> str:
 
 
 def _parse_summary_response(content: str) -> dict[str, Any]:
-    cleaned = content.strip()
-    if cleaned.startswith("<think>"):
-        end_idx = cleaned.find("</think>")
-        if end_idx != -1:
-            cleaned = cleaned[end_idx + len("</think>") :].strip()
+    cleaned = strip_thinking_tags(content.strip()).strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")
         if cleaned.startswith("json"):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import sqlite3
 
 from esdc.knowledge.learn import run_learn
 from esdc.knowledge.store import KnowledgeStore
@@ -103,6 +105,62 @@ def test_failed_doc_is_counted_and_not_marked_learned(sqlite_conn, duck_conn):
         sqlite_conn=sqlite_conn, duck_conn=duck_conn, llm_caller=_llm, progress=False
     )
     assert report2.docs_processed == 1
+
+
+def test_mirror_refresh_failure_is_warning_not_fatal(sqlite_conn, duck_conn, monkeypatch):
+    """A refresh_all failure during learn degrades to a warning, not a fatal error.
+
+    A refresh_all failure (e.g. lost DuckDB write lock) must not abort
+    learn -- everything above is already committed to the SQLite truth by
+    then, so it's a stale mirror, not a failed learn run (same contract as
+    the portal's _refresh_mirror_after_save).
+    """
+    import esdc.corpus.mirror as mirror
+
+    def boom(conn, path):
+        raise RuntimeError("lock held by another process")
+
+    monkeypatch.setattr(mirror, "refresh_all", boom)
+
+    report = run_learn(
+        sqlite_conn=sqlite_conn, duck_conn=duck_conn, llm_caller=_llm, progress=False
+    )
+    assert report.docs_processed == 3
+    assert report.docs_failed == 0
+
+
+def test_in_memory_sqlite_skips_mirror_refresh_without_warning(
+    sqlite_conn, duck_conn, caplog
+):
+    """An in-memory sqlite_conn must not trigger a mirror_refresh_failed warning.
+
+    As some callers/tests inject, PRAGMA database_list's file column is ''
+    for an in-memory connection -- Path('') resolves to '.', which
+    ATTACHes the wrong database and used to fail the refresh on every
+    learn run, logging a mirror_refresh_failed warning every time. The
+    refresh should be skipped outright for an in-memory connection instead
+    of attempted and warned about.
+    """
+    mem_conn = sqlite3.connect(":memory:")
+    mem_conn.row_factory = sqlite3.Row
+    mem_conn.execute("PRAGMA foreign_keys = ON")
+    sqlite_conn.backup(mem_conn)
+
+    try:
+        with caplog.at_level(logging.WARNING):
+            report = run_learn(
+                sqlite_conn=mem_conn,
+                duck_conn=duck_conn,
+                llm_caller=_llm,
+                progress=False,
+            )
+        assert report.docs_processed == 3
+        assert report.docs_failed == 0
+        assert not any(
+            "mirror_refresh_failed" in record.message for record in caplog.records
+        )
+    finally:
+        mem_conn.close()
 
 
 def test_limit_caps_llm_docs(sqlite_conn, duck_conn):

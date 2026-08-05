@@ -76,7 +76,8 @@ def sqlite_conn(tmp_path: Path) -> sqlite3.Connection:
             file_name TEXT, file_hash TEXT, doc_type TEXT, doc_topic TEXT,
             doc_number TEXT, doc_date TEXT, subject TEXT,
             wk_name TEXT, field_name TEXT, project_name TEXT,
-            pod_name TEXT, suggested_pod_ids TEXT, markdown TEXT
+            pod_name TEXT, suggested_pod_ids TEXT, markdown TEXT,
+            raw_entities TEXT, metadata TEXT, ingested_at TEXT
         )
         """
     )

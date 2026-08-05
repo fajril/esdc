@@ -13,6 +13,7 @@ cosine space; check_or_seed_probe enforces that at runtime.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import math
@@ -35,6 +36,49 @@ _load_lock = threading.Lock()
 # this. The chat server can run corpus tools concurrently.
 _infer_lock = threading.Lock()
 _model: Any | None = None
+# Set once _close_model begins so a late _get_model() cannot start a
+# reload that would outlive the atexit handlers (that model would never
+# be freed — the very SIGABRT this module removes).
+_closing = False
+
+
+def _close_model() -> None:
+    """Free the llama.cpp model before the process exits.
+
+    ggml-metal's dylib destructor runs at exit() and asserts every
+    residency set was released (ggml-metal-device.m: GGML_ASSERT
+    ([rsets->data count] == 0)). A model still alive then aborts the
+    process with SIGABRT — exit 134 — after the work already succeeded.
+    Dropping the last Python reference is not enough on its own: pytest
+    keeps models alive in retained tracebacks, and a daemon thread's
+    frame outlives interpreter finalization entirely.
+
+    Both locks are taken with a timeout because atexit runs on the main
+    thread while a daemon thread may still be inside _get_model() or
+    embed(); freeing the model under them would be a use-after-free.
+    Giving up restores the old abort — same outcome, no memory
+    corruption. Lock order is always _load_lock then _infer_lock.
+    """
+    global _model, _closing
+    _closing = True
+    if not _load_lock.acquire(timeout=2.0):
+        logger.warning("[Embedding] model loading at exit; skipping close")
+        return
+    try:
+        if _model is None:
+            return
+        if not _infer_lock.acquire(timeout=2.0):
+            logger.warning("[Embedding] model busy at exit; skipping close")
+            return
+        try:
+            _model.close()
+        finally:
+            # Clear even if close() raises so a handler re-registered by
+            # a load that finished mid-atexit never double-frees.
+            _model = None
+            _infer_lock.release()
+    finally:
+        _load_lock.release()
 
 
 def _get_model() -> Any:
@@ -42,6 +86,15 @@ def _get_model() -> Any:
     global _model
     with _load_lock:
         if _model is None:
+            if _closing:
+                # Shutdown has begun; a model loaded now would outlive
+                # the atexit handlers and leak Metal buffers at exit().
+                # Raising rather than returning None keeps this function's
+                # contract — callers dereference the result immediately.
+                raise RuntimeError(
+                    "[Embedding] model load refused: interpreter shutdown "
+                    "has begun."
+                )
             # Imports inside the try: a broken llama-cpp-python install
             # (ImportError) must surface the same actionable message as a
             # failed download.
@@ -61,6 +114,9 @@ def _get_model() -> Any:
                     "First use needs internet to download the GGUF (~600 MB, "
                     f"cached under ~/.esdc/models afterwards). Error: {e}"
                 ) from e
+            # Registered on load, not at import: a process that never
+            # embeds owns no Metal buffers and needs no teardown.
+            atexit.register(_close_model)
             logger.info("[Embedding] internal model loaded | model=%s", MODEL_ID)
         return _model
 

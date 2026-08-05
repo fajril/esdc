@@ -1869,6 +1869,11 @@ _DOC_TOPIC_VALUES = enum_values("doc_topic")
 _DOC_SCHEMA_CONTEXT = render_tool_context()
 
 
+def _doc_filters_from_args(**kwargs: Any) -> dict[str, Any]:
+    """Collect the non-None corpus filter arguments into a filters dict."""
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
 @tool("Document Search")
 def search_documents(
     query: Annotated[
@@ -1925,20 +1930,14 @@ def search_documents(
     - search_documents("rencana kerja", doc_topic="wpnb") -> WP&B documents
     - search_documents("berita acara serah terima", year=2025) -> 2025 BA docs
     """
-    # Build filters dict from optional parameters
-    filters: dict[str, Any] = {}
-    if doc_type is not None:
-        filters["doc_type"] = doc_type
-    if doc_topic is not None:
-        filters["doc_topic"] = doc_topic
-    if year is not None:
-        filters["year"] = year
-    if wk_name is not None:
-        filters["wk_name"] = wk_name
-    if field_name is not None:
-        filters["field_name"] = field_name
-    if project_name is not None:
-        filters["project_name"] = project_name
+    filters = _doc_filters_from_args(
+        doc_type=doc_type,
+        doc_topic=doc_topic,
+        year=year,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+    )
 
     cache = _get_tool_cache()
     cache_key = _tool_cache_key("search_documents", query=query, limit=limit, **filters)
@@ -2008,6 +2007,214 @@ search_documents.description = (
     + "\n\nDocument metadata schema:\n"
     + _DOC_SCHEMA_CONTEXT
 )
+
+
+@tool("Document Aggregator")
+def aggregate_documents(
+    query: Annotated[
+        str | None,
+        "Term or phrase to match in document BODY text. Leave empty for a "
+        "pure metadata count/list by doc_type/doc_topic/year/entity.",
+    ] = None,
+    mode: Annotated[
+        str, "'count' (exhaustive total) or 'list' (deduped documents + count)."
+    ] = "count",
+    match: Annotated[
+        str,
+        "'hybrid' (default) = exact count plus semantically-similar "
+        "candidates. 'keyword' = exact only. 'semantic' = ranking only.",
+    ] = "hybrid",
+    group_by: Annotated[
+        str | None,
+        "Facet dimension: year, doc_type, doc_level, doc_topic, wk_name, "
+        "field_name, project_name.",
+    ] = None,
+    semantic_candidates: Annotated[
+        int,
+        "How many semantically-similar documents to return alongside the "
+        "exact count. Does not affect count.",
+    ] = 20,
+    limit: Annotated[
+        int, "Max documents returned in list mode. Counts are always exhaustive."
+    ] = 50,
+    doc_type: Annotated[str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."] = None,
+    doc_topic: Annotated[
+        str | None, f"Filter by business topic: {', '.join(_DOC_TOPIC_VALUES)}."
+    ] = None,
+    doc_level: Annotated[str | None, "Filter by document level."] = None,
+    year: Annotated[int | None, "Filter by document year."] = None,
+    wk_name: Annotated[str | None, "Filter by working area (ILIKE pattern)."] = None,
+    field_name: Annotated[str | None, "Filter by field name (ILIKE pattern)."] = None,
+    project_name: Annotated[
+        str | None, "Filter by project name (ILIKE pattern)."
+    ] = None,
+    pod_name: Annotated[str | None, "Filter by POD name (ILIKE pattern)."] = None,
+    sender: Annotated[
+        str | None,
+        "Filter by sending party ('dari X'), substring match. On an approval "
+        "letter the SENDER is the approving authority, so 'disetujui oleh "
+        "Menteri ESDM' means sender='Menteri ESDM' (also SKK Migas, BPMA).",
+    ] = None,
+    recipient: Annotated[
+        str | None,
+        "Filter by receiving party ('untuk X' / 'kepada X'), substring match. "
+        "On an approval letter this is the KKKS being approved.",
+    ] = None,
+    subject: Annotated[
+        str | None, "Filter by letter subject line, substring match."
+    ] = None,
+    doc_number: Annotated[
+        str | None, "Filter by document/letter number, substring match."
+    ] = None,
+) -> str:
+    """Count or list ALL documents matching a criterion — not the top few.
+
+    Use this tool when:
+    - The user asks HOW MANY documents: "berapa dokumen ...", "how many
+      documents ..."
+    - The user asks WHICH documents, exhaustively: "dokumen apa saja ...",
+      "dokumen mana saja ...", "list all documents that ..."
+    - The user wants a breakdown by year/type/topic/entity (use group_by)
+
+    DO NOT use search_documents for these — it returns only the top few
+    passages, so any count derived from it is wrong.
+
+    match="hybrid" (default) gives you both: `count` is the EXACT number
+    of documents whose body literally contains every query term, and
+    `semantic_candidates` lists documents that are semantically related
+    but did NOT contain the terms, each with a similarity score.
+
+    How to report a hybrid result:
+    - `count` is the answer. It is exact, reproducible, and safe to state
+      as a number.
+    - `semantic_candidates` are SUGGESTIONS, not part of the count. Say
+      "N documents contain the term; M others appear related and may be
+      worth reviewing". Never add the two together into one figure.
+    - `provenance.exact_total` equals `count` and is a real total.
+      `provenance.semantic_extra` is how many candidates were RETURNED —
+      the size of a ranking you requested, not a measurement. Ask for 200
+      and it says 200. Never report it as "200 related documents exist".
+
+    match="keyword" skips the semantic pass entirely when you only want
+    the defensible count. match="semantic" returns just the ranking; there
+    `count` means "candidates returned", NOT a total, and approximate is
+    true -- say so.
+
+    There is no similarity threshold: absolute similarity scores are not
+    comparable between queries (a 0.5 cutoff selects 6 documents for one
+    query and 342 for another on this corpus), so the semantic side is
+    always a ranking, capped by semantic_candidates.
+
+    Offshore/onshore is a SQL attribute, not a document field: use
+    execute_sql with is_offshore for that, not this tool.
+
+    Returns:
+    JSON string with status, mode, match, approximate, count, and either
+    doc_ids (count mode) or documents (list mode), plus facets when
+    group_by is set. Facets over multi-valued columns (doc_topic,
+    wk_name, field_name, project_name) are flagged multi_valued and do
+    NOT sum to count.
+
+    `count` is ALWAYS the complete, exhaustive total over every matching
+    document — it never shrinks because of `limit`. The doc_ids/documents
+    ARRAY, however, is capped at `limit` items. When the array holds
+    fewer items than `count`, the payload adds `returned` (items in the
+    array) and `truncated: true`, plus a `note` string spelling out that
+    the array is a partial page. NEVER report `returned` or the array's
+    length as if it were the answer to "how many" — always report `count`,
+    and when `truncated` is true, say the list you're showing is partial
+    (e.g. "150 documents match; showing the first 50") rather than
+    presenting the partial array as the complete set. Raise `limit` or add
+    filters if the user needs to see more of the array itself.
+
+    Examples:
+    - aggregate_documents("separator", mode="list") -> every doc mentioning it
+    - aggregate_documents("akan onstream 2026", match="semantic", year=2026)
+    - aggregate_documents(mode="count", doc_topic="pod", group_by="year")
+    """
+    filters = _doc_filters_from_args(
+        doc_type=doc_type,
+        doc_topic=doc_topic,
+        doc_level=doc_level,
+        year=year,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+        pod_name=pod_name,
+        sender=sender,
+        recipient=recipient,
+        subject=subject,
+        doc_number=doc_number,
+    )
+
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "aggregate_documents",
+        query=query,
+        mode=mode,
+        match=match,
+        group_by=group_by,
+        semantic_candidates=semantic_candidates,
+        limit=limit,
+        **filters,
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=aggregate_documents key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    store = None
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        store = CorpusStore(embedder=_get_corpus_embedder())
+        store.ensure_tables()
+        result = store.aggregate(
+            query=query,
+            mode=mode,
+            match=match,
+            group_by=group_by,
+            semantic_candidates=semantic_candidates,
+            limit=limit,
+            filters=filters if filters else None,
+        )
+
+        if result.get("status") == "not_available":
+            hint = (
+                "Run: esdc corpus extract <folder>, review the sidecars, "
+                "then esdc corpus commit <folder>"
+            )
+            store_msg = result.get("message")
+            result["message"] = f"{store_msg} {hint}" if store_msg else hint
+
+        result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        if result.get("status") in ("success", "no_results"):
+            cache.set(cache_key, result_str)
+        return result_str
+
+    except Exception as e:
+        logger.error("[DocAggregate] tool failed | query=%s error=%s", query, e)
+        return json.dumps({"status": "error", "message": str(e), "query": query})
+    finally:
+        if store is not None:
+            store.close()
+
+
+# Same reasoning as search_documents.description above: the LLM-facing
+# text is `.description`, captured at decoration time.
+aggregate_documents.description = (
+    aggregate_documents.description
+    + "\n\nDocument metadata schema:\n"
+    + _DOC_SCHEMA_CONTEXT
+)
+
+# `similarity_threshold` was removed rather than deprecated (see the
+# docstring above): a caller that still passes it must get a loud error,
+# not a silent no-op. Pydantic v2's default is to ignore unrecognized
+# fields, so without this the removed kwarg would be dropped quietly and
+# the caller would never learn it did nothing. Forbidding extras on this
+# tool's schema turns that into a ValidationError.
+aggregate_documents.args_schema.model_config["extra"] = "forbid"
+aggregate_documents.args_schema.model_rebuild(force=True)
 
 
 @tool("Document Reader")

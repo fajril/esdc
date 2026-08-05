@@ -254,6 +254,17 @@ class TestQueryClassifier:
         result = self.classifier.classify("berapa cadangan Duri")
         assert result.query_type == QueryType.SIMPLE_FACTUAL
 
+    def test_enumeration_queries_classify_as_document(self):
+        """Exhaustive-count/list phrasing routes to DOCUMENT for aggregate_documents."""
+        for query in (
+            "berapa dokumen yang menyatakan akan onstream di 2026?",
+            "dokumen apa saja yang menyebutkan kata separator?",
+            "dokumen mana saja yang membahas separator?",
+        ):
+            assert self.classifier.classify(query).query_type == QueryType.DOCUMENT, (
+                query
+            )
+
 
 class TestToolSelection:
     """Test tool selection based on classification."""
@@ -372,6 +383,20 @@ class TestToolSelection:
             tools = get_tools_for_classification(classification)
             assert "Document Search" in tools, f"missing for {qtype.name}"
             assert "Document Reader" in tools, f"missing for {qtype.name}"
+
+    def test_document_aggregator_is_bound_for_every_query_type(self):
+        """A tool the classifier does not bind is a tool the model cannot call."""
+        for qtype in QueryType:
+            classification = QueryClassification(
+                query_type=qtype,
+                confidence=0.9,
+                detected_entities={},
+                suggested_table=None,
+                suggested_columns=[],
+                reason="Test",
+            )
+            tools = get_tools_for_classification(classification)
+            assert "Document Aggregator" in tools, f"missing for {qtype.name}"
 
 
 class TestPromptFormatting:

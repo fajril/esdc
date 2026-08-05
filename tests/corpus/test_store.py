@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import duckdb
@@ -78,6 +79,7 @@ def test_force_replaces_document(store):
 
 def test_search_returns_inserted_doc(store):
     store.insert_document(DOC, [Chunk(0, "Surat", "persetujuan POD lapangan Duri")])
+    store.refresh_mirror()  # search hydrates/joins off the mirror, not the insert
     store.rebuild_indexes()
     result = store.search("persetujuan POD", limit=5, filters=None)
     assert result["status"] == "success"
@@ -87,6 +89,7 @@ def test_search_returns_inserted_doc(store):
 
 def test_search_filter_excludes(store):
     store.insert_document(DOC, [Chunk(0, None, "persetujuan POD")])
+    store.refresh_mirror()  # filtered search joins the mirror
     store.rebuild_indexes()
     result = store.search("persetujuan", limit=5, filters={"doc_type": "mom"})
     assert result["results"] == []
@@ -96,6 +99,7 @@ def test_search_results_include_doc_topic(store):
     doc = dict(DOC)
     doc["doc_topic"] = ["wpnb"]
     store.insert_document(doc, [Chunk(0, None, "persetujuan POD")])
+    store.refresh_mirror()  # doc_topic is hydrated from the mirror
     store.rebuild_indexes()
     result = store.search("persetujuan", limit=5, filters=None)
     assert result["results"][0]["doc_topic"] == ["wpnb"]
@@ -103,6 +107,7 @@ def test_search_results_include_doc_topic(store):
 
 def test_get_document(store):
     store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # get_document is a serving read off the mirror
     doc = store.get_document("abc123")
     assert doc["markdown"] == "# Surat\nisi"
     assert store.get_document("nope") is None
@@ -110,10 +115,21 @@ def test_get_document(store):
 
 def test_list_documents(store):
     store.insert_document(DOC, [Chunk(0, None, "a"), Chunk(1, None, "b")])
+    doc_no_chunks = dict(DOC)
+    doc_no_chunks["doc_id"] = "nochunks1"
+    doc_no_chunks["file_hash"] = "cd" * 32
+    doc_no_chunks["file_name"] = "nochunks.pdf"
+    store.insert_document(doc_no_chunks, [])
+    store.refresh_mirror()  # list_documents is a serving read off the mirror
     docs = store.list_documents()
-    assert len(docs) == 1
-    assert docs[0]["doc_id"] == "abc123"
-    assert docs[0]["n_chunks"] == 2
+    by_id = {d["doc_id"]: d for d in docs}
+    assert len(docs) == 2
+    assert by_id["abc123"]["n_chunks"] == 2
+    # A document with zero chunks must still appear in the results, with
+    # n_chunks == 0 (not missing, not None) — the LEFT JOIN + COUNT(c.chunk_id)
+    # must not drop or null out rows with no matching chunks.
+    assert "nochunks1" in by_id
+    assert by_id["nochunks1"]["n_chunks"] == 0
 
 
 def test_clear(store):
@@ -246,6 +262,7 @@ def test_search_entity_filter_is_case_insensitive_substring(tmp_path: Path):
         doc2 = _doc_variant("d2", "d2.pdf")
         doc2["wk_name"] = ["Bangkanai"]
         store.insert_document(doc2, [Chunk(0, None, "isi d2")])
+        store.refresh_mirror()  # this test queries the DuckDB mirror directly
 
         clause, params = store._build_filter_clause({"wk_name": "rokan"}, "d")
         rows = store._get_connection().execute(
@@ -272,6 +289,7 @@ def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
         doc = _doc_variant("d1", "d1.pdf")
         doc["wk_name"] = ["Rokan"]
         store.insert_document(doc, [Chunk(0, "Report", "drilling report content")])
+        store.refresh_mirror()  # wk_name is hydrated from the mirror
         store.rebuild_indexes()
         result = store.search("drilling")
         assert result["status"] == "success"
@@ -282,6 +300,7 @@ def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
 
 def test_insert_and_get_pod_name_round_trip(store):
     store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # get_document/list_documents are serving reads
     got = store.get_document(DOC["doc_id"])
     assert got["pod_name"] == ["POD Mengoepeh"]
     assert got["suggested_pod_ids"] == ["PL-2003-0005-3-2-0"]
@@ -293,6 +312,7 @@ def test_insert_and_get_doc_topic_round_trip(store):
     doc = dict(DOC)
     doc["doc_topic"] = ["psc", "wpnb"]
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # get_document is a serving read off the mirror
     got = store.get_document(doc["doc_id"])
     assert got["doc_topic"] == ["psc", "wpnb"]
 
@@ -301,6 +321,7 @@ def test_list_documents_includes_doc_topic(store):
     doc = dict(DOC)
     doc["doc_topic"] = ["pod_i"]
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # list_documents is a serving read off the mirror
     docs = store.list_documents()
     assert docs[0]["doc_topic"] == ["pod_i"]
 
@@ -315,6 +336,7 @@ def test_build_filter_clause_doc_topic_case_insensitive_substring(tmp_path: Path
         doc2 = _doc_variant("d2", "d2.pdf")
         doc2["doc_topic"] = ["wpnb"]
         store.insert_document(doc2, [Chunk(0, None, "isi d2")])
+        store.refresh_mirror()  # this test queries the DuckDB mirror directly
 
         clause, params = store._build_filter_clause({"doc_topic": "psc"}, "d")
         rows = store._get_connection().execute(
@@ -335,6 +357,7 @@ def test_search_filter_by_doc_topic_returns_matching_doc_only(tmp_path: Path):
         doc2 = _doc_variant("d2", "d2.pdf")
         doc2["doc_topic"] = ["wpnb"]
         store.insert_document(doc2, [Chunk(0, None, "pengajuan WPNB")])
+        store.refresh_mirror()  # filtered search joins the mirror
         store.rebuild_indexes()
 
         result = store.search(
@@ -411,7 +434,8 @@ def _sqlite_doc_count(tmp_path: Path) -> int:
 def test_insert_writes_sqlite_truth_and_duckdb_mirror(store, tmp_path):
     store.insert_document(DOC, [Chunk(0, "Surat", "isi surat")])
     assert _sqlite_doc_count(tmp_path) == 1
-    # mirror row present for search joins / iris
+    # The mirror row is produced by refresh_mirror(), not by insert itself.
+    store.refresh_mirror()
     n = store._get_connection().execute(
         "SELECT COUNT(*) FROM documents"
     ).fetchone()[0]
@@ -420,13 +444,53 @@ def test_insert_writes_sqlite_truth_and_duckdb_mirror(store, tmp_path):
 
 def test_delete_removes_both_stores(store, tmp_path):
     store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # populate the mirror so there's something to remove
     store.delete_document(DOC["doc_id"])
     assert _sqlite_doc_count(tmp_path) == 0
+    # Chunks are deleted eagerly by delete_document, so search stops
+    # surfacing this doc immediately...
+    assert store.counts() == {"documents": 0, "chunks": 0}
+    # ...and delete_document also removes the `documents` mirror row in
+    # the same DuckDB transaction as the chunk delete, so it is gone
+    # immediately too — not just after the next refresh. get_document/
+    # list_documents/find_doc_ids are serving reads off this mirror, so
+    # leaving the row behind would keep a deleted document visible.
     n = store._get_connection().execute(
         "SELECT COUNT(*) FROM documents"
     ).fetchone()[0]
     assert n == 0
-    assert store.counts() == {"documents": 0, "chunks": 0}
+    # A subsequent refresh is a no-op here: the truth row is already gone,
+    # so the mirror stays empty.
+    store.refresh_mirror()
+    n = store._get_connection().execute(
+        "SELECT COUNT(*) FROM documents"
+    ).fetchone()[0]
+    assert n == 0
+
+
+def test_delete_document_removes_mirror_row_without_intervening_refresh(
+    store, tmp_path
+):
+    """delete_document removes the mirror row immediately, with no refresh in between.
+
+    Reproduces the Finding 1 bug: insert -> refresh -> delete must make
+    the document disappear from every serving read (get_document,
+    list_documents, find_doc_ids) immediately, with no refresh_mirror()
+    call between the delete and the reads. Before the fix, delete_document
+    left the mirror's `documents` row behind, so these all still returned
+    the deleted document until the next refresh.
+    """
+    store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()
+    assert store.get_document(DOC["doc_id"]) is not None
+
+    store.delete_document(DOC["doc_id"])
+
+    assert store.get_document(DOC["doc_id"]) is None
+    assert DOC["doc_id"] not in {d["doc_id"] for d in store.list_documents()}
+    assert DOC["doc_id"] not in {
+        doc_id for doc_id, _ in store.find_doc_ids({"doc_type": "surat"})
+    }
 
 
 class _RaisingConn:
@@ -481,17 +545,22 @@ def test_orphaned_duckdb_rows_cleared_on_reinsert(store, tmp_path):
     assert store.counts()["chunks"] == 1
 
 
-def test_exists_get_list_read_sqlite(store, tmp_path):
+def test_document_exists_reads_truth_independent_of_mirror_mutation(store, tmp_path):
+    """document_exists (deciding read) is unaffected by mutating the DuckDB mirror directly.
 
+    get_document/list_documents/find_doc_ids (serving
+    reads) answer from that same mirror, so once it is wiped they go
+    empty/None until the next refresh_mirror() — the inverse of the old
+    contract, where every read here went to sqlite truth.
+    """
     store.insert_document(DOC, [Chunk(0, None, "isi")])
-    # Mutate the mirror only; reads must reflect sqlite truth, not the mirror.
+    store.refresh_mirror()  # populate the mirror so there is something to wipe
+    # Mutate the mirror only; document_exists must still see sqlite truth.
     store._get_connection().execute("DELETE FROM documents")
     assert store.document_exists(DOC["file_hash"])
-    assert store.get_document(DOC["doc_id"]) is not None
-    assert len(store.list_documents()) == 1
-    assert store.find_doc_ids({"doc_type": "surat"}) == [
-        (DOC["doc_id"], DOC["file_name"])
-    ]
+    assert store.get_document(DOC["doc_id"]) is None
+    assert store.list_documents() == []
+    assert store.find_doc_ids({"doc_type": "surat"}) == []
 
 
 # --------------------------------------------------------------------------
@@ -510,6 +579,7 @@ def _blank_entity_doc() -> dict:
 def test_fill_blank_entities_fills_null_and_empty_leaves_non_empty(store):
     doc = _blank_entity_doc()
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # mirror row must exist for get_document below
 
     filled = store.fill_blank_entities(
         doc["doc_id"],
@@ -521,6 +591,10 @@ def test_fill_blank_entities_fills_null_and_empty_leaves_non_empty(store):
     )
 
     assert filled == ["wk_name", "field_name"]
+    # fill_blank_entities only writes the SQLite truth now (no more
+    # row-by-row DuckDB mirror write); refresh before reading it back
+    # through the mirror-backed get_document.
+    store.refresh_mirror()
     result = store.get_document(doc["doc_id"])
     assert result["wk_name"] == ["Sidecar WK"]
     assert result["field_name"] == ["Sidecar Field"]
@@ -531,10 +605,15 @@ def test_fill_blank_entities_fills_null_and_empty_leaves_non_empty(store):
 def test_fill_blank_entities_mirrors_to_duckdb(store):
     doc = _blank_entity_doc()
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # the mirror row must exist before fill_blank_entities
 
     filled = store.fill_blank_entities(doc["doc_id"], {"wk_name": ["Sidecar WK"]})
-
     assert filled == ["wk_name"]
+
+    # fill_blank_entities only writes the SQLite truth; the mirror only
+    # reflects it after the next refresh_mirror() (no more row-by-row
+    # dual-write here).
+    store.refresh_mirror()
     mirror_row = (
         store._get_connection()
         .execute("SELECT wk_name FROM documents WHERE doc_id = ?", [doc["doc_id"]])
@@ -549,6 +628,7 @@ def test_fill_blank_entities_no_blank_fields_returns_empty(store):
     doc["field_name"] = ["Already Set Field"]
     doc["project_name"] = ["Already Set Project"]
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # mirror row must exist for get_document below
 
     filled = store.fill_blank_entities(
         doc["doc_id"],
@@ -569,6 +649,7 @@ def test_fill_blank_entities_no_blank_fields_returns_empty(store):
 def test_fill_blank_entities_empty_sidecar_value_skips(store):
     doc = _blank_entity_doc()
     store.insert_document(doc, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # mirror row must exist for get_document below
 
     filled = store.fill_blank_entities(
         doc["doc_id"], {"wk_name": None, "field_name": []}
@@ -592,6 +673,30 @@ def test_get_document_by_hash_returns_row_then_none(store):
     assert got["file_hash"] == DOC["file_hash"]
     assert got["doc_date"] == DOC["doc_date"]
     assert got["subject"] == "Persetujuan"
+
+
+def test_get_document_readers_return_same_row_shape(store):
+    """Pin that get_document, get_document_by_id, and get_document_by_hash agree.
+
+    get_document (DuckDB mirror) and get_document_by_id/by_hash (SQLite
+    truth) share one column list + JSON-field set; pin that all three
+    return the same keys so a future column add/rename/remove can't drift
+    one reader out of sync with the other two silently.
+    """
+    store.insert_document(DOC, [Chunk(0, None, "isi")])
+    store.refresh_mirror()  # get_document is a serving read off the mirror
+
+    by_mirror = store.get_document(DOC["doc_id"])
+    by_id = store.get_document_by_id(DOC["doc_id"])
+    by_hash = store.get_document_by_hash(DOC["file_hash"])
+
+    assert by_mirror is not None
+    assert by_id is not None
+    assert by_hash is not None
+    assert by_mirror.keys() == by_id.keys() == by_hash.keys()
+    # Both SQLite-truth readers hit the exact same row via different
+    # columns -- their contents, not just their keys, must match.
+    assert by_id == by_hash
 
 
 def test_default_embedder_is_internal(monkeypatch, tmp_path):
@@ -676,6 +781,7 @@ def test_keyword_search_matches_prefix_terms(store_with_doc_factory):
     store, doc = store_with_doc_factory(
         doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
     )
+    store.refresh_mirror()  # _keyword_search joins the mirror unconditionally
     store.rebuild_indexes()
     results = store._keyword_search("Merak", 10, None)
     assert results, "prefix term must be FTS-searchable"
@@ -798,3 +904,709 @@ def test_sample_content_returns_first_chunk(populated_store):
 
 def test_sample_content_missing_doc_returns_none(populated_store):
     assert populated_store.sample_content("does-not-exist") is None
+
+
+def test_refresh_mirror_rebuilds_documents_from_sqlite_truth(tmp_path):
+    """A row written only to the SQLite truth appears in the mirror after refresh."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "m.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "m.sqlite",
+    )
+    store.ensure_tables()
+    sconn = store._get_sqlite()
+    sconn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_path, file_hash, "
+        "doc_type, doc_date, markdown, extraction_method, embedding_model) "
+        "VALUES ('sneaky','s.pdf','/tmp/s.pdf','h1','surat','2026-01-05','# x','docling','m')"
+    )
+    sconn.commit()
+    assert store._get_connection().execute(
+        "SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'"
+    ).fetchone()[0] == 0
+
+    report = store.refresh_mirror()
+
+    assert report.documents == 1
+    assert store._get_connection().execute(
+        "SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'"
+    ).fetchone()[0] == 1
+    store.close()
+
+
+def test_get_sqlite_self_heals_missing_raw_entities_metadata_ingested_at(
+    tmp_path: Path,
+):
+    """A legacy documents table self-heals its missing columns via ALTER on connect.
+
+    A SQLite documents table predating raw_entities/metadata/ingested_at
+    self-heals via ALTER on connect.
+
+    refresh_documents' `SELECT * REPLACE (...)` names those three columns
+    explicitly, so a legacy table missing any of them broke every refresh
+    (and, since Task 6, every corpus commit/learn/portal save). The two
+    text columns get the same ADD COLUMN treatment already used for
+    pod_name/suggested_pod_ids; ingested_at is added without its
+    DEFAULT (datetime('now')) clause, since SQLite's ADD COLUMN only
+    accepts a constant default.
+    """
+    import sqlite3
+
+    sqlite_path = tmp_path / "legacy.sqlite"
+    conn = sqlite3.connect(sqlite_path)
+    conn.execute(
+        """
+        CREATE TABLE documents (
+            doc_id TEXT PRIMARY KEY, file_name TEXT NOT NULL,
+            file_path TEXT NOT NULL, file_hash TEXT NOT NULL UNIQUE,
+            doc_type TEXT, doc_topic TEXT, doc_number TEXT, doc_date TEXT,
+            subject TEXT, sender TEXT, recipient TEXT, doc_level TEXT,
+            wk_name TEXT, field_name TEXT, project_name TEXT,
+            pod_name TEXT, suggested_pod_ids TEXT,
+            markdown TEXT NOT NULL, extraction_method TEXT NOT NULL,
+            embedding_model TEXT NOT NULL, page_count INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_path, file_hash, "
+        "markdown, extraction_method, embedding_model) "
+        "VALUES ('legacy1', 'a.pdf', '/a.pdf', 'h1', '# body', 'native', 'm')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = CorpusStore(
+        db_path=tmp_path / "legacy.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=sqlite_path,
+    )
+    try:
+        store.ensure_tables()  # must not crash on the legacy schema
+
+        cols = {
+            row[1]
+            for row in store._get_sqlite()
+            .execute("PRAGMA table_info(documents)")
+            .fetchall()
+        }
+        assert {"raw_entities", "metadata", "ingested_at"} <= cols
+
+        # refresh_mirror's SELECT * REPLACE(...) must not raise either.
+        report = store.refresh_mirror()
+        assert report.documents == 1
+    finally:
+        store.close()
+
+
+def test_insert_document_writes_truth_and_chunks_but_not_mirror(tmp_path):
+    """The mirror row is produced by refresh, not by the insert path."""
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "i.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "i.sqlite",
+    )
+    store.ensure_tables()
+    doc = {
+        "doc_id": "d1", "file_name": "a.pdf", "file_path": "/tmp/a.pdf",
+        "file_hash": "h1", "doc_type": "surat", "doc_date": "2026-01-01",
+        "markdown": "# x", "extraction_method": "docling", "embedding_model": "m",
+    }
+    store.insert_document(doc, [Chunk(index=0, section=None, text="hello")])
+
+    conn = store._get_connection()
+    assert conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    assert store.document_exists("h1") is True  # truth has it
+
+    store.refresh_mirror()
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    store.close()
+
+
+class _RaisingSqliteConn:
+    """Proxy around a real sqlite3 connection that fails INSERTs into one table.
+
+    Mirrors ``_RaisingConn`` above but for the SQLite side: only the
+    truth-row INSERT fails, so the health-check ``SELECT 1`` that
+    ``_get_sqlite()`` runs on an already-open connection still succeeds.
+    """
+
+    def __init__(self, real, table_to_fail: str):
+        self._real = real
+        self._table_to_fail = table_to_fail
+
+    def execute(self, sql, *args, **kwargs):
+        if "INSERT INTO" in sql and self._table_to_fail in sql:
+            raise sqlite3.OperationalError("truth write failed")
+        return self._real.execute(sql, *args, **kwargs)
+
+    def __enter__(self):
+        self._real.__enter__()
+        return self
+
+    def __exit__(self, *exc_info):
+        return self._real.__exit__(*exc_info)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_insert_document_cleans_up_chunks_when_truth_write_fails(tmp_path):
+    """insert_document cleans up already-written chunks when the truth write fails.
+
+    If the SQLite commit-marker write raises, the chunks written just
+    before it must be cleaned up so no orphaned embeddings survive, and
+    the exception must still propagate (see insert_document's docstring).
+    """
+    store = CorpusStore(
+        db_path=tmp_path / "fail.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "fail.sqlite",
+    )
+    store.ensure_tables()
+    doc = dict(DOC)
+    doc["doc_id"] = "fails1"
+
+    store._sconn = _RaisingSqliteConn(store._get_sqlite(), store.DOC_TABLE)
+
+    with pytest.raises(sqlite3.OperationalError):
+        store.insert_document(doc, [Chunk(0, "Section", "text")])
+
+    conn = store._get_connection()
+    assert (
+        conn.execute(
+            f"SELECT COUNT(*) FROM {store.CHUNK_TABLE} WHERE doc_id = ?",
+            [doc["doc_id"]],
+        ).fetchone()[0]
+        == 0
+    )
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    store.close()
+
+
+def test_serving_reads_use_the_mirror_and_deciding_reads_use_the_truth(tmp_path):
+    """get_document answers from DuckDB; document_exists answers from SQLite."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "r.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "r.sqlite",
+    )
+    store.ensure_tables()
+    sconn = store._get_sqlite()
+    sconn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_path, file_hash, "
+        "doc_type, doc_date, markdown, extraction_method, embedding_model) "
+        "VALUES ('d1','a.pdf','/tmp/a.pdf','h1','surat','2026-01-01','# body','docling','m')"
+    )
+    sconn.commit()
+
+    # deciding read sees the truth immediately
+    assert store.document_exists("h1") is True
+    # serving read does not, until the mirror is refreshed
+    assert store.get_document("d1") is None
+
+    store.refresh_mirror()
+    doc = store.get_document("d1")
+    assert doc is not None and doc["markdown"] == "# body"
+    store.close()
+
+
+def test_bm25_predicate_escapes_single_quotes(tmp_path):
+    """The escaping invariant lives in one place and survives extraction."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "q.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "q.sqlite",
+    )
+    match_expr, clause, params = store._bm25_predicate("O'Brien", None)
+
+    assert "O''Brien" in match_expr
+    assert "match_bm25" in match_expr
+    assert clause == ""
+    assert params == []
+    store.close()
+
+
+def test_bm25_predicate_includes_filter_clause(tmp_path):
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "q2.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "q2.sqlite",
+    )
+    _, clause, params = store._bm25_predicate("pod", {"doc_type": "surat"})
+
+    assert "d.doc_type = ?" in clause
+    assert params == ["surat"]
+    store.close()
+
+
+def test_hydrate_docs_returns_parsed_metadata(tmp_path):
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "h.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "h.sqlite",
+    )
+    store.ensure_tables()
+    store.insert_document(
+        {
+            "doc_id": "d1", "file_name": "a.pdf", "file_path": "/x/a.pdf",
+            "file_hash": "ab" * 32, "doc_type": "surat",
+            "field_name": ["Duri"], "doc_date": "2026-01-05",
+            "markdown": "# x", "extraction_method": "docling",
+            "embedding_model": "fake-model",
+        },
+        [Chunk(0, None, "isi")],
+    )
+    store.refresh_mirror()
+
+    docs = store._hydrate_docs(["d1"])
+
+    assert docs["d1"]["file_name"] == "a.pdf"
+    assert docs["d1"]["field_name"] == ["Duri"]  # parsed, not a JSON string
+    store.close()
+
+
+def test_corpus_unavailable_on_empty_corpus(tmp_path):
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "u.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "u.sqlite",
+    )
+    store.ensure_tables()
+
+    payload = store._corpus_unavailable()
+
+    assert payload is not None
+    assert payload["status"] == "not_available"
+    store.close()
+
+
+@pytest.fixture
+def agg_store(tmp_path):
+    """Corpus where 'separator' appears in one body and one subject only."""
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "agg.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "agg.sqlite",
+    )
+    store.ensure_tables()
+    base = {
+        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
+        "extraction_method": "docling", "embedding_model": "fake-model",
+    }
+    # body mentions separator, twice -> must still count once
+    store.insert_document(
+        {**base, "doc_id": "body1", "file_name": "b1.pdf", "file_hash": "a" * 64,
+         "subject": "Surat biasa", "markdown": "# x"},
+        [Chunk(0, None, "pemasangan separator di lapangan"),
+         Chunk(1, None, "separator kedua disebut lagi")],
+    )
+    # subject mentions separator, body does not -> must NOT count
+    store.insert_document(
+        {**base, "doc_id": "subj1", "file_name": "s1.pdf", "file_hash": "b" * 64,
+         "subject": "Pengadaan separator", "markdown": "# y"},
+        [Chunk(0, None, "isi tentang pompa dan pipa")],
+    )
+    # unrelated
+    store.insert_document(
+        {**base, "doc_id": "other", "file_name": "o.pdf", "file_hash": "c" * 64,
+         "subject": "Lain lain", "doc_type": "mom", "markdown": "# z"},
+        [Chunk(0, None, "rapat bulanan")],
+    )
+    store.rebuild_indexes()
+    store.refresh_mirror()
+    yield store
+    store.close()
+
+
+def test_aggregate_keyword_count_dedups_and_ignores_metadata_prefix(agg_store):
+    result = agg_store.aggregate("separator", mode="count", match="keyword")
+
+    assert result["status"] == "success"
+    assert result["match"] == "keyword"
+    assert result["approximate"] is False
+    # body1 counted once despite two matching chunks; subj1 excluded
+    assert result["count"] == 1
+    assert result["doc_ids"] == ["body1"]
+
+
+def test_aggregate_keyword_is_conjunctive(agg_store):
+    result = agg_store.aggregate("separator pompa", mode="count", match="keyword")
+
+    # no single chunk contains both terms
+    assert result["count"] == 0
+    assert result["status"] == "no_results"
+
+
+def test_aggregate_keyword_conjunction_is_within_one_chunk(agg_store):
+    """Terms split across two chunks of the same document do NOT match.
+
+    body1 has 'separator' in chunk 0 and 'kedua' in chunk 1. Documented
+    behavior, not an accident — see the plan's "embed_text trap" section.
+    """
+    result = agg_store.aggregate("separator kedua", mode="count", match="keyword")
+
+    assert result["count"] == 1  # chunk 1 holds 'separator kedua' together
+    assert (
+        agg_store.aggregate("pemasangan kedua", mode="count", match="keyword")["count"]
+        == 0
+    )  # 'pemasangan' is chunk 0, 'kedua' is chunk 1
+
+
+def test_aggregate_metadata_only_counts_by_filter(agg_store):
+    result = agg_store.aggregate(None, mode="count", filters={"doc_type": "surat"})
+
+    assert result["count"] == 2
+    assert result["approximate"] is False
+    assert result["match"] == "metadata"
+
+
+def test_aggregate_semantic_mode_is_flagged_and_ranked(agg_store):
+    result = agg_store.aggregate(
+        "separator", mode="count", match="semantic", semantic_candidates=3
+    )
+
+    assert result["approximate"] is True
+    assert result["match"] == "semantic"
+    assert result["count"] == len(result["semantic_candidates"])
+    assert result["count"] <= 3
+
+
+def test_aggregate_semantic_candidates_not_limit_controls_the_ranking(tmp_path):
+    """`limit` pages `list` mode only; it must never gate `mode="count"`.
+
+    Regression guard for the top-K-pool bug: on a corpus bigger than the
+    old `max(limit * 4, 200)` pool, a small `limit` used to silently
+    shrink the semantic count. Uses filters to force _vector_search's
+    JOIN/sequential-scan branch (deterministic, unlike the unfiltered
+    HNSW-index path which is approximate even at large LIMITs).
+    """
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "big.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "big.sqlite",
+    )
+    store.ensure_tables()
+    base = {
+        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
+        "extraction_method": "docling", "embedding_model": "fake-model",
+    }
+    letters = "abcdefghijklmnopqrstuvwxyz"
+
+    def word(i):
+        return "".join(letters[(i + k) % 26] for k in range(3 + (i % 5)))
+
+    n_docs = 250
+    for i in range(n_docs):
+        store.insert_document(
+            {**base, "doc_id": f"doc{i}", "file_name": f"f{i}.pdf",
+             "file_hash": format(i, "064x"), "subject": "Subjek acak",
+             "markdown": "# x"},
+            [Chunk(0, None, f"separator {word(i)}")],
+        )
+    store.rebuild_indexes()
+    store.refresh_mirror()
+
+    filters = {"doc_type": "surat"}
+    a = store.aggregate(
+        "separator", mode="count", match="semantic",
+        semantic_candidates=5, limit=1, filters=filters,
+    )
+    b = store.aggregate(
+        "separator", mode="count", match="semantic",
+        semantic_candidates=5, limit=1000, filters=filters,
+    )
+
+    assert a["count"] == b["count"] == 5, "limit must not touch the ranking size"
+    store.close()
+
+
+def test_aggregate_list_mode_returns_documents_capped_by_limit(agg_store):
+    result = agg_store.aggregate(None, mode="list", limit=2)
+
+    assert result["count"] == 3          # full total, uncapped
+    assert len(result["documents"]) == 2  # page capped by limit
+    assert {"doc_id", "file_name", "subject"} <= set(result["documents"][0])
+
+
+def test_aggregate_scalar_facet_sums_to_total(agg_store):
+    result = agg_store.aggregate(None, mode="count", group_by="doc_type")
+
+    facets = result["facets"]
+    assert facets["dimension"] == "doc_type"
+    assert facets["multi_valued"] is False
+    assert sum(facets["values"].values()) == result["count"]
+    assert facets["values"]["surat"] == 2
+
+
+def test_aggregate_json_facet_is_flagged_multi_valued(agg_store):
+    result = agg_store.aggregate(None, mode="count", group_by="doc_topic")
+
+    assert result["facets"]["multi_valued"] is True
+
+
+def test_aggregate_semantic_returns_ranked_scored_candidates(agg_store):
+    rows = agg_store._aggregate_semantic("separator", candidates=3, filters=None)
+
+    assert len(rows) <= 3
+    assert {"doc_id", "similarity", "snippet"} <= set(rows[0])
+    scores = [r["similarity"] for r in rows]
+    assert scores == sorted(scores, reverse=True), "must be ranked, best first"
+
+
+def test_aggregate_semantic_candidates_caps_the_list(agg_store):
+    one = agg_store._aggregate_semantic("separator", candidates=1, filters=None)
+    two = agg_store._aggregate_semantic("separator", candidates=2, filters=None)
+
+    assert len(one) == 1
+    assert len(two) == 2
+    assert one[0]["doc_id"] == two[0]["doc_id"], "same ranking, just truncated"
+
+
+def test_aggregate_semantic_honours_filters(agg_store):
+    """A filter that excludes everything yields no candidates."""
+    rows = agg_store._aggregate_semantic(
+        "separator", candidates=10, filters={"doc_type": "zzz-nope"}
+    )
+
+    assert rows == []
+
+
+def test_aggregate_hybrid_count_is_the_exact_total(agg_store):
+    """Hybrid never inflates count with semantic-only documents."""
+    kw = agg_store.aggregate("separator", mode="count", match="keyword")
+    hy = agg_store.aggregate("separator", mode="count", match="hybrid")
+
+    assert hy["count"] == kw["count"]
+    assert hy["approximate"] is False, "the headline total is still exact"
+    assert hy["doc_ids"] == kw["doc_ids"]
+
+
+def test_aggregate_hybrid_provenance_reports_only_stable_numbers(agg_store):
+    """Provenance carries the exact total and the ranking size, nothing else."""
+    result = agg_store.aggregate("separator", mode="count", match="hybrid")
+
+    p = result["provenance"]
+    assert set(p) == {"exact_total", "semantic_extra", "semantic_extra_is_a_ranking"}
+    assert p["exact_total"] == result["count"]
+    assert p["semantic_extra_is_a_ranking"] is True
+
+
+def test_aggregate_hybrid_provenance_exposes_no_knob_dependent_counts(agg_store):
+    """Only the ranking size may move with semantic_candidates; the total may not.
+
+    A keyword_only/both split was deliberately removed: measured on the
+    live corpus it swung 29/5 to 7/27 purely with semantic_candidates
+    while count stayed at 34, which is an artifact of the parameter, not
+    a property of the corpus — the same trap similarity_threshold was.
+    """
+    small = agg_store.aggregate(
+        "separator", mode="count", match="hybrid", semantic_candidates=1
+    )
+    large = agg_store.aggregate(
+        "separator", mode="count", match="hybrid", semantic_candidates=50
+    )
+
+    assert small["count"] == large["count"]
+    assert small["provenance"]["exact_total"] == large["provenance"]["exact_total"]
+    moving = {
+        k
+        for k in small["provenance"]
+        if small["provenance"][k] != large["provenance"][k]
+    }
+    assert moving <= {"semantic_extra"}, f"knob-dependent keys leaked: {moving}"
+
+
+def test_aggregate_hybrid_semantic_candidates_exclude_keyword_hits(agg_store):
+    """The tail is what keyword missed; exact hits are never repeated in it."""
+    result = agg_store.aggregate("separator", mode="count", match="hybrid")
+
+    kw_ids = set(result["doc_ids"])
+    tail_ids = {c["doc_id"] for c in result["semantic_candidates"]}
+    assert not (kw_ids & tail_ids)
+    assert len(tail_ids) == result["provenance"]["semantic_extra"]
+
+
+@pytest.fixture
+def many_docs_store(tmp_path):
+    """5 documents with long 'separator' bodies, for truncation tests.
+
+    Enough documents to exercise limit-driven truncation in both list and
+    count modes, and a chunk long enough (~1900 chars) to prove snippet
+    trimming actually shrinks it.
+    """
+    from esdc.corpus.chunker import Chunk
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "many.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "many.sqlite",
+    )
+    store.ensure_tables()
+    base = {
+        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
+        "extraction_method": "docling", "embedding_model": "fake-model",
+    }
+    for i in range(5):
+        store.insert_document(
+            {**base, "doc_id": f"d{i}", "file_name": f"f{i}.pdf",
+             "file_hash": format(i, "064x"), "subject": "Surat",
+             "markdown": "# x"},
+            [Chunk(0, None, f"pemasangan separator unit {i} " * 60)],
+        )
+    store.rebuild_indexes()
+    store.refresh_mirror()
+    yield store
+    store.close()
+
+
+def test_aggregate_list_mode_truncated_flags_and_note(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="list", match="keyword", limit=2
+    )
+
+    assert result["count"] == 5  # exhaustive total, unaffected by limit
+    assert result["returned"] == 2
+    assert result["truncated"] is True
+    assert len(result["documents"]) == 2
+    assert "note" in result
+    assert "5" in result["note"]
+
+
+def test_aggregate_list_mode_not_truncated_has_no_misleading_note(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="list", match="keyword", limit=10
+    )
+
+    assert result["count"] == 5
+    assert result["returned"] == 5
+    assert result["truncated"] is False
+    assert "note" not in result
+
+
+def test_aggregate_count_mode_doc_ids_bounded_by_limit(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="count", match="keyword", limit=2
+    )
+
+    assert result["count"] == 5  # exhaustive, unaffected by limit
+    assert len(result["doc_ids"]) == 2  # bounded
+    assert result["returned"] == 2
+    assert result["truncated"] is True
+    assert "note" in result
+
+
+def test_aggregate_count_mode_doc_ids_not_truncated_when_under_limit(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="count", match="keyword", limit=50
+    )
+
+    assert result["count"] == 5
+    assert len(result["doc_ids"]) == 5
+    assert result["returned"] == 5
+    assert result["truncated"] is False
+    assert "note" not in result
+
+
+def test_aggregate_matched_snippet_is_trimmed_and_contains_term(many_docs_store):
+    result = many_docs_store.aggregate(
+        "separator", mode="list", match="keyword", limit=1
+    )
+
+    snippet = result["documents"][0]["matched_snippet"]
+    assert snippet is not None
+    assert len(snippet) < 500  # materially shorter than the ~1900-char chunk
+    assert "separator" in snippet.lower()
+
+
+def test_aggregate_on_empty_corpus_is_not_available(tmp_path):
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(
+        db_path=tmp_path / "empty2.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "empty2.sqlite",
+    )
+    store.ensure_tables()
+
+    result = store.aggregate("apapun", mode="count")
+
+    assert result["status"] == "not_available"
+
+
+def test_build_filter_clause_supports_text_substring_columns(tmp_path):
+    """sender/recipient/subject/doc_number filter by case-insensitive substring.
+
+    Stored values are long institutional strings ("PERTAMINA BADAN
+    PEMBINAAN PENGUSAHAAN KONTRAKTOR ASING..."), so an exact match would
+    never hit; substring is the only usable form.
+    """
+    store = CorpusStore(
+        db_path=tmp_path / "tf.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "tf.sqlite",
+    )
+    clause, params = store._build_filter_clause(
+        {"sender": "pertamina", "recipient": "skk"}, "d"
+    )
+
+    assert "d.sender ILIKE" in clause
+    assert "d.recipient ILIKE" in clause
+    assert params == ["pertamina", "skk"]
+    store.close()
+
+
+def test_build_filter_clause_supports_pod_name(tmp_path):
+    """pod_name is a JSON array column like wk_name; it filters the same way."""
+    store = CorpusStore(
+        db_path=tmp_path / "pn.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "pn.sqlite",
+    )
+    clause, params = store._build_filter_clause({"pod_name": "Bekasap"}, "d")
+
+    assert "json_each(d.pod_name)" in clause
+    assert params == ["Bekasap"]
+    store.close()
+
+
+def test_build_filter_clause_unchanged_without_new_keys(tmp_path):
+    """Existing callers (search, find_doc_ids) see byte-identical output."""
+    store = CorpusStore(
+        db_path=tmp_path / "un.duckdb",
+        embedder=FakeEmbedder(),
+        sqlite_path=tmp_path / "un.sqlite",
+    )
+    clause, params = store._build_filter_clause(
+        {"doc_type": "surat", "field_name": "Duri"}, "d"
+    )
+
+    assert clause.startswith(" AND d.doc_type = ?")
+    assert "sender" not in clause
+    assert params == ["surat", "Duri"]
+    store.close()
+    store.close()

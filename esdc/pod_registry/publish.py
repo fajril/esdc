@@ -7,6 +7,7 @@ import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 import yaml
 
@@ -57,10 +58,42 @@ def _load_schema_entries() -> dict[str, dict]:
     return {entry["table_name"]: entry for entry in data["tables"]}
 
 
-def publish_pod_registry(
-    sqlite_path: Path | None = None, db_path: Path | None = None
+def _publish_registry_tables(
+    conn: duckdb.DuckDBPyConnection,
+    sqlite_path: Path | None,
+    db_path: Path | None = None,
 ) -> tuple[LoadResult, ...]:
-    """Replace DuckDB pod_registry/pod_project with the current SQLite state."""
+    """Write pod_registry/pod_project/pod_document onto an existing DuckDB conn.
+
+    Split out of `publish_pod_registry` so `refresh_all`
+    (`esdc/corpus/mirror.py`), which already holds an open write
+    connection to the live DuckDB file, can converge these published
+    tables without opening a *second* write connection of its own.
+
+    That distinction matters and was verified empirically before writing
+    this: `duckdb.connect(path)` a second time, in-process, against a
+    real on-disk `path` DOES succeed and shares state with the first
+    connection (DuckDB caches one in-process database instance per
+    canonicalized file path) -- so a naive "just call
+    `publish_pod_registry()` from `refresh_all`" would not deadlock or
+    raise on a real file. But `duckdb.connect()` with no path
+    (`":memory:"`, what every `refresh_all`/`refresh_registry` test in
+    `tests/corpus/test_mirror.py` uses) creates a *wholly independent*
+    database on every call -- two in-memory connections never share a
+    single row. `publish_pod_registry` opening its own connection from
+    inside `refresh_all` would therefore silently publish into a
+    database the caller's `conn` (and every assertion against it) can
+    never see, passing in production and failing every unit test.
+    Operating directly on the caller-supplied `conn` sidesteps the
+    question for both cases. `publish_pod_registry` below is now a thin
+    wrapper around this function for its own callers
+    (`esdc/portal/app.py`, `esdc/pod_registry/importer.py`), which still
+    get a dedicated connection each.
+
+    `db_path` only stamps `LoadResult.db_path`; when omitted (the
+    `refresh_all` case, which does not otherwise need to know its own
+    connection's file path) it is read back off `conn`.
+    """
     sconn = get_sqlite_connection(sqlite_path)
     try:
         registry_df = pd.read_sql_query(_REGISTRY_SQL, sconn)
@@ -69,13 +102,17 @@ def publish_pod_registry(
     finally:
         sconn.close()
 
+    if db_path is None:
+        row = conn.execute(
+            "SELECT path FROM duckdb_databases() "
+            "WHERE database_name = current_database()"
+        ).fetchone()
+        db_path = Path(row[0]) if row and row[0] else Path()
+
     schemas = _load_schema_entries()
-    target = db_path or Config.get_db_file()
-    Config.get_db_dir().mkdir(parents=True, exist_ok=True)
-    conn = get_duckdb_connection(target, read_only=False)
     results: list[LoadResult] = []
+    conn.execute("BEGIN")
     try:
-        conn.execute("BEGIN")
         _create_metadata_table(conn)
         for table_name, df, date_cols in (
             ("pod_registry", registry_df, ("approval_date",)),
@@ -116,16 +153,28 @@ def publish_pod_registry(
                     table_name=table_name,
                     row_count=len(df),
                     column_count=len(df.columns),
-                    db_path=target,
+                    db_path=db_path,
                     link_warnings=(),
                 )
             )
         conn.execute("COMMIT")
-        conn.execute("CHECKPOINT")
     except Exception:
         with contextlib.suppress(Exception):
             conn.execute("ROLLBACK")
         raise
+    return tuple(results)
+
+
+def publish_pod_registry(
+    sqlite_path: Path | None = None, db_path: Path | None = None
+) -> tuple[LoadResult, ...]:
+    """Replace DuckDB pod_registry/pod_project with the current SQLite state."""
+    target = db_path or Config.get_db_file()
+    Config.get_db_dir().mkdir(parents=True, exist_ok=True)
+    conn = get_duckdb_connection(target, read_only=False)
+    try:
+        results = _publish_registry_tables(conn, sqlite_path, target)
+        conn.execute("CHECKPOINT")
     finally:
         conn.close()
 
@@ -133,4 +182,4 @@ def publish_pod_registry(
 
     reset_sql_cache()
     invalidate_tool_cache()
-    return tuple(results)
+    return results

@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Chat
+
+**Fixed:** conversation titles and tags no longer contain raw reasoning. With a
+reasoning model that embeds thinking in the message content (Qwen3 via
+llama.cpp/vLLM, DeepSeek-R1), the `<thinking>` block reliably defeated the JSON
+slice in `generate_conversation_title` / `generate_conversation_tags` — the
+model reasons about the requested `{"title": "…"}` format, so the block itself
+contains braces — and the plain-text fallback then copied the whole tagged
+response into the title. Thinking blocks are now stripped before parsing. A
+response cut off mid-reasoning (no closing tag) yields an empty title rather
+than leaking the reasoning prose. Models that carry reasoning in a separate
+field (Ollama, OpenAI o-series, Gemini) are unaffected — the strip is a no-op
+when no tags are present.
+
+**Fixed:** chat requests now carry exactly one system message, always first.
+The query-classifier strategy (and tool-limit nudges / compaction summaries)
+used to be appended as extra `SystemMessage`s after the user message;
+Qwen3.x chat templates (e.g. Qwen3.6-27B) reject any system message that is
+not the first message, which llama.cpp surfaced as HTTP 400 "Unable to
+generate parser for this template ... System message must be at the
+beginning". Trailing system content is now merged into the leading system
+prompt.
+
+### Reasoning models: thinking blocks no longer corrupt LLM output
+
+**Fixed:** every place the app parses or stores an LLM's text response now
+strips `<think>`/`<thinking>` blocks first, via the new shared
+`esdc.llm_text.strip_thinking_tags`. Models that keep reasoning in a separate
+field (Ollama, OpenAI o-series, Gemini) are unaffected; the strip is a no-op
+on tag-free text.
+
+This mattered most for `esdc corpus learn`, where ten consecutive documents
+failed with `LLM response contained invalid JSON`. The extraction prompt asks
+for a JSON object, so the model's reasoning discusses that schema and contains
+braces — the greedy `{.*}` match then started *inside* the reasoning prose and
+produced an unparseable slice. All ten captured responses recover with the fix.
+
+Sites corrected:
+
+- `esdc corpus learn` knowledge extraction — documents were dropped from the
+  knowledge graph with only a logged error.
+- `esdc corpus extract` metadata (`parse_llm_json`) — failed **silently**,
+  returning `{}`, so documents were committed with blank metadata.
+- POD dossier generation — reasoning prose was persisted verbatim into
+  `knowledge_dossiers`. Because dossiers are gated on `source_hash`, a polluted
+  dossier was not regenerated on later runs without `--force`.
+- `esdc corpus eval --init` query synthesis — reasoning prose was written into
+  the benchmark query file, silently invalidating every Pass@k number computed
+  from it.
+- OCR cleanup passes and strategic-summary parsing, which each carried their
+  own partial or missing handling.
+
+**Added:** unparseable knowledge-extraction responses are now written in full
+to `<cache>/extract_failures/`, with the reason, response length, think-tag
+presence, and brace counts recorded — the 100-character error excerpt could not
+distinguish a reasoning-prefixed response from one with no JSON at all.
+
+### Corpus: SQLite truth, DuckDB mirror
+
+- `documents` now lives in the operational SQLite db (`esdc.sqlite`) as the
+  source of truth for everything a human writes or corrects; DuckDB holds
+  derived data only — chunk embeddings, a wholesale-rebuilt mirror of
+  `documents`, and mirrors of the POD registry and knowledge-graph tables
+  (`m_pod`, `project_pod`, `pod_document`, `pod_revision`, `kg_edge`,
+  `kg_claim`, ...), all now queryable from DuckDB (`execute_sql`, iris
+  chat tools) alongside the rest of the corpus. Mutations write SQLite;
+  `refresh_mirror()` rebuilds the DuckDB side wholesale at the end of each
+  batch (commit, learn, portal save, `esdc corpus sync`) — there is no
+  row-by-row mirroring and so no drift to reconcile.
+- New `esdc corpus sync` — rebuilds the DuckDB mirror on demand (documents,
+  POD registry, knowledge-graph tables, orphan chunk sweep) without running
+  a commit or learn.
+- Read-path routing rule: serving reads (`search`, `get_document`,
+  `list_documents`, `find_doc_ids`) answer from the DuckDB mirror and
+  tolerate its refresh window; deciding reads (`document_exists`,
+  `fingerprint_rows`, `get_document_by_hash`) and truth-backed reads
+  (`get_document_by_id`, used by export) go straight to the SQLite truth so
+  a stale mirror can never cause a re-ingest, a double-delete, or an export
+  overwriting a sidecar with stale content.
+
 ### Embedding backends
 
 **Changed:** `embedding_model` no longer selects the Ollama tag. The `local`
@@ -20,6 +100,16 @@ shared `embedding_backend`, which defaults to `ollama`. Set
 
 **Fixed:** semantic project search no longer requires a reachable Ollama —
 queries embed locally.
+
+**Fixed:** processes that load a llama.cpp model no longer abort with exit 134
+on macOS. ggml-metal's dylib destructor runs at `exit()` and asserts every
+residency set was released; the embedding and reranker singletons were never
+closed, so any live model reference at interpreter shutdown — pytest's
+retained tracebacks, a background thread parked inside an inference call —
+left Metal buffers alive and the process died with SIGABRT *after* its work
+had finished and its output had printed. Both singletons now free the model from
+an `atexit` handler, taking the load and inference locks with a timeout so a
+close never races a thread mid-load or mid-`embed()`.
 
 ### Corpus retrieval overhaul
 

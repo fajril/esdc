@@ -105,3 +105,25 @@ def test_prompt_contains_context(sqlite_conn, duck_conn):
     assert "delay_cause" in p
     assert "MoM Monitoring POD I Duri" in p
     assert "[doc_id]" in p or "cite" in p.lower()
+
+
+def test_generate_pod_dossier_strips_reasoning_prose(sqlite_conn, duck_conn):
+    """A reasoning-model response must not be persisted verbatim.
+
+    Pre-fix, `text = llm_caller(...)` was stored as-is: `dossier_text` would
+    still contain the `<think>...</think>` block and its prose. Because
+    `source_hash` gating skips regeneration on an unchanged doc set, that
+    pollution would survive indefinitely without `--force`. This asserts
+    the stored text is exactly the post-tag content, matching what
+    `strip_thinking_tags` + `.strip()` would produce.
+    """
+    store = _prepared(sqlite_conn, duck_conn)
+
+    def llm(prompt):
+        return "<think>Let me plan the dossier sections first.</think>\n## Approval"
+
+    generate_pod_dossier(POD, sqlite_conn, duck_conn, store, "gh", llm)
+    dossier = get_dossier(duck_conn, "pod", POD)
+    assert dossier["dossier_text"] == "## Approval"
+    assert "<think>" not in dossier["dossier_text"]
+    assert "plan the dossier" not in dossier["dossier_text"]

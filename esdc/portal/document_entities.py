@@ -6,8 +6,20 @@ tables), `documents` is populated by the corpus ingest pipeline, not the
 portal grid — so inserts/deletes stay rejected here and only the three
 entity columns are editable. SQLite (`esdc.pod_registry.store`) is the
 source of truth; the DuckDB `documents` mirror (`esdc.corpus.store`,
-same file as `Config.get_db_file()`) is best-effort — a mirror failure
-is reported as a warning, never rolls back the SQLite commit.
+same file as `Config.get_db_file()`) is refreshed wholesale
+(`CorpusStore.refresh_mirror()`) after every save — best-effort, since a
+refresh can lose DuckDB's single-writer lock to a running corpus
+command; a failure is reported as a warning, never rolls back the
+SQLite commit.
+
+Once the mirror refresh succeeds, the edited documents' chunks are
+re-embedded (`_reembed_edited`) so `document_chunks.embed_text` — which
+bakes in the entity names via `build_context_prefix` — stops carrying
+the pre-edit names. A failed or skipped mirror refresh means the
+re-embed is skipped too (it reads document metadata from the mirror);
+`esdc corpus reembed --stale` is the fallback in both cases. Like the
+mirror refresh, a re-embed failure is reported as a warning and never
+rolls back the SQLite commit.
 
 Name validation mirrors `_validate_entity_overrides` in
 `esdc.corpus.pipeline`: each cell is `;`-separated raw names, each name
@@ -99,7 +111,7 @@ def apply_document_entity_changeset(
     # SAME file the mirror later opens read-write; DuckDB refuses to open a
     # file with two different configurations at once, so the resolver
     # connection MUST be closed (see the finally below) before
-    # _mirror_updates runs.
+    # _refresh_mirror_after_save runs.
     resolver_conn = None
     if resolver is None:
         resolver, resolver_conn = _build_resolver(db_path)
@@ -153,7 +165,19 @@ def apply_document_entity_changeset(
     finally:
         sconn.close()
 
-    warnings = _mirror_updates(db_path, resolved_rows) if resolved_rows else []
+    warnings: list[str] = []
+    if resolved_rows:
+        warnings = _refresh_mirror_after_save(db_path, sqlite_path)
+        # Only re-embed once the mirror actually converged — see
+        # _reembed_edited's docstring for why a stale mirror is worse than
+        # skipping the re-embed entirely.
+        if not warnings:
+            warnings = _reembed_edited(resolved_rows, db_path, sqlite_path)
+        else:
+            warnings.append(
+                "Chunk re-embedding skipped because the mirror is stale. "
+                "Run `esdc corpus reembed --stale` after `esdc corpus sync`."
+            )
 
     return ChangesetResult(
         ok=True,
@@ -247,39 +271,90 @@ def _apply_row_update(
     )
 
 
-def _mirror_updates(
-    db_path: Path | None, resolved_rows: list[dict[str, Any]]
+def _refresh_mirror_after_save(
+    db_path: Path | None, sqlite_path: Path | None
 ) -> list[str]:
-    """Best-effort mirror of the same UPDATEs into the DuckDB documents table.
+    """Rebuild the DuckDB mirror from the just-committed SQLite truth.
 
-    SQLite already committed by the time this runs, so any failure here
-    (missing table, locked file, ...) is reported as a warning, never
-    raised — the save itself already succeeded.
+    Replaces the old row-by-row best-effort UPDATE mirroring: a wholesale
+    rebuild cannot leave the two stores partially diverged. Still
+    non-fatal — DuckDB is single-writer, so a refresh can lose the lock
+    to a running `esdc corpus commit`. The truth is already committed;
+    the next refresh (or `esdc corpus sync`) converges it.
+
+    `sqlite_path` is threaded through explicitly (not left to
+    CorpusStore's default) so this always refreshes from the same SQLite
+    truth `apply_document_entity_changeset` just wrote to, even when the
+    caller passed a non-default path (as the test suite does).
     """
-    from esdc.configs import Config
-    from esdc.dbmanager import get_duckdb_connection
+    from esdc.corpus.store import CorpusStore
 
-    path = db_path or Config.get_db_file()
+    store = None
     try:
-        conn = get_duckdb_connection(path, read_only=False)
+        store = CorpusStore(db_path=db_path, sqlite_path=sqlite_path)
+        store.refresh_mirror()
+        return []
     except Exception as exc:
-        return [f"DuckDB mirror unavailable: {exc}"]
-
-    warnings: list[str] = []
-    try:
-        for row in resolved_rows:
-            fields = row["fields"]
-            set_clause = ", ".join(f"{k} = ?" for k in fields)
-            values = [json.dumps(v) if v is not None else None for v in fields.values()]
-            try:
-                conn.execute(
-                    f"UPDATE documents SET {set_clause} WHERE doc_id = ?",
-                    (*values, row["doc_id"]),
-                )
-            except Exception as exc:
-                warnings.append(
-                    f"DuckDB mirror failed for doc_id {row['doc_id']!r}: {exc}"
-                )
+        return [
+            f"DuckDB mirror refresh deferred: {exc}. "
+            "Run `esdc corpus sync` to converge."
+        ]
     finally:
-        conn.close()
-    return warnings
+        if store is not None:
+            store.close()
+
+
+def _reembed_edited(
+    resolved_rows: list[dict[str, Any]],
+    db_path: Path | None,
+    sqlite_path: Path | None,
+) -> list[str]:
+    """Re-embed documents whose entity names just changed.
+
+    embed_text bakes the document's entities into every chunk, so an
+    entity correction that stops at the mirror would leave search matching
+    the old names. The SQLite truth is already committed when this runs,
+    so a failure is reported as a warning and repaired later by
+    `esdc corpus reembed --stale` — never a failed save.
+
+    MUST run after _refresh_mirror_after_save and only when that refresh
+    succeeded: run_reembed_documents reads each document's metadata from
+    the DuckDB mirror, so re-embedding against a stale one would rebuild
+    the chunks from exactly the pre-edit names this save replaced — and
+    unlike doing nothing, it would leave chunks the staleness detector
+    then reports as current.
+
+    Both paths are threaded into the store for the same reason
+    _refresh_mirror_after_save threads them (see its docstring): a
+    default-constructed CorpusStore targets ~/.esdc regardless of what the
+    caller asked for.
+
+    First call in a portal process loads the llama.cpp embedding model
+    (seconds), and the re-embed ends in a whole-corpus index rebuild.
+    Latency only — the save is already durable.
+    """
+    doc_ids = sorted({row["doc_id"] for row in resolved_rows})
+    if not doc_ids:
+        return []
+
+    from esdc.corpus.pipeline import run_reembed_documents
+    from esdc.corpus.store import CorpusStore
+
+    store = None
+    try:
+        store = CorpusStore(db_path=db_path, sqlite_path=sqlite_path)
+        store.ensure_tables()
+        report = run_reembed_documents(doc_ids, store=store)
+    except Exception as exc:
+        return [
+            f"Re-embedding deferred for {len(doc_ids)} document(s): {exc}. "
+            "Run `esdc corpus reembed --stale`."
+        ]
+    finally:
+        if store is not None:
+            store.close()
+    return [
+        f"Re-embed failed for {name}: {err}. "
+        "Run `esdc corpus reembed --stale`."
+        for name, err in report.failed.items()
+    ]

@@ -19,6 +19,7 @@ import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -212,6 +213,44 @@ def run_learn(
                 report.dossiers_skipped += 1
 
         report.proposals_pending = len(store.pending_proposals())
+
+        # insert_document no longer writes the mirror row (Task 7), so the
+        # mirror is only correct once the batch ends with a refresh. There
+        # is no CorpusStore in scope here -- run_learn works directly
+        # against the sqlite_conn/duck_conn it was given (which may be
+        # test-injected, on non-default paths) -- so refresh the mirror
+        # against those same connections rather than opening a second,
+        # independently-pathed CorpusStore.
+        from esdc.corpus.mirror import refresh_all
+
+        sqlite_path_str = sqlite_conn.execute(
+            "PRAGMA database_list"
+        ).fetchone()[2]
+        if not sqlite_path_str:
+            # In-memory sqlite_conn (tests inject this): PRAGMA
+            # database_list's file column is '' for :memory: databases, so
+            # Path('') would resolve to '.' and ATTACH the wrong database,
+            # failing every time. There is no on-disk truth to refresh the
+            # mirror from in that case, so skip rather than attempt-and-warn.
+            logger.debug(
+                "[Learn] sqlite_conn is in-memory, skipping mirror refresh"
+            )
+        else:
+            sqlite_path = Path(sqlite_path_str)
+            # Best-effort: DuckDB is single-writer, so this can lose the
+            # write lock to a concurrent corpus command. Everything above is
+            # already committed to the SQLite truth, so a refresh failure
+            # here means the mirror is stale, not that learn failed -- same
+            # non-fatal contract as the portal's _refresh_mirror_after_save.
+            try:
+                refresh_all(duck_conn, sqlite_path)
+            except Exception as e:
+                logger.warning(
+                    "[Learn] mirror_refresh_failed | error=%s -- run "
+                    "`esdc corpus sync` to converge",
+                    e,
+                )
+
         duck_conn.execute("CHECKPOINT")
 
         try:

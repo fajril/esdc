@@ -14,6 +14,7 @@ P("yes") — the relevance score.
 """
 from __future__ import annotations
 
+import atexit
 import logging
 import threading
 from typing import Any
@@ -49,6 +50,9 @@ _INSTRUCT = (
 
 # Llama contexts are not thread-safe; rerank scoring serializes on this.
 _infer_lock = threading.Lock()
+# Serializes singleton create/use against the shutdown close. Lock order
+# is always _load_lock then _infer_lock (rerank() takes only _infer_lock).
+_load_lock = threading.Lock()
 
 
 def _rerank_prompt(query: str, doc: str) -> str:
@@ -89,7 +93,12 @@ def _load_reranker() -> Any:
         )
         repo, filename = _RERANKER_GGUFS[DEFAULT_RERANKER]
     path = resolve_gguf(repo, filename)
-    return load_llama(path, pooling_type=LLAMA_POOLING_TYPE_RANK)
+    model = load_llama(path, pooling_type=LLAMA_POOLING_TYPE_RANK)
+    # Registered here rather than in get() so the tests that monkeypatch
+    # this loader never hand a fake model to teardown. See
+    # esdc.embedders._close_model for why the free must be explicit.
+    atexit.register(Reranker._close)
+    return model
 
 
 class Reranker:
@@ -103,29 +112,63 @@ class Reranker:
 
     @classmethod
     def get(cls) -> Reranker | None:
-        if cls._failed:
-            return None
-        if cls._instance is None:
-            try:
-                cls._instance = cls(_load_reranker())
-                logger.info(
-                    "[Corpus] reranker loaded | model=%s", _resolve_model_name()
-                )
-            except Exception as e:
-                logger.warning(
-                    "[Corpus] reranker unavailable, keeping RRF order | "
-                    "model=%s error=%s",
-                    _resolve_model_name(),
-                    e,
-                )
-                cls._failed = True
+        with _load_lock:
+            if cls._failed:
                 return None
-        return cls._instance
+            if cls._instance is None:
+                try:
+                    cls._instance = cls(_load_reranker())
+                    logger.info(
+                        "[Corpus] reranker loaded | model=%s", _resolve_model_name()
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[Corpus] reranker unavailable, keeping RRF order | "
+                        "model=%s error=%s",
+                        _resolve_model_name(),
+                        e,
+                    )
+                    cls._failed = True
+                    return None
+            return cls._instance
+
+    @classmethod
+    def _close(cls) -> None:
+        """Free the reranker before the process exits.
+
+        Same ggml-metal teardown assert as esdc.embedders._close_model,
+        including the lock timeouts. `_failed` is set so a get() racing
+        the close falls back to RRF order instead of handing out a
+        wrapper around freed memory. Lock order is _load_lock then
+        _infer_lock, mirroring esdc.embedders.
+        """
+        if not _load_lock.acquire(timeout=2.0):
+            logger.warning("[Corpus] reranker loading at exit; skipping close")
+            return
+        try:
+            inst = cls._instance
+            if inst is None:
+                return
+            if not _infer_lock.acquire(timeout=2.0):
+                logger.warning("[Corpus] reranker busy at exit; skipping close")
+                return
+            try:
+                cls._instance = None
+                cls._failed = True
+                inst._model.close()
+            finally:
+                _infer_lock.release()
+        finally:
+            _load_lock.release()
 
     def rerank(self, query: str, texts: list[str]) -> list[float]:
         """Score each text against the query; higher = more relevant."""
         scores: list[float] = []
         with _infer_lock:
+            if Reranker._failed:
+                # get() handed this instance out before _close() freed the
+                # model behind it. Only reachable at shutdown.
+                raise RuntimeError("reranker closed at interpreter shutdown")
             for t in texts:
                 out = self._model.embed(_rerank_prompt(query, t))
                 scores.append(float(out[0]))

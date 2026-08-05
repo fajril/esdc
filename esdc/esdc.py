@@ -2615,6 +2615,25 @@ def proposals() -> None:
     )
 
 
+@corpus_app.command(name="sync")
+def corpus_sync() -> None:
+    """Rebuild DuckDB's derived tables from the SQLite source of truth."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore()
+    try:
+        store.ensure_tables()
+        report = store.refresh_mirror()
+        typer.echo(f"documents mirrored: {report.documents}")
+        if report.orphan_chunks:
+            typer.echo(f"orphan chunks removed: {report.orphan_chunks}")
+        for table, n in sorted(report.registry.items()):
+            typer.echo(f"  {table}: {n}")
+        typer.echo(f"views: {', '.join(report.views)}")
+    finally:
+        store.close()
+
+
 @corpus_app.command(name="status")
 def corpus_status(
     paths: Annotated[
@@ -2988,9 +3007,47 @@ def reembed(
             help="Override embedding_backend for this run: local, ollama or openai.",
         ),
     ] = None,
+    stale: Annotated[
+        bool,
+        typer.Option(
+            "--stale",
+            help="Only re-embed documents whose chunk context prefix is "
+            "out of date (e.g. after portal entity edits).",
+        ),
+    ] = False,
 ) -> None:
-    """Rebuild chunk embeddings for the whole corpus after an embedding-model change."""
-    from esdc.corpus.pipeline import run_reembed
+    """Rebuild chunk embeddings: whole corpus, or --stale after entity edits."""
+    from esdc.corpus.pipeline import run_reembed, run_reembed_documents
+    from esdc.corpus.store import CorpusStore
+
+    if stale:
+        if embed_backend is not None:
+            # --stale re-embeds a subset with the model the rest of the
+            # corpus already uses; honouring a different backend here would
+            # leave one corpus holding vectors from two models, which no
+            # similarity comparison can span.
+            typer.echo(
+                "Error: --stale re-embeds with the corpus's current model; "
+                "--embed-backend applies only to a full re-embed. Drop one.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        store = CorpusStore()
+        try:
+            store.ensure_tables()
+            doc_ids = store.stale_embed_docs()
+            if not doc_ids:
+                typer.echo("No stale documents — every chunk prefix is current.")
+                return
+            report = run_reembed_documents(doc_ids, store=store, progress=True)
+        finally:
+            store.close()
+        _print_corpus_report(report)
+        typer.echo(
+            f"Re-embedded {len(report.processed)} stale document(s) "
+            f"with model '{report.embedding_model}'."
+        )
+        return
 
     try:
         report = run_reembed(embed_backend=embed_backend)

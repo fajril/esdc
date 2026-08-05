@@ -18,6 +18,7 @@ from esdc.corpus.sampling import (
     corpus_fingerprint,
     sample_docs,
 )
+from esdc.llm_text import strip_thinking_tags
 
 
 @dataclass
@@ -72,7 +73,7 @@ def synthesize_query(
 ) -> str:
     """Ask the LLM for one realistic query grounded in this document."""
     prompt = _PROMPT.format(subject=subject or "(none)", chunk=chunk_text[:1500])
-    return call(prompt).strip()
+    return strip_thinking_tags(call(prompt)).strip()
 
 
 def _docs_by_type(docs: list[dict]) -> dict[str, list[str]]:

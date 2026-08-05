@@ -76,6 +76,46 @@ def test_prompt_forbids_rewording():
     assert "EXACTLY" in CLEANUP_PROMPT
 
 
+def test_reasoning_block_stripped_before_guards():
+    """A reasoning-model response must not leak into committed markdown.
+
+    Pre-fix, the caller's raw output only went through fence-stripping, not
+    strip_thinking_tags. On a long page, a short `<think>` block prefixing
+    an otherwise faithful reformat keeps the combined length within the
+    0.5x-1.5x guard and introduces no invented digits, so `_guard_ok`
+    accepts it and the thinking prose lands verbatim in committed markdown
+    (verified: pre-fix, len ratio ~1.09, `_guard_ok` True). The page below
+    is long enough to reproduce that "guard passes" case rather than the
+    more common "guard rejects" case a short page would hit.
+    """
+    long_doc = (
+        "<!-- page 1: native -->\n"
+        "Bagian ini menjelaskan rincian teknis proyek pengembangan lapangan "
+        "yang mencakup studi subsurface, fasilitas produksi, dan jadwal "
+        "implementasi tahun 2024 dengan estimasi biaya 8,146,475 dolar AS "
+        "serta evaluasi risiko operasional yang harus dipertimbangkan "
+        "secara menyeluruh oleh tim manajemen proyek sebelum keputusan "
+        "final diambil.\n\n"
+    )
+    reformatted = (
+        "Bagian ini menjelaskan rincian teknis proyek pengembangan lapangan "
+        "yang mencakup studi subsurface, fasilitas produksi, dan jadwal "
+        "implementasi tahun 2024 dengan estimasi biaya 8,146,475 dolar AS "
+        "serta evaluasi risiko operasional yang harus dipertimbangkan "
+        "secara menyeluruh oleh tim manajemen proyek sebelum keputusan "
+        "final diambil."
+    )
+
+    def caller(prompt: str) -> str:
+        return "<think>Fixing wrap only.</think>\n" + reformatted
+
+    cleaned, n_cleaned, n_rejected = cleanup_markdown(long_doc, caller)
+    assert n_cleaned == 1 and n_rejected == 0
+    assert "<think>" not in cleaned
+    assert "Fixing wrap only" not in cleaned
+    assert reformatted in cleaned
+
+
 def test_native_docx_and_native_md_segments_are_cleanable():
     doc = (
         "<!-- page 1: native_docx -->\n"

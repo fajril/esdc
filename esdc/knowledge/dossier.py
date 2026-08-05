@@ -18,6 +18,7 @@ from typing import Any
 import duckdb
 
 from esdc.knowledge.store import Claim, KnowledgeStore
+from esdc.llm_text import strip_thinking_tags
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +252,7 @@ def generate_pod_dossier(
         provider = provider or existing[1]
         model = model or existing[2]
 
-    text = llm_caller(_build_dossier_prompt(context))
+    text = strip_thinking_tags(llm_caller(_build_dossier_prompt(context))).strip()
     duck_conn.execute(
         "DELETE FROM knowledge_dossiers WHERE entity_type = 'pod' AND entity_id = ?",
         [pod_id],

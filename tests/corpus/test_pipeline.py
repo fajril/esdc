@@ -1375,6 +1375,39 @@ def test_commit_dedupe_and_force(tmp_path, monkeypatch):
     store.close()
 
 
+def test_commit_mirror_refresh_failure_is_warning_not_fatal(tmp_path, monkeypatch):
+    """A refresh_mirror failure during commit degrades to a warning, not a fatal error.
+
+    A refresh_mirror failure (e.g. lost DuckDB write lock) must not abort
+    commit or fail the batch -- the SQLite truth is already written by
+    then, so it's a stale mirror, not a corrupted commit (same contract
+    as the portal's _refresh_mirror_after_save).
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    make_sidecar(
+        tmp_path, "doc.pdf", reviewed=True, file_hash="ee" * 32,
+        body="# Doc\nisi dokumen penting",
+    )
+
+    def boom():
+        raise RuntimeError("lock held by another process")
+
+    monkeypatch.setattr(store, "refresh_mirror", boom)
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert report.processed == ["doc.corpus.md"]
+    assert report.failed == {}
+    assert any(
+        "mirror refresh failed" in w and "esdc corpus sync" in w
+        for w in report.warnings
+    )
+    store.close()
+
+
 def test_commit_entity_resolution(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
@@ -1554,6 +1587,11 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
             "UPDATE documents SET project_name = ? WHERE doc_id = ?",
             (json.dumps(["Portal Project"]), doc_id),
         )
+    # A real portal save triggers _refresh_mirror_after_save; this direct
+    # SQL write bypasses that, so refresh explicitly — get_document is a
+    # serving read off the mirror, and the assertion below runs before the
+    # merge-only commit gets a chance to refresh.
+    store.refresh_mirror()
 
     # Re-extract updates the same sidecar: wk_name now populated, and a
     # DIFFERENT project_name than the portal-edited one.
@@ -1966,20 +2004,36 @@ def test_commit_no_rule_warning_when_level_already_matches(tmp_path, monkeypatch
 
 
 def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
-    """An exception raised after read_sidecar succeeds (e.g. store.insert_document choking on an unparseable hand-edited doc_date) must not abort the batch -- it's recorded as a per-file failure and the rest of the batch still commits."""
+    """An exception after read_sidecar succeeds is isolated to its own file, not the batch.
+
+    An exception raised after read_sidecar succeeds (e.g. store.insert_document
+    choking on a malformed row) must not abort the batch -- it's recorded as a
+    per-file failure and the rest of the batch still commits.
+
+    Task 7 dropped insert_document's DuckDB `documents` write (now derived via
+    refresh_mirror(), which tolerates a bad doc_date by TRY_CAST-ing it to NULL
+    instead of raising), so an unparseable hand-edited doc_date no longer fails
+    at insert time -- the scenario this test used to rely on. insert_document
+    is monkeypatched to fail for one doc instead, to keep testing the
+    per-file-isolation contract on its own terms.
+    """
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
     patch_entity_resolver(monkeypatch)
 
-    make_sidecar(
-        tmp_path,
-        "bad.pdf",
-        reviewed=True,
-        file_hash="55" * 32,
-        doc_date="31 Februari dua ribu",
-    )
+    bad_hash = "55" * 32
+    make_sidecar(tmp_path, "bad.pdf", reviewed=True, file_hash=bad_hash)
     make_sidecar(tmp_path, "good.pdf", reviewed=True, file_hash="66" * 32)
+
+    original_insert = store.insert_document
+
+    def flaky_insert(doc, chunks):
+        if doc["file_hash"] == bad_hash:
+            raise RuntimeError("simulated insert failure")
+        return original_insert(doc, chunks)
+
+    monkeypatch.setattr(store, "insert_document", flaky_insert)
 
     report = pipeline.run_commit([tmp_path])
 
@@ -2484,6 +2538,9 @@ def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkey
     }
     store1.insert_document(doc_a, [Chunk(0, None, "isi dokumen a")])
     store1.insert_document(doc_b, [Chunk(0, None, "isi dokumen b")])
+    # list_documents/get_document are serving reads off the DuckDB mirror
+    # (Task 8); populate it so run_reembed's list_documents() sees these docs.
+    store1.refresh_mirror()
     store1.close()
 
     store2 = CorpusStore(db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder2())
@@ -2799,6 +2856,12 @@ def test_export_writes_sidecar_reflecting_db_including_portal_edits(
             "UPDATE documents SET wk_name = ?, subject = ? WHERE doc_id = ?",
             (json.dumps(["Portal WK"]), "portal-edited subject", doc_id),
         )
+    # A real portal save triggers _refresh_mirror_after_save; this direct
+    # SQL write bypasses that. run_export now reads the SQLite truth
+    # directly (via get_document_by_id), so this refresh isn't required
+    # for the assertions below -- kept anyway to exercise the normal
+    # post-edit path and keep the mirror in sync too.
+    store.refresh_mirror()
 
     report = pipeline.run_export([sc])
 
@@ -2882,4 +2945,44 @@ def test_export_all_covers_every_committed_row(tmp_path, monkeypatch):
 
     assert sorted(report.processed) == ["a.corpus.md", "b.corpus.md"]
     assert report.failed == {}
+    store.close()
+
+
+def test_export_reads_truth_when_mirror_is_empty(tmp_path, monkeypatch):
+    """Export reads document content from the SQLite truth even when the mirror is empty.
+
+    Export's content fetch must come from the SQLite truth, not the
+    DuckDB mirror: a fresh install or a refresh that lost the DuckDB
+    single-writer lock leaves `documents` empty/stale in DuckDB while the
+    truth already has every byte. Simulate that by making refresh_mirror
+    a no-op for the commit, so the mirror never gets the row, then assert
+    export still finds the document and writes the correct markdown.
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    monkeypatch.setattr(store, "refresh_mirror", lambda: None)
+
+    sc = make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash="dd" * 32,
+        body="# Doc\nisi dokumen penting",
+    )
+    commit_report = pipeline.run_commit([tmp_path])
+    assert commit_report.processed == ["doc.corpus.md"]
+
+    # The mirror never got the row: refresh_mirror was a no-op above.
+    doc_id = ("dd" * 32)[:16]
+    assert store.get_document(doc_id) is None
+
+    report = pipeline.run_export([sc])
+
+    assert report.processed == ["doc.corpus.md"]
+    assert report.failed == {}
+    _meta, body = read_sidecar(sc)
+    assert "isi dokumen penting" in body
     store.close()

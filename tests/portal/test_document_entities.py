@@ -277,11 +277,53 @@ def test_update_with_no_entity_fields_is_a_noop(tmp_path):
 
 
 def test_mirror_failure_returns_warning_but_saves(tmp_path):
+    """A refresh that loses the DuckDB lock degrades to a warning, not a failed save.
+
+    `refresh_mirror()` rebuilds `documents` wholesale (`CREATE OR REPLACE
+    TABLE`), so a missing table no longer reproduces a mirror failure —
+    unlike the old row-by-row UPDATE mirror, it just creates the table.
+    Instead, hold a read-only DuckDB connection open on the same file:
+    DuckDB refuses a second connection under a different configuration,
+    which is exactly what happens if a `esdc corpus commit` (or another
+    portal save) still holds the write lock.
+    """
     sqlite_path = _seed_sqlite(tmp_path)
-    # DuckDB file exists but has no `documents` table -> the mirror UPDATE
-    # raises a catalog error, which must be downgraded to a warning.
-    duckdb_path = tmp_path / "empty.duckdb"
+    duckdb_path = tmp_path / "locked.duckdb"
     duckdb.connect(str(duckdb_path)).close()
+    lock_conn = duckdb.connect(str(duckdb_path), read_only=True)
+    resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
+
+    try:
+        result = apply_document_entity_changeset(
+            {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
+            sqlite_path=sqlite_path,
+            db_path=duckdb_path,
+            resolver=resolver,
+        )
+    finally:
+        lock_conn.close()
+
+    assert result.ok is True
+    assert result.warnings
+    assert "esdc corpus sync" in result.warnings[0]
+    assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
+
+
+def test_entity_save_reembeds_edited_documents(monkeypatch, tmp_path):
+    """The edited doc_ids are handed to the re-embed pass after commit."""
+    from esdc.corpus.pipeline import CorpusReport
+
+    seen: dict[str, object] = {}
+
+    def _fake(doc_ids, store=None):
+        seen["doc_ids"] = list(doc_ids)
+        seen["store"] = store
+        return CorpusReport()
+
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fake)
+
+    sqlite_path = _seed_sqlite(tmp_path)
+    duckdb_path = _make_duckdb_mirror(tmp_path)
     resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
 
     result = apply_document_entity_changeset(
@@ -292,6 +334,46 @@ def test_mirror_failure_returns_warning_but_saves(tmp_path):
     )
 
     assert result.ok is True
-    assert result.warnings
-    assert "D1" in result.warnings[0]
-    assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
+    assert seen["doc_ids"] == ["D1"]
+    # The store must carry the caller's paths. Asserting merely that it is
+    # not None would also pass for a default-constructed CorpusStore, which
+    # is exactly the bug this guards: that one targets the user's real
+    # ~/.esdc databases and would re-embed the live corpus during tests.
+    store = seen["store"]
+    assert store is not None
+    assert store._db_path == duckdb_path
+    assert store._sqlite_path == sqlite_path
+
+
+def test_entity_save_skips_reembed_when_the_mirror_refresh_failed(
+    monkeypatch, tmp_path
+):
+    """A stale mirror must not be baked into fresh-looking chunks."""
+    from esdc.portal import document_entities
+
+    called = False
+
+    def _fake(doc_ids, store=None):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fake)
+    monkeypatch.setattr(
+        document_entities,
+        "_refresh_mirror_after_save",
+        lambda *a, **k: ["DuckDB mirror refresh deferred: locked."],
+    )
+
+    sqlite_path = _seed_sqlite(tmp_path)
+    duckdb_path = _make_duckdb_mirror(tmp_path)
+    resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
+
+    result = apply_document_entity_changeset(
+        {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
+        sqlite_path=sqlite_path,
+        db_path=duckdb_path,
+        resolver=resolver,
+    )
+
+    assert called is False
+    assert any("reembed --stale" in w for w in result.warnings)

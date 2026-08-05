@@ -12,6 +12,7 @@ from esdc.chat.domain_knowledge.doc_schema import (
     legacy_topic_seed,
     render_prompt_definitions,
 )
+from esdc.llm_text import strip_thinking_tags
 
 DOC_TYPES = enum_values("doc_type")
 DOC_LEVELS = enum_values("doc_level")
@@ -52,7 +53,8 @@ def metadata_image_prompt(filename: str | None = None) -> str:
 
 def parse_llm_json(raw: str) -> dict[str, Any]:
     """Parse LLM output into a dict; tolerate code fences and chatter."""
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    cleaned = strip_thinking_tags(raw)
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if not match:
         return {}
     try:
@@ -230,4 +232,3 @@ def llm_extract(
     if filename:
         prompt = f"Filename (may hint doc_type/date/subject): {filename}\n\n{prompt}"
     return normalize_metadata(parse_llm_json(llm_caller(prompt)))
-

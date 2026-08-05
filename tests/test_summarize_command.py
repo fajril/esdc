@@ -10,6 +10,7 @@ from esdc.esdc import app
 from esdc.summarizer import (
     SummaryEntityResult,
     _commit_live_tokens,
+    _parse_summary_response,
     _preview_live_tokens,
     _strategic_analysis_data,
     _summarize_entity,
@@ -122,6 +123,45 @@ def _patch_llm(monkeypatch):
     )
     monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     return llm
+
+
+def test_parse_summary_response_strips_thinking_spelling():
+    """The "<thinking>" spelling was never recognized by the old code.
+
+    The old code only checked the literal "<think>" prefix, so a
+    "<thinking>" block (a real spelling used by some reasoning models) was
+    never stripped. Because the block below contains an unmatched "{" of
+    its own, the old code's brace-slicing grabbed content starting inside
+    the thinking block, producing invalid JSON and raising
+    JSONDecodeError. With strip_thinking_tags removing the whole block
+    first, only the real JSON object remains.
+    """
+    content = (
+        "<thinking>value should be like {invalid} but let's see</thinking>\n"
+        '{"status": "ok", "count": 1}'
+    )
+    assert _parse_summary_response(content) == {"status": "ok", "count": 1}
+
+
+def test_parse_summary_response_strips_think_block_after_preamble():
+    """A thinking block preceded by a preamble was never recognized either.
+
+    The old code only stripped when the thinking tag was the literal
+    first characters of the stripped content. A short preamble before the
+    tag meant the ``startswith("<think>")`` check never fired. Because the
+    thinking block here also contains a stray "{", the old code's
+    brace-slicing spanned from inside the thinking block to the real
+    closing brace, yielding invalid multi-object JSON and raising
+    JSONDecodeError. strip_thinking_tags removes the tagged block
+    regardless of position, leaving the preamble text and the real JSON;
+    brace-slicing then isolates the JSON object correctly.
+    """
+    content = (
+        "Sure, here is the analysis.\n"
+        "<think>Let me consider the numbers {a: 1}</think>\n"
+        '{"status": "ok"}'
+    )
+    assert _parse_summary_response(content) == {"status": "ok"}
 
 
 def _create_minimal_project_resources():

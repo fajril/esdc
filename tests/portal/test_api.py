@@ -36,8 +36,9 @@ def _seed_duckdb_entities(
     """Seed the DuckDB file `_patch_dirs` points Config.get_db_file() at.
 
     Populates the `project_resources` lookup table EntityResolver queries,
-    plus (optionally) a `documents` mirror table for `_mirror_updates` to
-    write into. Mirrors the setup in tests/portal/test_document_entities.py's
+    plus (optionally) a `documents` mirror table pre-seeded before
+    `_refresh_mirror_after_save`'s wholesale rebuild runs. Mirrors the setup
+    in tests/portal/test_document_entities.py's
     test_default_resolver_and_mirror_share_db_path.
     """
     path = tmp_path / "esdc.duckdb"
@@ -283,17 +284,29 @@ def test_documents_save_unknown_name_rejected_422(monkeypatch, tmp_path):
 
 
 def test_documents_save_warnings_passthrough(monkeypatch, tmp_path):
+    """A refresh that loses the DuckDB lock degrades to a warning, not a failed save.
+
+    `refresh_mirror()` rebuilds `documents` wholesale (`CREATE OR REPLACE
+    TABLE`), so a missing mirror table no longer reproduces a failure --
+    unlike the old row-by-row UPDATE mirror, it just creates the table.
+    Instead, hold a read-only DuckDB connection open on the same file:
+    DuckDB refuses a second connection under a different configuration,
+    which is exactly what happens if `esdc corpus commit` still holds
+    the write lock when the portal save's refresh runs.
+    """
     client = _client(monkeypatch, tmp_path)
     _seed_documents(["D1"])
-    # No documents mirror table -> the DuckDB UPDATE fails after the SQLite
-    # commit already succeeded, downgraded to a warning (never a 422/500).
     _seed_duckdb_entities(tmp_path, wk_name="Rokan", mirror_documents=False)
 
-    resp = client.post("/api/tables/documents/save", json={"updates": [
-        {"doc_id": "D1", "wk_name": "Rokan"},
-    ]})
+    lock_conn = duckdb.connect(str(tmp_path / "esdc.duckdb"), read_only=True)
+    try:
+        resp = client.post("/api/tables/documents/save", json={"updates": [
+            {"doc_id": "D1", "wk_name": "Rokan"},
+        ]})
+    finally:
+        lock_conn.close()
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["warnings"]
-    assert "D1" in body["warnings"][0]
+    assert "esdc corpus sync" in body["warnings"][0]

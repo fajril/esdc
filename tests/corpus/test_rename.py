@@ -1,6 +1,9 @@
 import datetime
+from pathlib import Path
 
+import esdc.corpus.rename as rename_mod
 from esdc.corpus import rename
+from esdc.corpus.sidecar import read_sidecar, sidecar_path, write_sidecar_file
 
 
 def test_format_doc_date_from_iso_string():
@@ -30,12 +33,6 @@ def test_sanitize_title_none_and_empty():
 def test_sanitize_title_caps_length():
     out = rename.sanitize_title("x" * 300)
     assert out is not None and len(out) <= 150
-
-
-from pathlib import Path
-
-import esdc.corpus.rename as rename_mod
-from esdc.corpus.sidecar import sidecar_path, write_sidecar_file
 
 
 def _write_sidecar(src: Path, meta: dict) -> Path:
@@ -215,9 +212,6 @@ def test_run_rename_collision_within_batch(tmp_path, monkeypatch):
     assert len(blocked) == 1
     assert "target exists" in blocked[0].note
     assert report.failed
-
-
-from esdc.corpus.sidecar import read_sidecar
 
 
 def test_apply_renames_source_and_sidecar(tmp_path, monkeypatch):

@@ -102,6 +102,7 @@ def populated(tool_env: Path) -> Path:
     store.ensure_tables()
     store.insert_document(DOC, [Chunk(0, "Surat", "persetujuan POD lapangan Duri")])
     store.insert_document(LONG_DOC, [Chunk(0, None, "notulen rapat panjang")])
+    store.refresh_mirror()  # search() hydrates/joins off the mirror, not insert
     store.rebuild_indexes()
     store.close()
     return tool_env
@@ -137,6 +138,7 @@ def test_search_documents_doc_topic_filter(tool_env):
     doc = dict(DOC)
     doc["doc_topic"] = ["wpnb"]
     store.insert_document(doc, [Chunk(0, None, "rencana kerja dan anggaran")])
+    store.refresh_mirror()  # search() hydrates/joins off the mirror, not insert
     store.rebuild_indexes()
     store.close()
 
@@ -159,6 +161,61 @@ def test_search_documents_empty_db_not_available(tool_env):
     assert result["status"] == "not_available"
     assert "esdc corpus extract" in result["message"]
     assert "esdc corpus commit" in result["message"]
+
+
+def test_aggregate_documents_counts_exhaustively(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"query": "persetujuan", "mode": "count"})
+    )
+    assert result["status"] in ("success", "no_results")
+    assert result["match"] == "hybrid"  # tool default flipped in Task 5
+    assert result["approximate"] is False
+    assert "count" in result
+
+
+def test_aggregate_documents_metadata_only_filter(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "list", "doc_type": "surat"})
+    )
+    assert result["count"] == 2  # both DOC and LONG_DOC are doc_type=surat
+    assert len(result["documents"]) == 2
+
+
+def test_aggregate_documents_list_mode_truncated_flags(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "list", "doc_type": "surat", "limit": 1})
+    )
+    assert result["count"] == 2  # both DOC and LONG_DOC are doc_type=surat
+    assert result["returned"] == 1
+    assert result["truncated"] is True
+    assert "note" in result
+
+
+def test_aggregate_documents_count_mode_doc_ids_bounded(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "count", "doc_type": "surat", "limit": 1})
+    )
+    assert result["count"] == 2
+    assert len(result["doc_ids"]) == 1
+    assert result["returned"] == 1
+    assert result["truncated"] is True
+    assert "note" in result
+
+
+def test_aggregate_documents_not_available_carries_ingest_hint(tool_env):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(aggregate_documents.invoke({"query": "apapun"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
 
 
 def test_search_documents_survives_missing_embed_text_column(populated):
@@ -612,3 +669,76 @@ def test_semantic_resolver_is_thread_local():
 
     assert len(results) == 2
     assert results[0] is not results[1]
+
+
+def test_aggregate_documents_filters_by_sender(populated):
+    """The 'but it is from X' follow-up: narrow a count by the sending party."""
+    from esdc.chat.tools import aggregate_documents
+
+    # DOC's sender is "SKK"; 'skk' proves the match is case-insensitive
+    # substring, which is the only usable form against the real corpus
+    # where senders read "PERTAMINA BADAN PEMBINAAN PENGUSAHAAN...".
+    hit = json.loads(aggregate_documents.invoke({"mode": "count", "sender": "skk"}))
+    miss = json.loads(
+        aggregate_documents.invoke({"mode": "count", "sender": "zzz-no-such-party"})
+    )
+
+    assert hit["count"] >= 1
+    assert miss["count"] == 0
+    assert miss["status"] == "no_results"
+
+
+def test_aggregate_documents_filters_by_pod_name(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "count", "pod_name": "zzz-no-such-pod"})
+    )
+
+    assert result["count"] == 0
+
+
+def test_aggregate_documents_defaults_to_hybrid_with_provenance(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(aggregate_documents.invoke({"query": "persetujuan"}))
+
+    assert result["match"] == "hybrid"
+    assert result["approximate"] is False
+    assert set(result["provenance"]) == {
+        "exact_total", "semantic_extra", "semantic_extra_is_a_ranking",
+    }
+    assert result["provenance"]["exact_total"] == result["count"]
+
+
+def test_aggregate_documents_semantic_candidates_carry_scores(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke(
+            {"query": "persetujuan", "semantic_candidates": 2}
+        )
+    )
+
+    for cand in result.get("semantic_candidates", []):
+        assert 0.0 <= cand["similarity"] <= 1.0
+        assert "matched_snippet" in cand
+
+
+def test_aggregate_documents_rejects_similarity_threshold(populated):
+    """The removed parameter must not silently succeed as a no-op.
+
+    LangChain's generated arg schema ignores unknown fields by default,
+    so deleting the parameter alone would have left a caller passing it
+    a silently unchanged result — the exact false-precision failure the
+    threshold was removed for. `extra="forbid"` on this tool's schema is
+    what turns it into a loud ValidationError instead.
+    """
+    from pydantic import ValidationError
+
+    from esdc.chat.tools import aggregate_documents
+
+    with pytest.raises(ValidationError, match="similarity_threshold"):
+        aggregate_documents.invoke(
+            {"query": "persetujuan", "similarity_threshold": 0.5}
+        )
