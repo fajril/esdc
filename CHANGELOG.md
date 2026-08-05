@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Corpus evaluation
+
+**Fixed:** `esdc corpus eval --init` no longer generates queries that score
+themselves. Each query was synthesized from its document's `subject`, which the
+context prefix stamps onto every chunk's `embed_text` — the text both the
+vector and FTS indexes are built on — so the benchmark was matching a
+paraphrase of indexed metadata. On a 20-query sample the old set scored
+Pass@10 1.00, leaving no headroom to detect an improvement or a regression.
+The subject is now withheld from the generator, and the excerpt is picked
+deterministically from anywhere in the document instead of always being chunk
+0, which for a letter is the letterhead.
+
+**Added:** query classes. Rows carry a `class` field — `lookup`,
+`cross_reference`, `thematic`, or `negative` — and results are reported per
+class instead of as one blended number that a corpus of near-identical
+approval letters will always flatter. `cross_reference` and `thematic` name
+several documents and are scored by Recall@k as well as Pass@k. `negative`
+rows have no answer in the corpus and are scored by abstention against
+`corpus.negative_floor` (requires rerank; RRF scores are not calibrated).
+Cross-reference pairs are discovered deterministically from letter numbers in
+body text via the new `esdc/corpus/citations.py`, so the labels are ground
+truth rather than model opinion. Existing query files without a `class` field
+load unchanged and score in their own `lookup_legacy` bucket.
+
 ### Knowledge graph
 
 **Fixed:** `esdc corpus learn` now links documents to their fields and working
