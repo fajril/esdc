@@ -18,11 +18,32 @@ from esdc.corpus.pipeline import _progress_with_status
 
 
 @dataclass
+class ClassReport:
+    n_queries: int = 0
+    pass_at: dict[int, float] = field(default_factory=dict)
+    recall_at: dict[int, float] = field(default_factory=dict)
+    abstention: float | None = None
+
+
+@dataclass
 class EvalReport:
     n_queries: int = 0
     pass_at: dict[int, float] = field(default_factory=dict)
     mean_latency_ms: float = 0.0
     failures: list[str] = field(default_factory=list)
+    by_class: dict[str, ClassReport] = field(default_factory=dict)
+
+
+def row_class(row: dict[str, Any]) -> str:
+    """Query class for a row.
+
+    Rows predating classes score in their own bucket rather than being
+    folded into `lookup`: they were synthesized from the document's own
+    subject line, which the context prefix stamps onto every chunk, so
+    they are systematically easier and must never be averaged with
+    leak-free queries.
+    """
+    return str(row.get("class") or "lookup_legacy")
 
 
 def run_eval(
@@ -47,6 +68,8 @@ def run_eval(
     n_queries = sum(1 for line in lines if _is_query_line(line))
 
     hits = dict.fromkeys(ks, 0)
+    per_class_hits: dict[str, dict[int, int]] = {}
+    per_class_n: dict[str, int] = {}
     latencies: list[float] = []
     try:
         with _progress_with_status("eval", n_queries, "queries") as p:
@@ -57,6 +80,7 @@ def run_eval(
                         continue
                     query = row["query"]
                     expected = set(row["expected"])
+                    cls = row_class(row)
                 except (ValueError, KeyError, TypeError) as e:
                     report.failures.append(f"line {lineno}: {e}")
                     continue
@@ -76,6 +100,8 @@ def run_eval(
 
                 report.n_queries += 1
                 results = result.get("results", [])
+                per_class_n[cls] = per_class_n.get(cls, 0) + 1
+                cls_hits = per_class_hits.setdefault(cls, dict.fromkeys(ks, 0))
                 for k in ks:
                     top = results[:k]
                     if any(
@@ -83,6 +109,7 @@ def run_eval(
                         for r in top
                     ):
                         hits[k] += 1
+                        cls_hits[k] += 1
     finally:
         if owns_store:
             store.close()
@@ -90,6 +117,11 @@ def run_eval(
     if report.n_queries:
         report.pass_at = {k: hits[k] / report.n_queries for k in ks}
         report.mean_latency_ms = sum(latencies) / len(latencies)
+    for cls, n in per_class_n.items():
+        report.by_class[cls] = ClassReport(
+            n_queries=n,
+            pass_at={k: per_class_hits[cls][k] / n for k in ks},
+        )
     return report
 
 

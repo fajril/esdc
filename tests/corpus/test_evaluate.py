@@ -1,6 +1,6 @@
 import json
 
-from esdc.corpus.evaluate import run_eval
+from esdc.corpus.evaluate import row_class, run_eval
 
 
 class FakeStore:
@@ -64,6 +64,40 @@ def test_bad_line_recorded_as_failure(tmp_path):
     report = run_eval(p, ks=(1,), store=FakeStore())
     assert report.n_queries == 1
     assert len(report.failures) == 1
+
+
+def test_row_without_class_is_lookup_legacy():
+    assert row_class({"query": "q", "expected": ["d"]}) == "lookup_legacy"
+
+
+def test_row_class_is_read_from_the_row():
+    assert row_class({"query": "q", "expected": ["d"], "class": "lookup"}) == "lookup"
+
+
+def test_per_class_pass_at_k(tmp_path):
+    path = _write_queries(
+        tmp_path,
+        [
+            {"query": "q1", "expected": ["doc-b"], "class": "lookup"},
+            {"query": "q2", "expected": ["doc-a"], "class": "lookup"},
+            {"query": "q3", "expected": ["missing"]},  # legacy bucket
+        ],
+    )
+    report = run_eval(path, ks=(1, 2), store=FakeStore())
+    assert report.by_class["lookup"].n_queries == 2
+    assert report.by_class["lookup"].pass_at[1] == 0.5
+    assert report.by_class["lookup"].pass_at[2] == 1.0
+    assert report.by_class["lookup_legacy"].n_queries == 1
+    assert report.by_class["lookup_legacy"].pass_at[1] == 0.0
+
+
+def test_blended_report_still_present(tmp_path):
+    path = _write_queries(
+        tmp_path, [{"query": "q1", "expected": ["doc-b"], "class": "lookup"}]
+    )
+    report = run_eval(path, ks=(1,), store=FakeStore())
+    assert report.n_queries == 1
+    assert report.pass_at[1] == 1.0
 
 
 def test_meta_header_line_is_ignored(tmp_path):
