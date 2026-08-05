@@ -34,6 +34,12 @@ class EvalReport:
     by_class: dict[str, ClassReport] = field(default_factory=dict)
 
 
+# Classes whose `expected` names several documents. Pass@k treats
+# retrieving one of four the same as retrieving all four, so these are
+# scored by Recall@k as well.
+RECALL_CLASSES = frozenset({"cross_reference", "thematic"})
+
+
 def row_class(row: dict[str, Any]) -> str:
     """Query class for a row.
 
@@ -70,6 +76,7 @@ def run_eval(
     hits = dict.fromkeys(ks, 0)
     per_class_hits: dict[str, dict[int, int]] = {}
     per_class_n: dict[str, int] = {}
+    recall_sums: dict[str, dict[int, float]] = {}
     latencies: list[float] = []
     try:
         with _progress_with_status("eval", n_queries, "queries") as p:
@@ -110,6 +117,21 @@ def run_eval(
                     ):
                         hits[k] += 1
                         cls_hits[k] += 1
+
+                if cls in RECALL_CLASSES:
+                    sums = recall_sums.setdefault(
+                        cls, dict.fromkeys(ks, 0.0)
+                    )
+                    for k in ks:
+                        top = results[:k]
+                        matched = {
+                            e
+                            for e in expected
+                            for r in top
+                            if r.get("doc_id") == e or r.get("file_name") == e
+                        }
+                        if expected:
+                            sums[k] += len(matched) / len(expected)
     finally:
         if owns_store:
             store.close()
@@ -118,9 +140,11 @@ def run_eval(
         report.pass_at = {k: hits[k] / report.n_queries for k in ks}
         report.mean_latency_ms = sum(latencies) / len(latencies)
     for cls, n in per_class_n.items():
+        sums = recall_sums.get(cls)
         report.by_class[cls] = ClassReport(
             n_queries=n,
             pass_at={k: per_class_hits[cls][k] / n for k in ks},
+            recall_at={k: sums[k] / n for k in ks} if sums is not None else {},
         )
     return report
 

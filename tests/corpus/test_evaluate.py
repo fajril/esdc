@@ -100,6 +100,41 @@ def test_blended_report_still_present(tmp_path):
     assert report.pass_at[1] == 1.0
 
 
+def test_recall_at_k_for_multi_doc_class(tmp_path):
+    # FakeStore returns doc-b then doc-a for every query.
+    path = _write_queries(
+        tmp_path,
+        [
+            {
+                "query": "q1",
+                "expected": ["doc-a", "doc-b", "doc-c", "doc-d"],
+                "class": "cross_reference",
+            }
+        ],
+    )
+    report = run_eval(path, ks=(1, 2), store=FakeStore())
+    cr = report.by_class["cross_reference"]
+    assert cr.recall_at[1] == 0.25   # doc-b of 4
+    assert cr.recall_at[2] == 0.5    # doc-b + doc-a of 4
+    assert cr.pass_at[1] == 1.0      # Pass@k still reported
+
+
+def test_recall_not_computed_for_lookup(tmp_path):
+    path = _write_queries(
+        tmp_path, [{"query": "q", "expected": ["doc-b"], "class": "lookup"}]
+    )
+    report = run_eval(path, ks=(1,), store=FakeStore())
+    assert report.by_class["lookup"].recall_at == {}
+
+
+def test_recall_ignores_empty_expected(tmp_path):
+    path = _write_queries(
+        tmp_path, [{"query": "q", "expected": [], "class": "thematic"}]
+    )
+    report = run_eval(path, ks=(1,), store=FakeStore())
+    assert report.by_class["thematic"].recall_at[1] == 0.0
+
+
 def test_meta_header_line_is_ignored(tmp_path):
     p = tmp_path / "queries.jsonl"
     p.write_text(
