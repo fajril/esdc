@@ -11,15 +11,20 @@ import re
 # Reasoning models (Qwen3 with thinking enabled, DeepSeek-R1) embed thinking
 # blocks directly in the message content. Strip them before any parsing so
 # neither the tags nor the reasoning prose reach a JSON slice or a title.
+# Open and close are matched independently (no backreference): models are not
+# consistent about which spelling they close with, and a mixed
+# `<thinking>…</think>` must still be treated as one balanced block rather
+# than truncated reasoning. `\b[^>]*>` tolerates attributes and newlines in
+# the tag itself.
 _THINKING_BLOCK_RE = re.compile(
-    r"<(?P<tag>thinking|think)>.*?</(?P=tag)>",
+    r"<(?:thinking|think)\b[^>]*>.*?</(?:thinking|think)\b[^>]*>",
     re.DOTALL | re.IGNORECASE,
 )
 _UNCLOSED_THINKING_RE = re.compile(
-    r"<(?:thinking|think)>.*\Z",
+    r"<(?:thinking|think)\b[^>]*>.*\Z",
     re.DOTALL | re.IGNORECASE,
 )
-_THINKING_TAG_RE = re.compile(r"</?(?:thinking|think)>", re.IGNORECASE)
+_THINKING_TAG_RE = re.compile(r"</?(?:thinking|think)\b[^>]*>", re.IGNORECASE)
 
 
 def strip_thinking_tags(text: str) -> str:

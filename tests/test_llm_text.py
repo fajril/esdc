@@ -28,3 +28,30 @@ def test_strip_thinking_tags_block_containing_braces_leaves_json_tail():
         'thoughts</thinking>\n\n{"title": "Cadangan nasional"}'
     )
     assert strip_thinking_tags(text) == '\n\n{"title": "Cadangan nasional"}'
+
+
+def test_strip_thinking_tags_mixed_close_spelling_is_balanced():
+    # Models are not consistent about the close spelling; a mixed block must
+    # be stripped as balanced, not treated as truncated reasoning (which
+    # would drop everything to end-of-string, JSON included).
+    assert (
+        strip_thinking_tags("<thinking>plan briefly</think>\n{\"a\": 1}")
+        == '\n{"a": 1}'
+    )
+    assert (
+        strip_thinking_tags("<think>plan briefly</thinking>\n{\"a\": 1}")
+        == '\n{"a": 1}'
+    )
+
+
+def test_strip_thinking_tags_tolerates_attributes_and_newlines_in_tags():
+    assert strip_thinking_tags('<think lang="en">r</think>{"a": 1}') == '{"a": 1}'
+    assert strip_thinking_tags("<thinking\n>r</thinking>tail") == "tail"
+
+
+def test_strip_thinking_tags_leaves_tags_that_merely_start_with_think():
+    # The word boundary after think/thinking is what keeps the attribute
+    # tolerance above from swallowing unrelated tags. Without it, <thinker>
+    # matches as an opener and the unclosed pass drops the rest of the text.
+    text = '<thinker>not reasoning</thinker> {"a": 1}'
+    assert strip_thinking_tags(text) == text
