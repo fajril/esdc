@@ -82,6 +82,10 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "(off by default; first use downloads the model, ~1 GB)"
     ),
     "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
+    "corpus.negative_floor": (
+        "Rerank score below which `esdc corpus eval` treats a negative-class "
+        "query as correctly finding nothing (needs rerank on)"
+    ),
     "corpus.rerank_model": (
         "Reranker GGUF id run in-process via llama.cpp "
         "(default ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
@@ -135,6 +139,7 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
         "corpus.rerank",
         "corpus.rerank_pool",
         "corpus.rerank_model",
+        "corpus.negative_floor",
         "corpus.ocr_dpi",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
@@ -959,6 +964,10 @@ class Config:
         # downloads the model (~1 GB, cached).
         "rerank": False,
         "rerank_pool": 30,  # candidates scored per query when rerank is on
+        # negative_floor: rerank P("yes") below which `esdc corpus eval`
+        # counts a negative-class query as correctly finding nothing. Only
+        # meaningful with rerank on — RRF scores are not calibrated.
+        "negative_floor": 0.5,
         # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",

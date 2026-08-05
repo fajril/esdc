@@ -135,6 +135,59 @@ def test_recall_ignores_empty_expected(tmp_path):
     assert report.by_class["thematic"].recall_at[1] == 0.0
 
 
+class ScoredStore:
+    """Returns one result whose rerank_score is fixed at construction."""
+
+    def __init__(self, score):
+        self._score = score
+
+    def search(self, query, limit=10, filters=None, rerank=None):
+        hit = {"doc_id": "doc-b", "file_name": "b.pdf"}
+        if self._score is not None:
+            hit["rerank_score"] = self._score
+        return {"status": "success", "results": [hit], "count": 1}
+
+    def close(self):
+        pass
+
+
+def test_negative_abstains_when_below_floor(tmp_path):
+    path = _write_queries(
+        tmp_path, [{"query": "q", "expected": [], "class": "negative"}]
+    )
+    report = run_eval(path, ks=(1,), rerank=True, store=ScoredStore(0.1))
+    assert report.by_class["negative"].abstention == 1.0
+
+
+def test_negative_fails_when_above_floor(tmp_path):
+    path = _write_queries(
+        tmp_path, [{"query": "q", "expected": [], "class": "negative"}]
+    )
+    report = run_eval(path, ks=(1,), rerank=True, store=ScoredStore(0.95))
+    assert report.by_class["negative"].abstention == 0.0
+
+
+def test_negative_unscored_without_rerank_score(tmp_path):
+    path = _write_queries(
+        tmp_path, [{"query": "q", "expected": [], "class": "negative"}]
+    )
+    report = run_eval(path, ks=(1,), store=ScoredStore(None))
+    assert report.by_class["negative"].abstention is None
+
+
+def test_negative_excluded_from_pass_at_k(tmp_path):
+    path = _write_queries(
+        tmp_path,
+        [
+            {"query": "q1", "expected": ["doc-b"], "class": "lookup"},
+            {"query": "q2", "expected": [], "class": "negative"},
+        ],
+    )
+    report = run_eval(path, ks=(1,), store=ScoredStore(0.1))
+    assert report.by_class["lookup"].pass_at[1] == 1.0
+    assert report.by_class["negative"].pass_at == {}
+
+
 def test_meta_header_line_is_ignored(tmp_path):
     p = tmp_path / "queries.jsonl"
     p.write_text(

@@ -1324,6 +1324,12 @@ class CorpusStore:
                         "score": round(r["score"], 6),
                     }
                 )
+                # Only present when the cross-encoder actually ran. It is
+                # the one calibrated relevance number search produces —
+                # P("yes") from RANK pooling — so the eval harness uses it
+                # to decide whether a query found anything at all.
+                if "rerank_score" in r:
+                    results[-1]["rerank_score"] = r["rerank_score"]
 
             return {"status": "success", "results": results, "count": len(results)}
 

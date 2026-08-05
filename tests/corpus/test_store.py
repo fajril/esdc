@@ -840,6 +840,43 @@ def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
     Reranker._failed = False
 
 
+def test_search_surfaces_rerank_score(store_with_doc_factory, monkeypatch):
+    """rerank_score must reach the payload; evaluate.py needs it for negatives."""
+    import esdc.corpus.reranker as reranker_mod
+    from esdc.corpus.reranker import Reranker
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+    class FixedModel:
+        def embed(self, prompt):
+            return [0.42, 0.0]
+
+    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: FixedModel())
+
+    # chunk_size=20 forces two chunks; _maybe_rerank is a no-op below two.
+    store, _ = store_with_doc_factory(
+        chunk_size=20,
+        subject="Pengembangan Merak",
+        markdown="# A\n\nalpha konten\n\n# B\n\nbeta konten",
+    )
+    store.rebuild_indexes()
+    out = store.search("konten", limit=3, rerank=True)
+    assert out["status"] == "success"
+    assert out["results"][0]["rerank_score"] == 0.42
+
+    Reranker._instance = None
+    Reranker._failed = False
+
+
+def test_search_omits_rerank_score_when_rerank_off(store_with_doc_factory):
+    store, _ = store_with_doc_factory(subject="Pengembangan Merak")
+    store.rebuild_indexes()
+    out = store.search("konten", limit=3, rerank=False)
+    assert out["status"] == "success"
+    assert "rerank_score" not in out["results"][0]
+
+
 def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatch):
     import esdc.corpus.reranker as reranker_mod
     from esdc.corpus.reranker import Reranker

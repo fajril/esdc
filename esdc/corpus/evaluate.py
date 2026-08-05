@@ -39,6 +39,20 @@ class EvalReport:
 # scored by Recall@k as well.
 RECALL_CLASSES = frozenset({"cross_reference", "thematic"})
 
+# A negative query has expected == [] — nothing in the corpus answers it.
+# search() always returns something, so the question is whether anything
+# clears a relevance floor. RRF scores are rank-derived and uncalibrated;
+# only the reranker's P("yes") is a real probability, so this class is
+# scored solely when reranking ran and reported as None otherwise.
+NEGATIVE_CLASS = "negative"
+
+
+def _negative_floor() -> float:
+    """rerank P("yes") below which a result counts as "nothing relevant"."""
+    from esdc.configs import Config
+
+    return float(Config.get_corpus_config().get("negative_floor", 0.5))
+
 
 def row_class(row: dict[str, Any]) -> str:
     """Query class for a row.
@@ -77,6 +91,9 @@ def run_eval(
     per_class_hits: dict[str, dict[int, int]] = {}
     per_class_n: dict[str, int] = {}
     recall_sums: dict[str, dict[int, float]] = {}
+    neg_scored: dict[str, int] = {}
+    neg_abstained: dict[str, int] = {}
+    floor = _negative_floor()
     latencies: list[float] = []
     try:
         with _progress_with_status("eval", n_queries, "queries") as p:
@@ -108,6 +125,17 @@ def run_eval(
                 report.n_queries += 1
                 results = result.get("results", [])
                 per_class_n[cls] = per_class_n.get(cls, 0) + 1
+
+                if cls == NEGATIVE_CLASS:
+                    scores = [
+                        r["rerank_score"] for r in results if "rerank_score" in r
+                    ]
+                    if scores:
+                        neg_scored[cls] = neg_scored.get(cls, 0) + 1
+                        if max(scores) < floor:
+                            neg_abstained[cls] = neg_abstained.get(cls, 0) + 1
+                    continue
+
                 cls_hits = per_class_hits.setdefault(cls, dict.fromkeys(ks, 0))
                 for k in ks:
                     top = results[:k]
@@ -141,10 +169,15 @@ def run_eval(
         report.mean_latency_ms = sum(latencies) / len(latencies)
     for cls, n in per_class_n.items():
         sums = recall_sums.get(cls)
+        scored = neg_scored.get(cls, 0)
+        cls_hits = per_class_hits.get(cls)
         report.by_class[cls] = ClassReport(
             n_queries=n,
-            pass_at={k: per_class_hits[cls][k] / n for k in ks},
+            pass_at={k: cls_hits[k] / n for k in ks} if cls_hits else {},
             recall_at={k: sums[k] / n for k in ks} if sums is not None else {},
+            abstention=(
+                neg_abstained.get(cls, 0) / scored if scored else None
+            ),
         )
     return report
 
