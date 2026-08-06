@@ -89,7 +89,7 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "corpus.query_instruct": (
         "Prefix search/aggregate queries with Qwen3-Embedding's documented "
         "instruction template before embedding (query side only -- chunks "
-        "stay raw); off by default until an eval run justifies it"
+        "stay raw, so toggling this never needs a re-embed)"
     ),
     "corpus.rerank_model": (
         "Reranker GGUF id run in-process via llama.cpp "
@@ -984,10 +984,14 @@ class Config:
         "max_chunks_per_doc": 2,
         # query_instruct: prefix search()/aggregate() queries with Qwen3's
         # documented instruction template before embedding them (query
-        # side only; chunks stay raw, so this needs no re-embed). Default
-        # False deliberately -- it stays off until an eval run on the
-        # Phase A query set justifies turning it on.
-        "query_instruct": False,
+        # side only; chunks stay raw, so this needs no re-embed).
+        # On by default since 2026-08-06: Qwen3-Embedding is instruction-
+        # tuned and asymmetric, so raw queries were using the model off the
+        # format it was trained for. Measured over 189 queries with the cap
+        # on: lookup Pass@1 78.3% -> 81.7%, cross_reference Recall@5
+        # 81.7% -> 83.3%, Recall@10 85.0% -> 90.0%; the cost is roughly one
+        # query at lookup Pass@5/Pass@10. Set False to A/B it back.
+        "query_instruct": True,
         # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",

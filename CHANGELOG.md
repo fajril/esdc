@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Corpus retrieval
 
+**Added:** `corpus.max_chunks_per_doc` (default 2). `search()` returned
+`merged[:limit]` with no per-document cap, so several chunks of one document
+could fill several result slots — over 20 real queries the top-10 held a mean
+of 5.05 distinct documents, minimum 1, and `lookup` Pass@5 equalled Pass@10
+exactly because ranks 6-10 were repeats. The cap is applied after reranking,
+so the chunk kept per document is the best-scoring one rather than whichever
+one RRF ranked first. `aggregate()` is unaffected; it already dedupes fully.
+Set to 0 to restore the old behaviour.
+
+**Added:** `corpus.query_instruct` (default on). Qwen3-Embedding is
+instruction-tuned and asymmetric — queries are meant to be wrapped in
+`Instruct: {task}\nQuery: {q}` while documents stay raw — but `search()` was
+embedding queries with the same call used for chunks, i.e. off the format the
+model was trained for. Chunks were already raw, which is correct, so enabling
+this needs **no re-embed** and does not touch the vector-space identity.
+
+Together, over 189 queries with reranking off: `lookup` Pass@1 78.3% → 81.7%,
+`cross_reference` Recall@5 75.0% → 83.3%, Recall@10 83.3% → 90.0%. The cap
+alone accounts for most of the cross-reference gain; the instruction prefix
+for the Pass@1 gain, at a cost of roughly one query at Pass@5/Pass@10.
+
 **Measured:** `corpus.rerank` does not pay for itself on this corpus, and the
 default stays `false`. Over 189 queries with full GPU offload, reranking left
 `lookup` Pass@1 unchanged at 78.3%, cost `cross_reference` 10pp of Pass@1

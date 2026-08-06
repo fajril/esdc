@@ -1337,8 +1337,10 @@ class CorpusStore:
         behaves identically across the local llama.cpp, Ollama and
         OpenAI-compatible backends.
 
-        Default is off (see CORPUS_DEFAULTS.query_instruct) until an eval
-        run justifies enabling it.
+        On by default since 2026-08-06 (see CORPUS_DEFAULTS.query_instruct
+        for the measured effect). The `False` fallback below is what a
+        config predating the key gets — raw queries, today's prior
+        behaviour — so an old config never silently changes ranking.
         """
         cfg = Config.get_corpus_config()
         if cfg.get("query_instruct", False):
