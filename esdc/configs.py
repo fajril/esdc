@@ -82,10 +82,6 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "(off by default; first use downloads the model, ~1 GB)"
     ),
     "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
-    "corpus.negative_floor": (
-        "Rerank score below which `esdc corpus eval` treats a negative-class "
-        "query as correctly finding nothing (needs rerank on)"
-    ),
     "corpus.rerank_model": (
         "Reranker GGUF id run in-process via llama.cpp "
         "(default ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
@@ -139,7 +135,6 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
         "corpus.rerank",
         "corpus.rerank_pool",
         "corpus.rerank_model",
-        "corpus.negative_floor",
         "corpus.ocr_dpi",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
@@ -959,15 +954,15 @@ class Config:
     CORPUS_DEFAULTS = {
         "chunk_size": 3000,  # max chars per chunk (~750 tokens)
         "chunk_overlap": 300,  # chars carried over between chunks
-        # rerank: second-stage cross-encoder over the RRF top pool.
-        # Off by default until `esdc corpus eval` justifies it; first use
-        # downloads the model (~1 GB, cached).
+        # rerank: second-stage cross-encoder over the RRF top pool. Off by
+        # default, and `esdc corpus eval` has now argued against turning it
+        # on: measured 2026-08-06 it left lookup Pass@1 unchanged (78.3%),
+        # cost cross_reference 10pp of Pass@1, and raised mean latency from
+        # 69 ms to 41 s per query WITH full GPU offload. It also scores
+        # near-1.0 on queries the corpus cannot answer. Read the reranker
+        # module docstring before enabling this.
         "rerank": False,
         "rerank_pool": 30,  # candidates scored per query when rerank is on
-        # negative_floor: rerank P("yes") below which `esdc corpus eval`
-        # counts a negative-class query as correctly finding nothing. Only
-        # meaningful with rerank on — RRF scores are not calibrated.
-        "negative_floor": 0.5,
         # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",

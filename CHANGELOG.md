@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Corpus retrieval
+
+**Measured:** `corpus.rerank` does not pay for itself on this corpus, and the
+default stays `false`. Over 189 queries with full GPU offload, reranking left
+`lookup` Pass@1 unchanged at 78.3%, cost `cross_reference` 10pp of Pass@1
+(and 5pp of Recall at every k), gained 15pp only on the weakest-labelled
+class, and raised mean latency from 69 ms to 41 s per query — 594×, which
+makes the chat `Document Search` tool unusable interactively.
+
+It also scores template match rather than entity identity. Asked
+`"persetujuan POFD Lapangan Volve"` — a Norwegian field, unanswerable in an
+Indonesian upstream corpus — it returns `"Persetujuan POFD Lapangan Securai"`
+at P("yes") = 0.9999, because both are POFD approval letters and the field
+name does not move the score. Across 19 such queries the scores (max 0.9999)
+overlap the answerable ones (min 0.9968), so no threshold separates them.
+With rerank on, chat therefore receives confidently ranked context for
+questions the corpus cannot answer. The full measurement is in the
+`esdc/corpus/reranker.py` module docstring.
+
+**Removed:** `corpus.negative_floor`, added earlier in this same unreleased
+cycle. It thresholded the reranker score to decide that a query found
+nothing; the measurement above shows that signal cannot discriminate absence,
+so the knob promised a capability that does not exist. `esdc corpus eval`
+now counts negative-class queries and reports them as unscored.
+
 ### Corpus evaluation
 
 **Fixed:** `esdc corpus eval --init` no longer generates queries that score

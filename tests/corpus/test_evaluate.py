@@ -151,28 +151,21 @@ class ScoredStore:
         pass
 
 
-def test_negative_abstains_when_below_floor(tmp_path):
+def test_negative_is_counted_but_never_scored(tmp_path):
+    """A rerank floor cannot score this class — see reranker.py's docstring.
+
+    Measured 2026-08-06: negatives scored max 0.9999 against a true-positive
+    minimum of 0.9968, so no threshold separates them. The class is kept
+    (the queries are still worth carrying) but abstention stays None until a
+    mechanism exists that can actually detect absence.
+    """
     path = _write_queries(
         tmp_path, [{"query": "q", "expected": [], "class": "negative"}]
     )
-    report = run_eval(path, ks=(1,), rerank=True, store=ScoredStore(0.1))
-    assert report.by_class["negative"].abstention == 1.0
-
-
-def test_negative_fails_when_above_floor(tmp_path):
-    path = _write_queries(
-        tmp_path, [{"query": "q", "expected": [], "class": "negative"}]
-    )
-    report = run_eval(path, ks=(1,), rerank=True, store=ScoredStore(0.95))
-    assert report.by_class["negative"].abstention == 0.0
-
-
-def test_negative_unscored_without_rerank_score(tmp_path):
-    path = _write_queries(
-        tmp_path, [{"query": "q", "expected": [], "class": "negative"}]
-    )
-    report = run_eval(path, ks=(1,), store=ScoredStore(None))
-    assert report.by_class["negative"].abstention is None
+    for score in (0.1, 0.95, None):
+        report = run_eval(path, ks=(1,), rerank=True, store=ScoredStore(score))
+        assert report.by_class["negative"].n_queries == 1
+        assert report.by_class["negative"].abstention is None
 
 
 def test_negative_excluded_from_pass_at_k(tmp_path):

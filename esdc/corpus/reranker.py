@@ -11,6 +11,49 @@ llama.cpp RANK pooling: the pair is wrapped in the official Qwen3
 rerank template (the GGUF does NOT bake it — llama.cpp only applies it
 in llama-server's /rerank endpoint), and index 0 of the RANK output is
 P("yes") — the relevance score.
+
+MEASURED ON THIS CORPUS (2026-08-06) — READ BEFORE ENABLING corpus.rerank
+=========================================================================
+189-query eval, Qwen3-Reranker-0.6B-Q8_0, rerank_pool 30, n_gpu_layers -1
+(full Metal offload), against the same set with rerank off:
+
+    lookup (n=120)            Pass@1  78.3% -> 78.3%   (identical)
+    cross_reference (n=30)    Pass@1  96.7% -> 86.7%   (-10.0 pp)
+                              Recall@1/5/10  each -5.0 pp
+    thematic (n=20)           Pass@1   0.0% -> 15.0%   (+15.0 pp)
+    mean latency                69 ms -> 40 969 ms     (594x)
+
+No gain on the dominant class, a consistent loss on cross_reference (all
+four metrics, same direction — not noise), and the one clear win is on the
+class whose labels are weakest.
+
+Worse, it scores template match rather than entity identity. Top-1 P("yes")
+for 19 queries about Norwegian fields — which an Indonesian upstream corpus
+cannot answer — against 12 answerable lookups:
+
+    negatives  min 0.0389  max 0.9999  mean 0.9363   (16 of 19 above 0.97)
+    positives  min 0.9968  max 1.0000  mean 0.9995
+
+    "persetujuan POFD Lapangan Volve"  ->  "Persetujuan POFD Lapangan
+    Securai"  scores 0.9999
+
+Both strings are POFD approval letters; the field name — carrying the whole
+discriminative burden — does not move the score. The two negatives that did
+score low were the ones whose *form* differed ("berapa cadangan terbukti
+Lapangan Troll", a question rather than a letter title, 0.0389). Because
+max(negative) exceeds min(positive), no threshold separates them: this is
+why esdc/corpus/evaluate.py refuses to score the negative class and why
+corpus.negative_floor was removed rather than tuned.
+
+Consequence for chat: with rerank on, Document Search returns confidently
+ranked context for questions the corpus cannot answer, with no signal that
+nothing relevant exists.
+
+Two things to try before concluding the model is at fault: _INSTRUCT below
+is the stock English web-search instruction while these queries are
+Indonesian, and rerank() scores strictly one pair at a time (1.37 s/pair for
+a 0.6B model at full offload is anomalous — check n_batch and the serial
+loop). Neither has been tested.
 """
 from __future__ import annotations
 

@@ -40,18 +40,28 @@ class EvalReport:
 RECALL_CLASSES = frozenset({"cross_reference", "thematic"})
 
 # A negative query has expected == [] — nothing in the corpus answers it.
-# search() always returns something, so the question is whether anything
-# clears a relevance floor. RRF scores are rank-derived and uncalibrated;
-# only the reranker's P("yes") is a real probability, so this class is
-# scored solely when reranking ran and reported as None otherwise.
+# search() always returns something, so scoring this class means detecting
+# that nothing relevant came back.
+#
+# This is CURRENTLY UNSCORED, deliberately. The original design thresholded
+# the reranker's P("yes"), the only calibrated score in the pipeline. Measured
+# 2026-08-06 over 19 negatives (queries about Norwegian fields, which cannot
+# exist in an Indonesian upstream corpus) against 12 answerable lookups:
+#
+#     negatives  min 0.0389  max 0.9999  mean 0.9363   (16 of 19 above 0.97)
+#     positives  min 0.9968  max 1.0000  mean 0.9995
+#
+# max(negative) exceeds min(positive), so NO threshold separates them. The
+# reranker scores template match, not entity identity: "persetujuan POFD
+# Lapangan Volve" against "Persetujuan POFD Lapangan Securai" scores 0.9999
+# because both are POFD approval letters — the field name, which carries the
+# entire discriminative burden, does not move the score. See the reranker
+# module docstring.
+#
+# Do not reintroduce a floor. Detecting absence needs a signal the reranker
+# does not carry — e.g. requiring an entity mentioned in the query to match a
+# retrieved document's field_name/wk_name/subject.
 NEGATIVE_CLASS = "negative"
-
-
-def _negative_floor() -> float:
-    """rerank P("yes") below which a result counts as "nothing relevant"."""
-    from esdc.configs import Config
-
-    return float(Config.get_corpus_config().get("negative_floor", 0.5))
 
 
 def row_class(row: dict[str, Any]) -> str:
@@ -91,9 +101,6 @@ def run_eval(
     per_class_hits: dict[str, dict[int, int]] = {}
     per_class_n: dict[str, int] = {}
     recall_sums: dict[str, dict[int, float]] = {}
-    neg_scored: dict[str, int] = {}
-    neg_abstained: dict[str, int] = {}
-    floor = _negative_floor()
     latencies: list[float] = []
     try:
         with _progress_with_status("eval", n_queries, "queries") as p:
@@ -127,13 +134,7 @@ def run_eval(
                 per_class_n[cls] = per_class_n.get(cls, 0) + 1
 
                 if cls == NEGATIVE_CLASS:
-                    scores = [
-                        r["rerank_score"] for r in results if "rerank_score" in r
-                    ]
-                    if scores:
-                        neg_scored[cls] = neg_scored.get(cls, 0) + 1
-                        if max(scores) < floor:
-                            neg_abstained[cls] = neg_abstained.get(cls, 0) + 1
+                    # Counted, never scored — see NEGATIVE_CLASS above.
                     continue
 
                 cls_hits = per_class_hits.setdefault(cls, dict.fromkeys(ks, 0))
@@ -169,15 +170,11 @@ def run_eval(
         report.mean_latency_ms = sum(latencies) / len(latencies)
     for cls, n in per_class_n.items():
         sums = recall_sums.get(cls)
-        scored = neg_scored.get(cls, 0)
         cls_hits = per_class_hits.get(cls)
         report.by_class[cls] = ClassReport(
             n_queries=n,
             pass_at={k: cls_hits[k] / n for k in ks} if cls_hits else {},
             recall_at={k: sums[k] / n for k in ks} if sums is not None else {},
-            abstention=(
-                neg_abstained.get(cls, 0) / scored if scored else None
-            ),
         )
     return report
 
