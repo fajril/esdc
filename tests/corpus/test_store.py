@@ -721,8 +721,10 @@ class RecordingEmbedder:
 
     def __init__(self):
         self.batch_calls = []
+        self.calls = []  # every single-text generate_embedding() call, in order
 
     def generate_embedding(self, text):
+        self.calls.append(text)
         return [0.1] * 8
 
     def generate_embeddings_batch(self, texts):
@@ -989,6 +991,93 @@ def test_search_caps_chunks_per_document(store_with_doc_factory, monkeypatch):
     doc_ids = [r["doc_id"] for r in result["results"]]
     counts = {d: doc_ids.count(d) for d in set(doc_ids)}
     assert all(c <= 2 for c in counts.values())
+
+
+# --------------------------------------------------------------------------
+# query_instruct: Qwen3's asymmetric instruction prefix, query side only
+# --------------------------------------------------------------------------
+
+
+def test_search_embeds_query_with_instruct_prefix_when_enabled(
+    store_with_doc_factory, monkeypatch
+):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        classmethod(lambda cls: {"rerank": False, "query_instruct": True}),
+    )
+    store, _ = store_with_doc_factory(subject="Pengembangan Merak")
+    store.rebuild_indexes()
+    store._embedder.calls.clear()
+
+    store.search("produksi minyak", limit=3)
+
+    assert store._embedder.calls, "search() must embed the query"
+    query_call = store._embedder.calls[0]
+    assert query_call.startswith("Instruct: ")
+    assert "produksi minyak" in query_call
+
+
+def test_search_embeds_raw_query_when_instruct_disabled(
+    store_with_doc_factory, monkeypatch
+):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        classmethod(lambda cls: {"rerank": False, "query_instruct": False}),
+    )
+    store, _ = store_with_doc_factory(subject="Pengembangan Merak")
+    store.rebuild_indexes()
+    store._embedder.calls.clear()
+
+    store.search("produksi minyak", limit=3)
+
+    assert store._embedder.calls[0] == "produksi minyak"  # byte-identical to today
+
+
+def test_aggregate_semantic_also_uses_query_instruct_prefix(
+    store_with_doc_factory, monkeypatch
+):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        classmethod(lambda cls: {"rerank": False, "query_instruct": True}),
+    )
+    store, _ = store_with_doc_factory(subject="Pengembangan Merak")
+    store.rebuild_indexes()
+    store.refresh_mirror()  # _aggregate_semantic joins the documents mirror
+    store._embedder.calls.clear()
+
+    store.aggregate("produksi minyak", match="semantic")
+
+    assert store._embedder.calls
+    assert store._embedder.calls[0].startswith("Instruct: ")
+
+
+def test_query_instruct_does_not_affect_chunk_embedding(
+    store_with_doc_factory, monkeypatch
+):
+    """Enabling query_instruct must not leak the prefix into indexed chunks."""
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        classmethod(lambda cls: {"rerank": False, "query_instruct": True}),
+    )
+    store, doc = store_with_doc_factory(
+        doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
+    )
+    embedded_texts = store._embedder.batch_calls[-1]
+    assert embedded_texts, "insert_document must batch-embed chunk text"
+    assert all(not t.startswith("Instruct: ") for t in embedded_texts)
+    assert all("Merak" in t for t in embedded_texts)
 
 
 def test_corpus_config_isolated_in_tests():

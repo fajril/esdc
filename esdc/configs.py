@@ -86,6 +86,11 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "Max chunks of the same document kept in search() results "
         "(0 = no cap, the setting used by the A/B eval run)"
     ),
+    "corpus.query_instruct": (
+        "Prefix search/aggregate queries with Qwen3-Embedding's documented "
+        "instruction template before embedding (query side only -- chunks "
+        "stay raw); off by default until an eval run justifies it"
+    ),
     "corpus.rerank_model": (
         "Reranker GGUF id run in-process via llama.cpp "
         "(default ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
@@ -140,6 +145,7 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
         "corpus.rerank_pool",
         "corpus.rerank_model",
         "corpus.max_chunks_per_doc",
+        "corpus.query_instruct",
         "corpus.ocr_dpi",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
@@ -976,6 +982,12 @@ class Config:
         # repeats of documents already seen. 0 disables the cap — that is
         # what the A/B eval run uses to reproduce the uncapped baseline.
         "max_chunks_per_doc": 2,
+        # query_instruct: prefix search()/aggregate() queries with Qwen3's
+        # documented instruction template before embedding them (query
+        # side only; chunks stay raw, so this needs no re-embed). Default
+        # False deliberately -- it stays off until an eval run on the
+        # Phase A query set justifies turning it on.
+        "query_instruct": False,
         # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
@@ -1261,6 +1273,7 @@ class Config:
             "api.verify_ssl",
             "logging.file.enabled",
             "corpus.rerank",
+            "corpus.query_instruct",
             "phoenix.enabled",
         }
     )

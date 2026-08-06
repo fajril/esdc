@@ -55,6 +55,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Qwen3-Embedding's documented task instruction for query-side embedding
+# (corpus.query_instruct). Chunks/documents are never prefixed — only
+# CorpusStore._embed_query uses this, and only for the query side.
+_QUERY_INSTRUCT = (
+    "Given a search query, retrieve relevant passages from a corpus of "
+    "Indonesian oil and gas regulatory documents and correspondence"
+)
+
 _SQLITE_DOC_DDL = """
 CREATE TABLE IF NOT EXISTS documents (
     doc_id TEXT PRIMARY KEY,
@@ -1315,6 +1323,28 @@ class CorpusStore:
             }
         return None
 
+    def _embed_query(self, query: str) -> list[float]:
+        """Embed a user QUERY, not a chunk -- callers must not reuse this for chunks.
+
+        Qwen3-Embedding is instruction-tuned and asymmetric: its documented
+        usage prefixes only the query with `Instruct: {task}\\nQuery: {q}`,
+        leaving the document side raw. Chunks are already embedded raw (see
+        the generate_embeddings_batch call sites in insert_document/
+        replace_chunks), so flipping corpus.query_instruct on requires no
+        re-embed, no corpus_meta repin, and no change to the MODEL_ID
+        vector-space identity -- it is a pure query-side transform. Applied
+        here in CorpusStore rather than inside an embedder class, so it
+        behaves identically across the local llama.cpp, Ollama and
+        OpenAI-compatible backends.
+
+        Default is off (see CORPUS_DEFAULTS.query_instruct) until an eval
+        run justifies enabling it.
+        """
+        cfg = Config.get_corpus_config()
+        if cfg.get("query_instruct", False):
+            query = f"Instruct: {_QUERY_INSTRUCT}\nQuery: {query}"
+        return self._embedder.generate_embedding(query)
+
     def search(
         self,
         query: str,
@@ -1335,7 +1365,7 @@ class CorpusStore:
             # Over-retrieve before RRF: a wider pool costs little here and
             # feeds both the fusion and the optional reranker.
             pool = max(limit * 2, 50)
-            query_embedding = self._embedder.generate_embedding(query)
+            query_embedding = self._embed_query(query)
             vector_results = self._vector_search(query_embedding, pool, filters)
 
             try:
@@ -1632,7 +1662,7 @@ class CorpusStore:
         """
         conn = self._get_connection()
         filter_clause, filter_params = self._build_filter_clause(filters, "d")
-        query_embedding = self._embedder.generate_embedding(query)
+        query_embedding = self._embed_query(query)
         dim = len(query_embedding)
         similarity = f"(1 - array_cosine_distance(c.embedding, ?::FLOAT[{dim}]))"
 
