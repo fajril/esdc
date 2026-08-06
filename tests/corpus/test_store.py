@@ -931,6 +931,66 @@ def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatc
     Reranker._failed = False
 
 
+def test_cap_per_doc_keeps_first_two_per_doc_in_incoming_order(store):
+    """cap 2 over 10 entries from 2 docs -> 4 results, first two per doc kept.
+
+    Incoming order is what rerank produced (best-scoring first), so
+    "first two" is "two best-scoring" once this runs after _maybe_rerank.
+    """
+    merged = [
+        {"doc_id": "a", "chunk_id": 0},
+        {"doc_id": "a", "chunk_id": 1},
+        {"doc_id": "b", "chunk_id": 2},
+        {"doc_id": "a", "chunk_id": 3},
+        {"doc_id": "b", "chunk_id": 4},
+        {"doc_id": "a", "chunk_id": 5},
+        {"doc_id": "b", "chunk_id": 6},
+        {"doc_id": "a", "chunk_id": 7},
+        {"doc_id": "b", "chunk_id": 8},
+        {"doc_id": "b", "chunk_id": 9},
+    ]
+    result = store._cap_per_doc(merged, 2)
+    assert len(result) == 4
+    assert [r["chunk_id"] for r in result if r["doc_id"] == "a"] == [0, 1]
+    assert [r["chunk_id"] for r in result if r["doc_id"] == "b"] == [2, 4]
+
+
+def test_cap_per_doc_zero_is_identity(store):
+    merged = [{"doc_id": "a", "chunk_id": 0}, {"doc_id": "b", "chunk_id": 1}]
+    result = store._cap_per_doc(merged, 0)
+    assert result is merged
+
+
+def test_search_caps_chunks_per_document(store_with_doc_factory, monkeypatch):
+    """No doc_id may appear more than max_chunks_per_doc times in results."""
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        classmethod(lambda cls: {"rerank": False, "max_chunks_per_doc": 2}),
+    )
+    store, _ = store_with_doc_factory(
+        chunk_size=20,
+        subject="Pengembangan Merak",
+        markdown=(
+            "# A\n\nkonten satu\n\n# B\n\nkonten dua\n\n"
+            "# C\n\nkonten tiga\n\n# D\n\nkonten empat"
+        ),
+    )
+    store.rebuild_indexes()
+    n_chunks = store._get_connection().execute(
+        "SELECT COUNT(*) FROM document_chunks"
+    ).fetchone()[0]
+    assert n_chunks > 2, "test is void unless the single doc had >2 chunks"
+
+    result = store.search("konten", limit=10)
+    assert result["status"] == "success"
+    doc_ids = [r["doc_id"] for r in result["results"]]
+    counts = {d: doc_ids.count(d) for d in set(doc_ids)}
+    assert all(c <= 2 for c in counts.values())
+
+
 def test_corpus_config_isolated_in_tests():
     """Config isolation: search() must not read the real ~/.esdc config.
 

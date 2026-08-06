@@ -1249,6 +1249,27 @@ class CorpusStore:
         top.sort(key=lambda r: r["rerank_score"], reverse=True)
         return top + merged[pool:]
 
+    @staticmethod
+    def _cap_per_doc(
+        merged: list[dict[str, Any]], cap: int
+    ) -> list[dict[str, Any]]:
+        """Keep at most `cap` entries per doc_id, preserving incoming order.
+
+        cap <= 0 disables the cap (identity) — that is what the A/B eval
+        run uses to reproduce the uncapped baseline.
+        """
+        if cap <= 0:
+            return merged
+        counts: dict[str, int] = {}
+        kept = []
+        for r in merged:
+            doc_id = r["doc_id"]
+            n = counts.get(doc_id, 0)
+            if n < cap:
+                kept.append(r)
+                counts[doc_id] = n + 1
+        return kept
+
     _DOC_META_COLUMNS = (
         "doc_id", "file_name", "doc_type", "doc_topic", "doc_date", "subject",
         "wk_name", "field_name", "project_name",
@@ -1326,7 +1347,12 @@ class CorpusStore:
                 keyword_results = []
 
             merged = self._merge_rrf(vector_results, keyword_results)
-            merged = self._maybe_rerank(query, merged, rerank)[:limit]
+            merged = self._maybe_rerank(query, merged, rerank)
+            # Cap AFTER rerank, BEFORE the limit slice: capping first would
+            # keep whichever chunk RRF happened to rank first per document;
+            # capping after rerank keeps the best-scoring chunk instead.
+            cap = Config.get_corpus_config().get("max_chunks_per_doc", 0)
+            merged = self._cap_per_doc(merged, cap)[:limit]
 
             if not merged:
                 return {"status": "no_results", "results": [], "count": 0}

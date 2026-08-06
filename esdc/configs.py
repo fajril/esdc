@@ -82,6 +82,10 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "(off by default; first use downloads the model, ~1 GB)"
     ),
     "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
+    "corpus.max_chunks_per_doc": (
+        "Max chunks of the same document kept in search() results "
+        "(0 = no cap, the setting used by the A/B eval run)"
+    ),
     "corpus.rerank_model": (
         "Reranker GGUF id run in-process via llama.cpp "
         "(default ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
@@ -135,6 +139,7 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
         "corpus.rerank",
         "corpus.rerank_pool",
         "corpus.rerank_model",
+        "corpus.max_chunks_per_doc",
         "corpus.ocr_dpi",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
@@ -963,6 +968,14 @@ class Config:
         # module docstring before enabling this.
         "rerank": False,
         "rerank_pool": 30,  # candidates scored per query when rerank is on
+        # max_chunks_per_doc: cap on chunks of the same document kept in
+        # search() results, applied after rerank so the surviving chunk per
+        # document is the best-scoring one. Measured 2026-08-05: top-10 held
+        # a mean of 5.05 distinct documents (min 1) without this, and
+        # lookup Pass@5/Pass@10 were identical because ranks 6-10 were
+        # repeats of documents already seen. 0 disables the cap — that is
+        # what the A/B eval run uses to reproduce the uncapped baseline.
+        "max_chunks_per_doc": 2,
         # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
@@ -1258,6 +1271,7 @@ class Config:
             "logging.file.backup_count",
             "semantic_search.embedding_batch_size",
             "corpus.rerank_pool",
+            "corpus.max_chunks_per_doc",
             "corpus.chunk_size",
             "corpus.chunk_overlap",
             "corpus.ocr_dpi",
