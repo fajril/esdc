@@ -1,3 +1,5 @@
+"""Phoenix LLM evals for RAG output quality."""
+
 from __future__ import annotations
 
 import logging

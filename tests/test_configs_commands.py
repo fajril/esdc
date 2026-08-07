@@ -1,3 +1,5 @@
+"""Tests for the configs CLI commands."""
+
 from unittest.mock import patch
 
 import pytest

@@ -1,3 +1,5 @@
+"""Tests for the response size guard."""
+
 # Standard library
 import json
 

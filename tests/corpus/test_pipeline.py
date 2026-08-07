@@ -1,3 +1,5 @@
+"""Tests for the corpus ingestion pipeline."""
+
 import json
 from contextlib import contextmanager
 from pathlib import Path

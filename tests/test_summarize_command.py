@@ -1,3 +1,5 @@
+"""Tests for the summarize CLI command."""
+
 import json
 
 import duckdb

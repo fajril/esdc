@@ -1,3 +1,5 @@
+"""Tests for corpus query generation."""
+
 from esdc.corpus.query_gen import (
     QueryMeta,
     generate,

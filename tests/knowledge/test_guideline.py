@@ -1,3 +1,5 @@
+"""Tests for extraction guidelines."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,3 +1,5 @@
+"""Tests for corpus sidecar metadata files."""
+
 from pathlib import Path
 
 import pytest

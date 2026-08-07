@@ -1,3 +1,5 @@
+"""Tests for entity dossiers."""
+
 from __future__ import annotations
 
 from esdc.knowledge.dossier import (

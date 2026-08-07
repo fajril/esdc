@@ -1,3 +1,5 @@
+"""Tests for the document schema."""
+
 from pathlib import Path
 
 from esdc.chat.domain_knowledge import doc_schema

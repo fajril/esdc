@@ -1,3 +1,5 @@
+"""Shared fixtures for knowledge graph tests."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""Shared pytest fixtures for the esdc test suite."""
+
 import re
 
 import pytest

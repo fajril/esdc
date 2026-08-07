@@ -1,3 +1,5 @@
+"""Base provider interface and shared configuration types."""
+
 # Standard library
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field

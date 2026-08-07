@@ -1,3 +1,5 @@
+"""Tests for corpus evaluation."""
+
 import json
 
 from esdc.corpus.evaluate import row_class, run_eval

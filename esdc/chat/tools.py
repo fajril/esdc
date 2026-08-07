@@ -1,3 +1,5 @@
+"""LangChain tools backing the chat agent's domain actions."""
+
 # Standard library
 import asyncio
 import hashlib

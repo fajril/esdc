@@ -1,3 +1,5 @@
+"""Safety checks and view isolation for database access."""
+
 import re
 from pathlib import Path
 

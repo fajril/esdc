@@ -1,3 +1,6 @@
+"""Text-to-SQL conversion via the configured LLM provider."""
+
+
 class TextToSQL:
     """Simple text-to-SQL converter stub."""
 

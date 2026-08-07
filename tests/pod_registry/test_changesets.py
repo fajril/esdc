@@ -1,3 +1,5 @@
+"""Tests for POD registry changesets."""
+
 import esdc.configs as configs
 from esdc.corpus.store import _SQLITE_DOC_DDL
 from esdc.pod_registry.changesets import apply_changeset

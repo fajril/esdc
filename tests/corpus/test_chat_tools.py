@@ -427,7 +427,7 @@ class TestSemanticSearchCorpusFanOut:
         # (e.g. test_search_documents_reuses_embedder's _CountingEmbedder).
         monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -435,7 +435,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [{"project_id": "P1", "similarity": 0.9}],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             result = json.loads(
                 semantic_search.invoke({"query": "persetujuan POD Duri"})
@@ -456,7 +456,7 @@ class TestSemanticSearchCorpusFanOut:
         store_mod = importlib.import_module("esdc.corpus.store")
         monkeypatch.setattr(store_mod, "CorpusStore", ExplodingStore)
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -467,7 +467,7 @@ class TestSemanticSearchCorpusFanOut:
                 ],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             result = json.loads(semantic_search.invoke({"query": "kendala teknis"}))
 
@@ -482,7 +482,7 @@ class TestSemanticSearchCorpusFanOut:
 
         from esdc.chat.tools import semantic_search
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "no_results",
@@ -490,7 +490,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             result = json.loads(semantic_search.invoke({"query": "apa saja"}))
 
@@ -520,7 +520,7 @@ class TestSemanticSearchCorpusFanOut:
         monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SpyStore)
         tools_mod.invalidate_tool_cache()
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -528,7 +528,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             semantic_search.invoke(
                 {
@@ -558,7 +558,7 @@ class TestSemanticSearchCorpusFanOut:
 
         from esdc.chat.tools import semantic_search
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -566,7 +566,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             first = json.loads(semantic_search.invoke({"query": "kendala unik"}))
             second = json.loads(semantic_search.invoke({"query": "kendala unik"}))
@@ -585,7 +585,7 @@ class TestSemanticSearchCorpusFanOut:
 
         monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -593,7 +593,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [{"project_id": "P1", "similarity": 0.9}],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             first = json.loads(
                 semantic_search.invoke({"query": "persetujuan POD Duri"})
@@ -625,14 +625,14 @@ def test_semantic_search_reuses_cached_resolver():
 
     # conftest's reset_semantic_resolver_cache autouse fixture already clears
     # the current thread's TLS slot before this test runs.
-    with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
         instance = MagicMock()
-        MockResolver.return_value = instance
+        resolver_cls.return_value = instance
 
         first = tools_mod._get_semantic_resolver()
         second = tools_mod._get_semantic_resolver()
 
-    MockResolver.assert_called_once()
+    resolver_cls.assert_called_once()
     assert first is instance
     assert second is instance
 

@@ -1,3 +1,5 @@
+"""Tests for knowledge extractor."""
+
 from __future__ import annotations
 
 import json

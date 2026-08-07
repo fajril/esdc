@@ -1,3 +1,5 @@
+"""Document loaders for oil and gas source files."""
+
 from __future__ import annotations
 
 import contextlib

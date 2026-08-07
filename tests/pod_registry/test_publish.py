@@ -1,3 +1,5 @@
+"""Tests for POD publication."""
+
 # tests/pod_registry/test_publish.py
 import esdc.configs as configs
 from esdc.dbmanager import get_duckdb_connection

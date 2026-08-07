@@ -1,3 +1,5 @@
+"""Tests for the corpus store."""
+
 import json
 import sqlite3
 from pathlib import Path

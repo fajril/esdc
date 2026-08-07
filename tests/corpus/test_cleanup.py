@@ -1,3 +1,5 @@
+"""Tests for corpus cleanup and deduplication."""
+
 from esdc.corpus.cleanup import CLEANUP_PROMPT, cleanup_markdown
 
 NATIVE_DOC = (

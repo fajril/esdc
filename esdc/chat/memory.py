@@ -1,3 +1,5 @@
+"""Checkpointer wiring for persistent chat conversations."""
+
 # Standard library
 import uuid
 

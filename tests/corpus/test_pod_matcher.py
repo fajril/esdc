@@ -1,3 +1,5 @@
+"""Tests for POD reference matching."""
+
 import sqlite3
 
 import pytest

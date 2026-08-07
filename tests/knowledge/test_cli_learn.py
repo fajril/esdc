@@ -1,3 +1,5 @@
+"""Tests for the CLI learn command."""
+
 from __future__ import annotations
 
 from unittest.mock import patch

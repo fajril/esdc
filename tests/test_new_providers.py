@@ -1,3 +1,5 @@
+"""Tests for the new provider integrations."""
+
 from unittest.mock import MagicMock, patch
 
 from esdc.providers.base import DEFAULT_CONTEXT_LENGTH, ProviderConfig

@@ -1,3 +1,5 @@
+"""Tests for the LLM provider layer."""
+
 import time
 from unittest.mock import MagicMock, patch
 

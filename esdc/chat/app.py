@@ -1,3 +1,4 @@
+"""Chat application entrypoint: CLI, streaming, and API glue."""
 # esdc/chat/app.py
 
 # Standard library

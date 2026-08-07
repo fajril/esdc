@@ -1,3 +1,5 @@
+"""LangGraph chat agent: graph state, workflow, and tool dispatch."""
+
 # Standard library
 import asyncio
 import contextlib

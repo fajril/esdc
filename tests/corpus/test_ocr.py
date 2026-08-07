@@ -1,3 +1,5 @@
+"""Tests for OCR-based document ingestion."""
+
 from esdc.corpus.ocr import OCR_PROMPT, OllamaVisionOcr
 
 

@@ -1,3 +1,6 @@
+"""Tests for text-to-SQL conversion."""
+
+
 def test_text_to_sql_generation():
     from esdc.chat.text_to_sql import TextToSQL
 

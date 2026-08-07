@@ -1,3 +1,5 @@
+"""Tests for the knowledge store."""
+
 from __future__ import annotations
 
 from esdc.knowledge.store import Claim, Edge, KnowledgeStore

@@ -1,3 +1,5 @@
+"""Phoenix observability configuration dataclass."""
+
 from __future__ import annotations
 
 import os

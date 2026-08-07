@@ -1,3 +1,5 @@
+"""Tests for corpus file renaming."""
+
 import datetime
 from pathlib import Path
 

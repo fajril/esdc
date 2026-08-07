@@ -1,3 +1,5 @@
+"""OpenAI-compatible provider implementation."""
+
 from typing import Any
 
 from langchain_openai import ChatOpenAI

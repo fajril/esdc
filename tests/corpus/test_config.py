@@ -1,3 +1,5 @@
+"""Tests for corpus configuration."""
+
 from esdc.configs import Config
 
 

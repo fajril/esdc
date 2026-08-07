@@ -1,3 +1,5 @@
+"""Tests for citation handling in corpus documents."""
+
 from esdc.corpus.citations import extract_letter_numbers, normalize_letter_number
 
 

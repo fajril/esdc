@@ -1,3 +1,5 @@
+"""Tests for the corpus document extractor."""
+
 from pathlib import Path
 
 import fitz  # PyMuPDF, pulled in by pymupdf4llm

@@ -1,3 +1,5 @@
+"""Tests for the corpus chunker."""
+
 import pytest
 
 from esdc.corpus.chunker import Chunk, chunk_markdown

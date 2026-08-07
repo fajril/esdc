@@ -1,3 +1,5 @@
+"""DuckDB database lifecycle, import, and export management."""
+
 import contextlib
 import datetime
 import logging

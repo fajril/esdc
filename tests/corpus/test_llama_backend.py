@@ -27,10 +27,10 @@ def test_load_llama_passes_gpu_layers_and_pooling():
     fake_cfg = {"n_gpu_layers": 5}
     with (
         patch.object(lb.Config, "get_corpus_config", return_value=fake_cfg),
-        patch.object(lb, "Llama") as LlamaCls,
+        patch.object(lb, "Llama") as llama_cls,
     ):
         lb.load_llama("/tmp/m.gguf", pooling_type=4, n_ctx=2048)
-    _, kwargs = LlamaCls.call_args
+    _, kwargs = llama_cls.call_args
     assert kwargs["model_path"] == "/tmp/m.gguf"
     assert kwargs["embedding"] is True
     assert kwargs["pooling_type"] == 4

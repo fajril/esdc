@@ -1,3 +1,5 @@
+"""Tests for entity linking."""
+
 from __future__ import annotations
 
 from esdc.knowledge.linker import run_deterministic_linking

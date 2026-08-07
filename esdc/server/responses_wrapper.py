@@ -22,7 +22,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 # Third-party
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 # Local
 from esdc.chat.agent import (
@@ -330,8 +330,6 @@ def convert_responses_input_to_langchain(
             # Tool result from client (for multi-turn conversations)
             # LangGraph expects this as a ToolMessage
             # Output can be either a string or array of content parts (OpenWebUI format)
-            from langchain_core.messages import ToolMessage
-
             output_content = ""
             if isinstance(output, str):
                 output_content = output

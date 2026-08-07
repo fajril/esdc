@@ -1,3 +1,4 @@
+"""Session context assembly and summarization for the chat agent."""
 # esdc/chat/context_manager.py
 
 # Standard library

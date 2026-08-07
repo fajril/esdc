@@ -1,3 +1,5 @@
+"""Tests for corpus sampling."""
+
 import pytest
 
 from esdc.corpus.sampling import (

@@ -1,3 +1,5 @@
+"""Tests for the portal web pages."""
+
 from fastapi.testclient import TestClient
 
 import esdc.configs as configs

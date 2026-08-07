@@ -1,3 +1,5 @@
+"""Column metadata descriptors for domain-aware SQL enrichment."""
+
 from dataclasses import dataclass
 
 

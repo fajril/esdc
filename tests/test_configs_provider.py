@@ -1,3 +1,5 @@
+"""Tests for provider configuration."""
+
 from unittest.mock import patch
 
 import pytest

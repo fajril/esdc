@@ -1,3 +1,5 @@
+"""Tests for corpus context building."""
+
 from esdc.corpus.context import build_context_prefix, build_embed_text
 
 

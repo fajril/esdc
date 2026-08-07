@@ -1,3 +1,4 @@
+"""Token counting helpers for context window management."""
 # esdc/chat/token_counter.py
 
 # Standard library

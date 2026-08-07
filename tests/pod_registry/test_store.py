@@ -1,3 +1,5 @@
+"""Tests for the POD registry store."""
+
 # tests/pod_registry/test_store.py
 import sqlite3
 

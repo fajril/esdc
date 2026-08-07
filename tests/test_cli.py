@@ -1,3 +1,5 @@
+"""Tests for the esdc CLI."""
+
 import os
 from unittest.mock import MagicMock, patch
 

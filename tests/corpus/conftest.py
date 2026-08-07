@@ -1,3 +1,5 @@
+"""Shared fixtures for corpus pipeline tests."""
+
 import pytest
 
 import esdc.configs as configs

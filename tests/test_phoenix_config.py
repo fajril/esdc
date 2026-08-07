@@ -1,3 +1,5 @@
+"""Tests for Phoenix configuration."""
+
 import os
 from unittest.mock import patch
 

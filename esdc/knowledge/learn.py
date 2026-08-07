@@ -18,11 +18,13 @@ import hashlib
 import logging
 import sqlite3
 from collections.abc import Callable
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 
+from esdc.console import console
 from esdc.knowledge.dossier import ensure_dossier_table, generate_pod_dossier
 from esdc.knowledge.extractor import extract_knowledge
 from esdc.knowledge.guideline import load_guideline
@@ -51,6 +53,16 @@ class LearnReport:
 
 def _doc_source_hash(file_hash: str, guideline_hash: str) -> str:
     return hashlib.sha256(f"{file_hash}:{guideline_hash}".encode()).hexdigest()
+
+
+@contextmanager
+def _status(progress: bool, msg: str):
+    """Dim spinner around a phase; no-op when progress is disabled."""
+    if progress:
+        with console.status(msg):
+            yield
+    else:
+        yield
 
 
 def _open_default_llm() -> tuple[Callable[[str], str], str, str]:
@@ -120,7 +132,8 @@ def run_learn(
             return report
 
         # Phase 1: deterministic
-        link_report = run_deterministic_linking(sqlite_conn, duck_conn, store)
+        with _status(progress, "linking deterministic edges"):
+            link_report = run_deterministic_linking(sqlite_conn, duck_conn, store)
         report.edges_written += link_report.edges_written
         report.pod_document_added = link_report.pod_document_added
 
@@ -128,8 +141,6 @@ def run_learn(
             llm_caller, provider, model = _open_default_llm()
 
         # Phases 2+3: extraction + resolution
-        from contextlib import ExitStack
-
         from esdc.corpus.pipeline import _progress_with_status
 
         handle = None
@@ -177,7 +188,8 @@ def run_learn(
 
         # Deleting doc edges above also removed deterministic doc edges for
         # processed docs; restore them.
-        link_report = run_deterministic_linking(sqlite_conn, duck_conn, store)
+        with _status(progress, "restoring deterministic edges"):
+            link_report = run_deterministic_linking(sqlite_conn, duck_conn, store)
 
         # Phase 4: dossiers for every POD with at least one document link
         ensure_dossier_table(duck_conn)
@@ -188,22 +200,32 @@ def run_learn(
                 "WHERE rel = 'ABOUT_POD' ORDER BY dst_id"
             ).fetchall()
         ]
-        for pod_id in pod_ids:
-            status = generate_pod_dossier(
-                pod_id,
-                sqlite_conn,
-                duck_conn,
-                store,
-                guideline.content_hash,
-                llm_caller,
-                provider=provider,
-                model=model,
-                force=force,
-            )
-            if status == "built":
-                report.dossiers_built += 1
-            else:
-                report.dossiers_skipped += 1
+        handle = None
+        with ExitStack() as stack:
+            if progress and pod_ids:
+                handle = stack.enter_context(
+                    _progress_with_status("dossiers", len(pod_ids), "pods")
+                )
+            for pod_id in pod_ids:
+                if handle is not None:
+                    handle.file(pod_id)
+                status = generate_pod_dossier(
+                    pod_id,
+                    sqlite_conn,
+                    duck_conn,
+                    store,
+                    guideline.content_hash,
+                    llm_caller,
+                    provider=provider,
+                    model=model,
+                    force=force,
+                )
+                if status == "built":
+                    report.dossiers_built += 1
+                else:
+                    report.dossiers_skipped += 1
+                if handle is not None:
+                    handle.advance()
 
         report.proposals_pending = len(store.pending_proposals())
 
@@ -231,16 +253,18 @@ def run_learn(
             # already committed to the SQLite truth, so a refresh failure
             # here means the mirror is stale, not that learn failed -- same
             # non-fatal contract as the portal's _refresh_mirror_after_save.
-            try:
-                refresh_all(duck_conn, sqlite_path)
-            except Exception as e:
-                logger.warning(
-                    "[Learn] mirror_refresh_failed | error=%s -- run "
-                    "`esdc corpus sync` to converge",
-                    e,
-                )
+            with _status(progress, "refreshing mirror"):
+                try:
+                    refresh_all(duck_conn, sqlite_path)
+                except Exception as e:
+                    logger.warning(
+                        "[Learn] mirror_refresh_failed | error=%s -- run "
+                        "`esdc corpus sync` to converge",
+                        e,
+                    )
 
-        duck_conn.execute("CHECKPOINT")
+        with _status(progress, "checkpointing"):
+            duck_conn.execute("CHECKPOINT")
 
         try:
             from esdc.chat.tools import invalidate_tool_cache, reset_sql_cache

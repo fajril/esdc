@@ -1,3 +1,5 @@
+"""Tests for the token counter."""
+
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage

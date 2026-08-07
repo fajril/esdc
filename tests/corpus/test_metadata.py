@@ -1,3 +1,5 @@
+"""Tests for corpus metadata extraction."""
+
 from esdc.chat.domain_knowledge import doc_schema
 from esdc.corpus import metadata
 from esdc.corpus.metadata import (

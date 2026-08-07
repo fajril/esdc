@@ -1,3 +1,5 @@
+"""Tests for the portal API."""
+
 import duckdb
 from fastapi.testclient import TestClient
 

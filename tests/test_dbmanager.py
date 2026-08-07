@@ -1,3 +1,5 @@
+"""Tests for the database manager."""
+
 import duckdb
 import pandas as pd
 import pytest

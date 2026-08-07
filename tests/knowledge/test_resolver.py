@@ -1,3 +1,5 @@
+"""Tests for entity resolution."""
+
 from __future__ import annotations
 
 from esdc.knowledge.extractor import ExtractionResult

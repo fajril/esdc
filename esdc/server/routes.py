@@ -1,3 +1,5 @@
+"""Web API routes for the ESDC server."""
+
 # Standard library
 import asyncio
 import hashlib

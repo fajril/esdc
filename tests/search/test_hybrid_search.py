@@ -150,7 +150,7 @@ class TestHybridSearchToolIntegration:
 
         from esdc.chat.tools import semantic_search
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_instance = MagicMock()
             mock_instance.hybrid_search.return_value = {
                 "status": "success",
@@ -158,7 +158,7 @@ class TestHybridSearchToolIntegration:
                 "results": [{"project_id": "P1", "similarity": 0.9}],
             }
             mock_instance.close = MagicMock()
-            MockResolver.return_value = mock_instance
+            resolver_cls.return_value = mock_instance
 
             with patch("esdc.chat.tools._get_tool_cache") as mock_cache:
                 cache = MagicMock()
@@ -200,8 +200,7 @@ class TestKeywordSearch:
         from esdc.search.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
-        resolver._db_path = MagicMock()
-        resolver._conn = None
+        resolver._get_connection = MagicMock(return_value=MagicMock())
 
         # Minimal test - actual test requires database connection
         # The method should handle exceptions gracefully

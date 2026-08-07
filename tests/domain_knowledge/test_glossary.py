@@ -1,3 +1,5 @@
+"""Tests for the domain glossary."""
+
 from esdc.chat.domain_knowledge.glossary import glossary_lookup, glossary_terms
 
 
