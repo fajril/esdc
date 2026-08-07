@@ -178,10 +178,7 @@ def schema_command(
             file_okay=True,
             dir_okay=False,
             writable=True,
-            help=(
-                "Schema YAML output path. Defaults to "
-                "./<excel-stem>.schema.yaml."
-            ),
+            help=("Schema YAML output path. Defaults to ./<excel-stem>.schema.yaml."),
         ),
     ] = None,
     overwrite: Annotated[
@@ -707,9 +704,7 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
         console.print(
             "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"  # noqa: E501
         )
-        console.print(
-            "[dim]Or set embedding_backend: local to embed in-process.[/dim]"
-        )
+        console.print("[dim]Or set embedding_backend: local to embed in-process.[/dim]")
         return
 
     resolver = SemanticResolver(db_path=db_path, embedder=embedder)
@@ -1403,8 +1398,8 @@ def _humanize_bytes(n: int) -> str:
     if n < 1024**2:
         return f"{n / 1024:.1f} KB"
     if n < 1024**3:
-        return f"{n / (1024 ** 2):.1f} MB"
-    return f"{n / (1024 ** 3):.1f} GB"
+        return f"{n / (1024**2):.1f} MB"
+    return f"{n / (1024**3):.1f} GB"
 
 
 def _status_fetch_report() -> bool:
@@ -1667,8 +1662,7 @@ def _status_corpus_report() -> None:
                 conn.execute("SELECT COUNT(*) FROM documents").fetchone() or (0,)
             )[0]
             chunk_count = (
-                conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()
-                or (0,)
+                conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone() or (0,)
             )[0]
             doc_type_rows = conn.execute(
                 "SELECT COALESCE(doc_type, 'unknown'), COUNT(*) FROM documents "
@@ -1931,12 +1925,8 @@ def serve(
     """
     from esdc.server.app import run_server
 
-    rich.print(
-        f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]"
-    )
-    rich.print(
-        f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
-    )
+    rich.print(f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]")
+    rich.print(f"[dim]API documentation available at http://{host}:{port}/docs[/dim]")
     run_server(host=host, port=port, log_level=log_level)
 
 
@@ -1949,9 +1939,7 @@ def portal(
     """Launch the POD registry portal (Excel-like master data editor)."""
     from esdc.portal.app import run_portal
 
-    rich.print(
-        f"[bold green]Starting POD portal on http://{host}:{port}/[/bold green]"
-    )
+    rich.print(f"[bold green]Starting POD portal on http://{host}:{port}/[/bold green]")
     run_portal(host=host, port=port, log_level=log_level)
 
 
@@ -2305,9 +2293,7 @@ def _validate_corpus_overrides(
         )
         raise typer.Exit(1)
     if topic is not None and topic not in DOC_TOPICS:
-        typer.echo(
-            f"Error: --topic must be one of {', '.join(DOC_TOPICS)}.", err=True
-        )
+        typer.echo(f"Error: --topic must be one of {', '.join(DOC_TOPICS)}.", err=True)
         raise typer.Exit(1)
 
     rule = doc_level_rule(doc_type, [topic] if topic is not None else None)
@@ -2450,7 +2436,14 @@ def corpus_rename(
         for p in plans
     ]
     headers = [
-        "file", "", "new name", "doc_type", "doc_date", "title", "source", "note",
+        "file",
+        "",
+        "new name",
+        "doc_type",
+        "doc_date",
+        "title",
+        "source",
+        "note",
     ]
     rich.print(tabulate(table, headers=headers, tablefmt="psql"))
 
@@ -2670,9 +2663,7 @@ def corpus_meta(
     ],
     level: Annotated[
         str | None,
-        typer.Option(
-            "--level", help="Set doc_level: wk, field, project, regulation."
-        ),
+        typer.Option("--level", help="Set doc_level: wk, field, project, regulation."),
     ] = None,
     doc_type: Annotated[
         str | None, typer.Option("--doc-type", help="Set doc_type.")
@@ -2734,8 +2725,14 @@ def corpus_meta(
             for r in rows
         ]
         headers = [
-            "file", "doc_type", "topic", "doc_date", "doc_level", "entity",
-            "reviewed", "note",
+            "file",
+            "doc_type",
+            "topic",
+            "doc_date",
+            "doc_level",
+            "entity",
+            "reviewed",
+            "note",
         ]
         rich.print(tabulate(table, headers=headers, tablefmt="psql"))
         return
@@ -2807,8 +2804,13 @@ def list_documents() -> None:
         for d in docs
     ]
     headers = [
-        "doc_id", "file_name", "doc_type", "doc_date",
-        "doc_level", "entity", "n_chunks",
+        "doc_id",
+        "file_name",
+        "doc_type",
+        "doc_date",
+        "doc_level",
+        "entity",
+        "n_chunks",
     ]
     rich.print(tabulate(rows, headers=headers, tablefmt="psql"))
 
@@ -2989,9 +2991,7 @@ def export(
     from esdc.corpus.pipeline import run_export
 
     if not all_docs and not paths:
-        typer.echo(
-            "Nothing to export: pass sidecar path(s) or --all.", err=True
-        )
+        typer.echo("Nothing to export: pass sidecar path(s) or --all.", err=True)
         raise typer.Exit(1)
 
     report = run_export(paths or [], all_docs=all_docs)
@@ -3163,8 +3163,13 @@ def corpus_eval(
             if init:
                 rows, meta = _progress_run(
                     lambda cb: generate(
-                        store, call, margin=margin,
-                        n=samples, seed=seed, ks=k_values, progress_cb=cb,
+                        store,
+                        call,
+                        margin=margin,
+                        n=samples,
+                        seed=seed,
+                        ks=k_values,
+                        progress_cb=cb,
                     )
                 )
                 if "cross_reference" in wanted:
@@ -3181,13 +3186,19 @@ def corpus_eval(
                 # multi-document row and destructive for a negative one
                 # (expected == []). Only lookup rows go through it.
                 old_rows = [
-                    r for r in all_old
+                    r
+                    for r in all_old
                     if str(r.get("class") or "lookup_legacy").startswith("lookup")
                 ]
                 carried = [r for r in all_old if r not in old_rows]
                 rows, meta = _progress_run(
                     lambda cb: reconcile(
-                        store, call, old_rows, old_meta, seed=seed, progress_cb=cb,
+                        store,
+                        call,
+                        old_rows,
+                        old_meta,
+                        seed=seed,
+                        progress_cb=cb,
                     )
                 )
                 rows = rows + carried
@@ -3202,11 +3213,13 @@ def corpus_eval(
                 removed = len(old_ids - new_ids)
                 old_by_id = {
                     r["expected"][0]: r.get("file_hash")
-                    for r in old_rows if r.get("expected")
+                    for r in old_rows
+                    if r.get("expected")
                 }
                 new_by_id = {
                     r["expected"][0]: r.get("file_hash")
-                    for r in new_lookup if r.get("expected")
+                    for r in new_lookup
+                    if r.get("expected")
                 }
                 changed = sum(
                     1
@@ -3228,8 +3241,7 @@ def corpus_eval(
         _rows, meta = read_query_file(path)
         if meta is None:
             rich.print(
-                "[yellow]Legacy query file (no fingerprint); "
-                "scoring as-is.[/yellow]"
+                "[yellow]Legacy query file (no fingerprint); scoring as-is.[/yellow]"
             )
         else:
             store = CorpusStore()

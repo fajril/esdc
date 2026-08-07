@@ -356,7 +356,7 @@ def test_parse_llm_json_mixed_close_spelling_keeps_json():
     # used to fall into the truncated-reasoning path, which dropped
     # everything to end-of-string — the JSON payload included — and silently
     # returned {}. The close spellings must be interchangeable.
-    raw = "<thinking>plan sections briefly</think>\n{\"doc_type\": \"letter\"}"
+    raw = '<thinking>plan sections briefly</think>\n{"doc_type": "letter"}'
     assert parse_llm_json(raw) == {"doc_type": "letter"}
 
 

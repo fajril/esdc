@@ -136,9 +136,7 @@ def _text_llm_caller(model: str, host: str | None = None) -> Any:
     return call
 
 
-def _resolve_text_caller(
-    model_spec: str | None, host: str | None = None
-) -> Any | None:
+def _resolve_text_caller(model_spec: str | None, host: str | None = None) -> Any | None:
     """Turn a corpus model config string into a prompt->text callable.
 
     "" / None -> None (feature off). "main" -> the default chat provider
@@ -154,7 +152,7 @@ def _resolve_text_caller(
         return None
 
     if model_spec.startswith("provider:"):
-        name = model_spec[len("provider:"):]
+        name = model_spec[len("provider:") :]
         named_config = Config.get_provider_config_by_name(name)
         if not isinstance(named_config, dict):
             logger.warning(
@@ -166,9 +164,7 @@ def _resolve_text_caller(
         # Same shape get_provider_configs_by_priority produces for "main".
         provider_config = dict(named_config)
         provider_config.setdefault("name", name)
-        provider_config.setdefault(
-            "provider_type", provider_config.get("type") or name
-        )
+        provider_config.setdefault("provider_type", provider_config.get("type") or name)
     elif model_spec != "main":
         return _text_llm_caller(model_spec, host)
     else:
@@ -637,13 +633,17 @@ def run_extract(
                     if preserved_meta is None:
                         p.status("prefill metadata")
                         meta_fields = _prefill_metadata(
-                            src, markdown, metadata_caller, ocr_client, cfg,
-                            report, name,
+                            src,
+                            markdown,
+                            metadata_caller,
+                            ocr_client,
+                            cfg,
+                            report,
+                            name,
                         )
                     else:
                         meta_fields = {
-                            key: preserved_meta.get(key)
-                            for key in _PRESERVED_FIELDS
+                            key: preserved_meta.get(key) for key in _PRESERVED_FIELDS
                         }
 
                     meta = {
@@ -719,7 +719,7 @@ def run_extract(
                     p.advance()
 
         entries.sort(
-            key=lambda e: (e[1] / e[2] if e[2] else 0.0),
+            key=lambda e: e[1] / e[2] if e[2] else 0.0,
             reverse=True,
         )
         for name, pages_ocr, _page_count in entries:
@@ -1225,9 +1225,21 @@ _REGENERATE_FIELDS = (
 
 # Reviewed frontmatter preserved by `extract --force` on a reviewed sidecar.
 _PRESERVED_FIELDS = (
-    "doc_type", "doc_topic", "doc_number", "doc_date", "subject",
-    "sender", "recipient", "doc_level", "wk_name", "field_name",
-    "project_name", "pod_name", "extras", "raw_entities", "entity_warnings",
+    "doc_type",
+    "doc_topic",
+    "doc_number",
+    "doc_date",
+    "subject",
+    "sender",
+    "recipient",
+    "doc_level",
+    "wk_name",
+    "field_name",
+    "project_name",
+    "pod_name",
+    "extras",
+    "raw_entities",
+    "entity_warnings",
 )
 
 
@@ -1616,9 +1628,7 @@ def run_export(paths: list[Path], all_docs: bool = False) -> CorpusReport:
                     [str(p)],
                 ).fetchone()
                 if row is None:
-                    report.failed[p.name] = (
-                        f"no committed document with file_path={p}"
-                    )
+                    report.failed[p.name] = f"no committed document with file_path={p}"
                     continue
                 targets.append((row["doc_id"], p))
 

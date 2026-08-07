@@ -1,5 +1,6 @@
 # tests/corpus/test_embedder.py
 """The corpus embedder module is a shim over esdc.embedders."""
+
 from __future__ import annotations
 
 import esdc.embedders as emb

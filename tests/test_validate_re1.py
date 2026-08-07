@@ -1031,7 +1031,9 @@ class TestRe1Registry:
         assert re1_count == 32
         assert re0_count == 66
         assert re9_count == 1
-        assert len(all_rules) == re0_count + re1_count + re2_count + re5_count + re9_count
+        assert (
+            len(all_rules) == re0_count + re1_count + re2_count + re5_count + re9_count
+        )
 
 
 # ---------------------------------------------------------------------------

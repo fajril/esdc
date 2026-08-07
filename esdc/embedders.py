@@ -11,6 +11,7 @@ corpus_meta/semantic_meta and into per-row embedding_model columns.
 Measured cross-backend cosine is >= 0.9986, so all backends write into one
 cosine space; check_or_seed_probe enforces that at runtime.
 """
+
 from __future__ import annotations
 
 import atexit
@@ -92,8 +93,7 @@ def _get_model() -> Any:
                 # Raising rather than returning None keeps this function's
                 # contract — callers dereference the result immediately.
                 raise RuntimeError(
-                    "[Embedding] model load refused: interpreter shutdown "
-                    "has begun."
+                    "[Embedding] model load refused: interpreter shutdown has begun."
                 )
             # Imports inside the try: a broken llama-cpp-python install
             # (ImportError) must surface the same actionable message as a
@@ -374,9 +374,7 @@ def check_or_seed_probe(conn: Any, meta_table: str, embedder: Any) -> None:
     stored = row[0]
 
     if stored is None:
-        conn.execute(
-            f"UPDATE {meta_table} SET probe_vec = ?", [json.dumps(current)]
-        )
+        conn.execute(f"UPDATE {meta_table} SET probe_vec = ?", [json.dumps(current)])
         logger.info("[Embedding] parity probe seeded | table=%s", meta_table)
         return
 
@@ -399,6 +397,4 @@ def check_or_seed_probe(conn: Any, meta_table: str, embedder: Any) -> None:
             "different quantization, pooling mode or model entirely. Check "
             "`embedding_model`/`embedding_host`, or rebuild this space."
         )
-    logger.debug(
-        "[Embedding] parity probe ok | table=%s cosine=%.6f", meta_table, sim
-    )
+    logger.debug("[Embedding] parity probe ok | table=%s cosine=%.6f", meta_table, sim)

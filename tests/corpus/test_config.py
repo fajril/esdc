@@ -7,8 +7,8 @@ def test_corpus_config_defaults(monkeypatch):
     assert cfg["chunk_size"] == 3000
     assert cfg["chunk_overlap"] == 300
     assert cfg["ocr_model"] == "glm-ocr"
-    assert cfg["metadata_model"] == "main"   # default chat provider
-    assert cfg["cleanup_model"] == "main"    # default chat provider
+    assert cfg["metadata_model"] == "main"  # default chat provider
+    assert cfg["cleanup_model"] == "main"  # default chat provider
     assert cfg["ocr_dpi"] == 200
     assert cfg["num_ctx"] == 16384
     assert cfg["min_chars_per_page"] == 50
@@ -20,7 +20,7 @@ def test_corpus_config_from_yaml(monkeypatch):
     monkeypatch.setattr(Config, "_load_config", classmethod(lambda cls: yaml_cfg))
     cfg = Config.get_corpus_config()
     assert cfg["chunk_size"] == 2000
-    assert cfg["chunk_overlap"] == 300          # default survives partial override
+    assert cfg["chunk_overlap"] == 300  # default survives partial override
     assert cfg["ocr_model"] == "qwen2.5vl:7b"
 
 

@@ -111,9 +111,7 @@ def test_update_entities_canonicalizes_and_stores_json_array(tmp_path):
 
 
 def test_empty_cell_clears_to_null(tmp_path):
-    sqlite_path = _seed_sqlite(
-        tmp_path, extra={"wk_name": '["Rokan"]'}
-    )
+    sqlite_path = _seed_sqlite(tmp_path, extra={"wk_name": '["Rokan"]'})
     resolver = FakeResolver()
 
     result = apply_document_entity_changeset(
@@ -129,7 +127,9 @@ def test_empty_cell_clears_to_null(tmp_path):
 
 def test_unknown_entity_name_rejected_with_suggestions(tmp_path):
     sqlite_path = _seed_sqlite(tmp_path)
-    resolver = FakeResolver(suggestions={("wk_name", "Rokann"): ["Rokan", "Rokan Hilir"]})
+    resolver = FakeResolver(
+        suggestions={("wk_name", "Rokann"): ["Rokan", "Rokan Hilir"]}
+    )
 
     result = apply_document_entity_changeset(
         {"updates": [{"doc_id": "D1", "wk_name": "Rokann"}]},

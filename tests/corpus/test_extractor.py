@@ -286,9 +286,9 @@ def test_supported_extensions_contains_pdf_docx_md():
 def test_extract_document_routes_pdf(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        extractor, "extract_pdf", lambda path, ocr_client, a, b, c: calls.append(
-            ("pdf", path, ocr_client)
-        )
+        extractor,
+        "extract_pdf",
+        lambda path, ocr_client, a, b, c: calls.append(("pdf", path, ocr_client)),
     )
     path = tmp_path / "doc.pdf"
     path.write_bytes(b"%PDF-1.4")

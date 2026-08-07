@@ -24,17 +24,21 @@ def test_connection_creates_tables_and_enforces_fk(monkeypatch, tmp_path):
     try:
         tables = {
             r["name"]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         assert {
-            "m_pod", "project_pod", "pod_revision", "r_institution",
-            "r_pod_type", "pod_document",
+            "m_pod",
+            "project_pod",
+            "pod_revision",
+            "r_institution",
+            "r_pod_type",
+            "pod_document",
         } <= tables
         # FK enforced: project_pod row without m_pod parent must fail
         try:
-            conn.execute("INSERT INTO project_pod (pod_id, project_id) VALUES (999, 'P-X')")
+            conn.execute(
+                "INSERT INTO project_pod (pod_id, project_id) VALUES (999, 'P-X')"
+            )
             raise AssertionError("expected IntegrityError")
         except sqlite3.IntegrityError:
             pass
@@ -54,8 +58,12 @@ def test_pod_document_fk_and_unique(monkeypatch, tmp_path):
             raise AssertionError("expected IntegrityError")
         except sqlite3.IntegrityError:
             pass
-        conn.execute("INSERT INTO r_institution (code, institution) VALUES (3, 'BP Migas')")
-        conn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD/Waterflood/EOR')")
+        conn.execute(
+            "INSERT INTO r_institution (code, institution) VALUES (3, 'BP Migas')"
+        )
+        conn.execute(
+            "INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD/Waterflood/EOR')"
+        )
         conn.execute(
             "INSERT INTO m_pod (id, pod_id, pod_name, approval_date,"
             " institution_code, pod_type_code, rev_num, approval_seq)"
@@ -64,7 +72,9 @@ def test_pod_document_fk_and_unique(monkeypatch, tmp_path):
         conn.execute("INSERT INTO pod_document (pod_id, doc_id) VALUES (1, 'abc123')")
         # UNIQUE: same pair twice must fail
         try:
-            conn.execute("INSERT INTO pod_document (pod_id, doc_id) VALUES (1, 'abc123')")
+            conn.execute(
+                "INSERT INTO pod_document (pod_id, doc_id) VALUES (1, 'abc123')"
+            )
             raise AssertionError("expected IntegrityError")
         except sqlite3.IntegrityError:
             pass
@@ -78,8 +88,12 @@ def test_m_pod_unique_pod_id(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     conn = get_sqlite_connection()
     try:
-        conn.execute("INSERT INTO r_institution (code, institution) VALUES (3, 'BP Migas')")
-        conn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD/Waterflood/EOR')")
+        conn.execute(
+            "INSERT INTO r_institution (code, institution) VALUES (3, 'BP Migas')"
+        )
+        conn.execute(
+            "INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD/Waterflood/EOR')"
+        )
         row = (1, "PL-2003-0001-3-2-0", "POD A", "L1", "2003-03-14", 3, 2, 0, 1)
         conn.execute(
             "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
@@ -101,7 +115,9 @@ def test_m_pod_unique_pod_id(monkeypatch, tmp_path):
 
 
 def _seed_refs(conn):
-    conn.execute("INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')")
+    conn.execute(
+        "INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')"
+    )
     conn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (3, 'POFD/OPL/OPLL')")
 
 

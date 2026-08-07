@@ -25,8 +25,13 @@ def test_prefix_contains_type_subject_and_entities():
 
 def test_prefix_accepts_json_string_arrays():
     prefix = build_context_prefix(
-        _doc(field_name='["Merak"]', wk_name='["WK Alpha"]',
-             project_name=None, pod_name=None, doc_topic='["Produksi"]')
+        _doc(
+            field_name='["Merak"]',
+            wk_name='["WK Alpha"]',
+            project_name=None,
+            pod_name=None,
+            doc_topic='["Produksi"]',
+        )
     )
     assert "Merak" in prefix
     assert "WK Alpha" in prefix
@@ -34,16 +39,13 @@ def test_prefix_accepts_json_string_arrays():
 
 
 def test_prefix_skips_empty_fields():
-    prefix = build_context_prefix(
-        {"doc_type": None, "subject": "", "field_name": []}
-    )
+    prefix = build_context_prefix({"doc_type": None, "subject": "", "field_name": []})
     assert prefix == ""
 
 
 def test_prefix_dedupes_entities():
     prefix = build_context_prefix(
-        _doc(field_name=["Merak"], project_name=["Merak"], pod_name=None,
-             wk_name=None)
+        _doc(field_name=["Merak"], project_name=["Merak"], pod_name=None, wk_name=None)
     )
     assert prefix.count("Merak") == 2  # once in subject, once in entities
 

@@ -231,7 +231,7 @@ class TestCreateLlmFromConfigFallback:
                         }
                     ],
                 }
-        )
+            )
 
         assert llm is fallback_model
         assert llm._esdc_provider_name == "deepseek"
@@ -374,9 +374,7 @@ class TestTemperaturePassthrough:
                 return _FakeLLM()
 
         with patch("esdc.providers.get_provider", return_value=_FakeProvider):
-            _create_single_llm_from_config(
-                {"provider_type": "fake", "model": "m"}
-            )
+            _create_single_llm_from_config({"provider_type": "fake", "model": "m"})
         assert "temperature" not in captured_kwargs
 
 

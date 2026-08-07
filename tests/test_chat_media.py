@@ -9,10 +9,7 @@ def test_extracts_single_image():
 
 
 def test_extracts_multiple_in_order_deduplicated():
-    md = (
-        "![a](http://x/1.png) text ![b](http://x/2.png) "
-        "again ![a2](http://x/1.png)"
-    )
+    md = "![a](http://x/1.png) text ![b](http://x/2.png) again ![a2](http://x/1.png)"
     assert extract_image_urls(md) == ["http://x/1.png", "http://x/2.png"]
 
 

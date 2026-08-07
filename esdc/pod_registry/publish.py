@@ -52,7 +52,9 @@ JOIN m_pod m ON m.id = pd.pod_id
 def _load_schema_entries() -> dict[str, dict]:
     schema_path = (
         Path(__file__).resolve().parent.parent
-        / "chat" / "domain_knowledge" / "pod_registry_schema.yaml"
+        / "chat"
+        / "domain_knowledge"
+        / "pod_registry_schema.yaml"
     )
     data = yaml.safe_load(schema_path.read_text(encoding="utf-8"))
     return {entry["table_name"]: entry for entry in data["tables"]}
@@ -121,8 +123,7 @@ def _publish_registry_tables(
         ):
             conn.register("_pod_pub_df", df)
             select_cols = ", ".join(
-                f"CAST({c} AS DATE) AS {c}" if c in date_cols else c
-                for c in df.columns
+                f"CAST({c} AS DATE) AS {c}" if c in date_cols else c for c in df.columns
             )
             conn.execute(f"DROP TABLE IF EXISTS {table_name}")
             conn.execute(

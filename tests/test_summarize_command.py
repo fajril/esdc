@@ -204,31 +204,91 @@ def _create_minimal_project_resources():
         )
         rows = [
             (
-                2025, "P-1", "Project Alpha", "F-1", "Field Alpha",
-                "WK-1", "WK Alpha", "Contingent Resources", "Development",
-                "E2", "2. Middle Value",
+                2025,
+                "P-1",
+                "Project Alpha",
+                "F-1",
+                "Field Alpha",
+                "WK-1",
+                "WK Alpha",
+                "Contingent Resources",
+                "Development",
+                "E2",
+                "2. Middle Value",
                 "Ada peluang workover untuk menaikkan produksi.",
-                2026, "Op A", 150.0,
-                100.0, 50.0, 200.0, 100.0, 150.0, 75.0,
-                1000.0, 500.0, 10.0, 5.0, 300.0, 150.0,
+                2026,
+                "Op A",
+                150.0,
+                100.0,
+                50.0,
+                200.0,
+                100.0,
+                150.0,
+                75.0,
+                1000.0,
+                500.0,
+                10.0,
+                5.0,
+                300.0,
+                150.0,
             ),
             (
-                2025, "P-2", "Project Beta", "F-2", "Field Beta",
-                "WK-1", "WK Alpha", "Reserves & GRR", "Production",
-                "E0", "2. Middle Value",
+                2025,
+                "P-2",
+                "Project Beta",
+                "F-2",
+                "Field Beta",
+                "WK-1",
+                "WK Alpha",
+                "Reserves & GRR",
+                "Production",
+                "E0",
+                "2. Middle Value",
                 "Perlu debottlenecking fasilitas untuk menjaga produksi.",
-                2026, "Op A", 300.0,
-                300.0, 150.0, 400.0, 200.0, 350.0, 175.0,
-                2000.0, 1000.0, 20.0, 10.0, 600.0, 300.0,
+                2026,
+                "Op A",
+                300.0,
+                300.0,
+                150.0,
+                400.0,
+                200.0,
+                350.0,
+                175.0,
+                2000.0,
+                1000.0,
+                20.0,
+                10.0,
+                600.0,
+                300.0,
             ),
             (
-                2025, "P-3", "Project Gamma", "F-3", "Field Gamma",
-                "WK-2", "WK Beta", "Prospective Resources", "Exploration",
-                "X5", "2. Middle Value",
+                2025,
+                "P-3",
+                "Project Gamma",
+                "F-3",
+                "Field Gamma",
+                "WK-2",
+                "WK Beta",
+                "Prospective Resources",
+                "Exploration",
+                "X5",
+                "2. Middle Value",
                 "Prospek membutuhkan data tambahan untuk unlock resources.",
-                2027, "Op B", 350.0,
-                0.0, 0.0, 500.0, 250.0, 200.0, 100.0,
-                3000.0, 1500.0, 0.0, 0.0, 0.0, 0.0,
+                2027,
+                "Op B",
+                350.0,
+                0.0,
+                0.0,
+                500.0,
+                250.0,
+                200.0,
+                100.0,
+                3000.0,
+                1500.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
             ),
         ]
         conn.executemany(
@@ -554,7 +614,9 @@ def test_strategic_analysis_data_uses_cumulative_80_percent_contributors():
         assert field_development["priority_projects"][0]["project_level"] == (
             "E6. Further Development"
         )
-        assert field_development["priority_projects"][0]["project_name"] == "Big Resource"
+        assert (
+            field_development["priority_projects"][0]["project_name"] == "Big Resource"
+        )
 
         exploration = data["exploration_highlights"]
         assert exploration["total_projects_reviewed"] == 1
@@ -562,8 +624,7 @@ def test_strategic_analysis_data_uses_cumulative_80_percent_contributors():
             "X2. Exploration Prospect"
         )
         assert [
-            project["project_level"]
-            for project in exploration["outlook_top3_projects"]
+            project["project_level"] for project in exploration["outlook_top3_projects"]
         ] == ["X1. Discovery under Evaluation", "X3. Exploration Lead"]
     finally:
         conn.close()
@@ -592,7 +653,7 @@ def test_strategic_summary_prompt_matches_reference_contributor_rule():
                         "project_remarks": "Requires POD finalization.",
                     }
                 ],
-            }
+            },
         },
     )
 
@@ -734,9 +795,7 @@ def test_summarize_field_creates_one_field_summary(
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     assert "fields 1 created/0 skipped" in result.stdout
@@ -764,14 +823,10 @@ def test_summarize_stores_actual_llm_metadata(runner, isolated_config, monkeypat
     monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
-    assert _summary_metadata() == [
-        ("field", "F-1", "deepseek", "deepseek-v4-flash")
-    ]
+    assert _summary_metadata() == [("field", "F-1", "deepseek", "deepseek-v4-flash")]
 
 
 def test_summarize_stores_actual_token_usage(runner, isolated_config, monkeypatch):
@@ -790,9 +845,7 @@ def test_summarize_stores_actual_token_usage(runner, isolated_config, monkeypatc
     monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     assert "tokens 125 processed" in result.stdout
@@ -807,9 +860,7 @@ def test_summarize_estimates_token_usage_without_provider_usage(
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     token_rows = _summary_token_rows()
@@ -841,9 +892,7 @@ def test_summarize_falls_back_when_provider_returns_zero_usage(
     monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     token_rows = _summary_token_rows()
@@ -862,12 +911,8 @@ def test_summarize_field_skips_unchanged_hash_and_force_regenerates(
     llm = _patch_llm(monkeypatch)
     _create_minimal_project_resources()
 
-    first = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
-    second = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    first = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
+    second = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
     forced = runner.invoke(
         app,
         [
@@ -906,18 +951,14 @@ def test_summarize_field_with_empty_remarks_does_not_call_llm(
     finally:
         conn.close()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     assert "fields 1 created/0 skipped" in result.stdout
     assert llm.prompts == []
     rows = _summary_rows()
     summary = json.loads(rows[0][3])
-    assert _summary_token_rows() == [
-        ("field", "F-1", 0, 0, 0, None, None)
-    ]
+    assert _summary_token_rows() == [("field", "F-1", 0, 0, 0, None, None)]
     assert summary["headline"] == "Tidak ada remarks material untuk field Field Alpha."
     assert summary["data_quality_notes"] == [
         "Source tidak memiliki remarks yang cukup informatif untuk diringkas."
@@ -941,9 +982,7 @@ def test_summarize_prompt_includes_low_quality_remark_context(
     finally:
         conn.close()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     assert len(llm.prompts) == 1
@@ -985,9 +1024,7 @@ def test_summary_hides_benign_data_quality_note(runner, isolated_config, monkeyp
     assert "Tidak ada isu kualitas data" not in result.output
 
 
-def test_summarize_field_ambiguous_fallback_fails(
-    runner, isolated_config, monkeypatch
-):
+def test_summarize_field_ambiguous_fallback_fails(runner, isolated_config, monkeypatch):
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
     conn = duckdb.connect(str(Config.get_db_file()))
@@ -1013,9 +1050,7 @@ def test_summarize_field_ambiguous_fallback_fails(
     finally:
         conn.close()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Alpha", "--year", "2025"])
 
     assert result.exit_code == 1
     assert "Ambiguous field name 'Alpha'" in result.stdout
@@ -1219,18 +1254,14 @@ def test_summarize_working_areas_requires_project_timeseries(
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "wk", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "wk", "--year", "2025"])
 
     assert result.exit_code == 1
     assert result.exception is not None
     assert "project_timeseries" in str(result.exception).lower()
 
 
-def test_summarize_default_runs_field_wk_and_nkri(
-    runner, isolated_config, monkeypatch
-):
+def test_summarize_default_runs_field_wk_and_nkri(runner, isolated_config, monkeypatch):
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
     _create_project_timeseries()
@@ -1257,9 +1288,7 @@ def test_summarize_skips_unchanged_hash_and_force_regenerates(
 
     first = runner.invoke(app, ["summarize", "field", "--year", "2025"])
     second = runner.invoke(app, ["summarize", "field", "--year", "2025"])
-    forced = runner.invoke(
-        app, ["summarize", "field", "--year", "2025", "--force"]
-    )
+    forced = runner.invoke(app, ["summarize", "field", "--year", "2025", "--force"])
 
     assert first.exit_code == 0
     assert second.exit_code == 0
@@ -1284,11 +1313,7 @@ def test_create_esdc_view_exposes_summary_columns(isolated_config):
             sql_script = _load_sql_script(script_name).replace(
                 "{table_name}", "project_resources"
             )
-            for statement in [
-                s.strip()
-                for s in sql_script.split(";")
-                if s.strip()
-            ]:
+            for statement in [s.strip() for s in sql_script.split(";") if s.strip()]:
                 conn.execute(statement)
         conn.execute(
             """

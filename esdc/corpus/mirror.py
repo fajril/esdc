@@ -135,9 +135,7 @@ def attached_truth(
             conn.execute(f"DETACH {alias}")
 
 
-def refresh_documents(
-    conn: duckdb.DuckDBPyConnection, sqlite_path: Path
-) -> int:
+def refresh_documents(conn: duckdb.DuckDBPyConnection, sqlite_path: Path) -> int:
     """Rebuild the DuckDB `documents` mirror from the SQLite truth.
 
     Returns the number of rows copied. CREATE OR REPLACE drops the
@@ -323,9 +321,7 @@ def refresh_registry(
             conn.execute(
                 f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM {truth}.{table}"
             )
-            copied[table] = conn.execute(
-                f"SELECT COUNT(*) FROM {table}"
-            ).fetchone()[0]
+            copied[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         # Retire any POD table a pre-fix build left raw-mirrored here.
         # Unconditional on truth presence (unlike the loop above): these
         # tables are real SQLite operational tables and normally ARE
@@ -337,9 +333,7 @@ def refresh_registry(
         for table in _RETIRED_REGISTRY_TABLES:
             if table in mirrored:
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
-                logger.info(
-                    "[Mirror] dropped retired registry table | table=%s", table
-                )
+                logger.info("[Mirror] dropped retired registry table | table=%s", table)
     logger.info("[Mirror] registry refreshed | tables=%d", len(copied))
     return copied
 
@@ -420,9 +414,7 @@ class MirrorReport:
     views: list[str] = field(default_factory=list)
 
 
-def refresh_all(
-    conn: duckdb.DuckDBPyConnection, sqlite_path: Path
-) -> MirrorReport:
+def refresh_all(conn: duckdb.DuckDBPyConnection, sqlite_path: Path) -> MirrorReport:
     """Rebuild every derived table/view in DuckDB from the SQLite truth.
 
     Converges both raw mirrors (`documents`, `kg_edge`/`kg_claim`) and

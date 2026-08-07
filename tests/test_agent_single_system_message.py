@@ -67,8 +67,6 @@ async def test_non_qwen_model_keeps_trailing_system_messages():
     object.__setattr__(llm, "_esdc_model_name", "gpt-4o")
     agent = create_agent(llm, tools=[], checkpointer=None, context_length=8000)
 
-    from langchain_core.messages import SystemMessage
-
     await agent.ainvoke(
         {"messages": [HumanMessage(content="halo")]},
         config={"recursion_limit": 10},

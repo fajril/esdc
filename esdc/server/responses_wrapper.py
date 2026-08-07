@@ -897,8 +897,7 @@ async def generate_responses_stream(
                 if normalized_usage:
                     last_usage = normalized_usage.to_dict()
                 elif (
-                    hasattr(ai_message, "usage_metadata")
-                    and ai_message.usage_metadata
+                    hasattr(ai_message, "usage_metadata") and ai_message.usage_metadata
                 ):
                     last_usage = ai_message.usage_metadata
 

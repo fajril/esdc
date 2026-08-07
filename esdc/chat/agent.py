@@ -661,7 +661,8 @@ def create_agent(
                 merged_messages[0] = SystemMessage(content=merged_system_content)
                 messages_with_system = merged_messages
                 logger.info(
-                    "[AGENT] merged %d trailing SystemMessage(s) into leading system prompt",
+                    "[AGENT] merged %d trailing SystemMessage(s) into leading "
+                    "system prompt",
                     len(trailing_system_text),
                 )
 

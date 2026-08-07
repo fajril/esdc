@@ -5,6 +5,7 @@ Loads pinned Qwen3 GGUFs in-process via llama-cpp-python. Weights are
 cached under ~/.esdc/models (HF-cache layout, follows ESDC_CONFIG_DIR),
 downloaded once, offline thereafter. No Ollama daemon involved.
 """
+
 from __future__ import annotations
 
 import logging

@@ -51,9 +51,7 @@ class TestQueryClassifier:
         )
 
         assert result.query_type == QueryType.SIMPLE_FACTUAL
-        assert result.detected_entities.get("operator_name") == (
-            "pertamina hulu rokan"
-        )
+        assert result.detected_entities.get("operator_name") == ("pertamina hulu rokan")
         assert result.suggested_table == "project_resources"
 
     def test_production_profile_query(self):

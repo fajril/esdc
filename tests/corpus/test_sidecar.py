@@ -25,11 +25,21 @@ def test_write_sidecar_file_writes_to_exact_path(tmp_path):
 def test_roundtrip(tmp_path: Path):
     pdf = tmp_path / "mom.pdf"
     meta = {
-        "source_file": "mom.pdf", "file_hash": "ab" * 32, "page_count": 2,
-        "extraction_method": "mixed", "doc_type": "mom", "doc_number": None,
-        "doc_date": "2026-03-01", "subject": "Monitoring POD", "sender": "SKK",
-        "recipient": None, "doc_level": "project", "wk_name": "Rokan",
-        "field_name": None, "project_name": "POD Duri", "extras": {"peserta": []},
+        "source_file": "mom.pdf",
+        "file_hash": "ab" * 32,
+        "page_count": 2,
+        "extraction_method": "mixed",
+        "doc_type": "mom",
+        "doc_number": None,
+        "doc_date": "2026-03-01",
+        "subject": "Monitoring POD",
+        "sender": "SKK",
+        "recipient": None,
+        "doc_level": "project",
+        "wk_name": "Rokan",
+        "field_name": None,
+        "project_name": "POD Duri",
+        "extras": {"peserta": []},
     }
     body = "<!-- page 1: native -->\n# MoM\nisi"
     path = write_sidecar(pdf, meta, body)

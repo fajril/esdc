@@ -1,5 +1,6 @@
 # tests/test_embedders.py
 """Shared embedder backends: internal (llama.cpp), Ollama, OpenAI-compatible."""
+
 from __future__ import annotations
 
 import json
@@ -204,21 +205,29 @@ def test_openai_raises_on_duplicate_index(monkeypatch):
 
 
 def test_openai_omits_auth_header_when_no_key(monkeypatch):
-    post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]}))
+    post = MagicMock(
+        return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]})
+    )
     monkeypatch.setattr(emb.requests, "post", post)
     emb.OpenAIEmbedder(host="http://h:1/v1", model="m").generate_embedding("x")
     assert "Authorization" not in post.call_args.kwargs["headers"]
 
 
 def test_openai_sends_bearer_when_key_set(monkeypatch):
-    post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]}))
+    post = MagicMock(
+        return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]})
+    )
     monkeypatch.setattr(emb.requests, "post", post)
-    emb.OpenAIEmbedder(host="http://h:1/v1", model="m", api_key="k").generate_embedding("x")
+    emb.OpenAIEmbedder(host="http://h:1/v1", model="m", api_key="k").generate_embedding(
+        "x"
+    )
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer k"
 
 
 def test_openai_splits_batches(monkeypatch):
-    post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]}))
+    post = MagicMock(
+        return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]})
+    )
     monkeypatch.setattr(emb.requests, "post", post)
     e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", batch_size=1)
     e.generate_embeddings_batch(["a", "b", "c"])
@@ -288,14 +297,18 @@ def test_factory_openai_passes_model_and_key(monkeypatch):
 def test_factory_none_falls_through_to_config(monkeypatch):
     from esdc.configs import Config
 
-    monkeypatch.setattr(Config, "get_embedding_backend", classmethod(lambda cls: "local"))
+    monkeypatch.setattr(
+        Config, "get_embedding_backend", classmethod(lambda cls: "local")
+    )
     assert isinstance(emb.get_build_embedder(None), emb.InternalEmbedder)
 
 
 def test_factory_explicit_arg_beats_config(monkeypatch):
     from esdc.configs import Config
 
-    monkeypatch.setattr(Config, "get_embedding_backend", classmethod(lambda cls: "ollama"))
+    monkeypatch.setattr(
+        Config, "get_embedding_backend", classmethod(lambda cls: "ollama")
+    )
     assert isinstance(emb.get_build_embedder("local"), emb.InternalEmbedder)
 
 
@@ -310,7 +323,9 @@ def test_factory_unknown_backend_lists_valid_ones():
 
 def _meta_conn(probe=None, dim=3):
     conn = duckdb.connect(":memory:")
-    conn.execute("CREATE TABLE m (embedding_model VARCHAR, dim INTEGER, probe_vec JSON)")
+    conn.execute(
+        "CREATE TABLE m (embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+    )
     conn.execute(
         "INSERT INTO m VALUES (?, ?, ?)",
         ["qwen3-embedding-0.6b-q8_0", dim, json.dumps(probe) if probe else None],
@@ -367,5 +382,7 @@ def test_probe_raises_on_dim_change():
 
 def test_probe_noop_when_meta_empty():
     conn = duckdb.connect(":memory:")
-    conn.execute("CREATE TABLE m (embedding_model VARCHAR, dim INTEGER, probe_vec JSON)")
+    conn.execute(
+        "CREATE TABLE m (embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+    )
     emb.check_or_seed_probe(conn, "m", _FixedEmbedder([1.0]))  # must not raise

@@ -228,10 +228,7 @@ class Config:
         if update_config:
             config = cls._load_config() or {}
             configured_path = config.get("database_path")
-            if (
-                configured_path
-                and Path(configured_path).expanduser() == legacy_db_file
-            ):
+            if configured_path and Path(configured_path).expanduser() == legacy_db_file:
                 config["database_path"] = str(default_db_file)
                 cls._save_config(config)
 

@@ -20,7 +20,6 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import duckdb
 
@@ -129,58 +128,52 @@ def run_learn(
             llm_caller, provider, model = _open_default_llm()
 
         # Phases 2+3: extraction + resolution
-        iterator: Any = pending
-        prog = None
-        if progress and pending:
-            from rich.progress import (
-                BarColumn,
-                Progress,
-                TextColumn,
-                TimeElapsedColumn,
-            )
+        from contextlib import ExitStack
 
-            prog = Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("{task.completed}/{task.total}"),
-                TimeElapsedColumn(),
-            )
-            prog.start()
-            task_id = prog.add_task("Extracting knowledge", total=len(pending))
+        from esdc.corpus.pipeline import _progress_with_status
 
-        for doc in iterator:
-            doc_id = doc["doc_id"]
-            src_hash = _doc_source_hash(doc["file_hash"], guideline.content_hash)
-            try:
-                meta = {
-                    "doc_type": doc["doc_type"],
-                    "doc_date": doc["doc_date"],
-                    "subject": doc["subject"],
-                }
-                extraction = extract_knowledge(
-                    doc["markdown"] or "", meta, guideline, llm_caller
+        handle = None
+        with ExitStack() as stack:
+            if progress and pending:
+                handle = stack.enter_context(
+                    _progress_with_status("learn", len(pending), "docs")
                 )
-                resolution = resolve_extraction(
-                    doc_id, extraction, sqlite_conn, duck_conn
-                )
-                # replace this doc's previous LLM knowledge, keep deterministic
-                # edges (they are re-upserted by phase 1 on every run)
-                store.delete_doc_edges(doc_id)
-                if resolution.edges:
-                    report.edges_written += store.upsert_edges(resolution.edges)
-                report.claims_written += store.replace_claims(doc_id, resolution.claims)
-                report.unresolved_mentions += len(resolution.unresolved)
-                for unknown in extraction.unknown_types:
-                    store.bump_proposal(unknown["kind"], unknown["name"], doc_id)
-                store.mark_learned(doc_id, src_hash)
-                report.docs_processed += 1
-            except Exception as e:  # noqa: BLE001 - one bad doc must not stop learn
-                logger.error("[Learn] doc_failed | doc_id=%s error=%s", doc_id, e)
-                report.docs_failed += 1
-            if prog is not None:
-                prog.advance(task_id)
-        if prog is not None:
-            prog.stop()
+
+            for doc in pending:
+                doc_id = doc["doc_id"]
+                if handle is not None:
+                    handle.file(doc_id)
+                src_hash = _doc_source_hash(doc["file_hash"], guideline.content_hash)
+                try:
+                    meta = {
+                        "doc_type": doc["doc_type"],
+                        "doc_date": doc["doc_date"],
+                        "subject": doc["subject"],
+                    }
+                    extraction = extract_knowledge(
+                        doc["markdown"] or "", meta, guideline, llm_caller
+                    )
+                    resolution = resolve_extraction(
+                        doc_id, extraction, sqlite_conn, duck_conn
+                    )
+                    # replace this doc's previous LLM knowledge, keep deterministic
+                    # edges (they are re-upserted by phase 1 on every run)
+                    store.delete_doc_edges(doc_id)
+                    if resolution.edges:
+                        report.edges_written += store.upsert_edges(resolution.edges)
+                    report.claims_written += store.replace_claims(
+                        doc_id, resolution.claims
+                    )
+                    report.unresolved_mentions += len(resolution.unresolved)
+                    for unknown in extraction.unknown_types:
+                        store.bump_proposal(unknown["kind"], unknown["name"], doc_id)
+                    store.mark_learned(doc_id, src_hash)
+                    report.docs_processed += 1
+                except Exception as e:  # noqa: BLE001 - one bad doc must not stop learn
+                    logger.error("[Learn] doc_failed | doc_id=%s error=%s", doc_id, e)
+                    report.docs_failed += 1
+                if handle is not None:
+                    handle.advance()
 
         # Deleting doc edges above also removed deterministic doc edges for
         # processed docs; restore them.
@@ -223,18 +216,14 @@ def run_learn(
         # independently-pathed CorpusStore.
         from esdc.corpus.mirror import refresh_all
 
-        sqlite_path_str = sqlite_conn.execute(
-            "PRAGMA database_list"
-        ).fetchone()[2]
+        sqlite_path_str = sqlite_conn.execute("PRAGMA database_list").fetchone()[2]
         if not sqlite_path_str:
             # In-memory sqlite_conn (tests inject this): PRAGMA
             # database_list's file column is '' for :memory: databases, so
             # Path('') would resolve to '.' and ATTACH the wrong database,
             # failing every time. There is no on-disk truth to refresh the
             # mirror from in that case, so skip rather than attempt-and-warn.
-            logger.debug(
-                "[Learn] sqlite_conn is in-memory, skipping mirror refresh"
-            )
+            logger.debug("[Learn] sqlite_conn is in-memory, skipping mirror refresh")
         else:
             sqlite_path = Path(sqlite_path_str)
             # Best-effort: DuckDB is single-writer, so this can lose the

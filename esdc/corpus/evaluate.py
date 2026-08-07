@@ -148,9 +148,7 @@ def run_eval(
                         cls_hits[k] += 1
 
                 if cls in RECALL_CLASSES:
-                    sums = recall_sums.setdefault(
-                        cls, dict.fromkeys(ks, 0.0)
-                    )
+                    sums = recall_sums.setdefault(cls, dict.fromkeys(ks, 0.0))
                     for k in ks:
                         top = results[:k]
                         matched = {

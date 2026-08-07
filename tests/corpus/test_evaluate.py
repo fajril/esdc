@@ -34,9 +34,9 @@ def test_pass_at_k(tmp_path):
     path = _write_queries(
         tmp_path,
         [
-            {"query": "q1", "expected": ["doc-b"]},   # hit at 1
-            {"query": "q2", "expected": ["doc-a"]},   # hit at 2, not 1
-            {"query": "q3", "expected": ["missing"]}, # never hit
+            {"query": "q1", "expected": ["doc-b"]},  # hit at 1
+            {"query": "q2", "expected": ["doc-a"]},  # hit at 2, not 1
+            {"query": "q3", "expected": ["missing"]},  # never hit
         ],
     )
     report = run_eval(path, ks=(1, 2), store=FakeStore())
@@ -114,9 +114,9 @@ def test_recall_at_k_for_multi_doc_class(tmp_path):
     )
     report = run_eval(path, ks=(1, 2), store=FakeStore())
     cr = report.by_class["cross_reference"]
-    assert cr.recall_at[1] == 0.25   # doc-b of 4
-    assert cr.recall_at[2] == 0.5    # doc-b + doc-a of 4
-    assert cr.pass_at[1] == 1.0      # Pass@k still reported
+    assert cr.recall_at[1] == 0.25  # doc-b of 4
+    assert cr.recall_at[2] == 0.5  # doc-b + doc-a of 4
+    assert cr.pass_at[1] == 1.0  # Pass@k still reported
 
 
 def test_recall_not_computed_for_lookup(tmp_path):
@@ -184,8 +184,7 @@ def test_negative_excluded_from_pass_at_k(tmp_path):
 def test_meta_header_line_is_ignored(tmp_path):
     p = tmp_path / "queries.jsonl"
     p.write_text(
-        '{"_meta": {"fingerprint": "fp"}}\n'
-        '{"query": "q1", "expected": ["doc-b"]}\n',
+        '{"_meta": {"fingerprint": "fp"}}\n{"query": "q1", "expected": ["doc-b"]}\n',
         encoding="utf-8",
     )
     report = run_eval(p, ks=(1,), store=FakeStore())

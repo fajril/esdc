@@ -21,7 +21,7 @@ def test_pods_page_renders_grid_config(monkeypatch, tmp_path):
     resp = client.get("/pods")
     assert resp.status_code == 200
     assert "tabulator" in resp.text
-    assert '"m_pod"' in resp.text          # table name passed to JS
+    assert '"m_pod"' in resp.text  # table name passed to JS
     assert "Superseded By" in resp.text
 
 
@@ -36,8 +36,17 @@ def test_pods_page_columns_in_excel_order(monkeypatch, tmp_path):
     text = client.get("/pods").text
     # Column headers must appear in the Excel POD Record order.
     order = [
-        "ID (ITB)", "Approval Date", "Institution", "POD Type", "Rev",
-        "Name", "Letter No.", "Seq", "POD ID", "Preceded By", "Superseded By",
+        "ID (ITB)",
+        "Approval Date",
+        "Institution",
+        "POD Type",
+        "Rev",
+        "Name",
+        "Letter No.",
+        "Seq",
+        "POD ID",
+        "Preceded By",
+        "Superseded By",
     ]
     positions = [text.index(f'"title": "{t}"') for t in order]
     assert positions == sorted(positions), positions

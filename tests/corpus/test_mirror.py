@@ -41,12 +41,21 @@ def _make_truth(path: Path, rows: list[dict]) -> None:
             "project_name, markdown, extraction_method, embedding_model, "
             "ingested_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                r["doc_id"], r["doc_id"] + ".pdf", "/tmp/" + r["doc_id"],
-                "hash-" + r["doc_id"], r.get("doc_type", "surat"),
-                r.get("doc_topic", '["pod"]'), r.get("doc_date", "2025-03-01"),
-                r.get("subject", "s"), r.get("wk_name", '["Rokan"]'),
-                r.get("field_name", '["Duri"]'), r.get("project_name", '["P1"]'),
-                "# body", "docling", "qwen3", "2025-03-01 00:00:00",
+                r["doc_id"],
+                r["doc_id"] + ".pdf",
+                "/tmp/" + r["doc_id"],
+                "hash-" + r["doc_id"],
+                r.get("doc_type", "surat"),
+                r.get("doc_topic", '["pod"]'),
+                r.get("doc_date", "2025-03-01"),
+                r.get("subject", "s"),
+                r.get("wk_name", '["Rokan"]'),
+                r.get("field_name", '["Duri"]'),
+                r.get("project_name", '["P1"]'),
+                "# body",
+                "docling",
+                "qwen3",
+                "2025-03-01 00:00:00",
             ),
         )
     conn.commit()
@@ -66,15 +75,22 @@ def test_refresh_documents_copies_rows_with_faithful_types(truth_path: Path):
     copied = refresh_documents(conn, truth_path)
 
     assert copied == 2
-    types = dict(conn.execute("SELECT column_name, column_type FROM (DESCRIBE documents)").fetchall())
+    types = dict(
+        conn.execute(
+            "SELECT column_name, column_type FROM (DESCRIBE documents)"
+        ).fetchall()
+    )
     assert types["doc_date"] == "DATE"
     assert types["ingested_at"] == "TIMESTAMP"
     assert types["doc_topic"] == "JSON"
     assert types["field_name"] == "JSON"
     # the year filter used by _build_filter_clause must bind
-    assert conn.execute(
-        "SELECT COUNT(*) FROM documents WHERE EXTRACT(year FROM doc_date) = 2026"
-    ).fetchone()[0] == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE EXTRACT(year FROM doc_date) = 2026"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_refresh_documents_wraps_legacy_bare_entity_names(tmp_path: Path):
@@ -84,11 +100,14 @@ def test_refresh_documents_wraps_legacy_bare_entity_names(tmp_path: Path):
 
     refresh_documents(conn, path)
 
-    assert conn.execute(
-        "SELECT COUNT(*) FROM documents WHERE EXISTS ("
-        "  SELECT 1 FROM json_each(documents.field_name) "
-        "  WHERE CAST(value AS VARCHAR) ILIKE '%duri%')"
-    ).fetchone()[0] == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE EXISTS ("
+            "  SELECT 1 FROM json_each(documents.field_name) "
+            "  WHERE CAST(value AS VARCHAR) ILIKE '%duri%')"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_refresh_documents_survives_a_malformed_doc_date(tmp_path, caplog):
@@ -108,9 +127,7 @@ def test_refresh_documents_survives_a_malformed_doc_date(tmp_path, caplog):
         copied = refresh_documents(conn, path)
 
     assert copied == 3  # the bad row is not dropped, only its doc_date is nulled
-    rows = dict(
-        conn.execute("SELECT doc_id, doc_date FROM documents").fetchall()
-    )
+    rows = dict(conn.execute("SELECT doc_id, doc_date FROM documents").fetchall())
     assert rows["d1"] == date(2025, 3, 1)
     assert rows["d2"] is None
     assert rows["d3"] == date(2026, 7, 1)
@@ -180,9 +197,7 @@ def test_sweep_orphan_chunks_removes_chunks_of_deleted_documents(truth_path: Pat
 
     assert deleted == 1
     assert conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0] == 1
-    assert conn.execute(
-        "SELECT doc_id FROM document_chunks"
-    ).fetchone()[0] == "d1"
+    assert conn.execute("SELECT doc_id FROM document_chunks").fetchone()[0] == "d1"
 
 
 def test_sweep_orphan_chunks_survives_a_null_doc_id_in_documents(truth_path: Path):
@@ -208,9 +223,7 @@ def test_sweep_orphan_chunks_survives_a_null_doc_id_in_documents(truth_path: Pat
 
     assert deleted == 1
     assert conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0] == 1
-    assert conn.execute(
-        "SELECT doc_id FROM document_chunks"
-    ).fetchone()[0] == "d1"
+    assert conn.execute("SELECT doc_id FROM document_chunks").fetchone()[0] == "d1"
 
 
 def test_sweep_orphan_chunks_on_fresh_install_returns_zero(truth_path: Path):
@@ -265,7 +278,9 @@ def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path
     assert conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()[0] == 0
 
 
-def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(tmp_path: Path):
+def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(
+    tmp_path: Path,
+):
     """refresh_registry drops the mirror table when its truth table disappears.
 
     A registry table present in one refresh but absent from the truth in
@@ -298,7 +313,9 @@ def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(tmp_pat
         conn.execute("SELECT COUNT(*) FROM kg_edge")
 
 
-def test_refresh_registry_stays_silent_when_table_was_never_mirrored(tmp_path: Path, caplog):
+def test_refresh_registry_stays_silent_when_table_was_never_mirrored(
+    tmp_path: Path, caplog
+):
     """refresh_registry stays silent about a table that was never mirrored.
 
     kg_edge/kg_claim have never existed in either store on most installs
@@ -323,7 +340,9 @@ def test_refresh_registry_stays_silent_when_table_was_never_mirrored(tmp_path: P
     assert not any("dropped" in r.message for r in caplog.records)
 
 
-def test_refresh_registry_logs_when_a_stale_mirror_is_actually_dropped(tmp_path: Path, caplog):
+def test_refresh_registry_logs_when_a_stale_mirror_is_actually_dropped(
+    tmp_path: Path, caplog
+):
     """refresh_registry logs when it actually drops a stale mirror table.
 
     A table that WAS mirrored and then disappears from the truth is a
@@ -380,9 +399,7 @@ def test_refresh_registry_no_longer_raw_mirrors_pod_tables(tmp_path: Path):
     conn_s.execute("INSERT INTO project_pod VALUES (1, 'PRJ-1')")
     conn_s.execute("CREATE TABLE pod_document (pod_id INTEGER, doc_id TEXT)")
     conn_s.execute("INSERT INTO pod_document VALUES (1, 'd1')")
-    conn_s.execute(
-        "CREATE TABLE pod_revision (successor_id TEXT, predecessor_id TEXT)"
-    )
+    conn_s.execute("CREATE TABLE pod_revision (successor_id TEXT, predecessor_id TEXT)")
     conn_s.commit()
     conn_s.close()
     conn = duckdb.connect()
@@ -391,8 +408,12 @@ def test_refresh_registry_no_longer_raw_mirrors_pod_tables(tmp_path: Path):
 
     assert copied == {}
     for table in (
-        "m_pod", "r_institution", "r_pod_type", "project_pod",
-        "pod_document", "pod_revision",
+        "m_pod",
+        "r_institution",
+        "r_pod_type",
+        "project_pod",
+        "pod_document",
+        "pod_revision",
     ):
         with pytest.raises(duckdb.CatalogException):
             conn.execute(f"SELECT * FROM {table}")
@@ -435,14 +456,19 @@ def test_refresh_registry_retires_stale_pod_mirrors_from_a_pre_fix_database(
 
     assert copied == {}
     for table in (
-        "m_pod", "r_institution", "r_pod_type", "project_pod",
-        "pod_document", "pod_revision",
+        "m_pod",
+        "r_institution",
+        "r_pod_type",
+        "project_pod",
+        "pod_document",
+        "pod_revision",
     ):
         with pytest.raises(duckdb.CatalogException):
             conn.execute(f"SELECT * FROM {table}")
-    assert sum(
-        1 for r in caplog.records if "dropped retired registry table" in r.message
-    ) == 6
+    assert (
+        sum(1 for r in caplog.records if "dropped retired registry table" in r.message)
+        == 6
+    )
 
 
 def test_views_expose_both_grains(tmp_path: Path):
@@ -488,7 +514,10 @@ def test_views_degrade_when_registry_absent(truth_path: Path):
 
     assert created == ["v_document"]
     assert conn.execute("SELECT COUNT(*) FROM v_document").fetchone()[0] == 2
-    assert conn.execute("SELECT linked_pod_ids FROM v_document LIMIT 1").fetchone()[0] == []
+    assert (
+        conn.execute("SELECT linked_pod_ids FROM v_document LIMIT 1").fetchone()[0]
+        == []
+    )
 
 
 def test_refresh_all_produces_canonical_varchar_pod_id_not_bigint_fk(tmp_path: Path):
@@ -583,7 +612,13 @@ def test_refresh_all_repairs_a_pre_fix_database(tmp_path: Path):
 
     refresh_all(conn, path)
 
-    for table in ("m_pod", "r_institution", "r_pod_type", "project_pod", "pod_revision"):
+    for table in (
+        "m_pod",
+        "r_institution",
+        "r_pod_type",
+        "project_pod",
+        "pod_revision",
+    ):
         with pytest.raises(duckdb.CatalogException):
             conn.execute(f"SELECT * FROM {table}")
     col_type = dict(

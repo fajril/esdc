@@ -14,8 +14,12 @@ def test_write_then_read_roundtrip(tmp_path):
     p = tmp_path / "corpus_queries.jsonl"
     rows = [{"query": "apa isi surat?", "expected": ["doc-1"]}]
     meta = QueryMeta(
-        fingerprint="abc", margin=0.05, n=1, ks=[1, 5, 10],
-        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+        fingerprint="abc",
+        margin=0.05,
+        n=1,
+        ks=[1, 5, 10],
+        embedding_model="qwen3",
+        generated_at="2026-07-25T00:00:00",
     )
     write_query_file(p, rows, meta)
 
@@ -28,7 +32,8 @@ def test_write_then_read_roundtrip(tmp_path):
 def test_meta_is_first_line(tmp_path):
     p = tmp_path / "corpus_queries.jsonl"
     write_query_file(
-        p, [{"query": "q", "expected": ["d"]}],
+        p,
+        [{"query": "q", "expected": ["d"]}],
         QueryMeta("fp", 0.05, 1, [1], "m", "t"),
     )
     first = p.read_text(encoding="utf-8").splitlines()[0]
@@ -68,8 +73,10 @@ def _call(prompt):  # deterministic stub LLM
 def _docs(n, doc_type="letter"):
     return [
         {
-            "doc_id": f"{doc_type}-{i}", "doc_type": doc_type,
-            "subject": f"subject {i}", "file_hash": f"h{i}",
+            "doc_id": f"{doc_type}-{i}",
+            "doc_type": doc_type,
+            "subject": f"subject {i}",
+            "file_hash": f"h{i}",
             "chunk_text": f"body {i}",
         }
         for i in range(n)
@@ -78,11 +85,13 @@ def _docs(n, doc_type="letter"):
 
 def test_synthesize_query_uses_caller():
     seen = {}
+
     def cap(prompt):
         seen["prompt"] = prompt
         return "  a question?  "
+
     out = synthesize_query(cap, "isi surat tentang cadangan")
-    assert out == "a question?"                          # stripped
+    assert out == "a question?"  # stripped
     assert "isi surat tentang cadangan" in seen["prompt"]  # chunk grounded
 
 
@@ -192,13 +201,13 @@ def test_reconcile_drops_row_with_empty_expected():
 
 def test_reconcile_does_not_grow_past_original_size():
     store = FakeStore(_docs(10, doc_type="letter"))
-    rows, meta = generate(store, _call, n=6, seed=1)   # 6 letter rows, target 6
+    rows, meta = generate(store, _call, n=6, seed=1)  # 6 letter rows, target 6
     # Corpus gains a new type; all 6 kept rows are still live letters.
     for d in _docs(5, doc_type="report"):
         store._docs[d["doc_id"]] = d
     new_rows, _ = reconcile(store, _call, rows, meta, seed=1)
-    assert len(new_rows) <= meta.n          # never exceeds original size
-    assert len(new_rows) == 6               # noop-ish: kept already fills target
+    assert len(new_rows) <= meta.n  # never exceeds original size
+    assert len(new_rows) == 6  # noop-ish: kept already fills target
 
 
 def test_reconcile_regenerates_doc_with_changed_file_hash():
@@ -311,14 +320,19 @@ class ThemeStore:
 
 def _theme_doc(doc_id, wk, year, subject):
     return {
-        "doc_id": doc_id, "doc_type": "letter", "subject": subject,
-        "wk_name": [wk], "doc_date": f"{year}-06-01",
+        "doc_id": doc_id,
+        "doc_type": "letter",
+        "subject": subject,
+        "wk_name": [wk],
+        "doc_date": f"{year}-06-01",
     }
 
 
 def test_thematic_groups_by_wk_and_year():
-    docs = [_theme_doc(f"d{i}", "Rokan (2019)", 2019, f"Persetujuan POD {i}")
-            for i in range(6)]
+    docs = [
+        _theme_doc(f"d{i}", "Rokan (2019)", 2019, f"Persetujuan POD {i}")
+        for i in range(6)
+    ]
     rows = generate_thematic(ThemeStore(docs), lambda p: "apa isu utama di Rokan 2019?")
     assert len(rows) == 1
     assert rows[0]["class"] == "thematic"
@@ -333,9 +347,19 @@ def test_thematic_skips_groups_below_min():
 
 def test_thematic_skips_docs_without_wk_or_date():
     docs = [
-        {"doc_id": "d1", "doc_type": "letter", "subject": "S", "wk_name": [],
-         "doc_date": "2020-01-01"},
-        {"doc_id": "d2", "doc_type": "letter", "subject": "S", "wk_name": ["X"],
-         "doc_date": None},
+        {
+            "doc_id": "d1",
+            "doc_type": "letter",
+            "subject": "S",
+            "wk_name": [],
+            "doc_date": "2020-01-01",
+        },
+        {
+            "doc_id": "d2",
+            "doc_type": "letter",
+            "subject": "S",
+            "wk_name": ["X"],
+            "doc_date": None,
+        },
     ]
     assert generate_thematic(ThemeStore(docs), lambda p: "q", min_group=1) == []

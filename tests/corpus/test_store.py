@@ -52,14 +52,28 @@ def store(tmp_path: Path):
 
 
 DOC = {
-    "doc_id": "abc123", "file_name": "s.pdf", "file_path": "/x/s.pdf",
-    "file_hash": "ab" * 32, "doc_type": "surat", "doc_topic": None,
-    "doc_number": "SRT-1", "doc_date": "2026-01-05", "subject": "Persetujuan",
-    "sender": "SKK", "recipient": "KKKS", "doc_level": "field",
-    "wk_name": "Rokan", "field_name": "Duri", "project_name": None,
-    "pod_name": ["POD Mengoepeh"], "suggested_pod_ids": ["PL-2003-0005-3-2-0"],
-    "raw_entities": "{}", "metadata": "{}", "markdown": "# Surat\nisi",
-    "extraction_method": "native", "page_count": 1,
+    "doc_id": "abc123",
+    "file_name": "s.pdf",
+    "file_path": "/x/s.pdf",
+    "file_hash": "ab" * 32,
+    "doc_type": "surat",
+    "doc_topic": None,
+    "doc_number": "SRT-1",
+    "doc_date": "2026-01-05",
+    "subject": "Persetujuan",
+    "sender": "SKK",
+    "recipient": "KKKS",
+    "doc_level": "field",
+    "wk_name": "Rokan",
+    "field_name": "Duri",
+    "project_name": None,
+    "pod_name": ["POD Mengoepeh"],
+    "suggested_pod_ids": ["PL-2003-0005-3-2-0"],
+    "raw_entities": "{}",
+    "metadata": "{}",
+    "markdown": "# Surat\nisi",
+    "extraction_method": "native",
+    "page_count": 1,
 }
 
 
@@ -239,9 +253,11 @@ def test_ensure_tables_migrates_legacy_varchar_entities(tmp_path: Path):
     store = CorpusStore(db_path=db, embedder=FakeEmbedder())
     try:
         store.ensure_tables()
-        row = store._get_connection().execute(
-            "SELECT wk_name FROM documents WHERE doc_id = 'abc'"
-        ).fetchone()
+        row = (
+            store._get_connection()
+            .execute("SELECT wk_name FROM documents WHERE doc_id = 'abc'")
+            .fetchone()
+        )
         assert json.loads(row[0]) == ["Rokan"]
         # And a json_each-based filter must not raise:
         store._get_connection().execute(
@@ -265,17 +281,21 @@ def test_search_entity_filter_is_case_insensitive_substring(tmp_path: Path):
         store.refresh_mirror()  # this test queries the DuckDB mirror directly
 
         clause, params = store._build_filter_clause({"wk_name": "rokan"}, "d")
-        rows = store._get_connection().execute(
-            f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params
-        ).fetchall()
+        rows = (
+            store._get_connection()
+            .execute(f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params)
+            .fetchall()
+        )
         assert [r[0] for r in rows] == ["d1"]
 
         # substring match too — "kan" is a substring of both "Rokan" and
         # "Bangkanai".
         clause, params = store._build_filter_clause({"wk_name": "kan"}, "d")
-        rows = store._get_connection().execute(
-            f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params
-        ).fetchall()
+        rows = (
+            store._get_connection()
+            .execute(f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params)
+            .fetchall()
+        )
         assert {r[0] for r in rows} == {"d1", "d2"}
     finally:
         store.close()
@@ -339,9 +359,11 @@ def test_build_filter_clause_doc_topic_case_insensitive_substring(tmp_path: Path
         store.refresh_mirror()  # this test queries the DuckDB mirror directly
 
         clause, params = store._build_filter_clause({"doc_topic": "psc"}, "d")
-        rows = store._get_connection().execute(
-            f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params
-        ).fetchall()
+        rows = (
+            store._get_connection()
+            .execute(f"SELECT doc_id FROM documents d WHERE 1=1{clause}", params)
+            .fetchall()
+        )
         assert [r[0] for r in rows] == ["d1"]
     finally:
         store.close()
@@ -360,9 +382,7 @@ def test_search_filter_by_doc_topic_returns_matching_doc_only(tmp_path: Path):
         store.refresh_mirror()  # filtered search joins the mirror
         store.rebuild_indexes()
 
-        result = store.search(
-            "persetujuan", limit=5, filters={"doc_topic": "psc"}
-        )
+        result = store.search("persetujuan", limit=5, filters={"doc_topic": "psc"})
         assert result["status"] == "success"
         assert {r["doc_id"] for r in result["results"]} == {"d1"}
     finally:
@@ -403,9 +423,11 @@ def test_ensure_tables_adds_doc_topic_column_to_legacy_documents_table(
     store = CorpusStore(db_path=db, embedder=FakeEmbedder())
     try:
         store.ensure_tables()  # must not crash
-        row = store._get_connection().execute(
-            "SELECT doc_topic FROM documents WHERE doc_id = 'abc'"
-        ).fetchone()
+        row = (
+            store._get_connection()
+            .execute("SELECT doc_topic FROM documents WHERE doc_id = 'abc'")
+            .fetchone()
+        )
         assert row[0] is None
         # json_each-based filter must not raise on the new column either.
         store._get_connection().execute(
@@ -436,9 +458,7 @@ def test_insert_writes_sqlite_truth_and_duckdb_mirror(store, tmp_path):
     assert _sqlite_doc_count(tmp_path) == 1
     # The mirror row is produced by refresh_mirror(), not by insert itself.
     store.refresh_mirror()
-    n = store._get_connection().execute(
-        "SELECT COUNT(*) FROM documents"
-    ).fetchone()[0]
+    n = store._get_connection().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
     assert n == 1
 
 
@@ -455,16 +475,12 @@ def test_delete_removes_both_stores(store, tmp_path):
     # immediately too — not just after the next refresh. get_document/
     # list_documents/find_doc_ids are serving reads off this mirror, so
     # leaving the row behind would keep a deleted document visible.
-    n = store._get_connection().execute(
-        "SELECT COUNT(*) FROM documents"
-    ).fetchone()[0]
+    n = store._get_connection().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
     assert n == 0
     # A subsequent refresh is a no-op here: the truth row is already gone,
     # so the mirror stays empty.
     store.refresh_mirror()
-    n = store._get_connection().execute(
-        "SELECT COUNT(*) FROM documents"
-    ).fetchone()[0]
+    n = store._get_connection().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
     assert n == 0
 
 
@@ -514,9 +530,7 @@ class _RaisingConn:
         return getattr(self._real, name)
 
 
-def test_delete_raises_and_keeps_sqlite_truth_when_mirror_delete_fails(
-    store, tmp_path
-):
+def test_delete_raises_and_keeps_sqlite_truth_when_mirror_delete_fails(store, tmp_path):
     store.insert_document(DOC, [Chunk(0, None, "isi")])
     store._conn = _RaisingConn(store._get_connection(), store.CHUNK_TABLE)
 
@@ -760,9 +774,11 @@ def test_insert_stores_contextual_embed_text(store_with_doc_factory):
     store, doc = store_with_doc_factory(
         doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
     )
-    row = store._get_connection().execute(
-        "SELECT chunk_text, embed_text FROM document_chunks LIMIT 1"
-    ).fetchone()
+    row = (
+        store._get_connection()
+        .execute("SELECT chunk_text, embed_text FROM document_chunks LIMIT 1")
+        .fetchone()
+    )
     chunk_text, embed_text = row
     assert "Merak" in embed_text
     assert embed_text.endswith(chunk_text)
@@ -847,9 +863,11 @@ def test_sample_content_default_is_first_chunk(store_with_doc_factory):
         chunk_size=20, markdown="# A\n\nalpha satu\n\n# B\n\nbeta dua"
     )
     got = store.sample_content(doc["doc_id"])
-    first = store._get_connection().execute(
-        "SELECT chunk_text FROM document_chunks ORDER BY chunk_index LIMIT 1"
-    ).fetchone()[0]
+    first = (
+        store._get_connection()
+        .execute("SELECT chunk_text FROM document_chunks ORDER BY chunk_index LIMIT 1")
+        .fetchone()[0]
+    )
     assert got["chunk_text"] == first
 
 
@@ -934,7 +952,7 @@ def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatc
 
 
 def test_cap_per_doc_keeps_first_two_per_doc_in_incoming_order(store):
-    """cap 2 over 10 entries from 2 docs -> 4 results, first two per doc kept.
+    """Cap 2 over 10 entries from 2 docs -> 4 results, first two per doc kept.
 
     Incoming order is what rerank produced (best-scoring first), so
     "first two" is "two best-scoring" once this runs after _maybe_rerank.
@@ -981,9 +999,11 @@ def test_search_caps_chunks_per_document(store_with_doc_factory, monkeypatch):
         ),
     )
     store.rebuild_indexes()
-    n_chunks = store._get_connection().execute(
-        "SELECT COUNT(*) FROM document_chunks"
-    ).fetchone()[0]
+    n_chunks = (
+        store._get_connection()
+        .execute("SELECT COUNT(*) FROM document_chunks")
+        .fetchone()[0]
+    )
     assert n_chunks > 2, "test is void unless the single doc had >2 chunks"
 
     result = store.search("konten", limit=10)
@@ -1153,16 +1173,22 @@ def test_refresh_mirror_rebuilds_documents_from_sqlite_truth(tmp_path):
         "VALUES ('sneaky','s.pdf','/tmp/s.pdf','h1','surat','2026-01-05','# x','docling','m')"
     )
     sconn.commit()
-    assert store._get_connection().execute(
-        "SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'"
-    ).fetchone()[0] == 0
+    assert (
+        store._get_connection()
+        .execute("SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'")
+        .fetchone()[0]
+        == 0
+    )
 
     report = store.refresh_mirror()
 
     assert report.documents == 1
-    assert store._get_connection().execute(
-        "SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'"
-    ).fetchone()[0] == 1
+    assert (
+        store._get_connection()
+        .execute("SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'")
+        .fetchone()[0]
+        == 1
+    )
     store.close()
 
 
@@ -1243,9 +1269,15 @@ def test_insert_document_writes_truth_and_chunks_but_not_mirror(tmp_path):
     )
     store.ensure_tables()
     doc = {
-        "doc_id": "d1", "file_name": "a.pdf", "file_path": "/tmp/a.pdf",
-        "file_hash": "h1", "doc_type": "surat", "doc_date": "2026-01-01",
-        "markdown": "# x", "extraction_method": "docling", "embedding_model": "m",
+        "doc_id": "d1",
+        "file_name": "a.pdf",
+        "file_path": "/tmp/a.pdf",
+        "file_hash": "h1",
+        "doc_type": "surat",
+        "doc_date": "2026-01-01",
+        "markdown": "# x",
+        "extraction_method": "docling",
+        "embedding_model": "m",
     }
     store.insert_document(doc, [Chunk(index=0, section=None, text="hello")])
 
@@ -1394,10 +1426,15 @@ def test_hydrate_docs_returns_parsed_metadata(tmp_path):
     store.ensure_tables()
     store.insert_document(
         {
-            "doc_id": "d1", "file_name": "a.pdf", "file_path": "/x/a.pdf",
-            "file_hash": "ab" * 32, "doc_type": "surat",
-            "field_name": ["Duri"], "doc_date": "2026-01-05",
-            "markdown": "# x", "extraction_method": "docling",
+            "doc_id": "d1",
+            "file_name": "a.pdf",
+            "file_path": "/x/a.pdf",
+            "file_hash": "ab" * 32,
+            "doc_type": "surat",
+            "field_name": ["Duri"],
+            "doc_date": "2026-01-05",
+            "markdown": "# x",
+            "extraction_method": "docling",
             "embedding_model": "fake-model",
         },
         [Chunk(0, None, "isi")],
@@ -1441,26 +1478,50 @@ def agg_store(tmp_path):
     )
     store.ensure_tables()
     base = {
-        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
-        "extraction_method": "docling", "embedding_model": "fake-model",
+        "file_path": "/x/a.pdf",
+        "doc_type": "surat",
+        "doc_date": "2026-01-05",
+        "extraction_method": "docling",
+        "embedding_model": "fake-model",
     }
     # body mentions separator, twice -> must still count once
     store.insert_document(
-        {**base, "doc_id": "body1", "file_name": "b1.pdf", "file_hash": "a" * 64,
-         "subject": "Surat biasa", "markdown": "# x"},
-        [Chunk(0, None, "pemasangan separator di lapangan"),
-         Chunk(1, None, "separator kedua disebut lagi")],
+        {
+            **base,
+            "doc_id": "body1",
+            "file_name": "b1.pdf",
+            "file_hash": "a" * 64,
+            "subject": "Surat biasa",
+            "markdown": "# x",
+        },
+        [
+            Chunk(0, None, "pemasangan separator di lapangan"),
+            Chunk(1, None, "separator kedua disebut lagi"),
+        ],
     )
     # subject mentions separator, body does not -> must NOT count
     store.insert_document(
-        {**base, "doc_id": "subj1", "file_name": "s1.pdf", "file_hash": "b" * 64,
-         "subject": "Pengadaan separator", "markdown": "# y"},
+        {
+            **base,
+            "doc_id": "subj1",
+            "file_name": "s1.pdf",
+            "file_hash": "b" * 64,
+            "subject": "Pengadaan separator",
+            "markdown": "# y",
+        },
         [Chunk(0, None, "isi tentang pompa dan pipa")],
     )
     # unrelated
     store.insert_document(
-        {**base, "doc_id": "other", "file_name": "o.pdf", "file_hash": "c" * 64,
-         "subject": "Lain lain", "doc_type": "mom", "markdown": "# z"},
+        {
+            **base,
+            "doc_id": "other",
+            "file_name": "o.pdf",
+            "file_hash": "c" * 64,
+            "subject": "Lain lain",
+            "doc_type": "mom",
+            "markdown": "# z",
+        },
         [Chunk(0, None, "rapat bulanan")],
     )
     store.rebuild_indexes()
@@ -1541,8 +1602,11 @@ def test_aggregate_semantic_candidates_not_limit_controls_the_ranking(tmp_path):
     )
     store.ensure_tables()
     base = {
-        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
-        "extraction_method": "docling", "embedding_model": "fake-model",
+        "file_path": "/x/a.pdf",
+        "doc_type": "surat",
+        "doc_date": "2026-01-05",
+        "extraction_method": "docling",
+        "embedding_model": "fake-model",
     }
     letters = "abcdefghijklmnopqrstuvwxyz"
 
@@ -1552,9 +1616,14 @@ def test_aggregate_semantic_candidates_not_limit_controls_the_ranking(tmp_path):
     n_docs = 250
     for i in range(n_docs):
         store.insert_document(
-            {**base, "doc_id": f"doc{i}", "file_name": f"f{i}.pdf",
-             "file_hash": format(i, "064x"), "subject": "Subjek acak",
-             "markdown": "# x"},
+            {
+                **base,
+                "doc_id": f"doc{i}",
+                "file_name": f"f{i}.pdf",
+                "file_hash": format(i, "064x"),
+                "subject": "Subjek acak",
+                "markdown": "# x",
+            },
             [Chunk(0, None, f"separator {word(i)}")],
         )
     store.rebuild_indexes()
@@ -1562,12 +1631,20 @@ def test_aggregate_semantic_candidates_not_limit_controls_the_ranking(tmp_path):
 
     filters = {"doc_type": "surat"}
     a = store.aggregate(
-        "separator", mode="count", match="semantic",
-        semantic_candidates=5, limit=1, filters=filters,
+        "separator",
+        mode="count",
+        match="semantic",
+        semantic_candidates=5,
+        limit=1,
+        filters=filters,
     )
     b = store.aggregate(
-        "separator", mode="count", match="semantic",
-        semantic_candidates=5, limit=1000, filters=filters,
+        "separator",
+        mode="count",
+        match="semantic",
+        semantic_candidates=5,
+        limit=1000,
+        filters=filters,
     )
 
     assert a["count"] == b["count"] == 5, "limit must not touch the ranking size"
@@ -1577,7 +1654,7 @@ def test_aggregate_semantic_candidates_not_limit_controls_the_ranking(tmp_path):
 def test_aggregate_list_mode_returns_documents_capped_by_limit(agg_store):
     result = agg_store.aggregate(None, mode="list", limit=2)
 
-    assert result["count"] == 3          # full total, uncapped
+    assert result["count"] == 3  # full total, uncapped
     assert len(result["documents"]) == 2  # page capped by limit
     assert {"doc_id", "file_name", "subject"} <= set(result["documents"][0])
 
@@ -1698,14 +1775,22 @@ def many_docs_store(tmp_path):
     )
     store.ensure_tables()
     base = {
-        "file_path": "/x/a.pdf", "doc_type": "surat", "doc_date": "2026-01-05",
-        "extraction_method": "docling", "embedding_model": "fake-model",
+        "file_path": "/x/a.pdf",
+        "doc_type": "surat",
+        "doc_date": "2026-01-05",
+        "extraction_method": "docling",
+        "embedding_model": "fake-model",
     }
     for i in range(5):
         store.insert_document(
-            {**base, "doc_id": f"d{i}", "file_name": f"f{i}.pdf",
-             "file_hash": format(i, "064x"), "subject": "Surat",
-             "markdown": "# x"},
+            {
+                **base,
+                "doc_id": f"d{i}",
+                "file_name": f"f{i}.pdf",
+                "file_hash": format(i, "064x"),
+                "subject": "Surat",
+                "markdown": "# x",
+            },
             [Chunk(0, None, f"pemasangan separator unit {i} " * 60)],
         )
     store.rebuild_indexes()

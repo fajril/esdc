@@ -342,9 +342,7 @@ class TestResolveName:
 class TestResolveNameParentFilter:
     """parent_filter constrains resolution to rows under a resolved parent."""
 
-    def test_resolve_name_with_parent_filter(
-        self, mock_db: duckdb.DuckDBPyConnection
-    ):
+    def test_resolve_name_with_parent_filter(self, mock_db: duckdb.DuckDBPyConnection):
         """Filtered resolution returns only entities under the parent."""
         resolver = EntityResolver(db=mock_db)
         # Duri is under WK Rokan, Widuri is under WK Widuri
@@ -365,9 +363,7 @@ class TestResolveNameParentFilter:
         )
         assert results == []
 
-    def test_resolve_name_parent_filter_none(
-        self, mock_db: duckdb.DuckDBPyConnection
-    ):
+    def test_resolve_name_parent_filter_none(self, mock_db: duckdb.DuckDBPyConnection):
         """parent_filter=None behaves like before (no filtering)."""
         resolver = EntityResolver(db=mock_db)
         results = resolver.resolve_name("Duri", "field_name", parent_filter=None)
@@ -406,9 +402,7 @@ class TestSuggestNames:
     this is the copy-paste escape hatch surfaced in unresolved warnings.
     """
 
-    def test_typo_returns_fuzzy_ranked_names(
-        self, mock_db: duckdb.DuckDBPyConnection
-    ):
+    def test_typo_returns_fuzzy_ranked_names(self, mock_db: duckdb.DuckDBPyConnection):
         resolver = EntityResolver(db=mock_db)
         names = resolver.suggest_names("Durri", "field_name")
         assert names[0] == "Duri"  # highest similarity first
@@ -468,8 +462,7 @@ def multi_entity_db() -> duckdb.DuckDBPyConnection:
         ("DURI UTARA", "Duri Utara Phase 1", "WK Rokan"),
     ]
     conn.executemany(
-        "INSERT INTO project_resources VALUES "
-        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO project_resources VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 f"u-{field_name}",
@@ -516,7 +509,7 @@ class TestResolveNameFallbackChain:
     def test_boundary_guard_rejects_non_boundary_substring(
         self, multi_entity_db: duckdb.DuckDBPyConnection
     ):
-        """"arung" must not match GARUNG/PEMARUNG (no word-boundary containment) even though a bare ILIKE substring test would clear the 0.8 threshold."""
+        """ "arung" must not match GARUNG/PEMARUNG (no word-boundary containment) even though a bare ILIKE substring test would clear the 0.8 threshold."""
         resolver = EntityResolver(db=multi_entity_db)
         matches = resolver.resolve_name("arung", "field_name")
         names = [m["name"] for m in matches]
@@ -537,7 +530,7 @@ class TestResolveNameFallbackChain:
     def test_no_fan_out_when_full_phrase_matches(
         self, multi_entity_db: duckdb.DuckDBPyConnection
     ):
-        """"Duri Utara" must resolve only to "DURI UTARA", not also "DURI" -- the whole-string step wins before segmentation could split it."""
+        """ "Duri Utara" must resolve only to "DURI UTARA", not also "DURI" -- the whole-string step wins before segmentation could split it."""
         resolver = EntityResolver(db=multi_entity_db)
         matches = resolver.resolve_name("Duri Utara", "field_name")
         assert [m["name"] for m in matches] == ["DURI UTARA"]
@@ -615,6 +608,4 @@ class TestEntityResolverTool:
         query = "__return_multiple_default_test__"
         entity_resolver.invoke({"query": query})
 
-        mock_resolver.resolve.assert_called_once_with(
-            query=query, return_multiple=True
-        )
+        mock_resolver.resolve.assert_called_once_with(query=query, return_multiple=True)

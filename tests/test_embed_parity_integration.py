@@ -9,6 +9,7 @@ qualifying a new backend before pointing a corpus at it.
     ESDC_EMBEDDING_MODEL=Qwen3-Embedding-0.6B-8bit \
     .venv/bin/pytest tests/test_embed_parity_integration.py -v
 """
+
 from __future__ import annotations
 
 import os

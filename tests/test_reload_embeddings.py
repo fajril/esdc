@@ -1,5 +1,6 @@
 # tests/test_reload_embeddings.py
 """esdc reload picks its generation backend and only health-checks daemons."""
+
 from __future__ import annotations
 
 import inspect

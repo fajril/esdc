@@ -12,7 +12,11 @@ from esdc.pod_registry.publish import publish_pod_registry
 from esdc.pod_registry.store import get_sqlite_connection
 
 _REQUIRED_SHEETS = (
-    "POD Record", "project_pod", "pod_revision", "institution", "pod_type",
+    "POD Record",
+    "project_pod",
+    "pod_revision",
+    "institution",
+    "pod_type",
 )
 
 
@@ -115,9 +119,7 @@ def import_pod_registry_workbook(
                 f"POD Record row {i}: unknown institution '{r.get('institution')}'"
             )
         if ptype is None:
-            errors.append(
-                f"POD Record row {i}: unknown pod_type '{r.get('pod_type')}'"
-            )
+            errors.append(f"POD Record row {i}: unknown pod_type '{r.get('pod_type')}'")
         if pod_id in seen_pod_ids:
             errors.append(f"POD Record row {i}: duplicate pod_id_skk '{pod_id}'")
         if seq in seen_seqs:
@@ -146,11 +148,19 @@ def import_pod_registry_workbook(
         int_rev = _int_cell(r.get("rev_num") or 0, "POD Record", i, "rev_num", errors)
         if int_pid is None or int_seq is None or int_rev is None:
             continue
-        m_pod_rows.append((
-            int_pid, str(pod_id), r.get("pod_name"), r.get("pod_letter_num"),
-            _iso(r.get("approval_date")), inst, ptype,
-            int_rev, int_seq,
-        ))
+        m_pod_rows.append(
+            (
+                int_pid,
+                str(pod_id),
+                r.get("pod_name"),
+                r.get("pod_letter_num"),
+                _iso(r.get("approval_date")),
+                inst,
+                ptype,
+                int_rev,
+                int_seq,
+            )
+        )
 
     valid_ids = {row[0] for row in m_pod_rows}
     valid_pod_ids = {row[1] for row in m_pod_rows}
@@ -189,7 +199,11 @@ def import_pod_registry_workbook(
     try:
         with conn:  # one transaction
             for table in (
-                "pod_revision", "project_pod", "m_pod", "r_pod_type", "r_institution",
+                "pod_revision",
+                "project_pod",
+                "m_pod",
+                "r_pod_type",
+                "r_institution",
             ):
                 conn.execute(f"DELETE FROM {table}")
             conn.executemany(

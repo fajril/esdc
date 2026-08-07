@@ -14,6 +14,7 @@ The child parks the model in a daemon thread's frame, which is the
 cheapest reliable way to keep a reference past interpreter finalization
 (pytest's retained tracebacks do the same thing by accident).
 """
+
 from __future__ import annotations
 
 import subprocess

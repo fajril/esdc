@@ -35,12 +35,10 @@ def test_strip_thinking_tags_mixed_close_spelling_is_balanced():
     # be stripped as balanced, not treated as truncated reasoning (which
     # would drop everything to end-of-string, JSON included).
     assert (
-        strip_thinking_tags("<thinking>plan briefly</think>\n{\"a\": 1}")
-        == '\n{"a": 1}'
+        strip_thinking_tags('<thinking>plan briefly</think>\n{"a": 1}') == '\n{"a": 1}'
     )
     assert (
-        strip_thinking_tags("<think>plan briefly</thinking>\n{\"a\": 1}")
-        == '\n{"a": 1}'
+        strip_thinking_tags('<think>plan briefly</thinking>\n{"a": 1}') == '\n{"a": 1}'
     )
 
 

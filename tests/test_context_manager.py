@@ -409,7 +409,8 @@ def test_manage_context_node_removes_empty_ai_messages_from_state():
     new_state = add_messages(msgs, result["messages"])
 
     empty_left = [
-        m for m in new_state
+        m
+        for m in new_state
         if isinstance(m, AIMessage) and not m.content and not m.tool_calls
     ]
     assert not empty_left

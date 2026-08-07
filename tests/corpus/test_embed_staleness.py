@@ -107,9 +107,11 @@ def test_run_reembed_documents_refreshes_the_prefix(store: CorpusStore):
     assert report.processed == ["s.pdf"]
     assert report.failed == {}
     assert store.stale_embed_docs() == []
-    embed_text = store._get_connection().execute(
-        "SELECT embed_text FROM document_chunks WHERE doc_id = 'd1'"
-    ).fetchone()[0]
+    embed_text = (
+        store._get_connection()
+        .execute("SELECT embed_text FROM document_chunks WHERE doc_id = 'd1'")
+        .fetchone()[0]
+    )
     assert "Duri Field" in embed_text
     assert "isi surat" in embed_text  # chunk_text preserved
 
@@ -138,7 +140,9 @@ def test_commit_reembeds_documents_whose_blank_entities_it_merged(
     patch_store_factory(monkeypatch, store)
     patch_entity_resolver(
         monkeypatch,
-        matches={"Minas": {"entity_type": "field_name", "name": "Minas", "confidence": 1.0}},
+        matches={
+            "Minas": {"entity_type": "field_name", "name": "Minas", "confidence": 1.0}
+        },
     )
 
     file_hash = "cc" * 32
@@ -167,8 +171,10 @@ def test_commit_reembeds_documents_whose_blank_entities_it_merged(
 
     assert any("entities merged" in p for p in report2.processed)
     assert store.stale_embed_docs() == []
-    embed_text = store._get_connection().execute(
-        "SELECT embed_text FROM document_chunks WHERE doc_id = ?", (doc_id,)
-    ).fetchone()[0]
+    embed_text = (
+        store._get_connection()
+        .execute("SELECT embed_text FROM document_chunks WHERE doc_id = ?", (doc_id,))
+        .fetchone()[0]
+    )
     assert "Minas" in embed_text
     store.close()

@@ -1,5 +1,6 @@
 # tests/corpus/test_llama_backend.py
 """llama.cpp backend: GGUF resolution + Llama construction."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -10,7 +11,9 @@ from esdc.corpus import llama_backend as lb
 def test_resolve_gguf_downloads_into_config_models_dir(tmp_path):
     with (
         patch.object(lb.Config, "get_config_dir", return_value=tmp_path),
-        patch.object(lb, "hf_hub_download", return_value=str(tmp_path / "x.gguf")) as dl,
+        patch.object(
+            lb, "hf_hub_download", return_value=str(tmp_path / "x.gguf")
+        ) as dl,
     ):
         out = lb.resolve_gguf("some/repo", "file.gguf")
     assert out == str(tmp_path / "x.gguf")

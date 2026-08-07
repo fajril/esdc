@@ -4,6 +4,7 @@ Forces a GGUF download + first-inference pass through the llama.cpp
 embedder/reranker seams, so a later air-gapped run doesn't hit the
 network.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,8 +40,10 @@ def run_warmup(rerank: bool | None = None) -> list[WarmupResult]:
     except Exception as e:
         results.append(WarmupResult("embedder", emb.model, False, str(e)))
 
-    want = rerank if rerank is not None else bool(
-        Config.get_corpus_config().get("rerank", False)
+    want = (
+        rerank
+        if rerank is not None
+        else bool(Config.get_corpus_config().get("rerank", False))
     )
     model_name = _resolve_model_name()
 

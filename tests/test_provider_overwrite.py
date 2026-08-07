@@ -313,12 +313,12 @@ class TestAddOpenaiCompatibleFlow:
         mock_default.return_value = None  # No default set
         mock_select.return_value.ask.side_effect = [
             "openai_compatible",  # select provider type
-            "qwen-7b",            # select model
+            "qwen-7b",  # select model
         ]
         mock_text.return_value.ask.side_effect = [
-            "my-qwen",            # custom provider name
-            "http://qwen:8000",   # base URL
-            "",                   # unused (model manual entry fallback)
+            "my-qwen",  # custom provider name
+            "http://qwen:8000",  # base URL
+            "",  # unused (model manual entry fallback)
         ]
         mock_password.return_value.ask.return_value = ""  # no api key
         mock_confirm.return_value.ask.side_effect = [

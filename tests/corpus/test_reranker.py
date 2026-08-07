@@ -1,5 +1,6 @@
 # tests/corpus/test_reranker.py
 """Reranker on llama.cpp RANK pooling (mocked model)."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch

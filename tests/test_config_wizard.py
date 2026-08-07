@@ -217,9 +217,7 @@ class TestPromptInstructionLine:
         _prompt_for_config_value("corpus.metadata_model", "main")
 
         _, kwargs = mock_select.call_args
-        message = (
-            mock_select.call_args.args[0] if mock_select.call_args.args else ""
-        )
+        message = mock_select.call_args.args[0] if mock_select.call_args.args else ""
         description = KEY_DESCRIPTIONS["corpus.metadata_model"]
         assert kwargs.get("instruction") == description
         assert description not in message
@@ -237,8 +235,9 @@ class TestPhoenixSurfaced:
 
         _edit_section("Observability", SETTINGS_SECTIONS["Observability"])
 
-        choices = mock_select_back.call_args.kwargs.get("choices") or (
-            mock_select_back.call_args.args[1]
+        choices = (
+            mock_select_back.call_args.kwargs.get("choices")
+            or (mock_select_back.call_args.args[1])
         )
         labels = {c.value: str(c.title) for c in choices}
         assert "phoenix.enabled = False" in labels["phoenix.enabled"]
@@ -532,7 +531,7 @@ class TestCorpusModelPicker:
 
         values = [c.value for c in _corpus_model_choices("corpus.metadata_model")]
         assert values[0] == "main"
-        assert "" in values            # image-based prefill fallback
+        assert "" in values  # image-based prefill fallback
         assert "glm-ocr" in values and "qwen3:8b" in values
         assert "__custom__" in values
 
@@ -541,7 +540,7 @@ class TestCorpusModelPicker:
         from esdc.config_wizard import _corpus_model_choices
 
         values = [c.value for c in _corpus_model_choices("corpus.ocr_model")]
-        assert "main" not in values    # vision OCR can't route through chat provider
+        assert "main" not in values  # vision OCR can't route through chat provider
         assert "glm-ocr" in values and "__custom__" in values
 
     _FAKE_PROVIDERS = {
@@ -562,7 +561,9 @@ class TestCorpusModelPicker:
             assert "provider:anthropic" in values
             assert "provider:work" in values
             labels = {
-                c.value: c.title for c in choices if str(c.value).startswith("provider:")
+                c.value: c.title
+                for c in choices
+                if str(c.value).startswith("provider:")
             }
             assert "anthropic" in str(labels["provider:anthropic"])
             assert "claude-haiku-4-5" in str(labels["provider:anthropic"])
@@ -590,9 +591,7 @@ class TestCorpusModelPicker:
         self, mock_select, mock_fetch, mock_providers
     ):
         mock_select.return_value.ask.return_value = "provider:anthropic"
-        result = _prompt_for_config_value(
-            "corpus.metadata_model", "provider:anthropic"
-        )
+        result = _prompt_for_config_value("corpus.metadata_model", "provider:anthropic")
         assert result == "provider:anthropic"
         default = mock_select.call_args.kwargs["default"]
         assert default is not None
@@ -671,9 +670,7 @@ class TestRerankKeyWidgets:
 
     @patch("esdc.config_wizard.questionary.text")
     @patch("esdc.config_wizard.questionary.select")
-    def test_rerank_model_custom_falls_through_to_text(
-        self, mock_select, mock_text
-    ):
+    def test_rerank_model_custom_falls_through_to_text(self, mock_select, mock_text):
         mock_select.return_value.ask.return_value = "__custom__"
         mock_text.return_value.ask.return_value = "my-custom-reranker"
         result = _prompt_for_config_value(

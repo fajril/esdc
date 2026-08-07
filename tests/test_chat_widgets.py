@@ -111,7 +111,9 @@ class TestToolTimeline:
         tl = ToolTimeline()
         tl.start_tool("SQL Executor")
         calls = {"n": 0}
-        monkeypatch.setattr(tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1))
+        monkeypatch.setattr(
+            tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1)
+        )
         tl._tick()
         assert calls["n"] == 1
 
@@ -122,7 +124,9 @@ class TestToolTimeline:
         tl.start_tool("SQL Executor")
         tl.finish_tool("SQL Executor")
         calls = {"n": 0}
-        monkeypatch.setattr(tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1))
+        monkeypatch.setattr(
+            tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1)
+        )
         tl._tick()
         assert calls["n"] == 0
 
@@ -351,7 +355,9 @@ class TestContextHealth:
 
     def _captured_text(self, ch, monkeypatch):
         captured = {}
-        monkeypatch.setattr(ch, "update", lambda content: captured.__setitem__("v", content))
+        monkeypatch.setattr(
+            ch, "update", lambda content: captured.__setitem__("v", content)
+        )
         return captured
 
     def test_green_below_50(self, monkeypatch):

@@ -9,9 +9,7 @@ from esdc.corpus.pod_matcher import PodMatcher
 def conn():
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
-    c.execute(
-        "CREATE TABLE m_pod (pod_id TEXT, pod_name TEXT, pod_letter_num TEXT)"
-    )
+    c.execute("CREATE TABLE m_pod (pod_id TEXT, pod_name TEXT, pod_letter_num TEXT)")
     c.executemany(
         "INSERT INTO m_pod VALUES (?, ?, ?)",
         [

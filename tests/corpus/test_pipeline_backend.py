@@ -1,5 +1,6 @@
 # tests/corpus/test_pipeline_backend.py
 """Generation commands route through get_build_embedder; others do not."""
+
 from __future__ import annotations
 
 import inspect

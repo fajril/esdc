@@ -107,7 +107,9 @@ def test_failed_doc_is_counted_and_not_marked_learned(sqlite_conn, duck_conn):
     assert report2.docs_processed == 1
 
 
-def test_mirror_refresh_failure_is_warning_not_fatal(sqlite_conn, duck_conn, monkeypatch):
+def test_mirror_refresh_failure_is_warning_not_fatal(
+    sqlite_conn, duck_conn, monkeypatch
+):
     """A refresh_all failure during learn degrades to a warning, not a fatal error.
 
     A refresh_all failure (e.g. lost DuckDB write lock) must not abort

@@ -60,9 +60,7 @@ def allocate(strata_counts: dict[str, int], n: int) -> dict[str, int]:
 
     # Largest-remainder distribution of the leftover units.
     leftover = remaining - assigned
-    remainders = sorted(
-        strata, key=lambda k: quotas[k] - floors[k], reverse=True
-    )
+    remainders = sorted(strata, key=lambda k: quotas[k] - floors[k], reverse=True)
     for k in remainders:
         if leftover <= 0:
             break

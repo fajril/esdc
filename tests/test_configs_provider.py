@@ -403,9 +403,7 @@ providers:
                 "base_url": "http://localhost:11434",
             }
 
-    def test_persist_provider_oauth_writes_file_with_0o600_permissions(
-        self, tmp_path
-    ):
+    def test_persist_provider_oauth_writes_file_with_0o600_permissions(self, tmp_path):
         """The rewritten config file must not be group/world readable."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
@@ -444,13 +442,9 @@ providers:
                 Config.persist_provider_oauth("does-not-exist", {"access_token": "x"})
 
             assert config_file.read_text() == original_contents
-            assert any(
-                "does-not-exist" in record.message for record in caplog.records
-            )
+            assert any("does-not-exist" in record.message for record in caplog.records)
 
-    def test_persist_provider_oauth_missing_config_file_is_noop(
-        self, tmp_path, caplog
-    ):
+    def test_persist_provider_oauth_missing_config_file_is_noop(self, tmp_path, caplog):
         """No config file on disk (e.g. env-only setup): no crash, warn instead."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             with caplog.at_level("WARNING"):

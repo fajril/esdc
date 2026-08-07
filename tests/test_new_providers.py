@@ -328,7 +328,9 @@ class TestDeepSeekProvider:
         mock_instance = MagicMock()
         mock_chat_cls.return_value = mock_instance
 
-        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+        with patch.object(
+            DeepSeekProvider, "get_actual_context_length", return_value=0
+        ):
             llm = DeepSeekProvider.create_llm(
                 model="deepseek-v4-pro",
                 api_key="sk-xxx",
@@ -349,7 +351,9 @@ class TestDeepSeekProvider:
 
         mock_chat_cls.return_value = MagicMock()
 
-        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+        with patch.object(
+            DeepSeekProvider, "get_actual_context_length", return_value=0
+        ):
             DeepSeekProvider.create_llm(
                 model="deepseek-v4-flash",
                 api_key="sk-xxx",
@@ -366,7 +370,9 @@ class TestDeepSeekProvider:
 
         mock_chat_cls.return_value = MagicMock()
 
-        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+        with patch.object(
+            DeepSeekProvider, "get_actual_context_length", return_value=0
+        ):
             DeepSeekProvider.create_llm(
                 model="deepseek-v4-flash",
                 api_key="sk-xxx",
@@ -383,7 +389,9 @@ class TestDeepSeekProvider:
 
         mock_chat_cls.return_value = MagicMock()
 
-        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+        with patch.object(
+            DeepSeekProvider, "get_actual_context_length", return_value=0
+        ):
             DeepSeekProvider.create_llm(
                 model="deepseek-v4-flash",
                 api_key="sk-xxx",

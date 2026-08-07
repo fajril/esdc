@@ -355,9 +355,7 @@ class KSMIGraphManager:
             logger.warning("[KSMI-KG] get_transitions_error | error=%s", e)
             return []
 
-    def format_reachability(
-        self, highlight: str | None = None
-    ) -> str:
+    def format_reachability(self, highlight: str | None = None) -> str:
         """Format reachability matrix as compact markdown.
 
         Reads CAN_TRANSITION_TO edges from the graph and renders a

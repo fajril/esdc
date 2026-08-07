@@ -56,7 +56,9 @@ def test_remote_host_passed_to_client(monkeypatch):
     import esdc.corpus.ocr as ocr_mod
 
     monkeypatch.setattr(ocr_mod.ollama, "Client", FakeClient)
-    OllamaVisionOcr(model="glm-ocr", host="http://llm-engine.sardine-python.ts.net:11434")
+    OllamaVisionOcr(
+        model="glm-ocr", host="http://llm-engine.sardine-python.ts.net:11434"
+    )
     assert captured["host"] == "http://llm-engine.sardine-python.ts.net:11434"
 
 

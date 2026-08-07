@@ -54,8 +54,14 @@ def _insert_doc(conn, doc_id, wk_name, field_name):
     conn.execute(
         "INSERT INTO documents (doc_id, file_name, file_hash, doc_type, "
         "doc_number, wk_name, field_name) VALUES (?, ?, ?, 'letter', ?, ?, ?)",
-        (doc_id, f"{doc_id}.pdf", f"hash-{doc_id}", f"NO-{doc_id}",
-         wk_name, field_name),
+        (
+            doc_id,
+            f"{doc_id}.pdf",
+            f"hash-{doc_id}",
+            f"NO-{doc_id}",
+            wk_name,
+            field_name,
+        ),
     )
     conn.commit()
 
@@ -73,8 +79,7 @@ def test_json_array_with_several_values_links_each(sqlite_conn, duck_conn):
     _insert_doc(sqlite_conn, "DOC-M", '["Rokan"]', '["Duri", "Kampung Baru"]')
     store, _ = _run(sqlite_conn, duck_conn)
     fields = sorted(
-        e.dst_id for e in store.edges_for("document", "DOC-M")
-        if e.rel == "ABOUT_FIELD"
+        e.dst_id for e in store.edges_for("document", "DOC-M") if e.rel == "ABOUT_FIELD"
     )
     assert fields == ["Duri", "Kampung Baru"]
 
@@ -93,9 +98,7 @@ def test_unknown_and_empty_metadata_values_produce_no_edge(sqlite_conn, duck_con
     assert store.edges_for("document", "DOC-N") == []
 
 
-def test_unparseable_metadata_value_is_treated_as_a_plain_name(
-    sqlite_conn, duck_conn
-):
+def test_unparseable_metadata_value_is_treated_as_a_plain_name(sqlite_conn, duck_conn):
     """A malformed JSON string must not raise; it falls back to the raw value."""
     _insert_doc(sqlite_conn, "DOC-X", '["Rokan', "Duri")
     store, _ = _run(sqlite_conn, duck_conn)

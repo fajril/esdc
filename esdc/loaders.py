@@ -86,11 +86,9 @@ def copy_pod_schema_template(
     overwrite: bool = False,
 ) -> Path:
     """Create the built-in POD workbook template at a user-visible path."""
-    return (
-        generate_pod_workbook_template(
-            output_path=output_path, overwrite=overwrite
-        ).output_path
-    )
+    return generate_pod_workbook_template(
+        output_path=output_path, overwrite=overwrite
+    ).output_path
 
 
 @dataclass(frozen=True)
@@ -199,8 +197,8 @@ def generate_schema_template_from_excel(
     if excel.suffix.lower() != ".xlsx":
         raise SpreadsheetLoadError("Only .xlsx Excel files are supported.")
 
-    destination = Path(output_path) if output_path else Path.cwd() / (
-        f"{excel.stem}.schema.yaml"
+    destination = (
+        Path(output_path) if output_path else Path.cwd() / (f"{excel.stem}.schema.yaml")
     )
     if destination.exists() and not overwrite:
         raise SpreadsheetLoadError(
@@ -418,19 +416,22 @@ def _build_pod_workbook_specs() -> tuple[WorkbookSheetSpec, ...]:
     column_by_name = {column.name: column for column in schema.columns}
     metric_columns = _pod_metric_columns(schema)
 
-    plan_columns: tuple[ColumnSchema, ...] = tuple(
-        column_by_name[name]
-        for name in (
-            "pod_id",
-            "pod_letter_num",
-            "pod_name",
-            "pod_scope",
-            "supercedes_by",
-            "report_date",
-            "effective_date",
+    plan_columns: tuple[ColumnSchema, ...] = (
+        tuple(
+            column_by_name[name]
+            for name in (
+                "pod_id",
+                "pod_letter_num",
+                "pod_name",
+                "pod_scope",
+                "supercedes_by",
+                "report_date",
+                "effective_date",
+            )
+            if name in column_by_name
         )
-        if name in column_by_name
-    ) + metric_columns
+        + metric_columns
+    )
 
     monitoring_columns: tuple[ColumnSchema, ...] = (
         column_by_name["pod_id"],
@@ -847,9 +848,7 @@ def _validate_pod_workbook_crosslinks(
 
 def _create_pod_views(conn: duckdb.DuckDBPyConnection) -> None:
     schema = _load_pod_domain_schema()
-    metric_names = tuple(
-        column.name for column in _pod_metric_columns(schema)
-    )
+    metric_names = tuple(column.name for column in _pod_metric_columns(schema))
     plan_meta = ["pod_letter_num", "pod_name", "pod_scope", "supercedes_by"]
 
     metrics_sql = ", ".join(metric_names)
@@ -917,9 +916,7 @@ def load_pod_workbook_to_duckdb(excel_path: Path | str) -> tuple[LoadResult, ...
     project_schema = schemas[POD_PROJECT_SHEET_NAME]
     monitoring_schema = schemas[POD_MONITORING_SHEET_NAME]
 
-    plan_df = _load_excel_sheet(
-        excel, POD_PLAN_SHEET_NAME, plan_schema, header_row=1
-    )
+    plan_df = _load_excel_sheet(excel, POD_PLAN_SHEET_NAME, plan_schema, header_row=1)
     project_df = _load_excel_sheet(
         excel, POD_PROJECT_SHEET_NAME, project_schema, header_row=1
     )
@@ -1014,10 +1011,7 @@ def build_loaded_schema_graph(rows: list[tuple[str, str, str, str]]) -> Any:
             "(entity_type STRING PRIMARY KEY, target_key STRING)"
         ),
         "CREATE NODE TABLE KSMIConcept (code STRING PRIMARY KEY)",
-        (
-            "CREATE REL TABLE LOADED_TABLE_HAS_COLUMN "
-            "(FROM LoadedTable TO LoadedColumn)"
-        ),
+        ("CREATE REL TABLE LOADED_TABLE_HAS_COLUMN (FROM LoadedTable TO LoadedColumn)"),
         (
             "CREATE REL TABLE LOADED_TABLE_LINKS_TO_ENTITY "
             "(FROM LoadedTable TO ReferenceEntity, "
@@ -1087,8 +1081,7 @@ def build_loaded_schema_graph(rows: list[tuple[str, str, str, str]]) -> Any:
         )
     for concept_code in ksmi_concepts:
         conn.execute(
-            f"CREATE (k:KSMIConcept "
-            f"{{code: '{_cypher_escape(concept_code)}'}})"
+            f"CREATE (k:KSMIConcept {{code: '{_cypher_escape(concept_code)}'}})"
         )
 
     for table_name, column_id in column_ids:
@@ -1259,9 +1252,7 @@ def lookup_loaded_schema(entity: str | None) -> str | None:
             )
             if match:
                 unit = f"\nUnit: {column['unit']}" if column.get("unit") else ""
-                alias_text = (
-                    f"\nAliases: {', '.join(aliases)}" if aliases else ""
-                )
+                alias_text = f"\nAliases: {', '.join(aliases)}" if aliases else ""
                 maps_to = column.get("maps_to", []) or []
                 maps_to_text = (
                     f"\nMaps to KSMI: {', '.join(maps_to)}" if maps_to else ""

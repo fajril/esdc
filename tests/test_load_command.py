@@ -111,7 +111,9 @@ def _write_pod_excel(path):
         }
         for sheet_name, description in sheet_descriptions.items():
             ws = workbook[sheet_name]
-            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
+            ws.merge_cells(
+                start_row=1, start_column=1, end_row=1, end_column=ws.max_column
+            )
             ws.cell(1, 1).value = description
     finally:
         workbook.save(path)
@@ -264,7 +266,9 @@ class TestLoadCommand:
             in result.stdout
         )
 
-    def test_load_excel_creates_table_and_metadata(self, runner, isolated_config, tmp_path):
+    def test_load_excel_creates_table_and_metadata(
+        self, runner, isolated_config, tmp_path
+    ):
         schema_path = _write_schema(tmp_path / "schema.yaml")
         excel_path = _write_excel(
             tmp_path / "data.xlsx",
@@ -308,9 +312,7 @@ class TestLoadCommand:
         assert "Loaded 1 rows x 37 columns into 'pod_monitoring'" in result.stdout
         conn = duckdb.connect(str(Config.get_db_file()))
         try:
-            plan_row = conn.execute(
-                "SELECT pod_name, pod_id FROM pod_plan"
-            ).fetchone()
+            plan_row = conn.execute("SELECT pod_name, pod_id FROM pod_plan").fetchone()
             project_row = conn.execute(
                 "SELECT pod_id, project_id FROM pod_project"
             ).fetchone()
@@ -629,7 +631,9 @@ class TestPodLoadValidation:
         finally:
             conn.close()
 
-    def test_load_pod_broken_project_pod_id_fails(self, runner, isolated_config, tmp_path):
+    def test_load_pod_broken_project_pod_id_fails(
+        self, runner, isolated_config, tmp_path
+    ):
         plan_row, _, monitoring_row = _make_pod_rows(
             plan_pod_id="POD-001",
             monitoring_pod_id="POD-001",
@@ -642,9 +646,14 @@ class TestPodLoadValidation:
             app, ["load", "--from-excel", str(excel_path), "--schema-pod"]
         )
         assert result.exit_code == 1
-        assert "pod_project references pod_id values not found in pod_plan" in result.stdout
+        assert (
+            "pod_project references pod_id values not found in pod_plan"
+            in result.stdout
+        )
 
-    def test_load_pod_broken_monitoring_pod_id_fails(self, runner, isolated_config, tmp_path):
+    def test_load_pod_broken_monitoring_pod_id_fails(
+        self, runner, isolated_config, tmp_path
+    ):
         plan_row, project_row, _ = _make_pod_rows(
             plan_pod_id="POD-001",
             project_pod_id="POD-001",
@@ -680,7 +689,10 @@ class TestPodLoadValidation:
             app, ["load", "--from-excel", str(excel_path), "--schema-pod"]
         )
         assert result.exit_code == 1
-        assert "pod_monitoring references pod_id values not found in pod_plan" in result.stdout
+        assert (
+            "pod_monitoring references pod_id values not found in pod_plan"
+            in result.stdout
+        )
 
     def test_load_pod_unknown_project_id_warns(self, runner, isolated_config, tmp_path):
         Config.init_config()
@@ -737,7 +749,9 @@ class TestSchemaCommand:
                 POD_MONITORING_SHEET_NAME,
             ]
             plan_headers = [cell.value for cell in workbook[POD_PLAN_SHEET_NAME][2]]
-            project_headers = [cell.value for cell in workbook[POD_PROJECT_SHEET_NAME][2]]
+            project_headers = [
+                cell.value for cell in workbook[POD_PROJECT_SHEET_NAME][2]
+            ]
             monitoring_headers = [
                 cell.value for cell in workbook[POD_MONITORING_SHEET_NAME][2]
             ]
@@ -769,9 +783,7 @@ class TestSchemaCommand:
         assert "outlook" in mon_dv_case.formula1
         assert mon_dv_case.sqref == "B3:B1048576"
 
-    def test_schema_pod_existing_output_fails_without_overwrite(
-        self, runner, tmp_path
-    ):
+    def test_schema_pod_existing_output_fails_without_overwrite(self, runner, tmp_path):
         output_path = tmp_path / "pod_template.xlsx"
         output_path.write_text("keep: true\n", encoding="utf-8")
 
@@ -1011,7 +1023,9 @@ class TestLoadPodRegistryCommand:
         xlsx = tmp_path / "pod.xlsx"
         xlsx.write_bytes(b"")
 
-        result = runner.invoke(app, ["load", "--from-excel", str(xlsx), "--pod-registry"])
+        result = runner.invoke(
+            app, ["load", "--from-excel", str(xlsx), "--pod-registry"]
+        )
 
         assert result.exit_code == 0
         assert called["path"] == xlsx

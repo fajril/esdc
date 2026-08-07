@@ -55,6 +55,7 @@ Indonesian, and rerank() scores strictly one pair at a time (1.37 s/pair for
 a 0.6B model at full offload is anomalous — check n_batch and the serial
 loop). Neither has been tested.
 """
+
 from __future__ import annotations
 
 import atexit
@@ -87,9 +88,7 @@ _PROMPT_PREFIX = (
     'only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
 )
 _PROMPT_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
-_INSTRUCT = (
-    "Given a web search query, retrieve relevant passages that answer the query"
-)
+_INSTRUCT = "Given a web search query, retrieve relevant passages that answer the query"
 
 # Llama contexts are not thread-safe; rerank scoring serializes on this.
 _infer_lock = threading.Lock()
@@ -132,7 +131,8 @@ def _load_reranker() -> Any:
     else:
         logger.warning(
             "[Corpus] rerank_model=%s is not a known GGUF; expected "
-            '"repo_id:filename.gguf" — falling back to default', name
+            '"repo_id:filename.gguf" — falling back to default',
+            name,
         )
         repo, filename = _RERANKER_GGUFS[DEFAULT_RERANKER]
     path = resolve_gguf(repo, filename)

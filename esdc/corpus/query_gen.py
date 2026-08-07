@@ -197,7 +197,11 @@ def generate_cross_reference(
         ).strip()
         if query:
             rows.append(
-                {"query": query, "expected": [citing, cited], "class": "cross_reference"}
+                {
+                    "query": query,
+                    "expected": [citing, cited],
+                    "class": "cross_reference",
+                }
             )
     return rows
 
@@ -243,12 +247,14 @@ def generate_thematic(
             call(_THEMATIC_PROMPT.format(subjects=subjects))
         ).strip()
         if query:
-            rows.append({
-                "query": query,
-                "expected": [d["doc_id"] for d in docs],
-                "class": "thematic",
-                "seed_filter": {"wk_name": wk, "year": year},
-            })
+            rows.append(
+                {
+                    "query": query,
+                    "expected": [d["doc_id"] for d in docs],
+                    "class": "thematic",
+                    "seed_filter": {"wk_name": wk, "year": year},
+                }
+            )
     return rows
 
 
@@ -290,7 +296,8 @@ def reconcile(
     # Target total: preserve the existing query-set size (--refresh does not
     # resize; only --init/generate sizes the set via margin or explicit n).
     target = (
-        existing_meta.n if existing_meta is not None
+        existing_meta.n
+        if existing_meta is not None
         else compute_sample_size(len(docs), margin=margin)
     )
     target = min(target, len(docs))
@@ -306,14 +313,10 @@ def reconcile(
         t = next((k for k, v in by_type.items() if did in v), "unknown")
         kept_per_type[t] = kept_per_type.get(t, 0) + 1
 
-    need = {
-        t: max(0, alloc.get(t, 0) - kept_per_type.get(t, 0)) for t in by_type
-    }
+    need = {t: max(0, alloc.get(t, 0) - kept_per_type.get(t, 0)) for t in by_type}
     budget = max(0, target - len(kept) - len(changed_ids))
     add_ids = sample_docs(unused_by_type, need, seed=seed)[:budget]
-    synthesized = _synthesize_rows(
-        store, call, changed_ids + add_ids, progress_cb
-    )
+    synthesized = _synthesize_rows(store, call, changed_ids + add_ids, progress_cb)
 
     rows = kept + synthesized
     return rows, _make_meta(store, rows, margin, ks)

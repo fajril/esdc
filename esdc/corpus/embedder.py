@@ -4,6 +4,7 @@
 The implementation moved to esdc/embedders.py so esdc.search can use it
 without importing esdc.corpus. Existing imports keep working.
 """
+
 from __future__ import annotations
 
 from esdc.embedders import (  # noqa: F401

@@ -91,9 +91,7 @@ def apply_document_entity_changeset(
         extra = set(row.keys()) - {"doc_id"} - set(ENTITY_FIELDS)
         if extra:
             errors.append(
-                RowError(
-                    "update", i, f"unknown field(s): {', '.join(sorted(extra))}"
-                )
+                RowError("update", i, f"unknown field(s): {', '.join(sorted(extra))}")
             )
             continue
         fields = {k: v for k, v in row.items() if k in ENTITY_FIELDS}
@@ -223,8 +221,7 @@ def _resolve_field(
             if suggestions:
                 listed = ", ".join(f"'{s}'" for s in suggestions)
                 message = (
-                    f"{field} '{name}' not found in database; "
-                    f"closest matches: {listed}"
+                    f"{field} '{name}' not found in database; closest matches: {listed}"
                 )
             else:
                 message = f"{field} '{name}' not found in database and no close matches"
@@ -354,7 +351,6 @@ def _reembed_edited(
         if store is not None:
             store.close()
     return [
-        f"Re-embed failed for {name}: {err}. "
-        "Run `esdc corpus reembed --stale`."
+        f"Re-embed failed for {name}: {err}. Run `esdc corpus reembed --stale`."
         for name, err in report.failed.items()
     ]

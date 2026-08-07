@@ -1581,12 +1581,8 @@ def _strategic_analysis_data(
             "total_projects_reviewed": len(prepared),
             "total_priority_projects": len(priority),
             f"total_{value_key}": total,
-            "total_rec_oc": round(
-                sum(p.get("rec_oc", 0) or 0 for p in prepared), 1
-            ),
-            "total_rec_an": round(
-                sum(p.get("rec_an", 0) or 0 for p in prepared), 1
-            ),
+            "total_rec_oc": round(sum(p.get("rec_oc", 0) or 0 for p in prepared), 1),
+            "total_rec_an": round(sum(p.get("rec_an", 0) or 0 for p in prepared), 1),
             "total_rec_mboe": round(
                 sum(p.get("rec_mboe", 0) or 0 for p in prepared), 1
             ),
@@ -2061,9 +2057,7 @@ def _normalize_strategic_summary(
     )
     for key in topic_keys:
         value = (
-            source.get(key)
-            if isinstance(source.get(key), dict)
-            else summary.get(key)
+            source.get(key) if isinstance(source.get(key), dict) else summary.get(key)
         )
         if not isinstance(value, dict):
             continue
@@ -2286,8 +2280,7 @@ def _render_strategic_segment(
             for project in top3_projects
         )
         paragraphs.append(
-            f"Proyek yang paling berpeluang menjadi kontributor utama adalah "
-            f"{ranking}."
+            f"Proyek yang paling berpeluang menjadi kontributor utama adalah {ranking}."
         )
 
     if top3_projects:
@@ -2316,8 +2309,7 @@ def _render_strategic_segment(
     remaining_projects = projects[3:8] if len(projects) > 3 else []
     if remaining_projects:
         names = ", ".join(
-            _bold_entity(project.get("project_name"))
-            for project in remaining_projects
+            _bold_entity(project.get("project_name")) for project in remaining_projects
         )
         issue_themes = _top_project_items(remaining_projects, "issues")
         sentence = (
@@ -2327,8 +2319,7 @@ def _render_strategic_segment(
         )
         if issue_themes:
             sentence += (
-                " Isu yang menonjol mencakup "
-                f"{_format_clause_list(issue_themes)}."
+                f" Isu yang menonjol mencakup {_format_clause_list(issue_themes)}."
             )
         paragraphs.append(sentence)
 
@@ -2407,8 +2398,7 @@ def _project_narrative(
         )
     if mitigation != "-":
         text += (
-            " Mitigasi yang relevan mencakup "
-            f"{_format_sentence_fragment(mitigation)}."
+            f" Mitigasi yang relevan mencakup {_format_sentence_fragment(mitigation)}."
         )
     return text
 

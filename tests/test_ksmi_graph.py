@@ -237,8 +237,26 @@ class TestKSMIGraphManagerFormatReachability:
 
     def test_format_reachability_includes_all_levels(self, manager):
         result = manager.format_reachability()
-        for code in ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8",
-                     "X0", "X1", "X2", "X3", "X4", "X5", "X6", "A1", "A2"]:
+        for code in [
+            "E0",
+            "E1",
+            "E2",
+            "E3",
+            "E4",
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "X0",
+            "X1",
+            "X2",
+            "X3",
+            "X4",
+            "X5",
+            "X6",
+            "A1",
+            "A2",
+        ]:
             assert f"{code} →" in result, f"Missing level {code}"
 
     def test_format_reachability_header(self, manager):
@@ -271,12 +289,31 @@ class TestKSMIGraphManagerFormatReachability:
     def test_format_reachability_sorted_order(self, manager):
         result = manager.format_reachability()
         lines = [
-            line for line in result.split("\n")
+            line
+            for line in result.split("\n")
             if "→" in line and not line.startswith("#")
         ]
         codes = [line.split("→")[0].strip().lstrip(">").strip() for line in lines]
-        expected_order = ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8",
-                          "X0", "X1", "X2", "X3", "X4", "X5", "X6", "A1", "A2"]
+        expected_order = [
+            "E0",
+            "E1",
+            "E2",
+            "E3",
+            "E4",
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "X0",
+            "X1",
+            "X2",
+            "X3",
+            "X4",
+            "X5",
+            "X6",
+            "A1",
+            "A2",
+        ]
         assert codes == expected_order
 
 

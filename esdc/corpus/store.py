@@ -124,9 +124,7 @@ def _header_matches(embed_text: str, prefix: str) -> bool:
     return header == prefix or header.startswith(prefix + " | ")
 
 
-def _trim_snippet(
-    text: str | None, query: str | None, width: int = 300
-) -> str | None:
+def _trim_snippet(text: str | None, query: str | None, width: int = 300) -> str | None:
     """Match-centred excerpt of a chunk, trimmed to ``width`` chars.
 
     _aggregate_keyword/_aggregate_semantic pick the snippet via
@@ -176,7 +174,11 @@ _EXACT_FILTER_COLUMNS = ("doc_type", "doc_level")
 # Columns on `documents` that store JSON arrays; filtered via case-insensitive
 # substring match over each array element (json_each + ILIKE).
 _JSON_ARRAY_FILTER_COLUMNS = (
-    "wk_name", "field_name", "project_name", "doc_topic", "pod_name",
+    "wk_name",
+    "field_name",
+    "project_name",
+    "doc_topic",
+    "pod_name",
 )
 # Free-text columns filtered by case-insensitive substring. These hold long
 # institutional strings -- a sender reads
@@ -192,18 +194,42 @@ _TEXT_FILTER_COLUMNS = ("sender", "recipient", "subject", "doc_number")
 # zip-based dict construction; the SQLite readers key off column name via
 # sqlite3.Row and would tolerate reordering, but keep them in lockstep.
 _DOC_COLUMNS = (
-    "doc_id", "file_name", "file_path", "file_hash", "doc_type",
-    "doc_topic", "doc_number", "doc_date", "subject", "sender",
-    "recipient", "doc_level", "wk_name", "field_name", "project_name",
-    "pod_name", "suggested_pod_ids", "raw_entities", "metadata",
-    "markdown", "extraction_method", "embedding_model", "page_count",
+    "doc_id",
+    "file_name",
+    "file_path",
+    "file_hash",
+    "doc_type",
+    "doc_topic",
+    "doc_number",
+    "doc_date",
+    "subject",
+    "sender",
+    "recipient",
+    "doc_level",
+    "wk_name",
+    "field_name",
+    "project_name",
+    "pod_name",
+    "suggested_pod_ids",
+    "raw_entities",
+    "metadata",
+    "markdown",
+    "extraction_method",
+    "embedding_model",
+    "page_count",
     "ingested_at",
 )
 # Columns within _DOC_COLUMNS that hold JSON-encoded values and must be
 # parsed back to Python lists/dicts before a row is returned to a caller.
 _DOC_JSON_FIELDS = (
-    "doc_topic", "wk_name", "field_name", "project_name",
-    "pod_name", "suggested_pod_ids", "raw_entities", "metadata",
+    "doc_topic",
+    "wk_name",
+    "field_name",
+    "project_name",
+    "pod_name",
+    "suggested_pod_ids",
+    "raw_entities",
+    "metadata",
 )
 
 
@@ -289,9 +315,7 @@ class CorpusStore:
                 "metadata",
             ):
                 with contextlib.suppress(sqlite3.OperationalError):
-                    self._sconn.execute(
-                        f"ALTER TABLE documents ADD COLUMN {col} TEXT"
-                    )
+                    self._sconn.execute(f"ALTER TABLE documents ADD COLUMN {col} TEXT")
             # ingested_at's DDL default (`DEFAULT (datetime('now'))`) is a
             # non-constant expression -- SQLite's ADD COLUMN only accepts a
             # constant default, so self-heal without one rather than
@@ -608,9 +632,7 @@ class CorpusStore:
         prefix = build_context_prefix(doc)
         embed_texts = [build_embed_text(prefix, c.section, c.text) for c in chunks]
         embeddings = (
-            self._embedder.generate_embeddings_batch(embed_texts)
-            if embed_texts
-            else []
+            self._embedder.generate_embeddings_batch(embed_texts) if embed_texts else []
         )
         values = self._doc_row_values(doc)
 
@@ -684,9 +706,7 @@ class CorpusStore:
         conn = self._get_connection()
         conn.execute("BEGIN TRANSACTION")
         try:
-            conn.execute(
-                f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id]
-            )
+            conn.execute(f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id])
             conn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
             conn.execute("COMMIT")
         except Exception:
@@ -706,10 +726,22 @@ class CorpusStore:
         """
         conn = self._get_connection()
         cols = [
-            "doc_id", "file_name", "doc_type", "doc_topic", "doc_date",
-            "subject", "doc_level", "wk_name", "field_name", "project_name",
-            "pod_name", "suggested_pod_ids",
-            "extraction_method", "page_count", "ingested_at", "n_chunks",
+            "doc_id",
+            "file_name",
+            "doc_type",
+            "doc_topic",
+            "doc_date",
+            "subject",
+            "doc_level",
+            "wk_name",
+            "field_name",
+            "project_name",
+            "pod_name",
+            "suggested_pod_ids",
+            "extraction_method",
+            "page_count",
+            "ingested_at",
+            "n_chunks",
         ]
         rows = conn.execute(f"""
             SELECT d.doc_id, d.file_name, d.doc_type, d.doc_topic, d.doc_date,
@@ -828,8 +860,15 @@ class CorpusStore:
         """).fetchall()
 
         cols = (
-            "doc_id", "doc_type", "doc_topic", "subject", "wk_name",
-            "field_name", "project_name", "pod_name", "sample_embed_text",
+            "doc_id",
+            "doc_type",
+            "doc_topic",
+            "subject",
+            "wk_name",
+            "field_name",
+            "project_name",
+            "pod_name",
+            "sample_embed_text",
         )
         stale: list[str] = []
         for row in rows:
@@ -888,16 +927,12 @@ class CorpusStore:
         prefix = build_context_prefix(doc)
         embed_texts = [build_embed_text(prefix, c.section, c.text) for c in chunks]
         embeddings = (
-            self._embedder.generate_embeddings_batch(embed_texts)
-            if embed_texts
-            else []
+            self._embedder.generate_embeddings_batch(embed_texts) if embed_texts else []
         )
 
         conn.execute("BEGIN TRANSACTION")
         try:
-            conn.execute(
-                f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id]
-            )
+            conn.execute(f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id])
             for chunk, embed_text, embedding in zip(
                 chunks, embed_texts, embeddings, strict=True
             ):
@@ -1248,9 +1283,7 @@ class CorpusStore:
                 query, [r.get("embed_text") or r["chunk_text"] for r in top]
             )
         except Exception as e:
-            logger.warning(
-                "[Corpus] rerank failed, keeping RRF order | error=%s", e
-            )
+            logger.warning("[Corpus] rerank failed, keeping RRF order | error=%s", e)
             return merged
         for r, s in zip(top, scores, strict=True):
             r["rerank_score"] = s
@@ -1258,9 +1291,7 @@ class CorpusStore:
         return top + merged[pool:]
 
     @staticmethod
-    def _cap_per_doc(
-        merged: list[dict[str, Any]], cap: int
-    ) -> list[dict[str, Any]]:
+    def _cap_per_doc(merged: list[dict[str, Any]], cap: int) -> list[dict[str, Any]]:
         """Keep at most `cap` entries per doc_id, preserving incoming order.
 
         cap <= 0 disables the cap (identity) — that is what the A/B eval
@@ -1279,8 +1310,15 @@ class CorpusStore:
         return kept
 
     _DOC_META_COLUMNS = (
-        "doc_id", "file_name", "doc_type", "doc_topic", "doc_date", "subject",
-        "wk_name", "field_name", "project_name",
+        "doc_id",
+        "file_name",
+        "doc_type",
+        "doc_topic",
+        "doc_date",
+        "subject",
+        "wk_name",
+        "field_name",
+        "project_name",
     )
 
     def _hydrate_docs(self, doc_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -1324,7 +1362,7 @@ class CorpusStore:
         return None
 
     def _embed_query(self, query: str) -> list[float]:
-        """Embed a user QUERY, not a chunk -- callers must not reuse this for chunks.
+        r"""Embed a user QUERY, not a chunk -- callers must not reuse this for chunks.
 
         Qwen3-Embedding is instruction-tuned and asymmetric: its documented
         usage prefixes only the query with `Instruct: {task}\\nQuery: {q}`,
@@ -1512,9 +1550,9 @@ class CorpusStore:
                         query, semantic_candidates + len(doc_ids), filters
                     )
                     kw_set = set(doc_ids)
-                    semantic_rows = [
-                        r for r in ranked if r["doc_id"] not in kw_set
-                    ][:semantic_candidates]
+                    semantic_rows = [r for r in ranked if r["doc_id"] not in kw_set][
+                        :semantic_candidates
+                    ]
                     match_used = "hybrid"
         except Exception as e:
             logger.error("[Corpus] aggregate failed | error=%s", e)
@@ -1532,8 +1570,10 @@ class CorpusStore:
             page = doc_ids[:limit]
             hydrated = self._hydrate_docs(page)
             result["documents"] = [
-                {**hydrated.get(doc_id, {"doc_id": doc_id}),
-                 "matched_snippet": _trim_snippet(snippets.get(doc_id), query)}
+                {
+                    **hydrated.get(doc_id, {"doc_id": doc_id}),
+                    "matched_snippet": _trim_snippet(snippets.get(doc_id), query),
+                }
                 for doc_id in page
             ]
             result["returned"] = len(page)
@@ -1767,7 +1807,7 @@ class CorpusStore:
         sconn = self._get_sqlite()
         row = sconn.execute(
             f"""
-            SELECT {', '.join(_DOC_COLUMNS)}
+            SELECT {", ".join(_DOC_COLUMNS)}
             FROM {self.DOC_TABLE}
             WHERE {column} = ?
             LIMIT 1

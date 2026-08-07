@@ -224,8 +224,15 @@ def run_rename(
             report.skipped.append(f"{src.name} (already named)")
             plans.append(
                 RenamePlan(
-                    src, new_path, dt, dd, title, source, sidecar_src,
-                    sidecar_new, "already named",
+                    src,
+                    new_path,
+                    dt,
+                    dd,
+                    title,
+                    source,
+                    sidecar_src,
+                    sidecar_new,
+                    "already named",
                 )
             )
             continue

@@ -442,7 +442,12 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
         display_name="Resources MSTB",
     ),
     "rec_an": ColumnMetadata(
-        "rec_an", "Resources total gas", "BSCF", "resources", "resources", "total_gas",
+        "rec_an",
+        "Resources total gas",
+        "BSCF",
+        "resources",
+        "resources",
+        "total_gas",
         display_name="Resources BSCF",
     ),
     "rec_mboe": ColumnMetadata(
@@ -508,11 +513,21 @@ COLUMN_METADATA: dict[str, ColumnMetadata] = {
     ),
     # Eureka in-place columns (alias for prj_ioip/prj_igip)
     "ioip": ColumnMetadata(
-        "ioip", "Initial Oil In Place", "MSTB", "in_place", "inplace", "oil",
+        "ioip",
+        "Initial Oil In Place",
+        "MSTB",
+        "in_place",
+        "inplace",
+        "oil",
         display_name="IOIP MSTB",
     ),
     "igip": ColumnMetadata(
-        "igip", "Initial Gas In Place", "BSCF", "in_place", "inplace", "total_gas",
+        "igip",
+        "Initial Gas In Place",
+        "BSCF",
+        "in_place",
+        "inplace",
+        "total_gas",
         display_name="IGIP BSCF",
     ),
     # EUR columns

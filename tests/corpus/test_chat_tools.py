@@ -49,13 +49,25 @@ class FakeEmbedder:
 
 
 DOC = {
-    "doc_id": "abc123", "file_name": "s.pdf", "file_path": "/x/s.pdf",
-    "file_hash": "ab" * 32, "doc_type": "surat",
-    "doc_number": "SRT-1", "doc_date": "2026-01-05", "subject": "Persetujuan",
-    "sender": "SKK", "recipient": "KKKS", "doc_level": "field",
-    "wk_name": "Rokan", "field_name": "Duri", "project_name": None,
-    "raw_entities": "{}", "metadata": "{}", "markdown": "# Surat\nisi",
-    "extraction_method": "native", "page_count": 1,
+    "doc_id": "abc123",
+    "file_name": "s.pdf",
+    "file_path": "/x/s.pdf",
+    "file_hash": "ab" * 32,
+    "doc_type": "surat",
+    "doc_number": "SRT-1",
+    "doc_date": "2026-01-05",
+    "subject": "Persetujuan",
+    "sender": "SKK",
+    "recipient": "KKKS",
+    "doc_level": "field",
+    "wk_name": "Rokan",
+    "field_name": "Duri",
+    "project_name": None,
+    "raw_entities": "{}",
+    "metadata": "{}",
+    "markdown": "# Surat\nisi",
+    "extraction_method": "native",
+    "page_count": 1,
 }
 
 LONG_DOC = {
@@ -383,9 +395,7 @@ def test_search_documents_reuses_embedder(tool_env, monkeypatch):
             return [[0.0] * 4 for _ in texts]
 
     monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
-    monkeypatch.setattr(
-        "esdc.corpus.embedder.InternalEmbedder", _CountingEmbedder
-    )
+    monkeypatch.setattr("esdc.corpus.embedder.InternalEmbedder", _CountingEmbedder)
     # invalidate the tool cache so both calls hit the store
     tools_mod.invalidate_tool_cache()
 
@@ -459,9 +469,7 @@ class TestSemanticSearchCorpusFanOut:
             mock_resolver.close = Mock()
             MockResolver.return_value = mock_resolver
 
-            result = json.loads(
-                semantic_search.invoke({"query": "kendala teknis"})
-            )
+            result = json.loads(semantic_search.invoke({"query": "kendala teknis"}))
 
         assert result["remarks"]["status"] == "success"
         assert result["remarks"]["count"] == 2
@@ -509,9 +517,7 @@ class TestSemanticSearchCorpusFanOut:
             def close(self):
                 pass
 
-        monkeypatch.setattr(
-            "esdc.corpus.store.CorpusStore", _SpyStore
-        )
+        monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SpyStore)
         tools_mod.invalidate_tool_cache()
 
         with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
@@ -570,9 +576,7 @@ class TestSemanticSearchCorpusFanOut:
         # No cache hit: both calls reached the (mocked) remarks search.
         assert mock_resolver.hybrid_search.call_count == 2
 
-    def test_fanout_cached_when_both_sections_definitive(
-        self, populated, monkeypatch
-    ):
+    def test_fanout_cached_when_both_sections_definitive(self, populated, monkeypatch):
         """Both sections success/no_results -> second call is a cache hit."""
         from unittest.mock import Mock, patch
 
@@ -706,7 +710,9 @@ def test_aggregate_documents_defaults_to_hybrid_with_provenance(populated):
     assert result["match"] == "hybrid"
     assert result["approximate"] is False
     assert set(result["provenance"]) == {
-        "exact_total", "semantic_extra", "semantic_extra_is_a_ranking",
+        "exact_total",
+        "semantic_extra",
+        "semantic_extra_is_a_ranking",
     }
     assert result["provenance"]["exact_total"] == result["count"]
 
@@ -715,9 +721,7 @@ def test_aggregate_documents_semantic_candidates_carry_scores(populated):
     from esdc.chat.tools import aggregate_documents
 
     result = json.loads(
-        aggregate_documents.invoke(
-            {"query": "persetujuan", "semantic_candidates": 2}
-        )
+        aggregate_documents.invoke({"query": "persetujuan", "semantic_candidates": 2})
     )
 
     for cand in result.get("semantic_candidates", []):

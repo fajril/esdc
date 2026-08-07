@@ -1,5 +1,6 @@
 # tests/test_configs_embedding.py
 """Embedding backend configuration keys and wizard registration."""
+
 from __future__ import annotations
 
 import esdc.configs as configs
@@ -69,7 +70,12 @@ def test_new_keys_described():
 
 def test_new_keys_in_embeddings_wizard_section():
     section = MODEL_SECTIONS["Embeddings"]
-    for key in ("embedding_backend", "embedding_host", "embedding_model", "embedding_api_key"):
+    for key in (
+        "embedding_backend",
+        "embedding_host",
+        "embedding_model",
+        "embedding_api_key",
+    ):
         assert key in section
 
 

@@ -20,9 +20,7 @@ def test_openai_text_uses_tiktoken_when_available():
 def test_openai_unknown_model_falls_back_to_base_encoding():
     text = "hello world"
 
-    count = estimate_text_tokens(
-        text, provider_type="openai", model="future-gpt-model"
-    )
+    count = estimate_text_tokens(text, provider_type="openai", model="future-gpt-model")
 
     assert count > 0
 

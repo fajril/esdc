@@ -36,9 +36,7 @@ def _isolated_registry(tmp_path, monkeypatch):
     """Keep _warn_pod_links' registry lookup off the user's real ~/.esdc."""
     import esdc.configs as configs
 
-    monkeypatch.setattr(
-        configs.Config, "get_db_dir", classmethod(lambda cls: tmp_path)
-    )
+    monkeypatch.setattr(configs.Config, "get_db_dir", classmethod(lambda cls: tmp_path))
 
 
 @pytest.fixture
@@ -91,18 +89,14 @@ def test_remove_filter_requires_yes(monkeypatch, store):
 
 
 def test_remove_filter_dry_run_lists_without_deleting(monkeypatch, store):
-    result = _invoke_remove(
-        monkeypatch, store, ["--doc-type", "letter", "--dry-run"]
-    )
+    result = _invoke_remove(monkeypatch, store, ["--doc-type", "letter", "--dry-run"])
     assert result.exit_code == 0
     assert "letter_a.pdf" in result.output
     assert store.counts()["documents"] == 3
 
 
 def test_remove_filter_with_yes_deletes(monkeypatch, store):
-    result = _invoke_remove(
-        monkeypatch, store, ["--doc-type", "letter", "--yes"]
-    )
+    result = _invoke_remove(monkeypatch, store, ["--doc-type", "letter", "--yes"])
     assert result.exit_code == 0
     assert store.counts()["documents"] == 1
     assert store.get_document("cccc") is not None

@@ -16,8 +16,15 @@ def _seed_documents(doc_ids):
             "INSERT INTO documents (doc_id, file_name, file_path, file_hash,"
             " markdown, extraction_method, embedding_model)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (doc_id, f"{doc_id}.pdf", f"/x/{doc_id}.pdf", doc_id * 4,
-             "# isi", "native", "fake-embed"),
+            (
+                doc_id,
+                f"{doc_id}.pdf",
+                f"/x/{doc_id}.pdf",
+                doc_id * 4,
+                "# isi",
+                "native",
+                "fake-embed",
+            ),
         )
     conn.commit()
     conn.close()
@@ -233,9 +240,7 @@ def test_pod_document_rejects_updates_and_duplicates(monkeypatch, tmp_path):
         "pod_document", {"updates": [{"pod_id": 900, "doc_id": "abc123"}]}
     )
     assert not result.ok
-    apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
+    apply_changeset("pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]})
     result = apply_changeset(
         "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
     )
@@ -245,9 +250,7 @@ def test_pod_document_rejects_updates_and_duplicates(monkeypatch, tmp_path):
 
 def test_delete_m_pod_blocked_by_pod_document(monkeypatch, tmp_path):
     _insert_pod_900(monkeypatch, tmp_path)
-    apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
+    apply_changeset("pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]})
     result = apply_changeset("m_pod", {"deletes": [{"id": 900}]})
     assert not result.ok
     assert "pod_document" in result.errors[0].message

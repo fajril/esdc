@@ -32,9 +32,7 @@ Page content:
 Cleaned markdown:"""
 
 # Same marker family the extractor emits and the chunker strips.
-_MARKER_SPLIT_RE = re.compile(
-    r"(<!--\s*page\s+\d+(?:\s+image\s+\d+)?:\s*\w+\s*-->\n?)"
-)
+_MARKER_SPLIT_RE = re.compile(r"(<!--\s*page\s+\d+(?:\s+image\s+\d+)?:\s*\w+\s*-->\n?)")
 _NATIVE_MARKER_RE = re.compile(r"<!--\s*page\s+\d+:\s*native(?:_docx|_md)?\s*-->")
 _DIGIT_RUN_RE = re.compile(r"\d+")
 _CODE_FENCE_RE = re.compile(r"^```[a-z]*\n|\n?```\s*$")

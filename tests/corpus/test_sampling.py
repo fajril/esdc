@@ -41,7 +41,10 @@ def test_allocate_never_exceeds_stratum_size():
 
 
 def test_sample_docs_is_deterministic_under_seed():
-    docs = {"letter": [f"L{i}" for i in range(20)], "report": [f"R{i}" for i in range(10)]}
+    docs = {
+        "letter": [f"L{i}" for i in range(20)],
+        "report": [f"R{i}" for i in range(10)],
+    }
     alloc = {"letter": 5, "report": 3}
     a = sample_docs(docs, alloc, seed=42)
     b = sample_docs(docs, alloc, seed=42)
@@ -50,7 +53,10 @@ def test_sample_docs_is_deterministic_under_seed():
 
 
 def test_sample_docs_respects_allocation_counts():
-    docs = {"letter": [f"L{i}" for i in range(20)], "report": [f"R{i}" for i in range(10)]}
+    docs = {
+        "letter": [f"L{i}" for i in range(20)],
+        "report": [f"R{i}" for i in range(10)],
+    }
     picked = sample_docs(docs, {"letter": 5, "report": 3}, seed=1)
     assert sum(1 for d in picked if d.startswith("L")) == 5
     assert sum(1 for d in picked if d.startswith("R")) == 3

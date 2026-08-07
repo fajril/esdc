@@ -81,9 +81,7 @@ async def test_third_identical_tool_call_is_blocked():
     # Only 2 identical calls actually reached the tool.
     assert _TOOL_CALL_COUNTER.get("n", 0) == 2
 
-    tool_messages = [
-        m for m in final_state["messages"] if isinstance(m, ToolMessage)
-    ]
+    tool_messages = [m for m in final_state["messages"] if isinstance(m, ToolMessage)]
     blocked = [m for m in tool_messages if m.tool_call_id == "call_3"]
     assert len(blocked) == 1
     assert "REPEATED CALL BLOCKED" in str(blocked[0].content)

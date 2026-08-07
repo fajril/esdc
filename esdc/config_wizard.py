@@ -277,9 +277,7 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
     # 2. Corpus model key? Offer main / local Ollama models / custom.
     if key in _CORPUS_MODEL_KEYS:
         choices = _corpus_model_choices(key)
-        default_choice = next(
-            (c for c in choices if c.value == str(current)), None
-        )
+        default_choice = next((c for c in choices if c.value == str(current)), None)
         selected = questionary.select(
             label,
             choices=choices,

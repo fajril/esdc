@@ -89,7 +89,18 @@ def test_doc_type_hierarchy_flattens_to_subset_of_enum():
     hierarchy = doc_schema.doc_type_hierarchy()
     flattened = {name for level in hierarchy for name in level}
     assert flattened <= set(DOC_TYPE_ENUM)
-    assert flattened == {"uu", "perpu", "mk", "pp", "perpres", "permen", "kepres", "kepmen", "ptk", "sop"}
+    assert flattened == {
+        "uu",
+        "perpu",
+        "mk",
+        "pp",
+        "perpres",
+        "permen",
+        "kepres",
+        "kepmen",
+        "ptk",
+        "sop",
+    }
 
 
 def test_doc_type_hierarchy_order_high_to_low():
@@ -235,7 +246,9 @@ def test_schema_field_names_are_columns_of_documents_table(tmp_path: Path):
     explicit_mapping = {"extras": "metadata", "source_file": "file_name"}
 
     schema = doc_schema.load_doc_schema()
-    all_field_names = doc_schema.llm_field_names() + doc_schema.housekeeping_field_names()
+    all_field_names = (
+        doc_schema.llm_field_names() + doc_schema.housekeeping_field_names()
+    )
     assert set(all_field_names) == {
         f["name"] for f in schema["llm_fields"] + schema["housekeeping_fields"]
     }

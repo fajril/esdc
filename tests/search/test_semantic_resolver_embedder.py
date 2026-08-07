@@ -1,5 +1,6 @@
 # tests/search/test_semantic_resolver_embedder.py
 """SemanticResolver embeds queries locally and accepts an injected embedder."""
+
 from __future__ import annotations
 
 import inspect
@@ -90,9 +91,9 @@ def test_legacy_space_without_meta_seeds_on_query(tmp_path):
         db_path=tmp_path / "s.duckdb", embedder=_FixedEmbedder([1.0, 0.0])
     )
     assert r._ensure_semantic_meta() is None
-    stored = r._get_connection().execute(
-        "SELECT probe_vec FROM semantic_meta"
-    ).fetchone()[0]
+    stored = (
+        r._get_connection().execute("SELECT probe_vec FROM semantic_meta").fetchone()[0]
+    )
     r.close()
     assert json.loads(stored) == [1.0, 0.0]
 
@@ -132,9 +133,11 @@ def test_build_writes_the_pin(tmp_path):
         db_path=tmp_path / "s.duckdb", embedder=_FixedEmbedder([1.0, 0.0])
     )
     r.build_embeddings_table()
-    row = r._get_connection().execute(
-        "SELECT embedding_model, dim FROM semantic_meta"
-    ).fetchone()
+    row = (
+        r._get_connection()
+        .execute("SELECT embedding_model, dim FROM semantic_meta")
+        .fetchone()
+    )
     r.close()
     assert row[0] == "qwen3-embedding-0.6b-q8_0"
     assert row[1] == 2

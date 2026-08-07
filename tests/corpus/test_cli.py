@@ -28,8 +28,7 @@ def test_extract_invalid_level_exits_1(tmp_path):
     )
     assert result.exit_code == 1
     assert (
-        "Error: --level must be one of wk, field, project, regulation."
-        in result.output
+        "Error: --level must be one of wk, field, project, regulation." in result.output
     )
 
 
@@ -60,9 +59,7 @@ def test_extract_passes_topic_to_pipeline(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pipeline, "run_extract", fake_run_extract)
 
-    result = runner.invoke(
-        app, ["corpus", "extract", str(tmp_path), "--topic", "wpnb"]
-    )
+    result = runner.invoke(app, ["corpus", "extract", str(tmp_path), "--topic", "wpnb"])
     assert result.exit_code == 0
     assert captured["topic"] == "wpnb"
 
@@ -81,10 +78,7 @@ def test_extract_level_regulation_with_entity_flag_exits_1(tmp_path):
         ],
     )
     assert result.exit_code == 1
-    assert (
-        "regulation documents cannot have wk/field/project entities"
-        in result.output
-    )
+    assert "regulation documents cannot have wk/field/project entities" in result.output
 
 
 def test_extract_doc_type_implies_regulation_with_entity_flag_exits_1(tmp_path):
@@ -101,10 +95,7 @@ def test_extract_doc_type_implies_regulation_with_entity_flag_exits_1(tmp_path):
         ],
     )
     assert result.exit_code == 1
-    assert (
-        "regulation documents cannot have wk/field/project entities"
-        in result.output
-    )
+    assert "regulation documents cannot have wk/field/project entities" in result.output
 
 
 def test_extract_explicit_level_conflicts_with_doc_type_rule_exits_1(tmp_path):
@@ -204,9 +195,7 @@ def test_commit_model_mismatch_prints_clean_error(tmp_path, monkeypatch):
     import esdc.corpus.pipeline as pipeline
 
     def raise_mismatch(*args, **kwargs):
-        raise ValueError(
-            "[Corpus] embedding model changed. Run `esdc corpus reembed`."
-        )
+        raise ValueError("[Corpus] embedding model changed. Run `esdc corpus reembed`.")
 
     # commit imports run_commit lazily from the pipeline module.
     monkeypatch.setattr(pipeline, "run_commit", raise_mismatch)
@@ -221,8 +210,7 @@ def test_meta_invalid_level_exits_1(tmp_path):
     result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--level", "bogus"])
     assert result.exit_code == 1
     assert (
-        "Error: --level must be one of wk, field, project, regulation."
-        in result.output
+        "Error: --level must be one of wk, field, project, regulation." in result.output
     )
 
 
@@ -270,10 +258,7 @@ def test_meta_level_regulation_with_entity_flag_exits_1(tmp_path):
         ],
     )
     assert result.exit_code == 1
-    assert (
-        "regulation documents cannot have wk/field/project entities"
-        in result.output
-    )
+    assert "regulation documents cannot have wk/field/project entities" in result.output
 
 
 def test_meta_explicit_level_conflicts_with_topic_rule_exits_1(tmp_path):
@@ -401,15 +386,11 @@ def test_meta_unknown_entity_prints_clean_error(tmp_path, monkeypatch):
     import esdc.corpus.pipeline as pipeline
 
     def raise_not_found(*args, **kwargs):
-        raise ValueError(
-            "--wk-name 'Bogus' not found in database and no close matches"
-        )
+        raise ValueError("--wk-name 'Bogus' not found in database and no close matches")
 
     monkeypatch.setattr(pipeline, "run_meta", raise_not_found)
 
-    result = runner.invoke(
-        app, ["corpus", "meta", str(tmp_path), "--wk-name", "Bogus"]
-    )
+    result = runner.invoke(app, ["corpus", "meta", str(tmp_path), "--wk-name", "Bogus"])
     assert result.exit_code == 1
     assert "not found in database" in result.output
     assert "Traceback" not in result.output
@@ -419,9 +400,7 @@ def test_extract_unknown_entity_prints_clean_error(tmp_path, monkeypatch):
     import esdc.corpus.pipeline as pipeline
 
     def raise_not_found(*args, **kwargs):
-        raise ValueError(
-            "--wk-name 'Bogus' not found in database and no close matches"
-        )
+        raise ValueError("--wk-name 'Bogus' not found in database and no close matches")
 
     monkeypatch.setattr(pipeline, "run_extract", raise_not_found)
 
@@ -509,8 +488,13 @@ def test_rename_dry_run_is_default(tmp_path, monkeypatch):
         plan = RenamePlan(
             src=tmp_path / "scan.pdf",
             new_path=tmp_path / "letter - 2024.01.15 - Judul.pdf",
-            doc_type="letter", doc_date="2024.01.15", title="Judul",
-            source="sidecar", sidecar_src=None, sidecar_new=None, note="",
+            doc_type="letter",
+            doc_date="2024.01.15",
+            title="Judul",
+            source="sidecar",
+            sidecar_src=None,
+            sidecar_new=None,
+            note="",
         )
         return CorpusReport(), [plan]
 
@@ -537,8 +521,13 @@ def test_rename_yes_applies(tmp_path, monkeypatch):
         plan = RenamePlan(
             src=tmp_path / "scan.pdf",
             new_path=tmp_path / "letter - 2024.01.15 - Judul.pdf",
-            doc_type="letter", doc_date="2024.01.15", title="Judul",
-            source="sidecar", sidecar_src=None, sidecar_new=None, note="",
+            doc_type="letter",
+            doc_date="2024.01.15",
+            title="Judul",
+            source="sidecar",
+            sidecar_src=None,
+            sidecar_new=None,
+            note="",
         )
         return report, [plan]
 
@@ -594,8 +583,10 @@ class _FakeEvalStore:
 def _eval_docs():
     return [
         {
-            "doc_id": f"letter-{i}", "doc_type": "letter",
-            "subject": f"subject {i}", "file_hash": f"h{i}",
+            "doc_id": f"letter-{i}",
+            "doc_type": "letter",
+            "subject": f"subject {i}",
+            "file_hash": f"h{i}",
             "chunk_text": f"body {i}",
         }
         for i in range(3)
@@ -618,9 +609,7 @@ def fake_llm(monkeypatch):
         def invoke(self, prompt):
             return _Resp()
 
-    monkeypatch.setattr(
-        "esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM()
-    )
+    monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM())
     return _FakeLLM()
 
 
@@ -650,9 +639,7 @@ def test_eval_missing_file_errors(monkeypatch, tmp_path):
     assert "--init" in result.output
 
 
-def test_eval_init_generates_and_scores(
-    monkeypatch, tmp_path, fake_store, fake_llm
-):
+def test_eval_init_generates_and_scores(monkeypatch, tmp_path, fake_store, fake_llm):
     """`--init` with no value must auto-size (the primary default workflow)."""
     path = tmp_path / "corpus_queries.jsonl"
     _patch_queries_path(monkeypatch, path)
@@ -664,9 +651,7 @@ def test_eval_init_generates_and_scores(
     assert path.exists()
 
 
-def test_eval_init_with_explicit_samples(
-    monkeypatch, tmp_path, fake_store, fake_llm
-):
+def test_eval_init_with_explicit_samples(monkeypatch, tmp_path, fake_store, fake_llm):
     path = tmp_path / "corpus_queries.jsonl"
     _patch_queries_path(monkeypatch, path)
     _patch_provider_config(monkeypatch)
@@ -727,7 +712,7 @@ def test_eval_reports_negative_abstention_hint(monkeypatch, tmp_path):
 def test_eval_refresh_preserves_non_lookup_rows(
     monkeypatch, tmp_path, fake_store, fake_llm
 ):
-    """reconcile keys on expected[0]; it must never see a multi-doc or negative row."""
+    """Reconcile keys on expected[0]; it must never see a multi-doc or negative row."""
     import json
 
     from esdc.corpus.sampling import corpus_fingerprint
@@ -737,16 +722,19 @@ def test_eval_refresh_preserves_non_lookup_rows(
     _patch_provider_config(monkeypatch)
     meta = {
         "fingerprint": corpus_fingerprint(fake_store.fingerprint_rows()),
-        "margin": 0.05, "n": 3, "ks": [1],
-        "embedding_model": "qwen3", "generated_at": "2026-08-05T00:00:00",
+        "margin": 0.05,
+        "n": 3,
+        "ks": [1],
+        "embedding_model": "qwen3",
+        "generated_at": "2026-08-05T00:00:00",
     }
     path.write_text(
         json.dumps({"_meta": meta})
         + '\n{"query": "l", "expected": ["letter-0"], "class": "lookup",'
-          ' "file_hash": "h0"}\n'
-          '{"query": "x", "expected": ["letter-0", "letter-1"],'
-          ' "class": "cross_reference"}\n'
-          '{"query": "n", "expected": [], "class": "negative"}\n',
+        ' "file_hash": "h0"}\n'
+        '{"query": "x", "expected": ["letter-0", "letter-1"],'
+        ' "class": "cross_reference"}\n'
+        '{"query": "n", "expected": [], "class": "negative"}\n',
         encoding="utf-8",
     )
 
@@ -768,9 +756,7 @@ def test_eval_refresh_missing_file_errors(monkeypatch, tmp_path):
     result = runner.invoke(app, ["corpus", "eval", "--refresh"])
     assert result.exit_code == 1
     assert "--init" in result.output
-    assert result.exception is None or isinstance(
-        result.exception, SystemExit
-    )
+    assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
 def test_eval_stale_fingerprint_blocks(monkeypatch, tmp_path, fake_store):
@@ -779,8 +765,12 @@ def test_eval_stale_fingerprint_blocks(monkeypatch, tmp_path, fake_store):
     path = tmp_path / "corpus_queries.jsonl"
     _patch_queries_path(monkeypatch, path)
     meta = QueryMeta(
-        fingerprint="deadbeef", margin=0.05, n=1, ks=[1, 5, 10],
-        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+        fingerprint="deadbeef",
+        margin=0.05,
+        n=1,
+        ks=[1, 5, 10],
+        embedding_model="qwen3",
+        generated_at="2026-07-25T00:00:00",
     )
     write_query_file(path, [{"query": "q", "expected": ["letter-0"]}], meta)
 
@@ -809,8 +799,11 @@ def test_eval_stale_reports_changed_doc(monkeypatch, tmp_path, fake_store):
     ]
     meta = QueryMeta(
         fingerprint="stale-fp",  # deliberately not matching the live fingerprint
-        margin=0.05, n=3, ks=[1, 5, 10],
-        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+        margin=0.05,
+        n=3,
+        ks=[1, 5, 10],
+        embedding_model="qwen3",
+        generated_at="2026-07-25T00:00:00",
     )
     write_query_file(path, rows, meta)
 
@@ -836,21 +829,25 @@ def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
     _patch_provider_config(monkeypatch)
 
     # Query file matching the store's current (3-doc) fingerprint.
-    old_rows = [
-        {"query": f"q{i}", "expected": [f"letter-{i}"]} for i in range(3)
-    ]
+    old_rows = [{"query": f"q{i}", "expected": [f"letter-{i}"]} for i in range(3)]
     meta = QueryMeta(
         fingerprint=corpus_fingerprint(fake_store.fingerprint_rows()),
-        margin=0.05, n=3, ks=[1, 5, 10],
-        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+        margin=0.05,
+        n=3,
+        ks=[1, 5, 10],
+        embedding_model="qwen3",
+        generated_at="2026-07-25T00:00:00",
     )
     write_query_file(path, old_rows, meta)
 
     # Mutate the corpus: drop letter-2, add letter-3 -> fingerprint changes.
     del fake_store._docs["letter-2"]
     fake_store._docs["letter-3"] = {
-        "doc_id": "letter-3", "doc_type": "letter", "subject": "subject 3",
-        "file_hash": "h3", "chunk_text": "body 3",
+        "doc_id": "letter-3",
+        "doc_type": "letter",
+        "subject": "subject 3",
+        "file_hash": "h3",
+        "chunk_text": "body 3",
     }
 
     class _Resp:
@@ -860,9 +857,7 @@ def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
         def invoke(self, prompt):
             return _Resp()
 
-    monkeypatch.setattr(
-        "esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM()
-    )
+    monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM())
 
     result = runner.invoke(app, ["corpus", "eval", "--refresh"])
     assert result.exit_code == 0, result.output
@@ -874,9 +869,7 @@ def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
     new_ids = {r["expected"][0] for r in new_rows}
     assert "letter-2" not in new_ids
     assert "letter-3" in new_ids
-    assert new_meta.fingerprint == corpus_fingerprint(
-        fake_store.fingerprint_rows()
-    )
+    assert new_meta.fingerprint == corpus_fingerprint(fake_store.fingerprint_rows())
 
 
 # --- corpus sync: rebuild the DuckDB mirror from the SQLite truth ----------
@@ -934,8 +927,12 @@ def test_eval_refresh_reports_changed_count(monkeypatch, tmp_path, fake_store):
         {"query": "q2", "expected": ["letter-2"], "file_hash": "h2"},
     ]
     meta = QueryMeta(
-        fingerprint="stale-fp", margin=0.05, n=3, ks=[1, 5, 10],
-        embedding_model="qwen3", generated_at="2026-07-25T00:00:00",
+        fingerprint="stale-fp",
+        margin=0.05,
+        n=3,
+        ks=[1, 5, 10],
+        embedding_model="qwen3",
+        generated_at="2026-07-25T00:00:00",
     )
     write_query_file(path, old_rows, meta)
 
@@ -946,9 +943,7 @@ def test_eval_refresh_reports_changed_count(monkeypatch, tmp_path, fake_store):
         def invoke(self, prompt):
             return _Resp()
 
-    monkeypatch.setattr(
-        "esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM()
-    )
+    monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda cfg: _FakeLLM())
 
     result = runner.invoke(app, ["corpus", "eval", "--refresh"])
     assert result.exit_code == 0, result.output
