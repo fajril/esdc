@@ -139,7 +139,60 @@ def create_provider(provider_type: str, model: str | None = None, **kwargs) -> P
     return provider_class()
 
 
-def _create_single_llm_from_config(config: dict[str, Any]):
+_TOKEN_KWARG: dict[str, str] = {
+    "openai": "max_completion_tokens",
+    "openai_compatible": "max_completion_tokens",
+    "azure_openai": "max_completion_tokens",
+    "deepseek": "max_completion_tokens",
+    "anthropic": "max_tokens_to_sample",
+    "groq": "max_tokens",
+    "google": "max_tokens",
+    "ollama": "num_predict",
+    "ollama_cloud": "num_predict",
+}
+
+_TIMEOUT_KWARG: dict[str, str] = {
+    "openai": "timeout",
+    "openai_compatible": "timeout",
+    "azure_openai": "timeout",
+    "deepseek": "timeout",
+    "anthropic": "timeout",
+    "groq": "timeout",
+    "google": "request_timeout",
+}
+
+_OLLAMA_TIMEOUT_PROVIDERS = frozenset({"ollama", "ollama_cloud"})
+
+
+def _bounded_llm_kwargs(
+    provider_type: str, max_output_tokens: int, timeout_seconds: float
+) -> dict[str, Any]:
+    """Map extraction bounds to provider-specific LangChain kwargs.
+
+    ``0`` disables a bound; ``(0, 0)`` yields an empty dict so a bounded
+    call degrades to the current unbounded behavior.
+    """
+    if provider_type not in _TOKEN_KWARG:
+        raise ValueError(f"Unknown provider type: {provider_type}")
+    kwargs: dict[str, Any] = {}
+    if max_output_tokens:
+        kwargs[_TOKEN_KWARG[provider_type]] = max_output_tokens
+    if timeout_seconds:
+        timeout = float(timeout_seconds)
+        if provider_type in _OLLAMA_TIMEOUT_PROVIDERS:
+            kwargs["sync_client_kwargs"] = {"timeout": timeout}
+            kwargs["async_client_kwargs"] = {"timeout": timeout}
+        else:
+            kwargs[_TIMEOUT_KWARG[provider_type]] = timeout
+    return kwargs
+
+
+def _create_single_llm_from_config(
+    config: dict[str, Any],
+    *,
+    max_output_tokens: int | None = None,
+    timeout_seconds: float | None = None,
+):
     """Create a LangChain LLM from a single provider config dict."""
     provider_type = config.get("provider_type") or config.get("type")
     if not provider_type:
@@ -167,6 +220,14 @@ def _create_single_llm_from_config(config: dict[str, Any]):
         llm_kwargs["reasoning_effort"] = provider_config.reasoning_effort
     if config.get("temperature") is not None:
         llm_kwargs["temperature"] = config["temperature"]
+    if max_output_tokens or timeout_seconds:
+        llm_kwargs.update(
+            _bounded_llm_kwargs(
+                provider_type,
+                max_output_tokens or 0,
+                timeout_seconds or 0,
+            )
+        )
 
     llm = provider_class.create_llm(
         model=provider_config.model or None,
@@ -181,11 +242,19 @@ def _create_single_llm_from_config(config: dict[str, Any]):
     return llm
 
 
-def create_llm_from_config(config: dict[str, Any]):
+def create_llm_from_config(
+    config: dict[str, Any],
+    *,
+    max_output_tokens: int | None = None,
+    timeout_seconds: float | None = None,
+):
     """Create a LangChain LLM from provider config dict.
 
     If the config contains ``fallback_configs``, returns a wrapper that tries
     the primary provider first and then each fallback provider in order.
+
+    ``max_output_tokens`` and ``timeout_seconds`` are applied to every
+    primary and fallback provider. ``None`` or ``0`` leaves a bound disabled.
     """
     configs = [config] + list(config.get("fallback_configs") or [])
     llms: list[BaseChatModel] = []
@@ -195,7 +264,11 @@ def create_llm_from_config(config: dict[str, Any]):
 
     for cfg in configs:
         try:
-            llm = _create_single_llm_from_config(cfg)
+            llm = _create_single_llm_from_config(
+                cfg,
+                max_output_tokens=max_output_tokens,
+                timeout_seconds=timeout_seconds,
+            )
             llms.append(llm)
             provider_names.append(str(cfg.get("name") or cfg.get("provider_type")))
             model_names.append(str(cfg.get("model") or ""))

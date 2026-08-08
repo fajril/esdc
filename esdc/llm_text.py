@@ -40,3 +40,33 @@ def strip_thinking_tags(text: str) -> str:
     text = _THINKING_BLOCK_RE.sub("", text)
     text = _UNCLOSED_THINKING_RE.sub("", text)
     return _THINKING_TAG_RE.sub("", text)
+
+
+def has_degenerate_repetition(
+    text: str,
+    *,
+    min_length: int = 20_000,
+    repeated_lines: int = 20,
+    probe_size: int = 128,
+) -> bool:
+    """Detect degenerate repetition: repeated lines or a periodic tail.
+
+    Stdlib-only, not a general compression analyzer.
+    """
+    if len(text) < min_length:
+        return False
+    previous = None
+    run = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped == previous:
+            run += 1
+        else:
+            previous = stripped
+            run = 1
+        if run >= repeated_lines:
+            return True
+    probe = text[-probe_size:]
+    return text.count(probe) >= 3

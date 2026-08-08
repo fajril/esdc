@@ -9,15 +9,22 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from esdc.knowledge.guideline import Guideline, build_extraction_prompt
-from esdc.llm_text import strip_thinking_tags
+from esdc.llm_text import has_degenerate_repetition, strip_thinking_tags
 
 logger = logging.getLogger(__name__)
+
+_RETRY_SUFFIX = """
+
+Your previous response was rejected. Return a single valid JSON object only.
+Start with { and end with }. No prose, markdown fences, or repeated items.
+Escape quote characters inside JSON strings.
+"""
 
 
 def _dump_raw_response(raw: str, doc_meta: dict[str, Any], reason: str) -> str | None:
@@ -34,15 +41,23 @@ def _dump_raw_response(raw: str, doc_meta: dict[str, Any], reason: str) -> str |
         dump_dir = Config.get_cache_dir() / "extract_failures"
         dump_dir.mkdir(parents=True, exist_ok=True)
         doc_id = str(doc_meta.get("doc_id") or "unknown")
-        path = dump_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{doc_id}.txt"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        path = dump_dir / f"{stamp}-{doc_id}-{reason}.txt"
+        if len(raw) <= 64_000:
+            body = raw
+            truncated = False
+        else:
+            body = raw[:48_000] + "\n\n... RESPONSE ELIDED ...\n\n" + raw[-16_000:]
+            truncated = True
         path.write_text(
             f"# reason: {reason}\n"
             f"# doc_id: {doc_id}\n"
             f"# response_len: {len(raw)}\n"
+            f"# response_truncated: {str(truncated).lower()}\n"
             f"# has_think_open: {'<think' in raw.lower()}\n"
             f"# has_think_close: {'</think' in raw.lower()}\n"
             f"# brace_open: {raw.count('{')} brace_close: {raw.count('}')}\n"
-            f"{'-' * 70}\n{raw}",
+            f"{'-' * 70}\n{body}",
             encoding="utf-8",
         )
         return str(path)
@@ -121,40 +136,51 @@ def extract_knowledge(
     doc_meta: dict[str, Any],
     guideline: Guideline,
     llm_caller: Callable[[str], str],
+    *,
+    max_attempts: int = 2,
 ) -> ExtractionResult:
     prompt = build_extraction_prompt(guideline, doc_meta, markdown)
-    raw = llm_caller(prompt)
+    reason = "no_json_object"
+    raw = ""
+    for attempt in range(max_attempts):
+        # Provider-level failure is handled by fallback in the caller; do not
+        # catch or retry llm_caller exceptions (one timeout window per call).
+        raw = llm_caller(prompt)
 
-    # Strip reasoning blocks before matching, to prevent greedy {.*} from
-    # matching from a brace inside <think>…</think> to the closing brace
-    # of the real JSON. Keep original raw for all diagnostics.
-    candidate = strip_thinking_tags(raw)
+        if not has_degenerate_repetition(raw):
+            # Strip reasoning blocks before matching, to prevent greedy {.*}
+            # from matching from a brace inside <think>…</think> to the
+            # closing brace of the real JSON. Keep original raw for all
+            # diagnostics.
+            candidate = strip_thinking_tags(raw)
+            match = re.search(r"\{.*\}", candidate, re.DOTALL)
+            if match:
+                try:
+                    parsed_dict = json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    reason = "json_decode_error"
+                else:
+                    return ExtractionResult(
+                        entities=_clean_entities(
+                            parsed_dict.get("entities"),
+                            set(guideline.entity_types),
+                        ),
+                        claims=_clean_claims(
+                            parsed_dict.get("claims"), set(guideline.claim_types)
+                        ),
+                        unknown_types=_clean_unknowns(parsed_dict.get("unknown_types")),
+                    )
+            else:
+                reason = "no_json_object"
+        else:
+            reason = "repetition_loop"
 
-    # Validate that the response contains valid JSON before parsing.
-    # This ensures we raise ValueError for both:
-    # 1. No {..} object found at all
-    # 2. {..} found but fails to parse (unquoted keys, trailing commas, etc.)
-    match = re.search(r"\{.*\}", candidate, re.DOTALL)
-    if not match:
-        dump = _dump_raw_response(raw, doc_meta, "no_json_object")
-        raise ValueError(
-            f"LLM response contained no valid JSON: {raw[:100]}"
-            + (f" | raw dumped to {dump}" if dump else "")
-        )
+        if attempt < max_attempts - 1:
+            prompt = prompt + _RETRY_SUFFIX
+            logger.warning("[Extract] %s, retrying %s", reason, doc_meta.get("doc_id"))
 
-    try:
-        parsed_dict = json.loads(match.group(0))
-    except json.JSONDecodeError as e:
-        dump = _dump_raw_response(raw, doc_meta, "json_decode_error")
-        raise ValueError(
-            f"LLM response contained invalid JSON: {raw[:100]}"
-            + (f" | raw dumped to {dump}" if dump else "")
-        ) from e
-
-    return ExtractionResult(
-        entities=_clean_entities(
-            parsed_dict.get("entities"), set(guideline.entity_types)
-        ),
-        claims=_clean_claims(parsed_dict.get("claims"), set(guideline.claim_types)),
-        unknown_types=_clean_unknowns(parsed_dict.get("unknown_types")),
+    dump = _dump_raw_response(raw, doc_meta, reason)
+    raise ValueError(
+        f"LLM response contained no valid JSON: {raw[:100]}"
+        + (f" | raw dumped to {dump}" if dump else "")
     )

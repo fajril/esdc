@@ -65,14 +65,22 @@ def _status(progress: bool, msg: str):
         yield
 
 
-def _open_default_llm() -> tuple[Callable[[str], str], str, str]:
+def _open_default_llm(
+    *,
+    max_output_tokens: int | None = None,
+    timeout_seconds: float | None = None,
+) -> tuple[Callable[[str], str], str, str]:
     from esdc.configs import Config
     from esdc.providers import create_llm_from_config
 
     provider_config = Config.get_provider_config()
     if not provider_config:
         raise ValueError("No provider configured. Run 'esdc configs' first.")
-    llm = create_llm_from_config(provider_config)
+    llm = create_llm_from_config(
+        provider_config,
+        max_output_tokens=max_output_tokens,
+        timeout_seconds=timeout_seconds,
+    )
     provider = str(
         provider_config.get("name") or provider_config.get("provider_type") or ""
     )
@@ -138,7 +146,21 @@ def run_learn(
         report.pod_document_added = link_report.pod_document_added
 
         if llm_caller is None:
-            llm_caller, provider, model = _open_default_llm()
+            from esdc.configs import Config
+
+            corpus_cfg = Config.get_corpus_config()
+            extraction_caller, provider, model = _open_default_llm(
+                max_output_tokens=(
+                    int(corpus_cfg.get("extract_max_tokens") or 0) or None
+                ),
+                timeout_seconds=(
+                    float(corpus_cfg.get("extract_timeout_seconds") or 0) or None
+                ),
+            )
+            dossier_caller, _, _ = _open_default_llm()
+        else:
+            extraction_caller = llm_caller
+            dossier_caller = llm_caller
 
         # Phases 2+3: extraction + resolution
         from esdc.corpus.pipeline import _progress_with_status
@@ -157,12 +179,13 @@ def run_learn(
                 src_hash = _doc_source_hash(doc["file_hash"], guideline.content_hash)
                 try:
                     meta = {
+                        "doc_id": doc_id,
                         "doc_type": doc["doc_type"],
                         "doc_date": doc["doc_date"],
                         "subject": doc["subject"],
                     }
                     extraction = extract_knowledge(
-                        doc["markdown"] or "", meta, guideline, llm_caller
+                        doc["markdown"] or "", meta, guideline, extraction_caller
                     )
                     resolution = resolve_extraction(
                         doc_id, extraction, sqlite_conn, duck_conn
@@ -215,7 +238,7 @@ def run_learn(
                     duck_conn,
                     store,
                     guideline.content_hash,
-                    llm_caller,
+                    dossier_caller,
                     provider=provider,
                     model=model,
                     force=force,

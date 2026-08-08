@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from esdc.knowledge.extractor import extract_knowledge
+from esdc.configs import Config
+from esdc.knowledge.extractor import _dump_raw_response, extract_knowledge
 from esdc.knowledge.guideline import load_guideline
 
 META = {"doc_type": "mom", "subject": "MoM POD I Duri", "doc_date": "2023-04-01"}
@@ -129,3 +131,109 @@ def test_error_message_preserves_original_raw_with_thinking_tags():
     # The error message starts with the first 100 chars of raw, which includes
     # the <think> tag if present (since it's at the beginning)
     assert "<think>" in error_msg
+
+
+def test_dump_raw_response_truncates_long_body(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "get_cache_dir", classmethod(lambda cls: tmp_path))
+    raw = "A" * 50_000 + "Z" * 50_000
+    path = _dump_raw_response(raw, {"doc_id": "doc-42"}, "repetition_loop")
+    assert path is not None
+    dumped = Path(path).read_text(encoding="utf-8")
+    assert "# doc_id: doc-42" in dumped
+    assert "# reason: repetition_loop" in dumped
+    assert "# response_len: 100000" in dumped
+    assert "# response_truncated: true" in dumped
+    body = dumped.split("-" * 70 + "\n", maxsplit=1)[1]
+    assert body.count("A") == 48_000
+    assert body.count("Z") == 16_000
+    assert dumped.endswith("Z" * 16_000)
+    assert len(dumped) < 66_000
+
+
+def test_dump_raw_response_short_body_stored_verbatim(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "get_cache_dir", classmethod(lambda cls: tmp_path))
+    raw = '{"entities": [], "claims": [], "unknown_types": []}'
+    path = _dump_raw_response(raw, {"doc_id": "doc-7"}, "json_decode_error")
+    assert path is not None
+    dumped = Path(path).read_text(encoding="utf-8")
+    assert "# response_len: 51" in dumped
+    assert "# response_truncated: false" in dumped
+    body = dumped.split("-" * 70 + "\n", maxsplit=1)[1]
+    assert body == raw
+
+
+_REPEATED_LINE = '    {"type": "field", "name": "Lapangan Tala"},\n'
+_VALID = {"entities": [], "claims": [], "unknown_types": []}
+
+
+def _repeated_response() -> str:
+    return "{\n" + _REPEATED_LINE * 5038
+
+
+def _recording_caller(responses):
+    prompts: list[str] = []
+
+    def caller(prompt: str) -> str:
+        prompts.append(prompt)
+        return responses[min(len(prompts) - 1, len(responses) - 1)]
+
+    return caller, prompts
+
+
+def test_retry_after_repetition_then_succeeds():
+    caller, prompts = _recording_caller([_repeated_response(), json.dumps(_VALID)])
+    result = extract_knowledge("# Doc", META, load_guideline(), caller)
+    assert result.entities == []
+    assert len(prompts) == 2
+    assert prompts[0] != prompts[1]
+    assert "single valid JSON object" in prompts[1]
+
+
+def test_retry_after_prose_then_succeeds():
+    caller, prompts = _recording_caller(["I cannot help with that", json.dumps(_VALID)])
+    result = extract_knowledge("# Doc", META, load_guideline(), caller)
+    assert result.entities == []
+    assert len(prompts) == 2
+    assert prompts[0] != prompts[1]
+    assert "single valid JSON object" in prompts[1]
+
+
+def test_retry_after_unescaped_quotes_then_succeeds():
+    bad = '{"entities": [{"type": "field", "name": "Lapangan "Tala" Tala"}]}'
+    caller, prompts = _recording_caller([bad, json.dumps(_VALID)])
+    result = extract_knowledge("# Doc", META, load_guideline(), caller)
+    assert result.entities == []
+    assert len(prompts) == 2
+    assert prompts[0] != prompts[1]
+    assert "single valid JSON object" in prompts[1]
+
+
+def test_retry_both_fail_dumps_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "get_cache_dir", classmethod(lambda cls: tmp_path))
+    caller, prompts = _recording_caller([_repeated_response(), _repeated_response()])
+    with pytest.raises(ValueError):
+        extract_knowledge("# Doc", META, load_guideline(), caller)
+    assert len(prompts) == 2
+    dumps = list((tmp_path / "extract_failures").glob("*"))
+    assert len(dumps) == 1
+    dumped = Path(dumps[0]).read_text(encoding="utf-8")
+    assert "# reason: repetition_loop" in dumped
+    assert "# doc_id: unknown" in dumped
+
+
+def test_retry_max_attempts_one_single_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "get_cache_dir", classmethod(lambda cls: tmp_path))
+    caller, prompts = _recording_caller(["I cannot help with that"])
+    with pytest.raises(ValueError):
+        extract_knowledge("# Doc", META, load_guideline(), caller, max_attempts=1)
+    assert len(prompts) == 1
+    assert len(list((tmp_path / "extract_failures").glob("*"))) == 1
+
+
+def test_success_first_response_no_retry_no_dump(tmp_path, monkeypatch):
+    monkeypatch.setattr(Config, "get_cache_dir", classmethod(lambda cls: tmp_path))
+    caller, prompts = _recording_caller([json.dumps(_VALID)])
+    result = extract_knowledge("# Doc", META, load_guideline(), caller)
+    assert result.entities == []
+    assert len(prompts) == 1
+    assert not list(tmp_path.rglob("*"))

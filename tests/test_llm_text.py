@@ -1,6 +1,6 @@
-"""Unit tests for esdc.llm_text.strip_thinking_tags."""
+"""Unit tests for esdc.llm_text text helpers."""
 
-from esdc.llm_text import strip_thinking_tags
+from esdc.llm_text import has_degenerate_repetition, strip_thinking_tags
 
 
 def test_strip_thinking_tags_removes_qwen3_blocks():
@@ -53,3 +53,22 @@ def test_strip_thinking_tags_leaves_tags_that_merely_start_with_think():
     # matches as an opener and the unclosed pass drops the rest of the text.
     text = '<thinker>not reasoning</thinker> {"a": 1}'
     assert strip_thinking_tags(text) == text
+
+
+def test_detects_repeated_json_lines():
+    line = '    {"type": "field", "name": "Lapangan Tala"},\n'
+    assert has_degenerate_repetition("{\n" + line * 5038)
+
+
+def test_detects_repeated_inline_prose():
+    sentence = (
+        "Continuing to map the remaining claims about the Benua field, "
+        "including production timing and economic assumptions. "
+    )
+    assert has_degenerate_repetition(sentence * 300)
+
+
+def test_does_not_flag_short_or_varied_json():
+    assert not has_degenerate_repetition("same\n" * 500)
+    varied = "\n".join(f'{{"name": "field-{i}"}}' for i in range(2000))
+    assert not has_degenerate_repetition(varied)

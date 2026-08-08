@@ -103,6 +103,14 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "llama.cpp GPU offload for corpus embed/rerank "
         "(-1=auto: all layers if a GPU is present else CPU; 0=force CPU)"
     ),
+    "corpus.extract_max_tokens": (
+        "Max output tokens for each corpus-knowledge extraction LLM call "
+        "(0 = no cap); dossiers and guideline bootstrap stay unbounded"
+    ),
+    "corpus.extract_timeout_seconds": (
+        "Timeout in seconds for each corpus-knowledge extraction LLM call "
+        "(0 = no timeout); dossiers and guideline bootstrap stay unbounded"
+    ),
     "corpus.min_chars_per_page": (
         "Text-layer character threshold below which a page counts as scanned"
     ),
@@ -152,6 +160,8 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
         "corpus.n_gpu_layers",
+        "corpus.extract_max_tokens",
+        "corpus.extract_timeout_seconds",
     ],
     "Logging": [
         "logging.level",
@@ -1003,6 +1013,12 @@ class Config:
         "cleanup_model": "main",
         "ocr_dpi": 200,  # page render resolution; raise to 300 if OCR quality poor
         "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
+        # extract_max_tokens / extract_timeout_seconds: bounds applied ONLY to
+        # corpus-knowledge extraction LLM calls (`esdc corpus learn`). Dossiers
+        # and --init-guideline bootstrap keep their separate unbounded contract.
+        # 0 disables each bound.
+        "extract_max_tokens": 8192,
+        "extract_timeout_seconds": 300,
         "min_chars_per_page": 50,  # text-layer chars below which a page counts as scanned  # noqa: E501
         "min_image_area": 0.05,  # embedded-image area (fraction of page) below which images are ignored  # noqa: E501
         # ollama_host: Ollama server for corpus OCR + Ollama-named text
@@ -1294,6 +1310,8 @@ class Config:
             "corpus.num_ctx",
             "corpus.min_chars_per_page",
             "corpus.n_gpu_layers",
+            "corpus.extract_max_tokens",
+            "corpus.extract_timeout_seconds",
         }
     )
 

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from esdc.configs import MODEL_SECTIONS, SETTINGS_SECTIONS, Config
+from esdc.configs import KEY_DESCRIPTIONS, MODEL_SECTIONS, SETTINGS_SECTIONS, Config
 
 
 class TestConfigDir:
@@ -303,3 +303,28 @@ class TestBooleanAndIntKeyCoercion:
                 assert key in Config.BOOLEAN_KEYS, f"{key} missing from BOOLEAN_KEYS"
             elif isinstance(value, int):
                 assert key in Config.INT_KEYS, f"{key} missing from INT_KEYS"
+
+
+class TestCorpusExtractionBounds:
+    """Defaults and descriptions for bounded extraction calls."""
+
+    def test_extract_max_tokens_default(self):
+        assert Config.CORPUS_DEFAULTS["extract_max_tokens"] == 8192
+
+    def test_extract_timeout_seconds_default(self):
+        assert Config.CORPUS_DEFAULTS["extract_timeout_seconds"] == 300
+
+    def test_extract_keys_have_descriptions(self):
+        assert "corpus.extract_max_tokens" in KEY_DESCRIPTIONS
+        assert "corpus.extract_timeout_seconds" in KEY_DESCRIPTIONS
+
+    def test_extract_keys_listed_in_wizard_sections(self):
+        from esdc.configs import SETTINGS_SECTIONS
+
+        section_keys = set(SETTINGS_SECTIONS["Corpus processing"])
+        assert "corpus.extract_max_tokens" in section_keys
+        assert "corpus.extract_timeout_seconds" in section_keys
+
+    def test_extract_keys_coerce_as_ints(self):
+        assert Config._coerce_value("corpus.extract_max_tokens", "0") == 0
+        assert Config._coerce_value("corpus.extract_timeout_seconds", "0") == 0

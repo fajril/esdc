@@ -177,3 +177,111 @@ def test_limit_caps_llm_docs(sqlite_conn, duck_conn):
     )
     assert report.docs_processed == 1
     assert report.docs_skipped == 0  # remaining docs are pending, not skipped
+
+
+def test_extraction_and_dossier_use_separate_bounded_callers(
+    sqlite_conn, duck_conn, monkeypatch
+):
+    """Extraction calls carry bounds; dossier calls stay unbounded.
+
+    run_learn must open the default LLM twice: once bounded for
+    extract_knowledge, once unbounded for generate_pod_dossier, and use
+    the matching caller in each phase.
+    """
+    import esdc.knowledge.learn as learn_mod
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        classmethod(
+            lambda cls: {
+                "extract_max_tokens": 8192,
+                "extract_timeout_seconds": 300,
+            }
+        ),
+    )
+
+    opened: list[dict[str, object]] = []
+    extraction_prompts: list[str] = []
+    dossier_prompts: list[str] = []
+
+    def fake_open_default_llm(
+        *, max_output_tokens: int | None = None, timeout_seconds: float | None = None
+    ):
+        opened.append(
+            {"max_output_tokens": max_output_tokens, "timeout_seconds": timeout_seconds}
+        )
+        if max_output_tokens is not None or timeout_seconds is not None:
+
+            def extraction_caller(prompt: str) -> str:
+                extraction_prompts.append(prompt)
+                return json.dumps(EXTRACTION)
+
+            return extraction_caller, "fake", "fake-model"
+
+        def dossier_caller(prompt: str) -> str:
+            dossier_prompts.append(prompt)
+            return "## Approval & Revisions\nstub dossier"
+
+        return dossier_caller, "fake", "fake-model"
+
+    monkeypatch.setattr(learn_mod, "_open_default_llm", fake_open_default_llm)
+    run_learn(
+        sqlite_conn=sqlite_conn,
+        duck_conn=duck_conn,
+        progress=False,
+    )
+
+    assert opened == [
+        {"max_output_tokens": 8192, "timeout_seconds": 300.0},
+        {"max_output_tokens": None, "timeout_seconds": None},
+    ]
+    assert extraction_prompts
+    assert dossier_prompts
+    assert not set(extraction_prompts) & set(dossier_prompts)
+
+
+def test_init_guideline_calls_open_default_llm_without_bounds(sqlite_conn, monkeypatch):
+    """Guideline bootstrap must keep the unconstrained default caller."""
+    import esdc.knowledge.learn as learn_mod
+    from esdc.knowledge.bootstrap import init_guideline
+
+    opened: list[dict[str, object]] = []
+    payload = {
+        "claim_types": {
+            "economics": "NPV, IRR, capex. Predicate examples: npv_musd, irr_pct."
+        },
+        "doc_type_hints": {"letter": "Focus on approval terms."},
+    }
+
+    def fake_open_default_llm(**kwargs):
+        opened.append(dict(kwargs))
+        return lambda p: json.dumps(payload), "fake", "fake-model"
+
+    monkeypatch.setattr(learn_mod, "_open_default_llm", fake_open_default_llm)
+    init_guideline(sqlite_conn=sqlite_conn, force=True)
+
+    assert opened == [{}]
+
+
+def test_extraction_meta_carries_doc_id(sqlite_conn, duck_conn, monkeypatch):
+    import esdc.knowledge.learn as learn_mod
+
+    seen: list[dict[str, object]] = []
+    real_extract = learn_mod.extract_knowledge
+
+    def spy_extract(markdown, doc_meta, guideline, llm_caller):
+        seen.append(dict(doc_meta))
+        return real_extract(markdown, doc_meta, guideline, llm_caller)
+
+    monkeypatch.setattr(learn_mod, "extract_knowledge", spy_extract)
+    run_learn(
+        sqlite_conn=sqlite_conn,
+        duck_conn=duck_conn,
+        llm_caller=_llm,
+        progress=False,
+    )
+
+    assert seen
+    assert all(meta.get("doc_id") for meta in seen)
