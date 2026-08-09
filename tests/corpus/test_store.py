@@ -3,12 +3,14 @@
 import json
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import pytest
 
 from esdc.corpus.chunker import Chunk, chunk_markdown
 from esdc.corpus.store import CorpusStore
+from esdc.embedders import MODEL_ID
 
 
 def _fake_vector(text: str) -> list[float]:
@@ -218,6 +220,10 @@ class FakeLegacyEmbedder(FakeEmbedder):
     model = "qwen3-embedding:0.6b"
 
 
+class FakeCanonicalEmbedder(FakeEmbedder):
+    model = MODEL_ID
+
+
 def test_legacy_ollama_pin_is_repinned_not_rejected(tmp_path: Path):
     db_path = tmp_path / "legacy.duckdb"
     s1 = CorpusStore(db_path=db_path, embedder=FakeLegacyEmbedder())
@@ -225,21 +231,48 @@ def test_legacy_ollama_pin_is_repinned_not_rejected(tmp_path: Path):
     s1.insert_document(DOC, [Chunk(0, None, "isi")])
     s1.close()
 
-    s2 = CorpusStore(db_path=db_path, embedder=FakeEmbedder())
+    s2 = CorpusStore(db_path=db_path, embedder=FakeCanonicalEmbedder())
     # Must NOT raise "embedding model changed" on a legacy pin.
     s2.ensure_tables(validate_model=True)
 
-    meta_row = s2._get_connection().execute(
-        "SELECT embedding_model FROM corpus_meta LIMIT 1"
-    ).fetchone()
+    meta_row = (
+        s2._get_connection()
+        .execute("SELECT embedding_model FROM corpus_meta LIMIT 1")
+        .fetchone()
+    )
     assert meta_row is not None
-    assert meta_row[0] == "fake-embed"
+    assert meta_row[0] == MODEL_ID
 
     sconn = s2._get_sqlite()
     row = sconn.execute(
         "SELECT embedding_model FROM documents WHERE doc_id = ?", [DOC["doc_id"]]
     ).fetchone()
-    assert row is not None and row[0] == "fake-embed"
+    assert row is not None and row[0] == MODEL_ID
+    s2.close()
+
+
+def test_legacy_ollama_pin_rejects_unrelated_same_dimension_model(tmp_path: Path):
+    db_path = tmp_path / "legacy-unrelated.duckdb"
+    s1 = CorpusStore(db_path=db_path, embedder=FakeLegacyEmbedder())
+    s1.ensure_tables()
+    s1.insert_document(DOC, [Chunk(0, None, "isi")])
+    s1.close()
+
+    s2 = CorpusStore(db_path=db_path, embedder=FakeEmbedder())
+    with pytest.raises(ValueError, match="reembed"):
+        s2.ensure_tables(validate_model=True)
+
+    meta_row = (
+        s2._get_connection()
+        .execute("SELECT embedding_model FROM corpus_meta LIMIT 1")
+        .fetchone()
+    )
+    assert meta_row is not None and meta_row[0] == "qwen3-embedding:0.6b"
+    sconn = s2._get_sqlite()
+    row = sconn.execute(
+        "SELECT embedding_model FROM documents WHERE doc_id = ?", [DOC["doc_id"]]
+    ).fetchone()
+    assert row is not None and row[0] == "qwen3-embedding:0.6b"
     s2.close()
 
 
@@ -289,6 +322,7 @@ def test_ensure_tables_migrates_legacy_varchar_entities(tmp_path: Path):
             .execute("SELECT wk_name FROM documents WHERE doc_id = 'abc'")
             .fetchone()
         )
+        assert row is not None
         assert json.loads(row[0]) == ["Rokan"]
         # And a json_each-based filter must not raise:
         store._get_connection().execute(
@@ -459,6 +493,7 @@ def test_ensure_tables_adds_doc_topic_column_to_legacy_documents_table(
             .execute("SELECT doc_topic FROM documents WHERE doc_id = 'abc'")
             .fetchone()
         )
+        assert row is not None
         assert row[0] is None
         # json_each-based filter must not raise on the new column either.
         store._get_connection().execute(
@@ -1204,22 +1239,24 @@ def test_refresh_mirror_rebuilds_documents_from_sqlite_truth(tmp_path):
         "VALUES ('sneaky','s.pdf','/tmp/s.pdf','h1','surat','2026-01-05','# x','docling','m')"
     )
     sconn.commit()
-    assert (
+    before_row = (
         store._get_connection()
         .execute("SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'")
-        .fetchone()[0]
-        == 0
+        .fetchone()
     )
+    assert before_row is not None
+    assert before_row[0] == 0
 
     report = store.refresh_mirror()
 
     assert report.documents == 1
-    assert (
+    after_row = (
         store._get_connection()
         .execute("SELECT COUNT(*) FROM documents WHERE doc_id = 'sneaky'")
-        .fetchone()[0]
-        == 1
+        .fetchone()
     )
+    assert after_row is not None
+    assert after_row[0] == 1
     store.close()
 
 
@@ -1313,12 +1350,18 @@ def test_insert_document_writes_truth_and_chunks_but_not_mirror(tmp_path):
     store.insert_document(doc, [Chunk(index=0, section=None, text="hello")])
 
     conn = store._get_connection()
-    assert conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0] == 1
-    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    chunk_row = conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()
+    assert chunk_row is not None
+    assert chunk_row[0] == 1
+    doc_row = conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+    assert doc_row is not None
+    assert doc_row[0] == 0
     assert store.document_exists("h1") is True  # truth has it
 
     store.refresh_mirror()
-    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    after_row = conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+    assert after_row is not None
+    assert after_row[0] == 1
     store.close()
 
 
@@ -1366,20 +1409,23 @@ def test_insert_document_cleans_up_chunks_when_truth_write_fails(tmp_path):
     doc = dict(DOC)
     doc["doc_id"] = "fails1"
 
-    store._sconn = _RaisingSqliteConn(store._get_sqlite(), store.DOC_TABLE)
+    store._sconn = cast(
+        sqlite3.Connection, _RaisingSqliteConn(store._get_sqlite(), store.DOC_TABLE)
+    )
 
     with pytest.raises(sqlite3.OperationalError):
         store.insert_document(doc, [Chunk(0, "Section", "text")])
 
     conn = store._get_connection()
-    assert (
-        conn.execute(
-            f"SELECT COUNT(*) FROM {store.CHUNK_TABLE} WHERE doc_id = ?",
-            [doc["doc_id"]],
-        ).fetchone()[0]
-        == 0
-    )
-    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    orphan_row = conn.execute(
+        f"SELECT COUNT(*) FROM {store.CHUNK_TABLE} WHERE doc_id = ?",
+        [doc["doc_id"]],
+    ).fetchone()
+    assert orphan_row is not None
+    assert orphan_row[0] == 0
+    doc_row = conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+    assert doc_row is not None
+    assert doc_row[0] == 0
     store.close()
 
 

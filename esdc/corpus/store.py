@@ -49,6 +49,7 @@ import duckdb
 
 from esdc.configs import Config
 from esdc.corpus.chunker import Chunk
+from esdc.embedders import MODEL_ID
 
 if TYPE_CHECKING:
     from esdc.corpus.mirror import MirrorReport
@@ -444,9 +445,7 @@ class CorpusStore:
                 if existing is not None and (
                     existing[0] != model or existing[1] != dim
                 ):
-                    if existing[1] == dim and self._is_legacy_pin(
-                        existing[0], model
-                    ):
+                    if existing[1] == dim and self._is_legacy_pin(existing[0], model):
                         self._repin_legacy_model(conn, existing[0], model)
                     else:
                         raise ValueError(
@@ -884,7 +883,7 @@ class CorpusStore:
         )
         stale: list[str] = []
         for row in rows:
-            doc = dict(zip(cols, row, strict=True))
+            doc: dict[str, Any] = dict(zip(cols, row, strict=True))
             embed_text = doc.pop("sample_embed_text") or ""
             _parse_json_fields(
                 doc, ("doc_topic", "wk_name", "field_name", "project_name", "pod_name")
@@ -990,7 +989,7 @@ class CorpusStore:
         reembed. Never extend this to unproven models: the probe only seeds on
         legacy corpora, so the string check is their only backstop.
         """
-        return stored_model == LEGACY_OLLAMA_MODEL and model != stored_model
+        return stored_model == LEGACY_OLLAMA_MODEL and model == MODEL_ID
 
     def _repin_legacy_model(self, conn: Any, old: str, new: str) -> None:
         """Rewrite a legacy model pin to the canonical one without re-embedding.
@@ -1379,7 +1378,7 @@ class CorpusStore:
         ).fetchall()
         docs: dict[str, dict[str, Any]] = {}
         for row in rows:
-            doc = dict(zip(self._DOC_META_COLUMNS, row, strict=True))
+            doc: dict[str, Any] = dict(zip(self._DOC_META_COLUMNS, row, strict=True))
             _parse_json_fields(
                 doc, ("doc_topic", "wk_name", "field_name", "project_name")
             )
@@ -1839,7 +1838,7 @@ class CorpusStore:
         # DuckDB returns plain tuples (no column names attached), unlike
         # sqlite3.Row below -- zip against the shared column tuple to
         # rebuild the dict.
-        doc = dict(zip(_DOC_COLUMNS, row, strict=True))
+        doc: dict[str, Any] = dict(zip(_DOC_COLUMNS, row, strict=True))
         return _parse_json_fields(doc, _DOC_JSON_FIELDS)
 
     def _get_document_by(self, column: str, value: Any) -> dict[str, Any] | None:
