@@ -214,6 +214,35 @@ def test_meta_mismatch_raises(tmp_path: Path):
     s2.close()
 
 
+class FakeLegacyEmbedder(FakeEmbedder):
+    model = "qwen3-embedding:0.6b"
+
+
+def test_legacy_ollama_pin_is_repinned_not_rejected(tmp_path: Path):
+    db_path = tmp_path / "legacy.duckdb"
+    s1 = CorpusStore(db_path=db_path, embedder=FakeLegacyEmbedder())
+    s1.ensure_tables()
+    s1.insert_document(DOC, [Chunk(0, None, "isi")])
+    s1.close()
+
+    s2 = CorpusStore(db_path=db_path, embedder=FakeEmbedder())
+    # Must NOT raise "embedding model changed" on a legacy pin.
+    s2.ensure_tables(validate_model=True)
+
+    meta_row = s2._get_connection().execute(
+        "SELECT embedding_model FROM corpus_meta LIMIT 1"
+    ).fetchone()
+    assert meta_row is not None
+    assert meta_row[0] == "fake-embed"
+
+    sconn = s2._get_sqlite()
+    row = sconn.execute(
+        "SELECT embedding_model FROM documents WHERE doc_id = ?", [DOC["doc_id"]]
+    ).fetchone()
+    assert row is not None and row[0] == "fake-embed"
+    s2.close()
+
+
 def test_search_not_available(tmp_path: Path):
     s = CorpusStore(db_path=tmp_path / "empty.duckdb", embedder=FakeEmbedder())
     result = s.search("anything", limit=5, filters=None)

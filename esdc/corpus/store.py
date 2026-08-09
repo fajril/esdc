@@ -63,6 +63,11 @@ _QUERY_INSTRUCT = (
     "Indonesian oil and gas regulatory documents and correspondence"
 )
 
+# Pre-refactor Ollama wire tag that some corpora still pin in corpus_meta.
+# Same weights / same cosine space as MODEL_ID (qwen3-embedding-0.6b-q8_0);
+# keep this literal frozen — it names a historical pin, not the live tag.
+LEGACY_OLLAMA_MODEL = "qwen3-embedding:0.6b"
+
 _SQLITE_DOC_DDL = """
 CREATE TABLE IF NOT EXISTS documents (
     doc_id TEXT PRIMARY KEY,
@@ -439,13 +444,18 @@ class CorpusStore:
                 if existing is not None and (
                     existing[0] != model or existing[1] != dim
                 ):
-                    raise ValueError(
-                        f"[Corpus] embedding model changed "
-                        f"(was {existing[0]} dim={existing[1]}, "
-                        f"now {model} dim={dim}). "
-                        f"Existing chunk embeddings are no longer comparable. "
-                        f"Run `esdc corpus reembed` to rebuild them."
-                    )
+                    if existing[1] == dim and self._is_legacy_pin(
+                        existing[0], model
+                    ):
+                        self._repin_legacy_model(conn, existing[0], model)
+                    else:
+                        raise ValueError(
+                            f"[Corpus] embedding model changed "
+                            f"(was {existing[0]} dim={existing[1]}, "
+                            f"now {model} dim={dim}). "
+                            f"Existing chunk embeddings are no longer comparable. "
+                            f"Run `esdc corpus reembed` to rebuild them."
+                        )
         else:
             # First run — seed corpus_meta
             existing = conn.execute(
@@ -457,6 +467,8 @@ class CorpusStore:
                     "(embedding_model, dim) VALUES (?, ?)",
                     [model, dim],
                 )
+            elif existing[1] == dim and self._is_legacy_pin(existing[0], model):
+                self._repin_legacy_model(conn, existing[0], model)
             elif existing[0] != model or existing[1] != dim:
                 raise ValueError(
                     f"[Corpus] embedding model changed "
@@ -968,6 +980,39 @@ class CorpusStore:
                 f"UPDATE {self.DOC_TABLE} SET embedding_model = ? WHERE doc_id = ?",
                 [self._embedder.model, doc_id],
             )
+
+    def _is_legacy_pin(self, stored_model: str, model: str) -> bool:
+        """True when stored_model is the pre-refactor Ollama tag for this model.
+
+        qwen3-embedding:0.6b and MODEL_ID name the same weights in the same
+        cosine space (measured >= 0.9986). The guard compares strings, so
+        treat the legacy tag as an alias and repin rather than demand a
+        reembed. Never extend this to unproven models: the probe only seeds on
+        legacy corpora, so the string check is their only backstop.
+        """
+        return stored_model == LEGACY_OLLAMA_MODEL and model != stored_model
+
+    def _repin_legacy_model(self, conn: Any, old: str, new: str) -> None:
+        """Rewrite a legacy model pin to the canonical one without re-embedding.
+
+        Vectors are unchanged; only the label that names them moves. corpus_meta
+        holds a single row; per-row embedding_model is updated in both the
+        DuckDB documents mirror and the SQLite source-of-truth table (matching
+        the dual write in replace_chunks).
+        """
+        conn.execute(f"UPDATE {self.META_TABLE} SET embedding_model = ?", [new])
+        conn.execute(
+            f"UPDATE {self.DOC_TABLE} SET embedding_model = ? "
+            "WHERE embedding_model = ?",
+            [new, old],
+        )
+        sconn = self._get_sqlite()
+        with sconn:
+            sconn.execute(
+                "UPDATE documents SET embedding_model = ? WHERE embedding_model = ?",
+                [new, old],
+            )
+        logger.info("[Corpus] repinned legacy model %s -> %s (same space)", old, new)
 
     def set_meta(self, embedding_model: str, dim: int) -> None:
         """Overwrite corpus_meta; recreate document_chunks if dim changed.
