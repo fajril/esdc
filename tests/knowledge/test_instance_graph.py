@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from esdc.chat.domain_knowledge.instance_graph import InstanceGraphManager
 from esdc.knowledge.linker import run_deterministic_linking
-from esdc.knowledge.store import KnowledgeStore
+from esdc.knowledge.store import Edge, KnowledgeStore
 
 
 @pytest.fixture
@@ -259,3 +260,221 @@ def test_project_names_degrade_gracefully_on_connection_failure(
     assert hits
     assert hits[0]["entity_id"] == "PRJ-001"
     assert hits[0]["name"] == "PRJ-001"
+
+
+def test_query_rejects_mutation(learned_sqlite: Path):
+    """Public Ladybug queries must reject mutation.
+
+    The instance graph is a disposable read-only index over the relational
+    source of truth. query() is exposed to chat tools, so a write Cypher
+    statement must raise instead of mutating the graph.
+    """
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    with pytest.raises(ValueError, match="read-only"):
+        mgr.query("CREATE (:POD {pod_id: 'forbidden'})")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "CREATE (:POD {pod_id: 'x'})",
+        "MERGE (a:POD {pod_id: 'x'})",
+        "MATCH (a:POD) SET a.rev_num = 5",
+        "MATCH (a:POD) DELETE a",
+        "CALL some_proc() RETURN 1",
+        "LOAD CSV FROM 'x' AS row RETURN row",
+        "DROP TABLE POD",
+        "MATCH (a:POD) RETURN a.pod_id; MATCH (b:POD) RETURN b.pod_id",
+        "MATCH (a:POD) RETURN a.pod_id UNION MATCH (b:POD) RETURN b.pod_id",
+        "MATCH (a:POD) RETURN a.pod_id YIELD something",
+    ],
+)
+def test_query_rejects_non_read(learned_sqlite: Path, bad: str):
+    """Write/DDL/unsupported/multi-statement queries raise before executing."""
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    with pytest.raises(ValueError, match="read-only"):
+        mgr.query(bad)
+
+
+def test_query_read_only_validation_masks_literals(learned_sqlite: Path):
+    """Keywords inside string literals/comments must not trip the guard."""
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    rows = mgr.query(
+        "MATCH (d:Document)-[:ABOUT_POD]->(p:POD) "
+        "WHERE d.subject = 'CREATE UNION SET' "
+        "RETURN d.doc_id, p.pod_id ORDER BY d.doc_id LIMIT 5"
+    )
+    assert isinstance(rows, list)
+    assert not rows
+    rows = mgr.query(
+        "MATCH (d:Document)-[:ABOUT_POD]->(p:POD) "
+        "// CREATE MERGE SET\n"
+        "RETURN d.doc_id, p.pod_id ORDER BY d.doc_id LIMIT 5"
+    )
+    assert rows
+
+
+def test_query_allows_semicolon_in_literal(learned_sqlite: Path):
+    """A semicolon inside a quoted literal is not a statement boundary.
+
+    The semicolon guard must run on the masked query, so ';' inside a
+    string literal is ignored; a single real trailing semicolon is allowed.
+    The literal matches nothing in the corpus, so the query may return empty
+    -- only the list shape is asserted.
+    """
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    rows = mgr.query(
+        "MATCH (d:Document) WHERE d.subject = 'a;b' "
+        "RETURN d.doc_id ORDER BY d.doc_id LIMIT 5;"
+    )
+    assert isinstance(rows, list)
+
+
+def test_query_validates_before_build(learned_sqlite: Path, monkeypatch):
+    """A write query must raise before the graph is built or checked."""
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+
+    def _should_not_build():
+        raise AssertionError("_ensure_built must not run for an invalid query")
+
+    monkeypatch.setattr(mgr, "_ensure_built", _should_not_build)
+    with pytest.raises(ValueError, match="read-only"):
+        mgr.query("CREATE (:POD {pod_id: 'forbidden'})")
+
+
+def test_query_read_only_allowlist_succeeds(learned_sqlite: Path):
+    """Valid MATCH with WHERE/WITH/RETURN/ORDER BY/SKIP/LIMIT passes."""
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    rows = mgr.query(
+        "MATCH (d:Document)-[:ABOUT_POD]->(p:POD) "
+        "WHERE d.doc_type = 'letter' "
+        "WITH d, p "
+        "RETURN d.doc_id, p.pod_id ORDER BY d.doc_id SKIP 0 LIMIT 10"
+    )
+    assert rows
+    optional = mgr.query(
+        "OPTIONAL MATCH (d:Document) WHERE d.doc_type = 'letter' "
+        "RETURN d.doc_id ORDER BY d.doc_id LIMIT 5"
+    )
+    assert len(optional) >= 1
+
+
+def test_temporal_relation_projection(learned_sqlite: Path, sqlite_conn):
+    """REVISES/SUPERSEDES must expose valid_from/valid_to/properties_json."""
+    store = KnowledgeStore(sqlite_conn)
+    store.upsert_edges(
+        [
+            Edge(
+                "pod",
+                "PL-2020-0003-2-2-0",
+                "SUPERSEDES",
+                "pod",
+                "PL-2019-0001-2-2-0",
+                confidence=1.0,
+                method="registry",
+                valid_from="2024-06-01",
+                valid_to="2025-01-01",
+                properties_json='{"revision_effect": "full_replacement"}',
+            )
+        ]
+    )
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    rows = mgr.query(
+        "MATCH (a:POD)-[r:SUPERSEDES]->(b:POD) "
+        "RETURN a.pod_id, b.pod_id, r.valid_from, r.valid_to, r.properties_json"
+    )
+    assert rows
+    hit = next(r for r in rows if r["a.pod_id"] == "PL-2020-0003-2-2-0")
+    assert hit["b.pod_id"] == "PL-2019-0001-2-2-0"
+    assert hit["r.valid_from"] == "2024-06-01"
+    assert hit["r.valid_to"] == "2025-01-01"
+    assert '"revision_effect": "full_replacement"' in hit["r.properties_json"]
+
+    revises = mgr.query(
+        "MATCH (a:POD)-[r:REVISES]->(b:POD) "
+        "RETURN a.pod_id, b.pod_id, r.valid_from, r.properties_json"
+    )
+    assert any(
+        r["a.pod_id"] == "PL-2022-0002-2-2-1"
+        and r["b.pod_id"] == "PL-2019-0001-2-2-0"
+        and r["r.valid_from"] is None
+        and '"revision_effect"' in r["r.properties_json"]
+        for r in revises
+    )
+
+
+def test_rebuild_reflects_sqlite_changes(learned_sqlite: Path, sqlite_conn):
+    """Rebuilding from the same sqlite is identical; edits become visible."""
+    store = KnowledgeStore(sqlite_conn)
+    store.upsert_edges(
+        [
+            Edge(
+                "pod",
+                "PL-2020-0003-2-2-0",
+                "SUPERSEDES",
+                "pod",
+                "PL-2019-0001-2-2-0",
+                confidence=1.0,
+                method="registry",
+                valid_from="2024-06-01",
+                properties_json='{"revision_effect": "full_replacement"}',
+            ),
+            Edge(
+                "pod",
+                "PL-2020-0003-2-2-0",
+                "SUPERSEDES",
+                "pod",
+                "PL-2022-0002-2-2-1",
+                confidence=1.0,
+                method="registry",
+                valid_from="2024-07-01",
+                properties_json='{"revision_effect": "full_replacement"}',
+            ),
+        ]
+    )
+
+    def supersedes_edges(mgr) -> list[dict[str, Any]]:
+        return mgr.query(
+            "MATCH (a:POD)-[r:SUPERSEDES]->(b:POD) "
+            "RETURN a.pod_id, b.pod_id ORDER BY b.pod_id"
+        )
+
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    state_a = supersedes_edges(mgr)
+    assert len(state_a) == 2
+    mgr.close()
+    InstanceGraphManager.reset_for_tests()
+
+    rebuilt = InstanceGraphManager(sqlite_path=learned_sqlite)
+    assert supersedes_edges(rebuilt) == state_a
+    rebuilt.close()
+
+    sqlite_conn.execute(
+        "DELETE FROM kg_edge WHERE rel = 'SUPERSEDES' AND dst_id = 'PL-2022-0002-2-2-1'"
+    )
+    store.upsert_edges(
+        [
+            Edge(
+                "pod",
+                "PL-2019-0001-2-2-0",
+                "SUPERSEDES",
+                "pod",
+                "PL-2020-0003-2-2-0",
+                confidence=1.0,
+                method="registry",
+                valid_from="2025-01-01",
+                properties_json='{"revision_effect": "full_replacement"}',
+            )
+        ]
+    )
+
+    mgr3 = InstanceGraphManager(sqlite_path=learned_sqlite)
+    state_b = supersedes_edges(mgr3)
+    assert len(state_b) == 2
+    assert not any(r["b.pod_id"] == "PL-2022-0002-2-2-1" for r in state_b), (
+        "old in-memory edge must be absent after rebuild"
+    )
+    assert any(
+        r["a.pod_id"] == "PL-2019-0001-2-2-0" and r["b.pod_id"] == "PL-2020-0003-2-2-0"
+        for r in state_b
+    ), "new sqlite edge must be visible after rebuild"

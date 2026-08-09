@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -31,19 +32,21 @@ _NODE_DDL = [
     "CREATE NODE TABLE Field (name STRING PRIMARY KEY)",
     "CREATE NODE TABLE WorkingArea (name STRING PRIMARY KEY)",
 ]
+_TEMPORAL_REL_PROPS = "valid_from STRING, valid_to STRING, properties_json STRING"
 _REL_DDL = [
-    "CREATE REL TABLE ABOUT_POD (FROM Document TO POD, "
-    "confidence DOUBLE, method STRING)",
-    "CREATE REL TABLE ABOUT_FIELD (FROM Document TO Field, "
-    "confidence DOUBLE, method STRING)",
-    "CREATE REL TABLE ABOUT_WK (FROM Document TO WorkingArea, "
-    "confidence DOUBLE, method STRING)",
-    "CREATE REL TABLE ABOUT_PROJECT (FROM Document TO Project, "
-    "confidence DOUBLE, method STRING)",
-    "CREATE REL TABLE HAS_PROJECT (FROM POD TO Project)",
-    "CREATE REL TABLE REVISES (FROM POD TO POD)",
-    "CREATE REL TABLE IN_FIELD (FROM Project TO Field)",
-    "CREATE REL TABLE IN_WK (FROM Field TO WorkingArea)",
+    f"CREATE REL TABLE ABOUT_POD (FROM Document TO POD, confidence DOUBLE, "
+    f"method STRING, {_TEMPORAL_REL_PROPS})",
+    f"CREATE REL TABLE ABOUT_FIELD (FROM Document TO Field, confidence DOUBLE, "
+    f"method STRING, {_TEMPORAL_REL_PROPS})",
+    f"CREATE REL TABLE ABOUT_WK (FROM Document TO WorkingArea, confidence DOUBLE, "
+    f"method STRING, {_TEMPORAL_REL_PROPS})",
+    f"CREATE REL TABLE ABOUT_PROJECT (FROM Document TO Project, "
+    f"confidence DOUBLE, method STRING, {_TEMPORAL_REL_PROPS})",
+    f"CREATE REL TABLE HAS_PROJECT (FROM POD TO Project, {_TEMPORAL_REL_PROPS})",
+    f"CREATE REL TABLE REVISES (FROM POD TO POD, {_TEMPORAL_REL_PROPS})",
+    f"CREATE REL TABLE SUPERSEDES (FROM POD TO POD, {_TEMPORAL_REL_PROPS})",
+    f"CREATE REL TABLE IN_FIELD (FROM Project TO Field, {_TEMPORAL_REL_PROPS})",
+    f"CREATE REL TABLE IN_WK (FROM Field TO WorkingArea, {_TEMPORAL_REL_PROPS})",
 ]
 
 # rel -> (src label, src key, dst label, dst key, has confidence/method)
@@ -54,6 +57,7 @@ _REL_MAP: dict[str, tuple[str, str, str, str, bool]] = {
     "ABOUT_PROJECT": ("Document", "doc_id", "Project", "project_id", True),
     "HAS_PROJECT": ("POD", "pod_id", "Project", "project_id", False),
     "REVISES": ("POD", "pod_id", "POD", "pod_id", False),
+    "SUPERSEDES": ("POD", "pod_id", "POD", "pod_id", False),
     "IN_FIELD": ("Project", "project_id", "Field", "name", False),
     "IN_WK": ("Field", "name", "WorkingArea", "name", False),
 }
@@ -114,6 +118,120 @@ def _cypher_escape(s: str) -> str:
     s = s.replace("'", "\\'")
     s = s.replace('"', '\\"')
     return s
+
+
+# -- public query read-only guard -------------------------------------
+#
+# The instance graph is a disposable read-only index rebuilt from sqlite;
+# public query() must never mutate it. Native read-only connections are
+# unavailable for :memory: databases, so queries are validated lexically
+# before execution. find()/neighbors() build their own read-only queries
+# (e.g. CALL QUERY_FTS_INDEX) and are NOT routed through this guard.
+
+# Known Cypher clauses; multi-word clauses must precede their single-word
+# parts so the alternation matches them whole (OPTIONAL MATCH vs MATCH).
+_KNOWN_CLAUSES = (
+    "OPTIONAL MATCH",
+    "DETACH DELETE",
+    "ORDER BY",
+    "UNION ALL",
+    "LOAD CSV",
+    "MATCH",
+    "WHERE",
+    "WITH",
+    "UNWIND",
+    "RETURN",
+    "SKIP",
+    "LIMIT",
+    "CREATE",
+    "MERGE",
+    "SET",
+    "DELETE",
+    "REMOVE",
+    "DROP",
+    "CALL",
+    "YIELD",
+    "COPY",
+    "ALTER",
+    "INSTALL",
+    "UPDATE",
+    "USE",
+    "EXPLAIN",
+    "PROFILE",
+    "FOREACH",
+    "UNION",
+    "ATTACH",
+    "BEGIN",
+    "COMMIT",
+    "ROLLBACK",
+)
+# The only clauses a public read query may use.
+_ALLOWED_CLAUSES = frozenset(
+    {
+        "MATCH",
+        "OPTIONAL MATCH",
+        "WHERE",
+        "WITH",
+        "UNWIND",
+        "RETURN",
+        "ORDER BY",
+        "SKIP",
+        "LIMIT",
+    }
+)
+_READ_START_RE = re.compile(r"(?:OPTIONAL\s+MATCH|MATCH|UNWIND)\b")
+# mask string/backtick literals and // and /* */ comments so keywords and
+# semicolons inside them never count toward clause/statement validation
+_READ_ONLY_MASK_RE = re.compile(
+    r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`[^`]*`|//[^\n]*|/\*.*?\*/",
+    re.DOTALL,
+)
+_CLAUSE_RE = re.compile(
+    "|".join(
+        r"\b" + r"\s+".join(re.escape(w) for w in c.split()) + r"\b"
+        for c in _KNOWN_CLAUSES
+    )
+)
+
+
+def _validate_read_only(cypher: str) -> None:
+    """Reject anything but a single read-only Cypher statement.
+
+    A public query must begin with MATCH / OPTIONAL MATCH / UNWIND, contain
+    RETURN, use only allowlisted clauses, and hold at most one trailing
+    semicolon. Literals/comments are masked before scanning, so clause
+    keywords and semicolons inside them never count.
+    """
+    query = cypher.strip()
+    if not query:
+        raise ValueError("read-only: empty query")
+    masked = _READ_ONLY_MASK_RE.sub(" ", query).upper().strip()
+    if masked.endswith(";"):
+        masked = masked[:-1].rstrip()
+    if ";" in masked:
+        raise ValueError("read-only: multiple statements are not allowed")
+    if not _READ_START_RE.match(masked):
+        raise ValueError(
+            "read-only: query must begin with MATCH, OPTIONAL MATCH, or UNWIND"
+        )
+    if not re.search(r"\bRETURN\b", masked):
+        raise ValueError("read-only: query must contain RETURN")
+    for clause in _CLAUSE_RE.findall(masked):
+        normalized = " ".join(clause.split())
+        if normalized not in _ALLOWED_CLAUSES:
+            raise ValueError(f"read-only: {normalized} is not allowed")
+
+
+def _rel_props_literal(row: sqlite3.Row) -> str:
+    """Format valid_from/valid_to/properties_json as a Cypher props body."""
+    parts: list[str] = []
+    for key in ("valid_from", "valid_to", "properties_json"):
+        value = row[key]
+        if value is None:
+            parts.append(f"{key}: null")
+        else:
+            parts.append(f"{key}: '{_cypher_escape(str(value))}'")
+    return ", ".join(parts)
 
 
 class InstanceGraphManager:
@@ -357,8 +475,8 @@ class InstanceGraphManager:
     def _load_edges(self, conn: sqlite3.Connection) -> None:
         assert self._conn is not None
         for row in conn.execute(
-            "SELECT src_type, src_id, rel, dst_type, dst_id, confidence, method "
-            "FROM kg_edge"
+            "SELECT src_type, src_id, rel, dst_type, dst_id, confidence, "
+            "method, valid_from, valid_to, properties_json FROM kg_edge"
         ).fetchall():
             rel = row["rel"]
             mapping = _REL_MAP.get(rel)
@@ -372,14 +490,14 @@ class InstanceGraphManager:
                 f"(b:{dst_label} "
                 f"{{{dst_key}: '{_cypher_escape(row['dst_id'])}'}}) "
             )
+            props = _rel_props_literal(row)
             if has_props:
-                cypher += (
-                    f"CREATE (a)-[:{rel} {{confidence: "
-                    f"{float(row['confidence'])}, "
-                    f"method: '{_cypher_escape(row['method'] or '')}'}}]->(b)"
+                props = (
+                    f"confidence: {float(row['confidence'])}, "
+                    f"method: '{_cypher_escape(row['method'] or '')}', "
+                    f"{props}"
                 )
-            else:
-                cypher += f"CREATE (a)-[:{rel}]->(b)"
+            cypher += f"CREATE (a)-[:{rel} {{{props}}}]->(b)"
             try:
                 self._conn.execute(cypher)
             except Exception as e:
@@ -553,6 +671,7 @@ class InstanceGraphManager:
         return result
 
     def query(self, cypher: str) -> list[dict[str, Any]]:
+        _validate_read_only(cypher)
         self._ensure_built()
         if not self._available:
             return []

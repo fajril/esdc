@@ -9,7 +9,7 @@ from pathlib import Path
 import openpyxl
 
 from esdc.pod_registry.publish import publish_pod_registry
-from esdc.pod_registry.store import get_sqlite_connection
+from esdc.pod_registry.store import get_sqlite_connection, validate_revision_effect
 
 _REQUIRED_SHEETS = (
     "POD Record",
@@ -67,6 +67,38 @@ def _int_cell(
     except (TypeError, ValueError):
         errors.append(f"{sheet} row {row_idx}: invalid {column} '{value}'")
         return None
+
+
+def _bool_cell(
+    value: object, sheet: str, row_idx: int, column: str, errors: list[str]
+) -> int | None:
+    """Normalize a workbook boolean cell to 1, 0, or None (blank).
+
+    Excel booleans arrive as Python bool; 1/0 ints and common text spellings
+    ("yes"/"no"/"true"/"false"/"y"/"n") are also accepted. Anything else is a
+    row error, mirroring _int_cell.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("1", "true", "yes", "y"):
+            return 1
+        if text in ("0", "false", "no", "n"):
+            return 0
+    errors.append(f"{sheet} row {row_idx}: invalid {column} '{value}'")
+    return None
+
+
+def _revision_effect_cell(value: object) -> str:
+    """Normalize a workbook revision_effect cell to a canonical value."""
+    if not value:
+        return "unknown"
+    return str(value).strip().lower().replace(" ", "_")
 
 
 def import_pod_registry_workbook(
@@ -200,7 +232,31 @@ def import_pod_registry_workbook(
             errors.append(f"pod_revision row {i}: duplicate pair ({succ}, {pred})")
             continue
         seen_rev_pairs.add((succ, pred))
-        revision_rows.append((succ, pred))
+        effect = _revision_effect_cell(r.get("revision_effect"))
+        remains_valid = _bool_cell(
+            r.get("previous_remains_valid"),
+            "pod_revision",
+            i,
+            "previous_remains_valid",
+            errors,
+        )
+        try:
+            validate_revision_effect(
+                effect, None if remains_valid is None else bool(remains_valid)
+            )
+        except ValueError as exc:
+            errors.append(f"pod_revision row {i}: {exc}")
+            continue
+        revision_rows.append(
+            (
+                succ,
+                pred,
+                effect,
+                _iso(r.get("effective_date")),
+                r.get("amended_scope"),
+                remains_valid,
+            )
+        )
 
     if errors:
         raise PodRegistryImportError(errors)
@@ -237,7 +293,9 @@ def import_pod_registry_workbook(
                 project_rows,
             )
             conn.executemany(
-                "INSERT INTO pod_revision (successor_id, predecessor_id) VALUES (?,?)",
+                "INSERT INTO pod_revision (successor_id, predecessor_id,"
+                " revision_effect, effective_date, amended_scope,"
+                " previous_remains_valid) VALUES (?,?,?,?,?,?)",
                 revision_rows,
             )
         counts = {

@@ -13,7 +13,7 @@ import duckdb
 import pandas as pd
 import typer
 import yaml
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -81,6 +81,14 @@ class LoadSchemaError(ValueError):
 
 class SpreadsheetLoadError(ValueError):
     """Raised when a spreadsheet cannot be loaded with the provided schema."""
+
+
+class PodProjectionError(SpreadsheetLoadError):
+    """POD value cases were committed to SQLite but the DuckDB projection failed.
+
+    The SQLite truth is intact; `esdc corpus sync` (or a later load)
+    retries the projection. Do not re-parse the workbook.
+    """
 
 
 def copy_pod_schema_template(
@@ -402,15 +410,33 @@ def _load_pod_domain_schema() -> LoadSchema:
 def _pod_metric_columns(schema: LoadSchema) -> tuple[ColumnSchema, ...]:
     excluded = {
         "report_date",
-        "effective_date",
+        "as_of_date",
         "case_type",
         "pod_id",
-        "pod_letter_num",
-        "pod_name",
         "pod_scope",
-        "supercedes_by",
     }
     return tuple(column for column in schema.columns if column.name not in excluded)
+
+
+def _pod_project_spec() -> WorkbookSheetSpec:
+    return WorkbookSheetSpec(
+        table_name=POD_PROJECT_SHEET_NAME,
+        description="Many-to-many POD to project mapping.",
+        columns=(
+            ColumnSchema(
+                name="pod_id",
+                type="string",
+                description="Unique POD identifier.",
+                aliases=("ID POD", "POD ID"),
+            ),
+            ColumnSchema(
+                name="project_id",
+                type="string",
+                description="Linked project identifier.",
+                aliases=("project code", "kode proyek"),
+            ),
+        ),
+    )
 
 
 def _build_pod_workbook_specs() -> tuple[WorkbookSheetSpec, ...]:
@@ -423,12 +449,9 @@ def _build_pod_workbook_specs() -> tuple[WorkbookSheetSpec, ...]:
             column_by_name[name]
             for name in (
                 "pod_id",
-                "pod_letter_num",
-                "pod_name",
                 "pod_scope",
-                "supercedes_by",
                 "report_date",
-                "effective_date",
+                "as_of_date",
             )
             if name in column_by_name
         )
@@ -436,26 +459,18 @@ def _build_pod_workbook_specs() -> tuple[WorkbookSheetSpec, ...]:
     )
 
     monitoring_columns: tuple[ColumnSchema, ...] = (
-        column_by_name["pod_id"],
-        column_by_name["case_type"],
-        column_by_name["report_date"],
-        column_by_name["effective_date"],
-    ) + metric_columns
-
-    project_columns = (
-        ColumnSchema(
-            name="pod_id",
-            type="string",
-            description="Unique POD identifier.",
-            aliases=("ID POD", "POD ID"),
-            maps_to=("ProducingLicense",),
-        ),
-        ColumnSchema(
-            name="project_id",
-            type="string",
-            description="Linked project identifier.",
-            aliases=("project code", "kode proyek"),
-        ),
+        tuple(
+            column_by_name[name]
+            for name in (
+                "pod_id",
+                "case_type",
+                "pod_scope",
+                "report_date",
+                "as_of_date",
+            )
+            if name in column_by_name
+        )
+        + metric_columns
     )
 
     return (
@@ -463,18 +478,6 @@ def _build_pod_workbook_specs() -> tuple[WorkbookSheetSpec, ...]:
             table_name=POD_PLAN_SHEET_NAME,
             description="Baseline POD plan data.",
             columns=plan_columns,
-        ),
-        WorkbookSheetSpec(
-            table_name=POD_PROJECT_SHEET_NAME,
-            description="Many-to-many POD to project mapping.",
-            columns=project_columns,
-            links=(
-                LinkSchema(
-                    entity_type="Project",
-                    column="project_id",
-                    target_key="project_id",
-                ),
-            ),
         ),
         WorkbookSheetSpec(
             table_name=POD_MONITORING_SHEET_NAME,
@@ -615,16 +618,15 @@ def generate_pod_workbook_template(
     dn = DefinedName("pod_plan_ids", attr_text=f"{POD_PLAN_SHEET_NAME}!$A$3:$A$1048576")
     workbook.defined_names.add(dn)
 
-    for sheet_name in (POD_PROJECT_SHEET_NAME, POD_MONITORING_SHEET_NAME):
-        dv = DataValidation(
-            type="list",
-            formula1='INDIRECT("pod_plan_ids")',
-            allow_blank=True,
-            error="Pilih POD ID yang valid dari sheet pod_plan",
-            errorTitle="POD ID tidak valid",
-        )
-        workbook[sheet_name].add_data_validation(dv)
-        dv.add("A3:A1048576")
+    dv = DataValidation(
+        type="list",
+        formula1='INDIRECT("pod_plan_ids")',
+        allow_blank=True,
+        error="Pilih POD ID yang valid dari sheet pod_plan",
+        errorTitle="POD ID tidak valid",
+    )
+    workbook[POD_MONITORING_SHEET_NAME].add_data_validation(dv)
+    dv.add("A3:A1048576")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(destination)
@@ -792,30 +794,37 @@ def _load_excel_sheet(
     return _coerce_dataframe(df, schema)
 
 
-def _validate_pod_workbook_crosslinks(
-    plan_df: pd.DataFrame,
-    project_df: pd.DataFrame,
-    monitoring_df: pd.DataFrame,
-) -> None:
-    if plan_df["pod_id"].duplicated().any():
-        raise SpreadsheetLoadError("pod_plan contains duplicate pod_id values.")
-
-    plan_ids = {
+def _pod_plan_ids(plan_df: pd.DataFrame) -> set[str]:
+    return {
         str(value).strip()
         for value in plan_df["pod_id"].dropna().tolist()
         if str(value).strip()
     }
 
-    project_missing = {
-        str(value).strip()
-        for value in project_df["pod_id"].dropna().tolist()
-        if str(value).strip()
-    } - plan_ids
-    if project_missing:
+
+def _validate_pod_workbook_crosslinks(
+    plan_df: pd.DataFrame,
+    project_df: pd.DataFrame | None,
+    monitoring_df: pd.DataFrame,
+) -> None:
+    if plan_df.duplicated(subset=["pod_id", "as_of_date"]).any():
         raise SpreadsheetLoadError(
-            "pod_project references pod_id values not found in pod_plan: "
-            f"{', '.join(sorted(project_missing))}"
+            "pod_plan contains duplicate pod_id/as_of_date rows."
         )
+
+    plan_ids = _pod_plan_ids(plan_df)
+
+    if project_df is not None:
+        project_missing = {
+            str(value).strip()
+            for value in project_df["pod_id"].dropna().tolist()
+            if str(value).strip()
+        } - plan_ids
+        if project_missing:
+            raise SpreadsheetLoadError(
+                "pod_project references pod_id values not found in pod_plan: "
+                f"{', '.join(sorted(project_missing))}"
+            )
 
     monitoring_missing = {
         str(value).strip()
@@ -839,74 +848,62 @@ def _validate_pod_workbook_crosslinks(
             f"Invalid values: {', '.join(sorted(invalid_case_types))}"
         )
 
-    if project_df.duplicated(subset=["pod_id", "project_id"]).any():
+    if (
+        project_df is not None
+        and project_df.duplicated(subset=["pod_id", "project_id"]).any()
+    ):
         raise SpreadsheetLoadError(
             "pod_project contains duplicate pod_id/project_id pairs."
         )
 
-    if monitoring_df.duplicated(subset=["pod_id", "case_type", "effective_date"]).any():
+    if monitoring_df.duplicated(subset=["pod_id", "case_type", "as_of_date"]).any():
         raise SpreadsheetLoadError(
-            "pod_monitoring contains duplicate pod_id/case_type/effective_date rows."
+            "pod_monitoring contains duplicate pod_id/case_type/as_of_date rows."
         )
 
 
-def _create_pod_views(conn: duckdb.DuckDBPyConnection) -> None:
-    schema = _load_pod_domain_schema()
-    metric_names = tuple(column.name for column in _pod_metric_columns(schema))
-    plan_meta = ["pod_letter_num", "pod_name", "pod_scope", "supercedes_by"]
+def _validate_pod_project_matches_canonical(
+    plan_ids: set[str], project_df: pd.DataFrame
+) -> None:
+    """Require the optional pod_project sheet to match canonical project_pod."""
+    if not plan_ids:
+        return
+    from esdc.pod_registry.store import get_sqlite_connection
 
-    metrics_sql = ", ".join(metric_names)
-    plan_meta_sql = ", ".join(plan_meta)
-    null_meta_sql = ", ".join(f"NULL::TEXT AS {name}" for name in plan_meta)
-
-    conn.execute(f"""
-        CREATE OR REPLACE VIEW pod_economics AS
-        SELECT
-            pod_id,
-            'plan'::TEXT AS case_type,
-            report_date,
-            effective_date,
-            {plan_meta_sql},
-            {metrics_sql}
-        FROM pod_plan
-        UNION ALL
-        SELECT
-            pod_id,
-            case_type,
-            report_date,
-            effective_date,
-            {null_meta_sql},
-            {metrics_sql}
-        FROM pod_monitoring
-    """)
-
-    if _table_has_column(conn, "project_resources", "project_id"):
-        conn.execute("""
-            CREATE OR REPLACE VIEW pod_project_economics AS
-            WITH ranked_pr AS (
-                SELECT *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY project_id
-                        ORDER BY report_date DESC NULLS LAST
-                    ) AS rn
-                FROM project_resources
-            )
-            SELECT
-                pe.*,
-                pp.project_id,
-                rpr.project_name,
-                rpr.project_stage,
-                rpr.project_class,
-                rpr.field_name,
-                rpr.wk_name
-            FROM pod_economics pe
-            JOIN pod_project pp ON pe.pod_id = pp.pod_id
-            LEFT JOIN ranked_pr rpr ON pp.project_id = rpr.project_id AND rpr.rn = 1
-        """)
+    placeholders = ", ".join("?" for _ in plan_ids)
+    conn = get_sqlite_connection()
+    try:
+        rows = conn.execute(
+            "SELECT m.pod_id, pp.project_id FROM project_pod pp"
+            " JOIN m_pod m ON m.id = pp.pod_id"
+            f" WHERE m.pod_id IN ({placeholders})",
+            sorted(plan_ids),
+        ).fetchall()
+    finally:
+        conn.close()
+    canonical = {(str(row[0]).strip(), str(row[1]).strip()) for row in rows}
+    workbook = {
+        (str(pod_id).strip(), str(project_id).strip())
+        for pod_id, project_id in project_df[["pod_id", "project_id"]]
+        .dropna()
+        .itertuples(index=False, name=None)
+    }
+    if workbook != canonical:
+        raise SpreadsheetLoadError("pod_project does not match canonical project_pod")
 
 
-def load_pod_workbook_to_duckdb(excel_path: Path | str) -> tuple[LoadResult, ...]:
-    """Load the built-in POD workbook into DuckDB tables."""
+def load_pod_workbook_to_sqlite(excel_path: Path | str) -> tuple[LoadResult, ...]:
+    """Parse a POD workbook, commit value cases to SQLite, refresh DuckDB projection.
+
+    The workbook's plan/monitoring sheets become SQLite `pod_value_case`
+    truth rows via `replace_pod_value_cases`. A legacy three-sheet
+    workbook's `pod_project` sheet is read for cross-link validation only
+    and is never written to SQLite or DuckDB (the canonical `project_pod`
+    stays the source of truth). After the SQLite commit, the DuckDB read
+    projection is refreshed from SQLite so it holds no independent facts.
+    If that projection refresh fails after the commit, `PodProjectionError`
+    reports that the truth is committed and the projection can be retried.
+    """
     excel = Path(excel_path)
     if not excel.exists():
         raise SpreadsheetLoadError(f"Excel file not found: {excel}")
@@ -915,79 +912,71 @@ def load_pod_workbook_to_duckdb(excel_path: Path | str) -> tuple[LoadResult, ...
 
     specs = _build_pod_workbook_specs()
     schemas = {spec.table_name: _sheet_spec_to_load_schema(spec) for spec in specs}
-
     plan_schema = schemas[POD_PLAN_SHEET_NAME]
-    project_schema = schemas[POD_PROJECT_SHEET_NAME]
     monitoring_schema = schemas[POD_MONITORING_SHEET_NAME]
 
     plan_df = _load_excel_sheet(excel, POD_PLAN_SHEET_NAME, plan_schema, header_row=1)
-    project_df = _load_excel_sheet(
-        excel, POD_PROJECT_SHEET_NAME, project_schema, header_row=1
-    )
     monitoring_df = _load_excel_sheet(
         excel, POD_MONITORING_SHEET_NAME, monitoring_schema, header_row=1
     )
-    _validate_pod_workbook_crosslinks(plan_df, project_df, monitoring_df)
 
-    db_path = Config.get_db_file()
-    _ensure_duckdb_database(db_path)
-    Config.get_db_dir().mkdir(parents=True, exist_ok=True)
-    conn = get_duckdb_connection(db_path, read_only=False)
-    results: list[LoadResult] = []
+    project_df: pd.DataFrame | None = None
+    workbook = load_workbook(excel, read_only=True)
     try:
-        conn.execute("BEGIN")
-        for schema, df in (
-            (plan_schema, plan_df),
-            (project_schema, project_df),
-            (monitoring_schema, monitoring_df),
-        ):
-            row_count, link_warnings = _write_dataframe_to_table(conn, schema, df)
-            _create_metadata_table(conn)
-            schema_yaml = yaml.safe_dump(
-                schema.raw, sort_keys=False, allow_unicode=True
-            )
-            conn.execute(
-                f"DELETE FROM {_METADATA_TABLE} WHERE table_name = ?",
-                [schema.table_name],
-            )
-            conn.execute(
-                f"""
-                INSERT INTO {_METADATA_TABLE}
-                    (table_name, description, sheet_name, schema_yaml, loaded_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [
-                    schema.table_name,
-                    schema.description,
-                    schema.sheet_name,
-                    schema_yaml,
-                    datetime.now(timezone.utc).isoformat(),
-                ],
-            )
-            results.append(
-                LoadResult(
-                    table_name=schema.table_name,
-                    row_count=row_count,
-                    column_count=len(schema.columns),
-                    db_path=db_path,
-                    link_warnings=link_warnings,
-                )
-            )
-        _create_pod_views(conn)
-        conn.execute("COMMIT")
-        conn.execute("CHECKPOINT")
-    except Exception:
-        with contextlib.suppress(Exception):
-            conn.execute("ROLLBACK")
-        raise
+        has_project_sheet = POD_PROJECT_SHEET_NAME in workbook.sheetnames
     finally:
-        conn.close()
+        workbook.close()
+    if has_project_sheet:
+        project_df = _load_excel_sheet(
+            excel,
+            POD_PROJECT_SHEET_NAME,
+            _sheet_spec_to_load_schema(_pod_project_spec()),
+            header_row=1,
+        )
+    _validate_pod_workbook_crosslinks(plan_df, project_df, monitoring_df)
+    if project_df is not None:
+        _validate_pod_project_matches_canonical(_pod_plan_ids(plan_df), project_df)
+
+    value_schema = _load_pod_domain_schema()
+    from esdc.pod_registry.value_cases import replace_pod_value_cases
+
+    try:
+        replace_pod_value_cases(None, plan_df, monitoring_df, value_schema)
+    except ValueError as e:
+        raise SpreadsheetLoadError(str(e)) from e
+
+    try:
+        from esdc.pod_registry.publish import publish_pod_registry
+
+        publish_pod_registry()
+    except Exception as e:
+        raise PodProjectionError(
+            f"POD value cases were committed to SQLite, but the DuckDB "
+            f"projection refresh failed: {e}"
+        ) from e
 
     from esdc.chat.tools import invalidate_tool_cache, reset_sql_cache
 
     reset_sql_cache()
     invalidate_tool_cache()
-    return tuple(results)
+
+    db_path = Config.get_db_file()
+    return (
+        LoadResult(
+            table_name=POD_PLAN_SHEET_NAME,
+            row_count=len(plan_df),
+            column_count=len(plan_schema.columns),
+            db_path=db_path,
+            link_warnings=(),
+        ),
+        LoadResult(
+            table_name=POD_MONITORING_SHEET_NAME,
+            row_count=len(monitoring_df),
+            column_count=len(monitoring_schema.columns),
+            db_path=db_path,
+            link_warnings=(),
+        ),
+    )
 
 
 def _cypher_escape(value: Any) -> str:

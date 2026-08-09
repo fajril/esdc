@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS kg_edge (
     method     TEXT NOT NULL,
     evidence   TEXT,
     learned_at TEXT DEFAULT (datetime('now')),
+    valid_from TEXT,
+    valid_to   TEXT,
+    properties_json TEXT,
     UNIQUE (src_type, src_id, rel, dst_type, dst_id)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_edge_src ON kg_edge (src_type, src_id);
@@ -69,6 +72,7 @@ RELATIONS = (
     "ABOUT_PROJECT",
     "HAS_PROJECT",
     "REVISES",
+    "SUPERSEDES",
     "IN_FIELD",
     "IN_WK",
 )
@@ -84,6 +88,9 @@ class Edge:
     confidence: float = 1.0
     method: str = ""
     evidence: str | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
+    properties_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -106,7 +113,17 @@ class KnowledgeStore:
 
     def ensure_tables(self) -> None:
         self._conn.executescript(_DDL)
+        self._migrate_kg_edge()
         self._conn.commit()
+
+    def _migrate_kg_edge(self) -> None:
+        existing = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(kg_edge)").fetchall()
+        }
+        for column in ("valid_from", "valid_to", "properties_json"):
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE kg_edge ADD COLUMN {column} TEXT")
 
     # -- edges ------------------------------------------------------------
 
@@ -115,8 +132,9 @@ class KnowledgeStore:
             """
             INSERT INTO kg_edge
                 (src_type, src_id, rel, dst_type, dst_id,
-                 confidence, method, evidence)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 confidence, method, evidence,
+                 valid_from, valid_to, properties_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (src_type, src_id, rel, dst_type, dst_id) DO UPDATE SET
                 confidence = CASE
                     WHEN excluded.confidence > kg_edge.confidence
@@ -126,7 +144,16 @@ class KnowledgeStore:
                     THEN excluded.method ELSE kg_edge.method END,
                 evidence = CASE
                     WHEN excluded.confidence > kg_edge.confidence
-                    THEN excluded.evidence ELSE kg_edge.evidence END
+                    THEN excluded.evidence ELSE kg_edge.evidence END,
+                valid_from = CASE
+                    WHEN excluded.confidence > kg_edge.confidence
+                    THEN excluded.valid_from ELSE kg_edge.valid_from END,
+                valid_to = CASE
+                    WHEN excluded.confidence > kg_edge.confidence
+                    THEN excluded.valid_to ELSE kg_edge.valid_to END,
+                properties_json = CASE
+                    WHEN excluded.confidence > kg_edge.confidence
+                    THEN excluded.properties_json ELSE kg_edge.properties_json END
             """,
             [
                 (
@@ -138,6 +165,9 @@ class KnowledgeStore:
                     e.confidence,
                     e.method,
                     e.evidence,
+                    e.valid_from,
+                    e.valid_to,
+                    e.properties_json,
                 )
                 for e in edges
             ],
@@ -157,7 +187,8 @@ class KnowledgeStore:
         rows = self._conn.execute(
             """
             SELECT src_type, src_id, rel, dst_type, dst_id,
-                   confidence, method, evidence
+                   confidence, method, evidence,
+                   valid_from, valid_to, properties_json
             FROM kg_edge
             WHERE (src_type = ? AND src_id = ?) OR (dst_type = ? AND dst_id = ?)
             ORDER BY rel, confidence DESC

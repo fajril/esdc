@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from esdc.pod_registry.store import allocate_pod_id, get_sqlite_connection
+from esdc.pod_registry.store import (
+    allocate_pod_id,
+    get_sqlite_connection,
+    validate_revision_effect,
+)
 
 _TABLES = (
     "m_pod",
@@ -287,9 +291,21 @@ def _apply_inserts(
         return []
     if table == "pod_revision":
         for row in inserts:
+            # Validation has already normalized previous_remains_valid, so the
+            # shared helper cannot raise here; map bool back to 1/0 for storage.
+            prev = _previous_remains_valid(row.get("previous_remains_valid"))
             conn.execute(
-                "INSERT INTO pod_revision (successor_id, predecessor_id) VALUES (?, ?)",
-                (row["successor_id"], row["predecessor_id"]),
+                "INSERT INTO pod_revision (successor_id, predecessor_id,"
+                " revision_effect, effective_date, amended_scope,"
+                " previous_remains_valid) VALUES (?,?,?,?,?,?)",
+                (
+                    row["successor_id"],
+                    row["predecessor_id"],
+                    row.get("revision_effect", "unknown"),
+                    row.get("effective_date"),
+                    row.get("amended_scope"),
+                    None if prev is None else (1 if prev else 0),
+                ),
             )
         return []
     if table in ("r_institution", "r_pod_type"):
@@ -585,6 +601,26 @@ def _validate_pod_document(
 # ---------------------------------------------------------------------------
 
 
+def _revision_effect_valid(value: object) -> bool:
+    return value in ("unknown", "partial_amendment", "full_replacement")
+
+
+def _previous_remains_valid(value: object) -> bool | None:
+    """Normalize previous_remains_valid to bool/None for validation.
+
+    Accepts None, bool, and integer 0/1. Any other non-null value raises
+    ValueError so an invalid flag can never be coerced to None and silently
+    pass validation (e.g. revision_effect='unknown' then written as NULL).
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    raise ValueError(
+        f"previous_remains_valid {value!r} must be a boolean, 0/1, or None"
+    )
+
+
 def _validate_pod_revision(
     conn: sqlite3.Connection,
     inserts: list[dict],
@@ -602,6 +638,15 @@ def _validate_pod_revision(
                     "pod_revision does not support updates; delete and insert instead",
                 )
             )
+
+    # A pair that already exists in the db may only be re-inserted when the
+    # same identity is scheduled for deletion in this changeset — that is the
+    # delete+insert replacement idiom for this table.
+    delete_pairs = {
+        (d["successor_id"], d["predecessor_id"])
+        for d in deletes
+        if d.get("successor_id") is not None and d.get("predecessor_id") is not None
+    }
 
     seen_pairs_in_changeset: set[tuple[str, str]] = set()
     for i, row in enumerate(inserts):
@@ -651,6 +696,30 @@ def _validate_pod_revision(
                 )
             )
 
+        effect = row.get("revision_effect", "unknown")
+        if not _revision_effect_valid(effect):
+            errors.append(RowError("insert", i, f"unknown revision_effect: {effect!r}"))
+        else:
+            try:
+                validate_revision_effect(
+                    effect, _previous_remains_valid(row.get("previous_remains_valid"))
+                )
+            except ValueError as exc:
+                errors.append(RowError("insert", i, str(exc)))
+
+        effective_date = row.get("effective_date")
+        if effective_date is not None:
+            try:
+                date.fromisoformat(str(effective_date))
+            except (ValueError, TypeError):
+                errors.append(
+                    RowError(
+                        "insert",
+                        i,
+                        f"effective_date {effective_date!r} is not a valid ISO date",
+                    )
+                )
+
         if successor_id is not None and predecessor_id is not None:
             pair = (successor_id, predecessor_id)
             if pair in seen_pairs_in_changeset:
@@ -663,7 +732,7 @@ def _validate_pod_revision(
                 " WHERE successor_id = ? AND predecessor_id = ?",
                 (successor_id, predecessor_id),
             ).fetchone()
-            if existing is not None:
+            if existing is not None and pair not in delete_pairs:
                 errors.append(RowError("insert", i, f"pair {pair} already exists"))
 
     for i, row in enumerate(deletes):

@@ -22,15 +22,18 @@ The POD registry is deliberately NOT raw-mirrored here. `m_pod`,
 `pod_revision` are normalized SQLite operational tables — `pod_id` on
 the SQLite `pod_document` is `m_pod.id`, a surrogate BIGINT foreign key.
 `esdc/pod_registry/publish.py` owns the read-side POD shapes: it
-denormalizes them into `pod_registry` / `pod_project` / `pod_document`,
-dissolves `r_institution`/`r_pod_type` into plain text columns, and
-replaces every `pod_id` with the canonical string identifier
-(`PL-YYYY-XXXX-A-B-R`) that `esdc/chat/domain_knowledge/
-pod_registry_schema.yaml` documents to the chat agent. A raw copy of the
-SQLite tables under those same names would silently overwrite the
-published, agent-documented shapes with the internal surrogate-keyed
-ones — `refresh_all` converges the published tables instead (see its
-docstring) precisely to avoid that collision.
+denormalizes them into `pod_registry` / `pod_project` / `pod_document`
+/ `pod_revision` / `pod_value_case`, dissolves `r_institution`/
+`r_pod_type` into plain text columns, and replaces every `pod_id` with
+the canonical string identifier (`PL-YYYY-XXXX-A-B-R`) that
+`esdc/chat/domain_knowledge/ pod_registry_schema.yaml` documents to the
+chat agent. A raw copy of the SQLite tables under those same names would
+silently overwrite the published, agent-documented shapes with the
+internal surrogate-keyed ones — `refresh_all` converges the published
+tables instead (see its docstring) precisely to avoid that collision.
+The economics read views (`pod_economics`, `pod_plan`,
+`pod_monitoring`, `pod_project_economics`) are published in the same
+transaction and hold no independent state.
 
 `document_chunks` is NOT derived from SQLite — its embeddings exist only
 in DuckDB — so refresh never rebuilds it and may only delete orphans.
@@ -416,10 +419,10 @@ class MirrorReport:
     orphan_chunks: int = 0
     # Every table this refresh actually converged in DuckDB, by row count:
     # kg_edge/kg_claim (raw-mirrored, see REGISTRY_TABLES) plus
-    # pod_registry/pod_project/pod_document (published, see
-    # esdc.pod_registry.publish). One flat dict rather than a separate
-    # field per source — `esdc corpus sync` just enumerates it — so the
-    # CLI output stays honest about everything refresh_all touched
+    # pod_registry/pod_project/pod_document/pod_revision/pod_value_case
+    # (published, see esdc.pod_registry.publish). One flat dict rather than
+    # a separate field per source — `esdc corpus sync` just enumerates it —
+    # so the CLI output stays honest about everything refresh_all touched
     # without the report shape caring which module produced which table.
     registry: dict[str, int] = field(default_factory=dict)
     views: list[str] = field(default_factory=list)
@@ -430,7 +433,8 @@ def refresh_all(conn: duckdb.DuckDBPyConnection, sqlite_path: Path) -> MirrorRep
 
     Converges both raw mirrors (`documents`, `kg_edge`/`kg_claim`) and
     the published POD registry (`pod_registry`, `pod_project`,
-    `pod_document`) so `esdc corpus sync` — the only place a user runs
+    `pod_document`, `pod_revision`, `pod_value_case`) plus the economics
+    read views, so `esdc corpus sync` — the only place a user runs
     this by hand — repairs the whole read side in one call, including
     the collision `refresh_registry`/`_RETIRED_REGISTRY_TABLES` retires
     (see their docstrings): a pre-fix build's raw `pod_document` mirror

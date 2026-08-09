@@ -74,11 +74,12 @@ from esdc.dbmanager import (  # noqa: E402
 )
 from esdc.loaders import (  # noqa: E402
     LoadSchemaError,
+    PodProjectionError,
     SpreadsheetLoadError,
     copy_pod_schema_template,
     generate_schema_template_from_excel,
     load_excel_to_duckdb,
-    load_pod_workbook_to_duckdb,
+    load_pod_workbook_to_sqlite,
     print_load_result,
 )
 from esdc.pod_registry.importer import (  # noqa: E402
@@ -291,7 +292,15 @@ def load(
             typer.echo("POD registry seeded and published to DuckDB.")
             return
         if schema_pod:
-            results = load_pod_workbook_to_duckdb(from_excel)
+            try:
+                results = load_pod_workbook_to_sqlite(from_excel)
+            except PodProjectionError as e:
+                typer.echo(f"Error: {e}")
+                typer.echo(
+                    "The POD value cases were committed to SQLite. "
+                    "Run 'esdc corpus sync' to retry the DuckDB projection."
+                )
+                raise typer.Exit(1) from None
             for result in results:
                 print_load_result(result)
             return

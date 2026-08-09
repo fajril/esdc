@@ -50,10 +50,28 @@ CREATE TABLE IF NOT EXISTS pod_document (
 CREATE TABLE IF NOT EXISTS pod_revision (
     successor_id   TEXT NOT NULL REFERENCES m_pod(pod_id),
     predecessor_id TEXT NOT NULL REFERENCES m_pod(pod_id),
+    revision_effect TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (revision_effect IN ('unknown', 'partial_amendment', 'full_replacement')),
+    effective_date TEXT,
+    amended_scope TEXT,
+    previous_remains_valid INTEGER
+        CHECK (previous_remains_valid IN (0, 1)),
     UNIQUE (successor_id, predecessor_id),
     CHECK (successor_id <> predecessor_id)
 );
 """
+
+_POD_REVISION_TEMPORAL_COLUMNS = (
+    (
+        "revision_effect",
+        "TEXT NOT NULL DEFAULT 'unknown'"
+        " CHECK (revision_effect IN ('unknown', 'partial_amendment',"
+        " 'full_replacement'))",
+    ),
+    ("effective_date", "TEXT"),
+    ("amended_scope", "TEXT"),
+    ("previous_remains_valid", "INTEGER CHECK (previous_remains_valid IN (0, 1))"),
+)
 
 
 def get_esdc_sqlite_path() -> Path:
@@ -63,6 +81,31 @@ def get_esdc_sqlite_path() -> Path:
 
 def ensure_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(_DDL)
+    # Migrate pre-temporal pod_revision tables (two-column) in place: add only
+    # absent columns. Existing rows keep revision_effect='unknown'; no
+    # supersession is inferred. ADD COLUMN with NOT NULL DEFAULT backfills rows.
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(pod_revision)")}
+    for name, definition in _POD_REVISION_TEMPORAL_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE pod_revision ADD COLUMN {name} {definition}")
+
+
+def validate_revision_effect(
+    effect: str,
+    previous_remains_valid: bool | None,
+) -> None:
+    """Validate a revision_effect against its previous_remains_valid flag."""
+    if effect == "partial_amendment":
+        if previous_remains_valid is not True:
+            raise ValueError("partial_amendment requires previous_remains_valid=True")
+    elif effect == "full_replacement":
+        if previous_remains_valid is not False:
+            raise ValueError("full_replacement requires previous_remains_valid=False")
+    elif effect == "unknown":
+        if previous_remains_valid is not None:
+            raise ValueError("unknown permits previous_remains_valid=None only")
+    else:
+        raise ValueError(f"unknown revision_effect: {effect!r}")
 
 
 def get_sqlite_connection(path: Path | None = None) -> sqlite3.Connection:

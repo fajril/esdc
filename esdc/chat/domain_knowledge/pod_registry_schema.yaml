@@ -1,4 +1,22 @@
 # esdc/chat/domain_knowledge/pod_registry_schema.yaml
+schema_version: "1"
+source_of_truth: sqlite
+projection: duckdb
+description: >-
+  Chat-facing contract for the POD registry read projections. SQLite is the
+  source of truth for all registry, revision, link, and value-case facts; the
+  DuckDB tables documented here are replace-mode projections rebuilt by
+  `esdc corpus sync` and carry no independently curated state.
+conceptual_mappings:
+  m_pod.pod_id: ProducingLicense identity
+  pod_registry.pod_id: ProducingLicense identity
+  pod_revision: "REVISES or SUPERSEDES (SUPERSEDES iff full_replacement)"
+  project_pod: "inverse of HAS_PRODUCING_LICENSE / COVERS_PROJECT"
+  pod_project: "inverse of HAS_PRODUCING_LICENSE / COVERS_PROJECT"
+  pod_value_case.as_of_date: observation_time
+  m_pod.approval_date: approval event_time
+  pod_registry.approval_date: approval event_time
+  pod_revision.effective_date: revision valid_from
 tables:
   - table_name: pod_registry
     description: "Master registry of approved PODs (Plan of Development) and related approvals (POD I, POFD/OPL/OPLL, POP): identity, approval date, approving institution, type, and revision lineage. Join to pod_plan and pod_project via pod_id."
@@ -43,9 +61,13 @@ tables:
         type: string
         description: "pod_id(s) this POD revises (semicolon separated). Derived from revision links."
         aliases: ["pendahulu", "predecessor"]
+      - name: revised_by
+        type: string
+        description: "pod_id(s) that revise this POD (semicolon separated). Any revision link, regardless of effect."
+        aliases: ["direvisi oleh", "successor"]
       - name: superseded_by
         type: string
-        description: "pod_id(s) that supersede this POD (semicolon separated). Non-empty means this POD is obsolete."
+        description: "pod_id(s) that supersede this POD (semicolon separated). Only full_replacement revisions populate this; partial amendments and legacy rows with unknown effect do not."
         aliases: ["digantikan oleh", "successor"]
   - table_name: pod_project
     description: "Many-to-many mapping between PODs and esdc projects. Join pod_id to pod_registry.pod_id and project_id to project_resources.project_id."
@@ -69,3 +91,31 @@ tables:
         type: string
         description: "Corpus document identifier (16-hex prefix of the source file hash); joins documents.doc_id."
         aliases: ["dokumen", "document id", "surat"]
+  - table_name: pod_revision
+    description: "Temporal revision links between POD identities: which successor revises which predecessor, the effect (full_replacement, partial_amendment, or unknown for legacy rows), the effective date, the amended scope, and whether the predecessor stays valid."
+    columns:
+      - name: successor_id
+        type: string
+        description: "Canonical POD identifier of the revising (successor) POD."
+        aliases: ["ID POD", "POD ID"]
+      - name: predecessor_id
+        type: string
+        description: "Canonical POD identifier of the revised (predecessor) POD."
+        aliases: ["pendahulu", "predecessor"]
+      - name: revision_effect
+        type: string
+        description: "full_replacement, partial_amendment, or unknown for legacy rows carrying no explicit effect."
+        aliases: ["jenis revisi"]
+        allowed_values: [unknown, partial_amendment, full_replacement]
+      - name: effective_date
+        type: date
+        description: "Date the revision takes effect."
+        aliases: ["tanggal efektif"]
+      - name: amended_scope
+        type: string
+        description: "Scope amended by this revision."
+        aliases: ["lingkup perubahan"]
+      - name: previous_remains_valid
+        type: boolean
+        description: "Whether the predecessor POD remains valid after this revision. 1 for partial_amendment, 0 for full_replacement, NULL for unknown."
+        aliases: ["tetap berlaku"]

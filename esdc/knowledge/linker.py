@@ -147,10 +147,32 @@ def run_deterministic_linking(
             )
         )
 
-    # 5: pod revision chain
+    # 5: pod revision chain. Registry-derived REVISES/SUPERSEDES are fully
+    # reconciled each run: stale rows (effect downgraded from full_replacement,
+    # or pod_revision deleted) must not persist, and equal-confidence temporal
+    # fields refresh because the rows are reinserted rather than upserted.
+    sqlite_conn.execute(
+        "DELETE FROM kg_edge WHERE method = 'registry'"
+        " AND rel IN ('REVISES', 'SUPERSEDES')"
+    )
     for row in sqlite_conn.execute(
-        "SELECT successor_id, predecessor_id FROM pod_revision"
+        "SELECT successor_id, predecessor_id, revision_effect,"
+        " effective_date, amended_scope, previous_remains_valid"
+        " FROM pod_revision"
     ).fetchall():
+        previous_remains_valid = row["previous_remains_valid"]
+        properties_json = json.dumps(
+            {
+                "revision_effect": row["revision_effect"],
+                "amended_scope": row["amended_scope"],
+                "previous_remains_valid": (
+                    None
+                    if previous_remains_valid is None
+                    else bool(previous_remains_valid)
+                ),
+            },
+            sort_keys=True,
+        )
         edges.append(
             Edge(
                 "pod",
@@ -160,8 +182,24 @@ def run_deterministic_linking(
                 row["predecessor_id"],
                 confidence=1.0,
                 method="registry",
+                valid_from=row["effective_date"],
+                properties_json=properties_json,
             )
         )
+        if row["revision_effect"] == "full_replacement":
+            edges.append(
+                Edge(
+                    "pod",
+                    row["successor_id"],
+                    "SUPERSEDES",
+                    "pod",
+                    row["predecessor_id"],
+                    confidence=1.0,
+                    method="registry",
+                    valid_from=row["effective_date"],
+                    properties_json=properties_json,
+                )
+            )
 
     # 6: project -> field -> wk at latest report_year
     latest: list[tuple[Any, ...]] = duck_conn.execute(

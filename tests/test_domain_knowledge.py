@@ -1,6 +1,9 @@
 """Tests for domain_knowledge module."""
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from esdc.chat.domain_knowledge import (
     AGGREGATION_LEVELS,
@@ -833,3 +836,131 @@ class TestKsmiRetrieveEntityResolution:
 
         result = ksmi_retrieve("definition", "xyznonexistent")
         assert "not found" in result.lower()
+
+
+_SCHEMA_ROOT = Path(__file__).resolve().parents[1]
+
+_KSMI_SCHEMA = "esdc/chat/domain_knowledge/ksmi_schema.yaml"
+_POD_SCHEMA = "esdc/chat/domain_knowledge/pod_schema.yaml"
+_POD_REGISTRY_SCHEMA = "esdc/chat/domain_knowledge/pod_registry_schema.yaml"
+
+
+def _load_schema(relative: str) -> dict:
+    with open(_SCHEMA_ROOT / relative, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def _conceptual_mappings() -> dict:
+    pod = _load_schema(_POD_SCHEMA).get("conceptual_mappings", {})
+    registry = _load_schema(_POD_REGISTRY_SCHEMA).get("conceptual_mappings", {})
+    return {**pod, **registry}
+
+
+class TestSchemaConsistency:
+    """Task 7: conceptual schema and temporal classification contracts."""
+
+    def test_ksmi_producing_license_type_set_exact(self):
+        """ProducingLicense.type remains exactly the canonical KSMI six."""
+        ksmi = _load_schema(_KSMI_SCHEMA)
+        canonical = {"pod_1", "pod", "pofd", "opl", "opll", "pop"}
+        assert set(ksmi["ProducingLicense"]["type"]) == canonical
+        assert set(ksmi["ksmi_producing_license_types"]) == canonical
+
+    def test_classification_schemes_disjoint_and_correct(self):
+        """KSMI and ptk_pod schemes are disjoint and correctly tagged."""
+        ksmi = _load_schema(_KSMI_SCHEMA)
+        ksmi_values = set(ksmi["ksmi_producing_license_types"])
+        ptk_values = set(ksmi["ptk_pod_classifications"])
+        assert ksmi_values == {"pod_1", "pod", "pofd", "opl", "opll", "pop"}
+        assert ptk_values == {
+            "pod_selanjutnya",
+            "pod_bertahap",
+            "pod_waterflood",
+            "pod_eor",
+            "pod_enhanced_gas_recovery",
+            "pod_ii_and_subsequent",
+        }
+        assert ksmi_values.isdisjoint(ptk_values)
+        assert ksmi["ProducingLicense"]["classification_scheme"] == "ksmi"
+
+    def test_pod_schema_has_as_of_date_not_analytical_effective_date(self):
+        """pod_schema has as_of_date and no analytical effective_date column."""
+        pod = _load_schema(_POD_SCHEMA)
+        names = {column["name"] for column in pod["columns"]}
+        assert "as_of_date" in names
+        assert "effective_date" not in names
+
+    def test_report_date_never_aliases_approval(self):
+        """report_date does not alias/claim approval; approval maps from registry."""
+        pod = _load_schema(_POD_SCHEMA)
+        registry = _load_schema(_POD_REGISTRY_SCHEMA)
+        report_date = next(
+            column for column in pod["columns"] if column["name"] == "report_date"
+        )
+        assert not any(
+            "approval" in alias.lower() for alias in report_date.get("aliases", [])
+        )
+        description = report_date.get("description", "").lower()
+        assert "approval" not in description or "m_pod.approval_date" in description
+        pod_mappings = " ".join(
+            f"{source} {target}"
+            for source, target in pod.get("conceptual_mappings", {}).items()
+        ).lower()
+        registry_mappings = " ".join(
+            f"{source} {target}"
+            for source, target in registry.get("conceptual_mappings", {}).items()
+        ).lower()
+        assert "approval" not in pod_mappings
+        assert "approval" in registry_mappings
+
+    def test_revision_effect_values_match_registry_contract(self):
+        """Registry contract exposes only supported revision effects."""
+        registry = _load_schema(_POD_REGISTRY_SCHEMA)
+        revision_table = next(
+            table
+            for table in registry["tables"]
+            if table["table_name"] == "pod_revision"
+        )
+        effect = next(
+            column
+            for column in revision_table["columns"]
+            if column["name"] == "revision_effect"
+        )
+        allowed = set(effect["allowed_values"])
+        assert allowed == {"unknown", "partial_amendment", "full_replacement"}
+
+    def test_required_physical_mappings_exist(self):
+        """Tracked contracts map each physical temporal field to its concept."""
+        mappings = _conceptual_mappings()
+        assert mappings["m_pod.pod_id"] == "ProducingLicense identity"
+        assert mappings["pod_registry.pod_id"] == "ProducingLicense identity"
+        assert "SUPERSEDES iff full_replacement" in mappings["pod_revision"]
+        assert "HAS_PRODUCING_LICENSE" in mappings["project_pod"]
+        assert "HAS_PRODUCING_LICENSE" in mappings["pod_project"]
+        assert mappings["pod_value_case.as_of_date"] == "observation_time"
+        assert mappings["m_pod.approval_date"] == "approval event_time"
+        assert mappings["pod_revision.effective_date"] == "revision valid_from"
+
+    def test_schema_version_metadata_exists(self):
+        """Schema/version metadata exists and aligns across contracts."""
+        ksmi = _load_schema(_KSMI_SCHEMA)
+        pod = _load_schema(_POD_SCHEMA)
+        registry = _load_schema(_POD_REGISTRY_SCHEMA)
+        assert ksmi["schema_version"]
+        assert "referenced KSMI version" in ksmi["vocabulary_stability"]
+        for key in (
+            "schema_version",
+            "schema_status",
+            "framework_reference",
+            "vocabulary_stability",
+            "ksmi_producing_license_types",
+            "ptk_pod_classifications",
+        ):
+            assert not isinstance(ksmi[key], dict)
+        assert pod["schema_version"] == "2"
+        assert pod["source_of_truth"] == "sqlite"
+        assert pod["truth_table"] == "pod_value_case"
+        assert pod["table_name"] == pod["truth_table"]
+        assert registry["schema_version"]
+        assert registry["source_of_truth"] == "sqlite"
+        assert registry["projection"] == "duckdb"

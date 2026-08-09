@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 import duckdb
+import pandas as pd
 import pytest
 
 from esdc.corpus.mirror import (
@@ -663,12 +664,15 @@ def test_refresh_all_repairs_a_pre_fix_database(tmp_path: Path):
 
     refresh_all(conn, path)
 
+    # Raw mirrors m_pod/r_institution/r_pod_type/project_pod are retired and
+    # never republished. pod_revision IS republished as the read projection
+    # (see test_refresh_all_rebuilds_pod_revision_projection), so it now
+    # legitimately exists under the canonical VARCHAR shape.
     for table in (
         "m_pod",
         "r_institution",
         "r_pod_type",
         "project_pod",
-        "pod_revision",
     ):
         with pytest.raises(duckdb.CatalogException):
             conn.execute(f"SELECT * FROM {table}")
@@ -684,3 +688,119 @@ def test_refresh_all_repairs_a_pre_fix_database(tmp_path: Path):
     linked_row = conn.execute("SELECT linked_pod_ids FROM v_document").fetchone()
     assert linked_row is not None
     assert linked_row[0] == ["PL-2019-0001-2-2-0"]
+
+
+def _seed_registry_pod(tmp_path: Path) -> Path:
+    """Build a truth with documents + one canonical POD row linked to a project."""
+    from esdc.pod_registry.store import get_sqlite_connection
+
+    path = tmp_path / "truth.sqlite"
+    _make_truth(path, [{"doc_id": "d1"}])
+    conn_s = get_sqlite_connection(path)
+    conn_s.execute(
+        "INSERT INTO r_institution (code, institution) VALUES (2, 'SKK Migas')"
+    )
+    conn_s.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD I')")
+    conn_s.execute(
+        "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
+        " institution_code, pod_type_code, rev_num, approval_seq)"
+        " VALUES (1, 'PL-2019-0001-2-2-0', 'Duri POD I', 'SRT-1', '2019-05-01',"
+        " 2, 2, 0, 1)"
+    )
+    conn_s.execute("INSERT INTO project_pod (pod_id, project_id) VALUES (1, 'PRJ-1')")
+    conn_s.commit()
+    return path
+
+
+def test_refresh_all_rebuilds_pod_revision_projection(tmp_path: Path):
+    """One refresh_all reconstructs the pod_revision read projection from SQLite."""
+    from esdc.pod_registry.store import get_sqlite_connection
+
+    path = _seed_registry_pod(tmp_path)
+    conn_s = get_sqlite_connection(path)
+    conn_s.execute(
+        "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
+        " institution_code, pod_type_code, rev_num, approval_seq)"
+        " VALUES (2, 'PL-2019-0002-2-2-1', 'Duri POD I Rev', 'SRT-2', '2020-01-15',"
+        " 2, 2, 1, 2)"
+    )
+    conn_s.execute(
+        "INSERT INTO pod_revision (successor_id, predecessor_id, revision_effect,"
+        " effective_date, amended_scope, previous_remains_valid)"
+        " VALUES ('PL-2019-0002-2-2-1', 'PL-2019-0001-2-2-0', 'full_replacement',"
+        " '2020-02-01', 'Full scope', 0)"
+    )
+    conn_s.commit()
+    conn_s.close()
+    conn = duckdb.connect()
+
+    refresh_all(conn, path)
+
+    rows = conn.execute(
+        "SELECT successor_id, predecessor_id, revision_effect FROM pod_revision"
+    ).fetchall()
+    assert rows == [("PL-2019-0002-2-2-1", "PL-2019-0001-2-2-0", "full_replacement")]
+    row = conn.execute(
+        "SELECT revised_by, superseded_by FROM pod_registry WHERE pod_id = ?",
+        ["PL-2019-0001-2-2-0"],
+    ).fetchone()
+    assert row == ("PL-2019-0002-2-2-1", "PL-2019-0002-2-2-1")
+
+
+def test_refresh_all_rebuilds_value_cases_and_economics_views(tmp_path: Path):
+    """One refresh_all publishes value cases and the economics views from SQLite."""
+    from esdc.loaders import POD_SCHEMA_PATH, load_schema_from_yaml
+    from esdc.pod_registry.value_cases import replace_pod_value_cases
+
+    path = _seed_registry_pod(tmp_path)
+    schema = load_schema_from_yaml(POD_SCHEMA_PATH)
+    plan_df = pd.DataFrame(
+        [
+            {
+                "pod_id": "PL-2019-0001-2-2-0",
+                "report_date": "2019-06-01",
+                "as_of_date": "2019-12-31",
+                "pod_scope": "Development",
+                "lifting_oil": 5.0,
+            }
+        ]
+    )
+    replace_pod_value_cases(path, plan_df, pd.DataFrame(), schema)
+    conn = duckdb.connect()
+    # Simulate the old workbook loader's stale base tables in DuckDB.
+    conn.execute("CREATE TABLE pod_plan (pod_id VARCHAR)")
+    conn.execute("CREATE TABLE pod_monitoring (pod_id VARCHAR)")
+
+    refresh_all(conn, path)
+
+    tables = {
+        r[0]
+        for r in conn.execute(
+            "SELECT table_name FROM duckdb_tables()"
+            " WHERE database_name = current_database()"
+        ).fetchall()
+    }
+    assert "pod_plan" not in tables
+    assert "pod_monitoring" not in tables
+    views = {
+        r[0]
+        for r in conn.execute(
+            "SELECT view_name FROM duckdb_views()"
+            " WHERE database_name = current_database()"
+        ).fetchall()
+    }
+    assert {
+        "pod_economics",
+        "pod_plan",
+        "pod_monitoring",
+        "pod_project_economics",
+    } <= views
+    assert conn.execute("SELECT pod_id, case_type FROM pod_economics").fetchall() == [
+        ("PL-2019-0001-2-2-0", "plan")
+    ]
+    assert conn.execute("SELECT project_id FROM pod_project_economics").fetchall() == [
+        ("PRJ-1",)
+    ]
+    count_row = conn.execute("SELECT COUNT(*) FROM pod_value_case").fetchone()
+    assert count_row is not None
+    assert count_row[0] == 1
