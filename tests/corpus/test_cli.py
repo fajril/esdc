@@ -866,6 +866,7 @@ def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
     assert "-1 removed" in result.output
 
     new_rows, new_meta = read_query_file(path)
+    assert new_meta is not None
     new_ids = {r["expected"][0] for r in new_rows}
     assert "letter-2" not in new_ids
     assert "letter-3" in new_ids

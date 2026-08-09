@@ -2308,8 +2308,8 @@ def _validate_corpus_overrides(
         )
         raise typer.Exit(1)
 
-    if level is not None and implied_level is not None and level != implied_level:
-        kind, key, _ = rule
+    if level is not None and rule is not None and level != rule[2]:
+        kind, key, implied_level = rule
         typer.echo(
             f"Error: --level {level} conflicts with the {kind} '{key}' rule "
             f"(implies {implied_level}).",

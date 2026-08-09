@@ -29,7 +29,7 @@ import fitz
 import ollama
 from rich.console import Group
 from rich.live import Live
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 
 from esdc.chat.domain_knowledge.doc_schema import legacy_doc_type_map, legacy_topic_seed
 from esdc.chat.domain_knowledge.entity_registry import ENTITY_REGISTRY
@@ -465,7 +465,9 @@ class _ProgressHandle:
     in place. Both lines share one Live so they refresh together.
     """
 
-    def __init__(self, bar: Progress, bar_id: int, status: Progress, status_id: int):
+    def __init__(
+        self, bar: Progress, bar_id: TaskID, status: Progress, status_id: TaskID
+    ):
         self._bar = bar
         self._bar_id = bar_id
         self._status = status
@@ -1329,6 +1331,7 @@ def run_meta(
 
                     if regenerate:
                         p.status("regenerate metadata")
+                        assert regen_caller is not None
                         regen_fields = llm_extract(body, regen_caller)
                         for key in _REGENERATE_FIELDS:
                             meta[key] = regen_fields.get(key)
@@ -1522,29 +1525,29 @@ def run_reembed_documents(
         ) as p:
             for doc_id in doc_ids:
                 name = doc_id
-                if progress:
+                if p is not None:
                     p.file(name)
                 try:
-                    if progress:
+                    if p is not None:
                         p.status("read document")
                     doc = store.get_document(doc_id)
                     if doc is None:
                         report.failed[name] = "document not found"
                         continue
                     name = doc.get("file_name") or doc_id
-                    if progress:
+                    if p is not None:
                         p.status("chunk markdown")
                     chunks = chunk_markdown(
                         doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
                     )
-                    if progress:
+                    if p is not None:
                         p.status("embed + replace")
                     store.replace_chunks(doc, chunks)
                     report.processed.append(name)
                 except Exception as e:
                     report.failed[name] = str(e)
                 finally:
-                    if progress:
+                    if p is not None:
                         p.advance()
         store.rebuild_indexes()
     finally:

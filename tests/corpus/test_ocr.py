@@ -1,5 +1,9 @@
 """Tests for OCR-based document ingestion."""
 
+from typing import cast
+
+import ollama
+
 from esdc.corpus.ocr import OCR_PROMPT, OllamaVisionOcr
 
 
@@ -18,7 +22,9 @@ class FakeOllamaClient:
 
 def test_ocr_page_returns_markdown():
     fake = FakeOllamaClient()
-    ocr = OllamaVisionOcr(model="glm-ocr", client=fake, num_ctx=16384)
+    ocr = OllamaVisionOcr(
+        model="glm-ocr", client=cast(ollama.Client, fake), num_ctx=16384
+    )
     result = ocr.ocr_page(b"\x89PNG")
     assert "SRT-001" in result
     model, messages, options = fake.calls[0]
@@ -30,14 +36,19 @@ def test_ocr_page_returns_markdown():
 
 def test_query_image_sends_custom_prompt():
     fake = FakeOllamaClient(content='{"doc_type": "surat"}')
-    ocr = OllamaVisionOcr(model="glm-ocr", client=fake)
+    ocr = OllamaVisionOcr(model="glm-ocr", client=cast(ollama.Client, fake))
     result = ocr.query_image(b"\x89PNG", "extract metadata as JSON")
     assert result == '{"doc_type": "surat"}'
     assert fake.calls[0][1][0]["content"] == "extract metadata as JSON"
 
 
 def test_health_check_true():
-    assert OllamaVisionOcr(model="m", client=FakeOllamaClient()).health_check() is True
+    assert (
+        OllamaVisionOcr(
+            model="m", client=cast(ollama.Client, FakeOllamaClient())
+        ).health_check()
+        is True
+    )
 
 
 def test_health_check_false():
@@ -45,7 +56,10 @@ def test_health_check_false():
         def show(self, model):
             raise ConnectionError("ollama down")
 
-    assert OllamaVisionOcr(model="m", client=Broken()).health_check() is False
+    assert (
+        OllamaVisionOcr(model="m", client=cast(ollama.Client, Broken())).health_check()
+        is False
+    )
 
 
 def test_remote_host_passed_to_client(monkeypatch):

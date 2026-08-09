@@ -1,6 +1,7 @@
 """Tests for the corpus document extractor."""
 
 from pathlib import Path
+from typing import cast
 
 import fitz  # PyMuPDF, pulled in by pymupdf4llm
 import pytest
@@ -9,6 +10,7 @@ from esdc.corpus import extractor
 from esdc.corpus.extractor import (
     SUPPORTED_EXTENSIONS,
     ExtractionResult,
+    OcrClient,
     extract_document,
     extract_docx,
     extract_markdown,
@@ -227,7 +229,7 @@ def make_docx(
     if image:
         d.add_picture(BytesIO(_tiny_png_bytes()))
     path = tmp_path / name
-    d.save(path)
+    d.save(str(path))
     return path
 
 
@@ -294,7 +296,7 @@ def test_extract_document_routes_pdf(tmp_path, monkeypatch):
     )
     path = tmp_path / "doc.pdf"
     path.write_bytes(b"%PDF-1.4")
-    extract_document(path, ocr_client="sentinel-ocr")
+    extract_document(path, ocr_client=cast(OcrClient, "sentinel-ocr"))
     assert calls == [("pdf", path, "sentinel-ocr")]
 
 

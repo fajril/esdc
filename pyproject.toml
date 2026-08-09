@@ -100,6 +100,7 @@ esdc = ["tests"]
 [tool.basedpyright]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
+exclude = ["**/node_modules", "**/__pycache__", "**/.*", "build"]
 
 # These are expected in this codebase - suppress them
 reportMissingTypeStubs = false

@@ -25,7 +25,9 @@ def _write_workbook(
     path, pod_rows=None, project_rows=None, revision_rows=None, institution_rows=None
 ):
     wb = openpyxl.Workbook()
-    wb.remove(wb.active)
+    active = wb.active
+    assert active is not None
+    wb.remove(active)
 
     ws = wb.create_sheet("POD Record")
     ws.append(

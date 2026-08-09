@@ -332,6 +332,8 @@ class InstanceGraphManager:
             "WHERE src_type IN ('project','field')"
         ).fetchall():
             entity_type, entity_id = row[0], row[1]
+            if not isinstance(entity_id, str):
+                continue
             try:
                 esc_id = _cypher_escape(entity_id)
                 if entity_type == "project":

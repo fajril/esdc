@@ -2215,8 +2215,11 @@ aggregate_documents.description = (
 # fields, so without this the removed kwarg would be dropped quietly and
 # the caller would never learn it did nothing. Forbidding extras on this
 # tool's schema turns that into a ValidationError.
-aggregate_documents.args_schema.model_config["extra"] = "forbid"
-aggregate_documents.args_schema.model_rebuild(force=True)
+args_schema = aggregate_documents.args_schema
+if not isinstance(args_schema, type):
+    raise TypeError("aggregate_documents has no args_schema model")
+args_schema.model_config["extra"] = "forbid"
+args_schema.model_rebuild(force=True)
 
 
 @tool("Document Reader")

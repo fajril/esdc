@@ -26,6 +26,7 @@ def test_write_then_read_roundtrip(tmp_path):
     write_query_file(p, rows, meta)
 
     got_rows, got_meta = read_query_file(p)
+    assert got_meta is not None
     assert got_rows == rows
     assert got_meta.fingerprint == "abc"
     assert got_meta.ks == [1, 5, 10]

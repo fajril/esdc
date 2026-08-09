@@ -355,6 +355,7 @@ class TestCypherEscaping:
     def test_entity_with_single_quote_stored_and_retrievable(self):
         builder = KSMIGraphBuilder()
         builder.build_from_yaml()
+        assert builder._conn is not None
         builder._conn.execute(
             "CREATE (e:KSMIEntity {code: 'QUOTE_TEST', "
             "name: 'Indonesia\\'s Reserve', "
@@ -366,7 +367,7 @@ class TestCypherEscaping:
             "MATCH (e:KSMIEntity {code: 'QUOTE_TEST'}) "
             "RETURN e.name, e.aliases, e.definition"
         )
-        rows = list(result)
+        rows = [tuple(row) for row in result]
         assert len(rows) == 1
         assert rows[0][0] == "Indonesia's Reserve"
         assert rows[0][1] == "Indonesia's oil"
@@ -376,6 +377,7 @@ class TestCypherEscaping:
     def test_project_level_with_quotes_stored_and_retrievable(self):
         builder = KSMIGraphBuilder()
         builder.build_from_yaml()
+        assert builder._conn is not None
         builder._conn.execute(
             "CREATE (l:ProjectLevel {code: 'Q_LEVEL', "
             "name: 'Level\\'s Name', "
@@ -390,7 +392,7 @@ class TestCypherEscaping:
             "RETURN l.name, l.project_classification, "
             "l.definition, l.rule_note"
         )
-        rows = list(result)
+        rows = [tuple(row) for row in result]
         assert len(rows) == 1
         assert rows[0][0] == "Level's Name"
         assert rows[0][1] == "Reserve's Class"

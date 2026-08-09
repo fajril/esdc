@@ -88,6 +88,7 @@ def test_generate_skips_when_hash_matches_and_force_rebuilds(sqlite_conn, duck_c
     assert (status1, status2, status3) == ("built", "skipped", "built")
     assert len(calls) == 2
     dossier = get_dossier(duck_conn, "pod", POD)
+    assert dossier is not None
     assert "Approved 2019" in dossier["dossier_text"]
     assert dossier["model"] == "m"
 
@@ -126,6 +127,7 @@ def test_generate_pod_dossier_strips_reasoning_prose(sqlite_conn, duck_conn):
 
     generate_pod_dossier(POD, sqlite_conn, duck_conn, store, "gh", llm)
     dossier = get_dossier(duck_conn, "pod", POD)
+    assert dossier is not None
     assert dossier["dossier_text"] == "## Approval"
     assert "<think>" not in dossier["dossier_text"]
     assert "plan the dossier" not in dossier["dossier_text"]

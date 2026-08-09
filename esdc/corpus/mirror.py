@@ -151,7 +151,7 @@ def refresh_documents(conn: duckdb.DuckDBPyConnection, sqlite_path: Path) -> int
         # of failing the whole rebuild (see module docstring). That must
         # not go unnoticed, so count — in one query, joined on doc_id —
         # rows where the source had a value but the cast produced NULL.
-        bad_doc_date, bad_ingested_at = conn.execute(
+        row = conn.execute(
             f"SELECT "
             f"SUM(CASE WHEN t.doc_date IS NOT NULL AND d.doc_date IS NULL "
             f"THEN 1 ELSE 0 END), "
@@ -159,6 +159,9 @@ def refresh_documents(conn: duckdb.DuckDBPyConnection, sqlite_path: Path) -> int
             f"THEN 1 ELSE 0 END) "
             f"FROM {truth}.{DOC_TABLE} t JOIN {DOC_TABLE} d ON d.doc_id = t.doc_id"
         ).fetchone()
+        if row is None:
+            raise RuntimeError("mirror query returned no row")
+        bad_doc_date, bad_ingested_at = row[0], row[1]
     for column, bad_count in (
         ("doc_date", bad_doc_date),
         ("ingested_at", bad_ingested_at),
@@ -176,7 +179,10 @@ def refresh_documents(conn: duckdb.DuckDBPyConnection, sqlite_path: Path) -> int
             )
         except Exception as e:  # index failure must not fail the refresh
             logger.warning("[Mirror] index %s failed: %s", idx_name, e)
-    count = conn.execute(f"SELECT COUNT(*) FROM {DOC_TABLE}").fetchone()[0]
+    count_row = conn.execute(f"SELECT COUNT(*) FROM {DOC_TABLE}").fetchone()
+    if count_row is None:
+        raise RuntimeError("mirror query returned no row")
+    count = count_row[0]
     logger.info("[Mirror] documents refreshed | rows=%d", count)
     return count
 
@@ -321,7 +327,10 @@ def refresh_registry(
             conn.execute(
                 f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM {truth}.{table}"
             )
-            copied[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            copied_row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            if copied_row is None:
+                raise RuntimeError("mirror query returned no row")
+            copied[table] = copied_row[0]
         # Retire any POD table a pre-fix build left raw-mirrored here.
         # Unconditional on truth presence (unlike the loop above): these
         # tables are real SQLite operational tables and normally ARE
@@ -356,14 +365,16 @@ def create_views(conn: duckdb.DuckDBPyConnection) -> list[str]:
     that no longer exists.
     """
     created: list[str] = []
-    has_links = bool(
-        conn.execute(
-            "SELECT COUNT(*) FROM duckdb_tables() "
-            "WHERE table_name IN ('pod_document', 'pod_registry') "
-            "AND database_name = current_database()"
-        ).fetchone()[0]
-        == 2
-    )
+    has_links_row = conn.execute(
+        "SELECT COUNT(*) FROM duckdb_tables() "
+        "WHERE table_name IN ('pod_document', 'pod_registry') "
+        "AND database_name = current_database()"
+    ).fetchone()
+    if has_links_row is None:
+        raise RuntimeError("mirror query returned no row")
+    # Both published POD tables must exist; a lone pod_document without
+    # pod_registry (or vice versa) would make the link view's JOIN dangle.
+    has_links = has_links_row[0] == 2
 
     if has_links:
         conn.execute("""

@@ -1,6 +1,9 @@
 """Regression: reasoning-model thinking tags must not leak into titles/tags."""
 
+from typing import cast
+
 import pytest
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
 from esdc.chat.agent import generate_conversation_tags, generate_conversation_title
@@ -24,9 +27,9 @@ QWEN_TITLE_WITH_THINKING = (
 @pytest.mark.asyncio
 async def test_title_ignores_thinking_block():
     llm = StubLLM(QWEN_TITLE_WITH_THINKING)
-    assert await generate_conversation_title(llm, "berapa cadangan nasional") == (
-        "Cadangan nasional"
-    )
+    assert await generate_conversation_title(
+        cast(BaseChatModel, llm), "berapa cadangan nasional"
+    ) == ("Cadangan nasional")
 
 
 @pytest.mark.asyncio
@@ -34,7 +37,7 @@ async def test_thinking_only_response_yields_empty():
     # Old behavior returned the raw thinking text as the title; new behavior
     # strips it, leaving the same empty result a contentless response gives.
     llm = StubLLM("<thinking>only reasoning, no final answer</thinking>")
-    assert await generate_conversation_title(llm, "halo") == ""
+    assert await generate_conversation_title(cast(BaseChatModel, llm), "halo") == ""
 
 
 @pytest.mark.asyncio
@@ -42,7 +45,10 @@ async def test_truncated_thinking_response_yields_empty_title():
     # Token limit hit mid-reasoning: no closing tag, no JSON. Without the
     # unterminated-block guard the reasoning prose itself became the title.
     llm = StubLLM("<thinking>The user asks about reserves, so the title should")
-    assert await generate_conversation_title(llm, "berapa cadangan") == ""
+    assert (
+        await generate_conversation_title(cast(BaseChatModel, llm), "berapa cadangan")
+        == ""
+    )
 
 
 QWEN_TAGS_WITH_THINKING = (
@@ -55,6 +61,6 @@ QWEN_TAGS_WITH_THINKING = (
 @pytest.mark.asyncio
 async def test_tags_ignore_thinking_block():
     llm = StubLLM(QWEN_TAGS_WITH_THINKING)
-    assert await generate_conversation_tags(llm, "list all working areas") == (
-        "Working Areas, Gas Production"
-    )
+    assert await generate_conversation_tags(
+        cast(BaseChatModel, llm), "list all working areas"
+    ) == ("Working Areas, Gas Production")

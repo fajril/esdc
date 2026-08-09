@@ -236,8 +236,8 @@ class TestCreateLlmFromConfigFallback:
             )
 
         assert llm is fallback_model
-        assert llm._esdc_provider_name == "deepseek"
-        assert llm._esdc_model_name == "deepseek-v4-flash"
+        assert getattr(llm, "_esdc_provider_name") == "deepseek"  # noqa: B009
+        assert getattr(llm, "_esdc_model_name") == "deepseek-v4-flash"  # noqa: B009
 
     @patch("esdc.providers.anthropic.ChatAnthropic")
     def test_anthropic_no_config_leak(self, mock_cls):

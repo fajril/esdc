@@ -46,10 +46,12 @@ def test_probe_column_created(tmp_path):
 def test_probe_seeded_on_first_write_path(tmp_path):
     s = _store(tmp_path, [1.0, 0.0, 0.0])
     s.ensure_tables(validate_model=True)
-    stored = (
-        s._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()[0]
+    stored_row = (
+        s._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
     )
     s.close()
+    assert stored_row is not None
+    stored = stored_row[0]
     assert json.loads(stored) == [1.0, 0.0, 0.0]
 
 
@@ -87,8 +89,10 @@ def test_set_meta_rebaselines_probe(tmp_path):
     s.close()
     s2 = _store(tmp_path, [0.0, 1.0, 0.0])
     s2.set_meta("qwen3-embedding-0.6b-q8_0", 3)
-    stored = (
-        s2._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()[0]
+    stored_row = (
+        s2._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
     )
     s2.close()
+    assert stored_row is not None
+    stored = stored_row[0]
     assert json.loads(stored) == [0.0, 1.0, 0.0]

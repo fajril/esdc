@@ -1,5 +1,6 @@
 """Tests for CorpusStore.find_doc_ids and `esdc corpus remove` filters."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ def _isolated_registry(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> CorpusStore:
+def store(tmp_path: Path) -> Iterator[CorpusStore]:
     s = CorpusStore(db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder())
     s.ensure_tables()
     s.insert_document(_doc("aaaa", "letter_a.pdf", "letter", "2019-01-01"), [])

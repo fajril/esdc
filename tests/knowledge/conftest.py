@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
@@ -68,7 +69,7 @@ def _isolate_instance_graph_duckdb(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
-def sqlite_conn(tmp_path: Path) -> sqlite3.Connection:
+def sqlite_conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     """Registry + minimal documents table, seeded with a tiny POD world."""
     conn = get_sqlite_connection(tmp_path / "esdc.sqlite")
     conn.execute(
@@ -198,7 +199,7 @@ def sqlite_conn(tmp_path: Path) -> sqlite3.Connection:
 
 
 @pytest.fixture
-def duck_conn(tmp_path: Path) -> duckdb.DuckDBPyConnection:
+def duck_conn(tmp_path: Path) -> Iterator[duckdb.DuckDBPyConnection]:
     """Minimal project_resources for canonical names + remarks."""
     conn = duckdb.connect(str(tmp_path / "esdc.duckdb"))
     conn.execute(

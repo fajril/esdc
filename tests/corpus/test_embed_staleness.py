@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -53,7 +54,7 @@ def _edit_field_name(store: CorpusStore, doc_id: str, value: str) -> None:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> CorpusStore:
+def store(tmp_path: Path) -> Iterator[CorpusStore]:
     s = CorpusStore(
         db_path=tmp_path / "e.duckdb",
         embedder=FakeEmbedder(),
@@ -107,11 +108,13 @@ def test_run_reembed_documents_refreshes_the_prefix(store: CorpusStore):
     assert report.processed == ["s.pdf"]
     assert report.failed == {}
     assert store.stale_embed_docs() == []
-    embed_text = (
+    embed_row = (
         store._get_connection()
         .execute("SELECT embed_text FROM document_chunks WHERE doc_id = 'd1'")
-        .fetchone()[0]
+        .fetchone()
     )
+    assert embed_row is not None
+    embed_text = embed_row[0]
     assert "Duri Field" in embed_text
     assert "isi surat" in embed_text  # chunk_text preserved
 
@@ -156,7 +159,9 @@ def test_commit_reembeds_documents_whose_blank_entities_it_merged(
     )
     report1 = pipeline.run_commit([tmp_path])
     assert report1.processed == ["doc.corpus.md"]
-    assert store.get_document(doc_id)["field_name"] is None
+    doc = store.get_document(doc_id)
+    assert doc is not None
+    assert doc["field_name"] is None
 
     # Re-extract updates the same sidecar: field_name now populated.
     make_sidecar(
@@ -171,10 +176,12 @@ def test_commit_reembeds_documents_whose_blank_entities_it_merged(
 
     assert any("entities merged" in p for p in report2.processed)
     assert store.stale_embed_docs() == []
-    embed_text = (
+    embed_row = (
         store._get_connection()
         .execute("SELECT embed_text FROM document_chunks WHERE doc_id = ?", (doc_id,))
-        .fetchone()[0]
+        .fetchone()
     )
+    assert embed_row is not None
+    embed_text = embed_row[0]
     assert "Minas" in embed_text
     store.close()

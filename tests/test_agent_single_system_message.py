@@ -10,7 +10,10 @@ to land after the user message, producing [system, user, system] requests.
 agent_node now merges all trailing system content into the leading prompt.
 """
 
+from typing import cast
+
 import pytest
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from esdc.chat.agent import create_agent
@@ -35,7 +38,9 @@ class RecordingLLM:
 async def test_outgoing_request_has_single_leading_system_message():
     """Classifier strategy SystemMessage must merge into the leading prompt."""
     llm = RecordingLLM(AIMessage(content="jawaban final"))
-    agent = create_agent(llm, tools=[], checkpointer=None, context_length=8000)
+    agent = create_agent(
+        cast(BaseChatModel, llm), tools=[], checkpointer=None, context_length=8000
+    )
 
     await agent.ainvoke(
         {"messages": [HumanMessage(content="halo")]},
@@ -65,7 +70,9 @@ async def test_non_qwen_model_keeps_trailing_system_messages():
     """
     llm = RecordingLLM(AIMessage(content="jawaban final"))
     object.__setattr__(llm, "_esdc_model_name", "gpt-4o")
-    agent = create_agent(llm, tools=[], checkpointer=None, context_length=8000)
+    agent = create_agent(
+        cast(BaseChatModel, llm), tools=[], checkpointer=None, context_length=8000
+    )
 
     await agent.ainvoke(
         {"messages": [HumanMessage(content="halo")]},
@@ -86,7 +93,9 @@ async def test_non_qwen_model_keeps_trailing_system_messages():
 async def test_manual_trailing_system_messages_are_merged():
     """Any system message in history (compaction summaries, nudges) merges."""
     llm = RecordingLLM(AIMessage(content="jawaban final"))
-    agent = create_agent(llm, tools=[], checkpointer=None, context_length=8000)
+    agent = create_agent(
+        cast(BaseChatModel, llm), tools=[], checkpointer=None, context_length=8000
+    )
 
     from langchain_core.messages import SystemMessage
 

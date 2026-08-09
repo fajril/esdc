@@ -6,6 +6,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+from typing import cast
 
 from esdc.embedders import InternalEmbedder
 from esdc.search.semantic_resolver import SemanticResolver
@@ -91,9 +92,11 @@ def test_legacy_space_without_meta_seeds_on_query(tmp_path):
         db_path=tmp_path / "s.duckdb", embedder=_FixedEmbedder([1.0, 0.0])
     )
     assert r._ensure_semantic_meta() is None
-    stored = (
-        r._get_connection().execute("SELECT probe_vec FROM semantic_meta").fetchone()[0]
+    stored_row = (
+        r._get_connection().execute("SELECT probe_vec FROM semantic_meta").fetchone()
     )
+    assert stored_row is not None
+    stored = stored_row[0]
     r.close()
     assert json.loads(stored) == [1.0, 0.0]
 
@@ -102,10 +105,11 @@ def test_pin_check_embeds_probe_only_once(tmp_path):
     """A stable DB file signature means the memo hits on the second call."""
     r = _seeded(tmp_path, [1.0, 0.0])
     assert r._ensure_semantic_meta() is None
-    r._embedder.calls = 0
+    embedder = cast(_FixedEmbedder, r._embedder)
+    embedder.calls = 0
     assert r._ensure_semantic_meta() is None
     r.close()
-    assert r._embedder.calls == 0
+    assert embedder.calls == 0
 
 
 def test_pin_recheck_on_db_signature_change(tmp_path):
@@ -116,7 +120,8 @@ def test_pin_recheck_on_db_signature_change(tmp_path):
     """
     r = _seeded(tmp_path, [1.0, 0.0])
     assert r._ensure_semantic_meta() is None
-    r._embedder.calls = 0
+    embedder = cast(_FixedEmbedder, r._embedder)
+    embedder.calls = 0
 
     # Simulate the DB file changing underneath the cached resolver by
     # bumping its mtime, so the recorded signature no longer matches.
@@ -125,7 +130,7 @@ def test_pin_recheck_on_db_signature_change(tmp_path):
 
     assert r._ensure_semantic_meta() is None
     r.close()
-    assert r._embedder.calls == 1
+    assert embedder.calls == 1
 
 
 def test_build_writes_the_pin(tmp_path):
@@ -138,6 +143,7 @@ def test_build_writes_the_pin(tmp_path):
         .execute("SELECT embedding_model, dim FROM semantic_meta")
         .fetchone()
     )
+    assert row is not None
     r.close()
     assert row[0] == "qwen3-embedding-0.6b-q8_0"
     assert row[1] == 2

@@ -607,7 +607,8 @@ class TestOpenAICompatibleContextLength:
         model_extra: dict | None = None,
     ):
         class FakeModel:
-            pass
+            id: str
+            model_extra: dict | None
 
         obj = FakeModel()
         obj.id = id

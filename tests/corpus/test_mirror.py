@@ -85,12 +85,11 @@ def test_refresh_documents_copies_rows_with_faithful_types(truth_path: Path):
     assert types["doc_topic"] == "JSON"
     assert types["field_name"] == "JSON"
     # the year filter used by _build_filter_clause must bind
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM documents WHERE EXTRACT(year FROM doc_date) = 2026"
-        ).fetchone()[0]
-        == 1
-    )
+    row = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE EXTRACT(year FROM doc_date) = 2026"
+    ).fetchone()
+    assert row is not None
+    assert row[0] == 1
 
 
 def test_refresh_documents_wraps_legacy_bare_entity_names(tmp_path: Path):
@@ -100,14 +99,13 @@ def test_refresh_documents_wraps_legacy_bare_entity_names(tmp_path: Path):
 
     refresh_documents(conn, path)
 
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM documents WHERE EXISTS ("
-            "  SELECT 1 FROM json_each(documents.field_name) "
-            "  WHERE CAST(value AS VARCHAR) ILIKE '%duri%')"
-        ).fetchone()[0]
-        == 1
-    )
+    row = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE EXISTS ("
+        "  SELECT 1 FROM json_each(documents.field_name) "
+        "  WHERE CAST(value AS VARCHAR) ILIKE '%duri%')"
+    ).fetchone()
+    assert row is not None
+    assert row[0] == 1
 
 
 def test_refresh_documents_survives_a_malformed_doc_date(tmp_path, caplog):
@@ -196,8 +194,12 @@ def test_sweep_orphan_chunks_removes_chunks_of_deleted_documents(truth_path: Pat
     deleted = sweep_orphan_chunks(conn)
 
     assert deleted == 1
-    assert conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0] == 1
-    assert conn.execute("SELECT doc_id FROM document_chunks").fetchone()[0] == "d1"
+    count_row = conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()
+    assert count_row is not None
+    assert count_row[0] == 1
+    doc_row = conn.execute("SELECT doc_id FROM document_chunks").fetchone()
+    assert doc_row is not None
+    assert doc_row[0] == "d1"
 
 
 def test_sweep_orphan_chunks_survives_a_null_doc_id_in_documents(truth_path: Path):
@@ -222,8 +224,12 @@ def test_sweep_orphan_chunks_survives_a_null_doc_id_in_documents(truth_path: Pat
     deleted = sweep_orphan_chunks(conn)
 
     assert deleted == 1
-    assert conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0] == 1
-    assert conn.execute("SELECT doc_id FROM document_chunks").fetchone()[0] == "d1"
+    count_row = conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()
+    assert count_row is not None
+    assert count_row[0] == 1
+    doc_row = conn.execute("SELECT doc_id FROM document_chunks").fetchone()
+    assert doc_row is not None
+    assert doc_row[0] == "d1"
 
 
 def test_sweep_orphan_chunks_on_fresh_install_returns_zero(truth_path: Path):
@@ -248,7 +254,9 @@ def test_refresh_registry_copies_present_tables_and_skips_absent(tmp_path: Path)
 
     assert copied == {"kg_edge": 1}
     assert "kg_claim" not in copied
-    assert conn.execute("SELECT dst_id FROM kg_edge").fetchone()[0] == "POD-1"
+    row = conn.execute("SELECT dst_id FROM kg_edge").fetchone()
+    assert row is not None
+    assert row[0] == "POD-1"
 
 
 def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path: Path):
@@ -275,7 +283,9 @@ def test_refresh_registry_distinguishes_empty_present_table_from_absent(tmp_path
     assert copied == {"kg_edge": 0}
     assert "kg_claim" not in copied
     # not just the dict says 0 — the table must actually exist in DuckDB
-    assert conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()[0] == 0
+    row = conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()
+    assert row is not None
+    assert row[0] == 0
 
 
 def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(
@@ -299,7 +309,9 @@ def test_refresh_registry_drops_mirror_table_when_truth_table_disappears(
     first = refresh_registry(conn, path)
 
     assert first["kg_edge"] == 1
-    assert conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()[0] == 1
+    row = conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()
+    assert row is not None
+    assert row[0] == 1
 
     conn_s = sqlite3.connect(path)
     conn_s.execute("DROP TABLE kg_edge")
@@ -498,12 +510,16 @@ def test_views_expose_both_grains(tmp_path: Path):
 
     assert set(created) == {"v_doc_pod_link", "v_document"}
     # fan-out grain: one row per (document, pod)
-    assert conn.execute("SELECT COUNT(*) FROM v_doc_pod_link").fetchone()[0] == 2
+    link_count = conn.execute("SELECT COUNT(*) FROM v_doc_pod_link").fetchone()
+    assert link_count is not None
+    assert link_count[0] == 2
     # document grain: one row per document, links aggregated
-    assert conn.execute("SELECT COUNT(*) FROM v_document").fetchone()[0] == 1
-    assert sorted(
-        conn.execute("SELECT linked_pod_ids FROM v_document").fetchone()[0]
-    ) == ["POD-1", "POD-2"]
+    doc_count = conn.execute("SELECT COUNT(*) FROM v_document").fetchone()
+    assert doc_count is not None
+    assert doc_count[0] == 1
+    linked = conn.execute("SELECT linked_pod_ids FROM v_document").fetchone()
+    assert linked is not None
+    assert sorted(linked[0]) == ["POD-1", "POD-2"]
 
 
 def test_views_degrade_when_registry_absent(truth_path: Path):
@@ -513,11 +529,46 @@ def test_views_degrade_when_registry_absent(truth_path: Path):
     created = create_views(conn)
 
     assert created == ["v_document"]
-    assert conn.execute("SELECT COUNT(*) FROM v_document").fetchone()[0] == 2
-    assert (
-        conn.execute("SELECT linked_pod_ids FROM v_document LIMIT 1").fetchone()[0]
-        == []
-    )
+    count_row = conn.execute("SELECT COUNT(*) FROM v_document").fetchone()
+    assert count_row is not None
+    assert count_row[0] == 2
+    linked_row = conn.execute(
+        "SELECT linked_pod_ids FROM v_document LIMIT 1"
+    ).fetchone()
+    assert linked_row is not None
+    assert linked_row[0] == []
+
+
+def test_views_degrade_when_only_one_pod_table_exists(tmp_path: Path):
+    """create_views needs BOTH pod_registry and pod_document for the link view.
+
+    Regression test. create_views used to treat either table's presence
+    (COUNT >= 1) as enough and build v_doc_pod_link from a half-published
+    registry, which made the JOIN dangle. Exactly one table existing must
+    degrade to v_document only — with the stale link view dropped, never
+    attempted — just like when neither table exists.
+    """
+    path = tmp_path / "half.sqlite"
+    _make_truth(path, [{"doc_id": "d1"}])
+    conn = duckdb.connect()
+    refresh_documents(conn, path)
+    conn.execute("CREATE TABLE pod_registry (pod_id VARCHAR, pod_name VARCHAR)")
+    conn.execute("INSERT INTO pod_registry VALUES ('POD-1', 'A')")
+    # pod_document deliberately absent — publish produced only one side.
+
+    created = create_views(conn)
+
+    assert created == ["v_document"]
+    count_row = conn.execute("SELECT COUNT(*) FROM v_document").fetchone()
+    assert count_row is not None
+    assert count_row[0] == 1
+    linked_row = conn.execute(
+        "SELECT linked_pod_ids FROM v_document LIMIT 1"
+    ).fetchone()
+    assert linked_row is not None
+    assert linked_row[0] == []
+    with pytest.raises(duckdb.CatalogException):
+        conn.execute("SELECT * FROM v_doc_pod_link")
 
 
 def test_refresh_all_produces_canonical_varchar_pod_id_not_bigint_fk(tmp_path: Path):
@@ -630,6 +681,6 @@ def test_refresh_all_repairs_a_pre_fix_database(tmp_path: Path):
     assert conn.execute("SELECT doc_id, pod_id FROM v_doc_pod_link").fetchall() == [
         ("d1", "PL-2019-0001-2-2-0")
     ]
-    assert conn.execute("SELECT linked_pod_ids FROM v_document").fetchone()[0] == [
-        "PL-2019-0001-2-2-0"
-    ]
+    linked_row = conn.execute("SELECT linked_pod_ids FROM v_document").fetchone()
+    assert linked_row is not None
+    assert linked_row[0] == ["PL-2019-0001-2-2-0"]

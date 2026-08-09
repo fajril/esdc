@@ -6,6 +6,7 @@ import json
 from unittest.mock import patch
 
 import pytest
+from langchain_core.tools import StructuredTool
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +34,8 @@ def _clear_tool_cache(monkeypatch):
 def _invoke(entity, entity_type=None):
     from esdc.chat.tools import explore_entity
 
+    assert isinstance(explore_entity, StructuredTool)
+    assert explore_entity.func is not None
     return json.loads(explore_entity.func(entity=entity, entity_type=entity_type))
 
 

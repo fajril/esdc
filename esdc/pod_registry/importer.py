@@ -59,6 +59,9 @@ def _int_cell(
     traceback instead of surfacing as one more entry in the per-row error
     list that becomes PodRegistryImportError.
     """
+    if not isinstance(value, (str, int, float)):
+        errors.append(f"{sheet} row {row_idx}: invalid {column} '{value}'")
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -109,22 +112,26 @@ def import_pod_registry_workbook(
     seen_seqs: set[int] = set()
     seen_ids: set[int] = set()
     for i, r in enumerate(pods, start=2):
-        inst = inst_by_name.get(r.get("institution"))
-        ptype = type_by_name.get(r.get("pod_type"))
+        inst_name = r.get("institution")
+        pod_type_name = r.get("pod_type")
         pod_id = r.get("pod_id_skk")
         pid = r.get("pod_id_itb")
         seq = r.get("approval_seq")
+        inst = inst_by_name.get(inst_name) if isinstance(inst_name, str) else None
+        ptype = (
+            type_by_name.get(pod_type_name) if isinstance(pod_type_name, str) else None
+        )
         if inst is None:
             errors.append(
                 f"POD Record row {i}: unknown institution '{r.get('institution')}'"
             )
         if ptype is None:
             errors.append(f"POD Record row {i}: unknown pod_type '{r.get('pod_type')}'")
-        if pod_id in seen_pod_ids:
+        if pod_id is not None and pod_id in seen_pod_ids:
             errors.append(f"POD Record row {i}: duplicate pod_id_skk '{pod_id}'")
-        if seq in seen_seqs:
+        if seq is not None and seq in seen_seqs:
             errors.append(f"POD Record row {i}: duplicate approval_seq '{seq}'")
-        if pid in seen_ids:
+        if pid is not None and pid in seen_ids:
             errors.append(f"POD Record row {i}: duplicate pod_id_itb '{pid}'")
         if pid is None:
             errors.append(f"POD Record row {i}: missing pod_id_itb")
@@ -132,9 +139,12 @@ def import_pod_registry_workbook(
             errors.append(f"POD Record row {i}: missing approval_seq")
         if pod_id is None:
             errors.append(f"POD Record row {i}: missing pod_id_skk")
-        seen_pod_ids.add(pod_id)
-        seen_seqs.add(seq)
-        seen_ids.add(pid)
+        if pod_id is not None:
+            seen_pod_ids.add(pod_id)
+        if seq is not None:
+            seen_seqs.add(seq)
+        if pid is not None:
+            seen_ids.add(pid)
         if (
             inst is None
             or ptype is None

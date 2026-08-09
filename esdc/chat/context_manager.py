@@ -279,8 +279,9 @@ def manage_context_node(
     for m in messages:
         if isinstance(m, AIMessage) and not m.content and not m.tool_calls:
             logger.warning("[CONTEXT] Removing empty AIMessage from history")
-            if getattr(m, "id", None):
-                removals.append(RemoveMessage(id=m.id))
+            message_id = m.id
+            if message_id is not None:
+                removals.append(RemoveMessage(id=message_id))
             continue
         filtered.append(m)
     messages = filtered

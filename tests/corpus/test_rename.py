@@ -104,6 +104,8 @@ def test_run_rename_uses_sidecar_metadata(tmp_path, monkeypatch):
     assert len(plans) == 1
     plan = plans[0]
     assert plan.source == "sidecar"
+    assert plan.new_path is not None
+    assert plan.sidecar_new is not None
     assert plan.new_path.name == "letter - 2024.01.15 - Persetujuan POD Duri.pdf"
     assert (
         plan.sidecar_new.name == "letter - 2024.01.15 - Persetujuan POD Duri.corpus.md"
@@ -128,6 +130,7 @@ def test_run_rename_doc_type_override_beats_sidecar(tmp_path, monkeypatch):
     )
 
     _report, plans = rename_mod.run_rename([tmp_path], doc_type="mom", apply=False)
+    assert plans[0].new_path is not None
     assert plans[0].new_path.name == "mom - 2024.01.15 - Judul.pdf"
 
 
@@ -174,6 +177,7 @@ def test_run_rename_falls_back_to_db(tmp_path, monkeypatch):
 
     _report, plans = rename_mod.run_rename([tmp_path], apply=False)
     assert plans[0].source == "db"
+    assert plans[0].new_path is not None
     assert plans[0].new_path.name == "ba - 2023.12.01 - Berita Acara.pdf"
 
 
@@ -238,6 +242,7 @@ def test_run_rename_llm_tier_receives_filename(tmp_path, monkeypatch):
     _report, plans = rename_mod.run_rename([tmp_path], apply=False)
     assert seen["filename"] == "memo-final.pdf"
     assert plans[0].source == "llm"
+    assert plans[0].new_path is not None
     assert plans[0].new_path.name == "note - 2022.06.30 - Catatan.pdf"
 
 

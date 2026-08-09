@@ -12,7 +12,7 @@ from OCR and deserve extra scrutiny.
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 import docx
 import fitz
@@ -79,7 +79,10 @@ def extract_pdf(
     Without an OCR client these images are counted in images_skipped
     instead of failing: the page still has its text layer.
     """
-    pages = pymupdf4llm.to_markdown(str(path), page_chunks=True)
+    pages = cast(
+        list[dict[str, Any]],
+        pymupdf4llm.to_markdown(str(path), page_chunks=True),
+    )
     if not pages:
         raise ValueError(f"{path.name}: no extractable pages")
     native_ok = [
@@ -115,6 +118,7 @@ def extract_pdf(
                         images_ocr += 1
                 parts.append(part)
             else:
+                assert ocr_client is not None
                 pix = doc[idx].get_pixmap(dpi=ocr_dpi)
                 text = ocr_client.ocr_page(pix.tobytes("png"))
                 parts.append(f"<!-- page {idx + 1}: llm_ocr -->\n{text.strip()}")

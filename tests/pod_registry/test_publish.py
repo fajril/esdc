@@ -107,6 +107,8 @@ def test_publish_is_idempotent(monkeypatch, tmp_path):
     publish_pod_registry()  # replaces, no duplicates
     conn = get_duckdb_connection(tmp_path / "esdc.duckdb", read_only=True)
     try:
-        assert conn.execute("SELECT COUNT(*) FROM pod_registry").fetchone()[0] == 2
+        count_row = conn.execute("SELECT COUNT(*) FROM pod_registry").fetchone()
+        assert count_row is not None
+        assert count_row[0] == 2
     finally:
         conn.close()

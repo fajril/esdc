@@ -8,9 +8,11 @@ returns a redirect ToolMessage so the LLM tries something else.
 """
 
 import json
+from typing import cast
 
 import pytest
 from langchain.tools import tool
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from esdc.chat.agent import create_agent
@@ -67,7 +69,7 @@ async def test_third_identical_tool_call_is_blocked():
     llm = FakeLLM(responses)
 
     agent = create_agent(
-        llm,
+        cast(BaseChatModel, llm),
         tools=[_fake_entity_resolver],
         checkpointer=None,
         context_length=8000,
@@ -115,7 +117,7 @@ async def test_different_args_are_not_blocked():
     llm = FakeLLM(responses)
 
     agent = create_agent(
-        llm,
+        cast(BaseChatModel, llm),
         tools=[_fake_entity_resolver],
         checkpointer=None,
         context_length=8000,
@@ -159,7 +161,7 @@ async def test_identical_calls_from_previous_turns_do_not_block():
     llm = FakeLLM(responses)
 
     agent = create_agent(
-        llm,
+        cast(BaseChatModel, llm),
         tools=[_fake_entity_resolver],
         checkpointer=None,
         context_length=8000,

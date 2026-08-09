@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import yaml
 from openpyxl import load_workbook
+from openpyxl.cell import Cell
 
 from esdc.chat.tools import knowledge_traversal
 from esdc.configs import Config
@@ -116,7 +117,9 @@ def _write_pod_excel(path):
             ws.merge_cells(
                 start_row=1, start_column=1, end_row=1, end_column=ws.max_column
             )
-            ws.cell(1, 1).value = description
+            title_cell = ws.cell(1, 1)
+            assert isinstance(title_cell, Cell)
+            title_cell.value = description
     finally:
         workbook.save(path)
         workbook.close()
@@ -290,7 +293,9 @@ class TestLoadCommand:
 
         conn = duckdb.connect(str(Config.get_db_file()))
         try:
-            count = conn.execute("SELECT COUNT(*) FROM sample_table").fetchone()[0]
+            count_row = conn.execute("SELECT COUNT(*) FROM sample_table").fetchone()
+            assert count_row is not None
+            count = count_row[0]
             metadata = conn.execute(
                 "SELECT description FROM _loaded_table_schemas WHERE table_name = ?",
                 ["sample_table"],
@@ -329,6 +334,8 @@ class TestLoadCommand:
             conn.close()
         assert plan_row == ("POD Alpha", "POD-001")
         assert project_row == ("POD-001", "PRJ-001")
+        assert monitoring_row is not None
+        assert metadata is not None
         assert monitoring_row[0] == "POD-001"
         assert monitoring_row[1] == "outlook"
         assert "Baseline POD plan data." in metadata[0]
@@ -567,7 +574,9 @@ def _write_pod_excel_with_data(path, plan_row, project_row, monitoring_row):
             ws.merge_cells(
                 start_row=1, start_column=1, end_row=1, end_column=ws.max_column
             )
-            ws.cell(1, 1).value = description
+            title_cell = ws.cell(1, 1)
+            assert isinstance(title_cell, Cell)
+            title_cell.value = description
     finally:
         workbook.save(path)
         workbook.close()
@@ -615,12 +624,16 @@ class TestPodLoadValidation:
             assert eco_rows[1][0] == "plan"
             assert eco_rows[1][2] == 1.0
 
-            plan_letter = conn.execute(
+            plan_letter_row = conn.execute(
                 "SELECT pod_letter_num FROM pod_economics WHERE case_type = 'plan'"
-            ).fetchone()[0]
-            mon_letter = conn.execute(
+            ).fetchone()
+            mon_letter_row = conn.execute(
                 "SELECT pod_letter_num FROM pod_economics WHERE case_type = 'outlook'"
-            ).fetchone()[0]
+            ).fetchone()
+            assert plan_letter_row is not None
+            assert mon_letter_row is not None
+            plan_letter = plan_letter_row[0]
+            mon_letter = mon_letter_row[0]
             assert plan_letter == "POD-L-001"
             assert mon_letter is None
 

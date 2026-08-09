@@ -1,14 +1,17 @@
 """Tests for ESDCChatApp._stream_response adapter over astream_agent_events."""
 
+from typing import cast
+
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import Runnable
 
 
 def _make_app():
     from esdc.chat.app import ESDCChatApp
 
     app = ESDCChatApp()
-    app._agent = object()  # sentinel; adapter passes it through
+    app._agent = cast(Runnable, object())  # sentinel; adapter passes it through
     app._thread_id = "esdc-test1234"
     return app
 

@@ -21,39 +21,43 @@ from esdc.summarizer import (
 )
 
 
+def _default_summary_payload() -> str:
+    return json.dumps(
+        {
+            "headline": "Peluang produksi dan cadangan perlu diprioritaskan",
+            "executive_summary": (
+                "Terdapat kendala subsurface dan fasilitas, namun remarks "
+                "menunjukkan peluang optimasi produksi dan penambahan cadangan."
+            ),
+            "current_situation": "Beberapa proyek masih memerlukan tindak lanjut.",
+            "key_challenges": ["Kendala fasilitas", "Ketidakpastian subsurface"],
+            "solution_proposals": ["Lanjutkan workover dan evaluasi reservoir"],
+            "production_or_reserve_opportunities": [
+                "Optimasi produksi dan maturation resources ke reserves"
+            ],
+            "management_attention": ["Perlu prioritas keputusan eksekusi"],
+            "ksmi_context": {
+                "resource_classes": ["Contingent Resources"],
+                "project_levels": ["E2"],
+                "constraint_types": ["technical"],
+                "mentions_groovy": False,
+                "mentions_pod_or_pse": False,
+            },
+            "source_coverage": {
+                "source_items_reviewed": 1,
+                "source_items_with_material_issues": 1,
+            },
+        }
+    )
+
+
 class FakeLLM:
     def __init__(self):
         self.prompts = []
 
     def invoke(self, prompt):
         self.prompts.append(prompt)
-        return json.dumps(
-            {
-                "headline": "Peluang produksi dan cadangan perlu diprioritaskan",
-                "executive_summary": (
-                    "Terdapat kendala subsurface dan fasilitas, namun remarks "
-                    "menunjukkan peluang optimasi produksi dan penambahan cadangan."
-                ),
-                "current_situation": "Beberapa proyek masih memerlukan tindak lanjut.",
-                "key_challenges": ["Kendala fasilitas", "Ketidakpastian subsurface"],
-                "solution_proposals": ["Lanjutkan workover dan evaluasi reservoir"],
-                "production_or_reserve_opportunities": [
-                    "Optimasi produksi dan maturation resources ke reserves"
-                ],
-                "management_attention": ["Perlu prioritas keputusan eksekusi"],
-                "ksmi_context": {
-                    "resource_classes": ["Contingent Resources"],
-                    "project_levels": ["E2"],
-                    "constraint_types": ["technical"],
-                    "mentions_groovy": False,
-                    "mentions_pod_or_pse": False,
-                },
-                "source_coverage": {
-                    "source_items_reviewed": 1,
-                    "source_items_with_material_issues": 1,
-                },
-            }
-        )
+        return _default_summary_payload()
 
 
 class StrategicAnalysisLLM(FakeLLM):
@@ -84,9 +88,34 @@ class MetadataLLM(FakeLLM):
     last_model_name = "deepseek-v4-flash"
 
 
-class UsageMetadataLLM(FakeLLM):
-    def invoke(self, prompt):
-        content = super().invoke(prompt)
+class _AIMessageLLM:
+    """Base for fakes that return an AIMessage instead of a JSON string.
+
+    Split from FakeLLM so the invoke override does not change the base
+    return type from str into AIMessage.
+    """
+
+    def __init__(self):
+        self.prompts = []
+
+    def invoke(self, prompt) -> AIMessage:
+        self.prompts.append(prompt)
+        return self._build_message(prompt)
+
+    def _build_message(self, prompt) -> AIMessage:
+        content = _default_summary_payload()
+        message = AIMessage(content=content)
+        message.usage_metadata = {  # type: ignore[attr-defined]
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+        return message
+
+
+class UsageMetadataLLM(_AIMessageLLM):
+    def _build_message(self, prompt) -> AIMessage:
+        content = _default_summary_payload()
         message = AIMessage(content=content)
         message.usage_metadata = {  # type: ignore[attr-defined]
             "input_tokens": 100,
@@ -96,18 +125,8 @@ class UsageMetadataLLM(FakeLLM):
         return message
 
 
-class ZeroUsageMetadataLLM(FakeLLM):
+class ZeroUsageMetadataLLM(_AIMessageLLM):
     """Simulates vLLM-style provider that returns all-zero usage."""
-
-    def invoke(self, prompt):
-        content = super().invoke(prompt)
-        message = AIMessage(content=content)
-        message.usage_metadata = {  # type: ignore[attr-defined]
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-        }
-        return message
 
 
 def _patch_llm(monkeypatch):
@@ -1353,21 +1372,24 @@ def test_create_esdc_view_exposes_summary_columns(isolated_config):
                  'wk_summary', 'test', 'model', 'now')
             """
         )
-        field_summary = conn.execute(
+        field_summary_row = conn.execute(
             "SELECT field_summary FROM field_resources WHERE field_id = 'F-1'"
-        ).fetchone()[0]
-        wk_summary = conn.execute(
+        ).fetchone()
+        wk_summary_row = conn.execute(
             "SELECT wk_summary FROM wa_resources WHERE wk_id = 'WK-1'"
-        ).fetchone()[0]
-        nkri_summary = conn.execute(
+        ).fetchone()
+        nkri_summary_row = conn.execute(
             "SELECT nkri_summary FROM nkri_resources WHERE report_year = 2025"
-        ).fetchone()[0]
+        ).fetchone()
     finally:
         conn.close()
 
-    assert field_summary == "Field summary"
-    assert wk_summary == "WK summary"
-    assert nkri_summary == "NKRI summary"
+    assert field_summary_row is not None
+    assert wk_summary_row is not None
+    assert nkri_summary_row is not None
+    assert field_summary_row[0] == "Field summary"
+    assert wk_summary_row[0] == "WK summary"
+    assert nkri_summary_row[0] == "NKRI summary"
 
 
 def test_ensure_summary_table_migrates_token_columns(isolated_config):

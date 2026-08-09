@@ -1,9 +1,11 @@
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool
 
 from esdc.providers.anthropic import AnthropicProvider
 from esdc.providers.azure_openai import AzureOpenAIProvider
@@ -54,7 +56,11 @@ class ProviderFallbackChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "esdc-provider-fallback"
 
-    def bind_tools(self, tools: list[Any], **kwargs: Any) -> Runnable:
+    def bind_tools(
+        self,
+        tools: Sequence[dict[str, Any] | type | Callable[..., Any] | BaseTool],
+        **kwargs: Any,
+    ) -> Runnable:
         """Bind tools to each provider and return a fallback runnable."""
         if not self.models:
             raise ValueError("No provider models configured")

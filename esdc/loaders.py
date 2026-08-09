@@ -210,7 +210,7 @@ def generate_schema_template_from_excel(
 
     try:
         workbook = pd.ExcelFile(excel, engine="openpyxl")
-        sheet_name = workbook.sheet_names[0]
+        sheet_name = str(workbook.sheet_names[0])
         df = pd.read_excel(workbook, sheet_name=sheet_name)
     except Exception as e:
         raise SpreadsheetLoadError(f"Failed to read Excel file: {e}") from e
@@ -598,7 +598,9 @@ def generate_pod_workbook_template(
         )
 
     workbook = Workbook()
-    workbook.remove(workbook.active)
+    active = workbook.active
+    if active is not None:
+        workbook.remove(active)
     specs = _build_pod_workbook_specs()
     for spec in specs:
         ws = workbook.create_sheet(title=spec.table_name)

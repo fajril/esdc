@@ -5,7 +5,7 @@ from pathlib import Path
 
 import duckdb
 
-from esdc.corpus.store import _SQLITE_DOC_DDL
+from esdc.corpus.store import _SQLITE_DOC_DDL, CorpusStore
 from esdc.pod_registry.store import get_sqlite_connection
 from esdc.portal.document_entities import ENTITY_FIELDS, apply_document_entity_changeset
 
@@ -105,9 +105,11 @@ def test_update_entities_canonicalizes_and_stores_json_array(tmp_path):
     assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan", "Kampar"])
 
     mirror = duckdb.connect(str(duckdb_path))
-    mirrored = mirror.execute(
+    mirrored_row = mirror.execute(
         "SELECT wk_name FROM documents WHERE doc_id = 'D1'"
-    ).fetchone()[0]
+    ).fetchone()
+    assert mirrored_row is not None
+    mirrored = mirrored_row[0]
     mirror.close()
     assert mirrored == json.dumps(["Rokan", "Kampar"])
 
@@ -251,9 +253,11 @@ def test_default_resolver_and_mirror_share_db_path(tmp_path):
     assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
 
     mirror = duckdb.connect(str(duckdb_path))
-    mirrored = mirror.execute(
+    mirrored_row = mirror.execute(
         "SELECT wk_name FROM documents WHERE doc_id = 'D1'"
-    ).fetchone()[0]
+    ).fetchone()
+    assert mirrored_row is not None
+    mirrored = mirrored_row[0]
     mirror.close()
     assert mirrored == json.dumps(["Rokan"])
 
@@ -343,6 +347,7 @@ def test_entity_save_reembeds_edited_documents(monkeypatch, tmp_path):
     # ~/.esdc databases and would re-embed the live corpus during tests.
     store = seen["store"]
     assert store is not None
+    assert isinstance(store, CorpusStore)
     assert store._db_path == duckdb_path
     assert store._sqlite_path == sqlite_path
 

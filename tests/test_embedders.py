@@ -64,12 +64,13 @@ def test_embedders_module_has_no_module_level_search_import():
     assert "esdc.search" not in sys.modules
 
 
-def _patched_manager(monkeypatch, mgr):
+def _patched_manager(monkeypatch, mgr) -> MagicMock:
     """Patch the lazily-imported EmbeddingManager at its source module."""
     import esdc.search.embedding_manager as em
 
-    monkeypatch.setattr(em, "EmbeddingManager", MagicMock(return_value=mgr))
-    return em.EmbeddingManager
+    fake_cls = MagicMock(return_value=mgr)
+    monkeypatch.setattr(em, "EmbeddingManager", fake_cls)
+    return fake_cls
 
 
 def test_ollama_reports_model_id_not_wire_tag(monkeypatch):
@@ -358,7 +359,9 @@ def test_cosine_is_scale_invariant():
 def test_probe_seeds_when_null():
     conn = _meta_conn(probe=None)
     emb.check_or_seed_probe(conn, "m", _FixedEmbedder([1.0, 0.0, 0.0]))
-    stored = conn.execute("SELECT probe_vec FROM m").fetchone()[0]
+    row = conn.execute("SELECT probe_vec FROM m").fetchone()
+    assert row is not None
+    stored = row[0]
     assert json.loads(stored) == [1.0, 0.0, 0.0]
 
 

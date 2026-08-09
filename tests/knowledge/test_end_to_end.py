@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from langchain_core.tools import StructuredTool
 
 from esdc.chat.domain_knowledge.instance_graph import InstanceGraphManager
 from esdc.knowledge.learn import run_learn
@@ -100,6 +101,8 @@ def test_learn_to_explore_entity_pipeline(
 
     invalidate_tool_cache()
 
+    assert isinstance(explore_entity, StructuredTool)
+    assert explore_entity.func is not None
     out = json.loads(explore_entity.func(entity="POD Duri", entity_type=None))
     assert out["status"] == "success"
     assert out["entity"]["entity_type"] == "pod"
@@ -110,6 +113,7 @@ def test_learn_to_explore_entity_pipeline(
 
     # A name that resolves to nothing must be a clean not_found, never an
     # exception -- the brief's "bad name" expectation.
+    assert explore_entity.func is not None
     out_missing = json.loads(
         explore_entity.func(
             entity="Zzyzx Nonexistent Entity 999888777", entity_type=None

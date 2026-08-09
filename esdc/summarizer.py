@@ -1820,7 +1820,7 @@ def _project_resource_metrics(
     )
     row = conn.execute(sql, [year, *params]).fetchone()
     names = [part.split(" AS ")[-1] for part in count_parts + list(sums.values())]
-    metrics = dict(zip(names, row or (), strict=False))
+    metrics: dict[str, Any] = dict(zip(names, row or (), strict=False))
     for col in ("project_class", "project_stage", "project_level", "uncert_level"):
         if col in columns:
             metrics[f"{col}_mix"] = _value_mix(conn, col, year, where_sql, params)
