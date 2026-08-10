@@ -5,7 +5,10 @@ SELECT m.*,
     (SELECT group_concat(predecessor_id, '; ') FROM pod_revision
       WHERE successor_id = m.pod_id) AS preceded_by,
     (SELECT group_concat(successor_id, '; ') FROM pod_revision
-      WHERE predecessor_id = m.pod_id) AS superseded_by
+      WHERE predecessor_id = m.pod_id) AS revised_by,
+    (SELECT group_concat(successor_id, '; ') FROM pod_revision
+      WHERE predecessor_id = m.pod_id
+        AND revision_effect = 'full_replacement') AS superseded_by
 FROM m_pod m ORDER BY m.approval_seq
 """
 
@@ -53,6 +56,7 @@ TABLE_CONFIGS: dict[str, dict] = {
             {"field": "approval_seq", "title": "Seq", "readonly": True},
             {"field": "pod_id", "title": "POD ID", "readonly": True},
             {"field": "preceded_by", "title": "Preceded By", "readonly": True},
+            {"field": "revised_by", "title": "Revised By", "readonly": True},
             {"field": "superseded_by", "title": "Superseded By", "readonly": True},
         ],
     },

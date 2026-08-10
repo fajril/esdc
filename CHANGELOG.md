@@ -79,6 +79,28 @@ load unchanged and score in their own `lookup_legacy` bucket.
 
 ### Knowledge graph
 
+**Added:** POD temporal harmonization. `pod_revision` carries explicit
+revision semantics (`revision_effect` of `unknown`, `partial_amendment`, or
+`full_replacement`, plus `effective_date`, `amended_scope`, and
+`previous_remains_valid`), with in-place migration for legacy two-column
+rows. Registry-derived edges are reconciled on every learn run:
+`REVISES` covers every revision link, while `SUPERSEDES` is emitted only for
+`full_replacement`; both carry `valid_from`/`valid_to`/`properties_json`.
+`pod_registry` now exposes `revised_by` alongside `preceded_by` and
+`superseded_by`, and the POD portal shows the same distinction.
+
+**Added:** POD value cases move to SQLite as `pod_value_case` truth
+(`pod_id`, `case_type`, `report_date`, `as_of_date`, `pod_scope`, metrics).
+The analytical workbook loader validates against canonical `m_pod` and
+`project_pod` instead of replacing canonical linkage, then refreshes the
+DuckDB `pod_economics`, `pod_plan`, `pod_monitoring`, and
+`pod_project_economics` views; projection failure keeps the committed SQLite
+payload and asks for `esdc corpus sync`.
+
+**Added:** the LadybugDB instance graph is generated from a versioned,
+executable `instance_graph_schema.yaml` contract, and public Cypher queries
+now reject any mutation or unsupported statement before execution.
+
 **Fixed:** `esdc corpus learn` now links documents to their fields and working
 areas. `documents.field_name` and `wk_name` are stored as JSON array strings
 (`'["Gebang"]'`, `'["DAYUNG", "GELAM", "LETANG"]'`), but the deterministic
@@ -760,4 +782,3 @@ close never races a thread mid-load or mid-`embed()`.
   - Database location in user directory
   - Basic error handling and logging
   - Initial project structure and documentation
-

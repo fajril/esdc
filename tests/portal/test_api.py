@@ -101,6 +101,17 @@ def test_get_unknown_table_404(monkeypatch, tmp_path):
     assert client.get("/api/tables/nope").status_code == 404
 
 
+def test_m_pod_columns_distinguish_revision_from_supersession(monkeypatch, tmp_path):
+    """Portal m_pod view exposes revised_by and full-replacement superseded_by."""
+    from esdc.portal.tables import TABLE_CONFIGS
+
+    config = TABLE_CONFIGS["m_pod"]
+    fields = {column["field"] for column in config["columns"]}
+    assert {"preceded_by", "revised_by", "superseded_by"} <= fields
+    assert "revised_by" in config["sql"]
+    assert "revision_effect = 'full_replacement'" in config["sql"]
+
+
 def test_save_insert_returns_generated_pod_id(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     resp = client.post(
