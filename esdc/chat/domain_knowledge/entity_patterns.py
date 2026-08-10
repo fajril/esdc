@@ -52,6 +52,11 @@ class QueryPatternMatcher:
     def __init__(self, schema: KGSchema) -> None:
         """Initialize query pattern matcher."""
         self.schema = schema
+        self._max_keyword_tokens = max(
+            len(keyword.split())
+            for pattern in schema.query_patterns.values()
+            for keyword in pattern["keywords"]
+        )
 
     def match(self, query: str) -> dict[str, Any] | None:
         """Match a query against known patterns and return best match."""
@@ -75,9 +80,6 @@ class QueryPatternMatcher:
                 "description": best_pattern.get("description", ""),
                 "confidence": best_pattern.get("_score", 0.0),
             }
-            cypher = best_pattern.get("cypher")
-            if cypher:
-                result["cypher_template"] = cypher.strip()
             return result
 
         return None
@@ -86,17 +88,13 @@ class QueryPatternMatcher:
         normalized = query.lower().strip()
         tokens = re.findall(r"[a-z_]+", normalized)
         keywords: list[str] = []
-        bigrams = [f"{tokens[i]} {tokens[i + 1]}" for i in range(len(tokens) - 1)]
-
-        for bigram in bigrams:
-            if bigram in _INDONESIAN_KEYWORDS:
-                keywords.append(_INDONESIAN_KEYWORDS[bigram])
-
-        for token in tokens:
-            if token in _INDONESIAN_KEYWORDS:
-                keywords.append(_INDONESIAN_KEYWORDS[token])
-            elif len(token) > 2:
-                keywords.append(token)
+        for size in range(self._max_keyword_tokens, 0, -1):
+            for start in range(len(tokens) - size + 1):
+                phrase = " ".join(tokens[start : start + size])
+                keywords.append(phrase)
+                alias = _INDONESIAN_KEYWORDS.get(phrase)
+                if alias:
+                    keywords.append(alias)
 
         seen: set[str] = set()
         unique: list[str] = []
@@ -112,14 +110,16 @@ class QueryPatternMatcher:
     ) -> dict[str, Any]:
         query_lower = query.lower()
         best: dict[str, Any] | None = None
-        best_score = 0.0
+        best_rank = (0, 0, 0, 0.0)
 
         for pattern in patterns:
             pattern_keywords = pattern.get("keywords", [])
             score = 0.0
+            exact_matches: list[str] = []
             for kw in pattern_keywords:
                 if kw.lower() in query_lower:
                     score += 1.0
+                    exact_matches.append(kw)
                 kw_tokens = kw.lower().split()
                 if all(t in query_lower for t in kw_tokens):
                     score += 0.5
@@ -128,8 +128,19 @@ class QueryPatternMatcher:
             score += specificity * 0.1
 
             pattern["_score"] = score
-            if score > best_score:
-                best_score = score
+            rank = (
+                len(exact_matches),
+                max((len(keyword.split()) for keyword in exact_matches), default=0),
+                int(
+                    any(
+                        query_lower.startswith(keyword.lower())
+                        for keyword in exact_matches
+                    )
+                ),
+                score,
+            )
+            if rank > best_rank:
+                best_rank = rank
                 best = pattern
 
         return best or patterns[0]

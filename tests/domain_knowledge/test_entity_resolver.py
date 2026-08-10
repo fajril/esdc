@@ -21,7 +21,7 @@ def schema() -> KGSchema:
         / "esdc"
         / "chat"
         / "domain_knowledge"
-        / "graph_schema.yaml"
+        / "entity_query_schema.yaml"
     )
     return KGSchema(schema_path=str(schema_path))
 
@@ -131,14 +131,8 @@ def mock_db() -> duckdb.DuckDBPyConnection:
 
 class TestKGSchema:
     def test_schema_loads(self, schema: KGSchema):
-        assert len(schema.entity_types) > 0
-        assert "Project" in schema.entity_types
-        assert "Field" in schema.entity_types
-        assert "Report" in schema.entity_types
-
-    def test_schema_relationships(self, schema: KGSchema):
-        assert "PROJECT_BELONGS_TO_FIELD" in schema.relationships
-        assert "FIELD_HAS_RESERVES" in schema.relationships
+        assert schema.schema_version == 1
+        assert len(schema.query_patterns) == 15
 
     def test_schema_query_patterns(self, schema: KGSchema):
         assert "cadangan" in schema.query_patterns
@@ -159,9 +153,39 @@ class TestKGSchema:
         assert "res_oc" in cols
         assert "res_an" in cols
 
-    def test_enum_values(self, schema: KGSchema):
-        values = schema.get_enum_values("project_class")
-        assert "1. Reserves & GRR" in values
+    def test_get_primary_entity_type(self, schema: KGSchema):
+        assert schema.get_primary_entity_type("cadangan") == "Field"
+
+    def test_missing_schema_names_path(self, tmp_path: Path):
+        path = tmp_path / "missing.yaml"
+        with pytest.raises(FileNotFoundError, match=str(path)):
+            KGSchema(path)
+
+    @pytest.mark.parametrize(
+        ("yaml_text", "message"),
+        [
+            ("- not\n- a\n- mapping\n", "query.yaml"),
+            ("schema_version: 2\nquery_patterns: {}\n", "schema_version"),
+            ("schema_version: 1\n", "query_patterns"),
+            ("schema_version: 1\nquery_patterns: []\n", "query_patterns"),
+            ("schema_version: 1\nquery_patterns: {}\n", "query_patterns"),
+            (
+                "schema_version: 1\nquery_patterns:\n  broken:\n    description: x\n",
+                "broken.*keywords",
+            ),
+            (
+                "schema_version: 1\nquery_patterns:\n  broken:\n    keywords: nope\n",
+                "broken.*keywords",
+            ),
+        ],
+    )
+    def test_invalid_query_schema_is_rejected(
+        self, tmp_path: Path, yaml_text: str, message: str
+    ):
+        path = tmp_path / "query.yaml"
+        path.write_text(yaml_text, encoding="utf-8")
+        with pytest.raises(ValueError, match=message):
+            KGSchema(path)
 
 
 class TestQueryPatternMatcher:
@@ -188,6 +212,51 @@ class TestQueryPatternMatcher:
         matcher = QueryPatternMatcher(schema)
         result = matcher.match("xyzzy foobar baz")
         assert result is None
+
+    @pytest.mark.parametrize(
+        ("query", "pattern_name"),
+        [
+            ("status lapangan Duri", "field_complete_status"),
+            ("cadangan lapangan Duri", "field_reserves_with_report"),
+            ("cadangan WK Rokan", "working_area_aggregated_reserves"),
+            ("recovery factor lapangan Duri", "field_recovery_metrics"),
+            ("rf oil Duri", "field_recovery_metrics"),
+            ("ioip Duri", "field_recovery_metrics"),
+            ("igip Duri", "field_recovery_metrics"),
+            ("data di WK Rokan 2024", "per_wk"),
+            ("top proyek di WK Rokan oleh Pertamina", "top_n"),
+        ],
+    )
+    def test_match_declared_phrase_patterns(
+        self, schema: KGSchema, query: str, pattern_name: str
+    ):
+        """Declared phrases and aliases select their intended query pattern."""
+        result = QueryPatternMatcher(schema).match(query)
+        assert result is not None
+        assert result["pattern_name"] == pattern_name
+
+    @pytest.mark.parametrize(
+        ("query", "table"),
+        [
+            ("cadangan lapangan Duri", "field_resources"),
+            ("cadangan WK Rokan", "wa_resources"),
+        ],
+    )
+    def test_reserve_phrase_patterns_keep_query_guidance(
+        self, schema: KGSchema, query: str, table: str
+    ):
+        """Newly reachable reserve patterns retain table and column guidance."""
+        result = QueryPatternMatcher(schema).match(query)
+        assert result is not None
+        assert result["suggested_table"] == table
+        assert result["suggested_columns"] == ["res_oc", "res_an", "rec_oc", "rec_an"]
+
+    def test_match_does_not_expose_dead_cypher(self, schema: KGSchema):
+        """Resolver metadata never exposes an unexecuted Cypher template."""
+        result = QueryPatternMatcher(schema).match("forecast Duri")
+        assert result is not None
+        assert result["pattern_name"] == "field_forecast_timeline"
+        assert "cypher_template" not in result
 
 
 class TestEntityResolver:
