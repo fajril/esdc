@@ -12,10 +12,14 @@ import logging
 import re
 import sqlite3
 import threading
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import real_ladybug as lb
+import yaml
 
 from esdc.configs import Config
 from esdc.dbmanager import get_duckdb_connection
@@ -23,76 +27,217 @@ from esdc.pod_registry.store import get_esdc_sqlite_path
 
 logger = logging.getLogger(__name__)
 
-_NODE_DDL = [
-    "CREATE NODE TABLE Document (doc_id STRING PRIMARY KEY, "
-    "file_name STRING, doc_type STRING, doc_date STRING, subject STRING)",
-    "CREATE NODE TABLE POD (pod_id STRING PRIMARY KEY, pod_name STRING, "
-    "letter_num STRING, approval_date STRING, pod_type STRING, rev_num INT64)",
-    "CREATE NODE TABLE Project (project_id STRING PRIMARY KEY, project_name STRING)",
-    "CREATE NODE TABLE Field (name STRING PRIMARY KEY)",
-    "CREATE NODE TABLE WorkingArea (name STRING PRIMARY KEY)",
-]
-_TEMPORAL_REL_PROPS = "valid_from STRING, valid_to STRING, properties_json STRING"
-_REL_DDL = [
-    f"CREATE REL TABLE ABOUT_POD (FROM Document TO POD, confidence DOUBLE, "
-    f"method STRING, {_TEMPORAL_REL_PROPS})",
-    f"CREATE REL TABLE ABOUT_FIELD (FROM Document TO Field, confidence DOUBLE, "
-    f"method STRING, {_TEMPORAL_REL_PROPS})",
-    f"CREATE REL TABLE ABOUT_WK (FROM Document TO WorkingArea, confidence DOUBLE, "
-    f"method STRING, {_TEMPORAL_REL_PROPS})",
-    f"CREATE REL TABLE ABOUT_PROJECT (FROM Document TO Project, "
-    f"confidence DOUBLE, method STRING, {_TEMPORAL_REL_PROPS})",
-    f"CREATE REL TABLE HAS_PROJECT (FROM POD TO Project, {_TEMPORAL_REL_PROPS})",
-    f"CREATE REL TABLE REVISES (FROM POD TO POD, {_TEMPORAL_REL_PROPS})",
-    f"CREATE REL TABLE SUPERSEDES (FROM POD TO POD, {_TEMPORAL_REL_PROPS})",
-    f"CREATE REL TABLE IN_FIELD (FROM Project TO Field, {_TEMPORAL_REL_PROPS})",
-    f"CREATE REL TABLE IN_WK (FROM Field TO WorkingArea, {_TEMPORAL_REL_PROPS})",
-]
+_INSTANCE_GRAPH_SCHEMA_PATH = Path(__file__).parent / "instance_graph_schema.yaml"
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SCALAR_TYPES = frozenset({"STRING", "INT64", "DOUBLE"})
+_REQUIRED_TEMPORAL_PROPS = ("valid_from", "valid_to", "properties_json")
+_ABOUT_EVIDENCE_PROPS = ("confidence", "method")
+
+
+class _SchemaDriftError(ValueError):
+    """Raised when kg_edge no longer matches the declared graph contract."""
+
+
+@dataclass(frozen=True)
+class _NodeDef:
+    label: str
+    corpus_type: str
+    key: str
+    name: str
+    properties: Mapping[str, str]
+    fts_index: str | None
+    fts_properties: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _RelDef:
+    rel: str
+    from_label: str
+    to_label: str
+    properties: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _InstanceGraphSchema:
+    nodes: Mapping[str, _NodeDef]
+    relationships: Mapping[str, _RelDef]
+
+
+def _load_instance_graph_schema(
+    path: Path = _INSTANCE_GRAPH_SCHEMA_PATH,
+) -> _InstanceGraphSchema:
+    """Load and strictly validate the executable LadybugDB topology contract."""
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a YAML mapping")
+    version = data.get("schema_version")
+    if version != 1:
+        raise ValueError(f"{path}: schema_version must be 1, got {version!r}")
+    nodes_raw = data.get("nodes")
+    rels_raw = data.get("relationships")
+    if not isinstance(nodes_raw, dict):
+        raise ValueError(f"{path}: nodes must be a mapping")
+    if not isinstance(rels_raw, dict):
+        raise ValueError(f"{path}: relationships must be a mapping")
+
+    def validate_identifier(context: str, value: Any) -> str:
+        if not isinstance(value, str) or not _IDENTIFIER_RE.match(value):
+            raise ValueError(f"{context}: invalid identifier {value!r}")
+        return value
+
+    def validate_properties(context: str, props_raw: Any) -> dict[str, str]:
+        if not isinstance(props_raw, dict):
+            raise ValueError(f"{context}: must be a mapping")
+        properties: dict[str, str] = {}
+        for prop_name, prop_type in props_raw.items():
+            prop_path = f"{context}.{prop_name}"
+            prop_name = validate_identifier(prop_path, prop_name)
+            if prop_type not in _SCALAR_TYPES:
+                raise ValueError(f"{prop_path}: unsupported type {prop_type!r}")
+            properties[prop_name] = prop_type
+        return properties
+
+    node_defs: dict[str, _NodeDef] = {}
+    seen_corpus_types: dict[str, str] = {}
+    for label, raw in nodes_raw.items():
+        node_path = f"{path}: nodes.{label}"
+        label = validate_identifier(node_path, label)
+        if not isinstance(raw, dict):
+            raise ValueError(f"{node_path} must be a mapping")
+        corpus_type = validate_identifier(
+            f"{node_path}.corpus_type", raw.get("corpus_type")
+        )
+        prior_label = seen_corpus_types.get(corpus_type)
+        if prior_label is not None:
+            raise ValueError(
+                f"{node_path}.corpus_type duplicates {corpus_type!r} "
+                f"from nodes.{prior_label}"
+            )
+        seen_corpus_types[corpus_type] = label
+        properties = validate_properties(
+            f"{node_path}.properties", raw.get("properties")
+        )
+        key = validate_identifier(f"{node_path}.key", raw.get("key"))
+        if key not in properties:
+            raise ValueError(f"{node_path}.key {key!r} must name a declared property")
+        name = validate_identifier(f"{node_path}.name", raw.get("name"))
+        if name not in properties:
+            raise ValueError(f"{node_path}.name {name!r} must name a declared property")
+
+        fts_index: str | None = None
+        fts_properties: tuple[str, ...] = ()
+        fts_raw = raw.get("fts")
+        if fts_raw is not None:
+            if not isinstance(fts_raw, dict):
+                raise ValueError(f"{node_path}.fts must be a mapping")
+            fts_index = validate_identifier(
+                f"{node_path}.fts.index", fts_raw.get("index")
+            )
+            fts_props_raw = fts_raw.get("properties")
+            if not isinstance(fts_props_raw, list) or not fts_props_raw:
+                raise ValueError(f"{node_path}.fts.properties must be a non-empty list")
+            for fts_prop in fts_props_raw:
+                fts_prop_path = f"{node_path}.fts.properties.{fts_prop}"
+                fts_prop = validate_identifier(fts_prop_path, fts_prop)
+                if fts_prop not in properties:
+                    raise ValueError(f"{fts_prop_path} must name a declared property")
+                fts_properties += (fts_prop,)
+        node_defs[label] = _NodeDef(
+            label=label,
+            corpus_type=corpus_type,
+            key=key,
+            name=name,
+            properties=MappingProxyType(properties),
+            fts_index=fts_index,
+            fts_properties=fts_properties,
+        )
+
+    rel_defs: dict[str, _RelDef] = {}
+    for rel, raw in rels_raw.items():
+        rel_path = f"{path}: relationships.{rel}"
+        rel = validate_identifier(rel_path, rel)
+        if not isinstance(raw, dict):
+            raise ValueError(f"{rel_path} must be a mapping")
+        from_label = validate_identifier(f"{rel_path}.from", raw.get("from"))
+        to_label = validate_identifier(f"{rel_path}.to", raw.get("to"))
+        if from_label not in node_defs:
+            raise ValueError(f"{rel_path}.from references unknown node {from_label!r}")
+        if to_label not in node_defs:
+            raise ValueError(f"{rel_path}.to references unknown node {to_label!r}")
+        properties = validate_properties(
+            f"{rel_path}.properties", raw.get("properties")
+        )
+        for temporal in _REQUIRED_TEMPORAL_PROPS:
+            if temporal not in properties:
+                raise ValueError(f"{rel_path}.properties.{temporal} is required")
+        if rel.startswith("ABOUT_"):
+            for evidence in _ABOUT_EVIDENCE_PROPS:
+                if evidence not in properties:
+                    raise ValueError(
+                        f"{rel_path}.properties.{evidence} is required "
+                        "for ABOUT_ relationships"
+                    )
+        rel_defs[rel] = _RelDef(
+            rel=rel,
+            from_label=from_label,
+            to_label=to_label,
+            properties=MappingProxyType(properties),
+        )
+
+    return _InstanceGraphSchema(
+        nodes=MappingProxyType(node_defs),
+        relationships=MappingProxyType(rel_defs),
+    )
+
+
+def _node_ddl(node: _NodeDef) -> str:
+    """Generate one LadybugDB node table from a schema node definition."""
+    ordered_props = [node.key]
+    ordered_props += [p for p in node.properties if p != node.key]
+    columns = ", ".join(
+        f"{p} {node.properties[p]}" + (" PRIMARY KEY" if p == node.key else "")
+        for p in ordered_props
+    )
+    return f"CREATE NODE TABLE {node.label} ({columns})"
+
+
+def _rel_ddl(rel: _RelDef) -> str:
+    """Generate one LadybugDB rel table from a schema relationship."""
+    columns = ", ".join(f"{p} {t}" for p, t in rel.properties.items())
+    return (
+        f"CREATE REL TABLE {rel.rel} (FROM {rel.from_label} "
+        f"TO {rel.to_label}, {columns})"
+    )
+
+
+_SCHEMA = _load_instance_graph_schema()
+_NODE_DDL = [_node_ddl(node) for node in _SCHEMA.nodes.values()]
+_REL_DDL = [_rel_ddl(rel) for rel in _SCHEMA.relationships.values()]
 
 # rel -> (src label, src key, dst label, dst key, has confidence/method)
 _REL_MAP: dict[str, tuple[str, str, str, str, bool]] = {
-    "ABOUT_POD": ("Document", "doc_id", "POD", "pod_id", True),
-    "ABOUT_FIELD": ("Document", "doc_id", "Field", "name", True),
-    "ABOUT_WK": ("Document", "doc_id", "WorkingArea", "name", True),
-    "ABOUT_PROJECT": ("Document", "doc_id", "Project", "project_id", True),
-    "HAS_PROJECT": ("POD", "pod_id", "Project", "project_id", False),
-    "REVISES": ("POD", "pod_id", "POD", "pod_id", False),
-    "SUPERSEDES": ("POD", "pod_id", "POD", "pod_id", False),
-    "IN_FIELD": ("Project", "project_id", "Field", "name", False),
-    "IN_WK": ("Field", "name", "WorkingArea", "name", False),
+    rel_name: (
+        rel_def.from_label,
+        _SCHEMA.nodes[rel_def.from_label].key,
+        rel_def.to_label,
+        _SCHEMA.nodes[rel_def.to_label].key,
+        set(_ABOUT_EVIDENCE_PROPS) <= set(rel_def.properties),
+    )
+    for rel_name, rel_def in _SCHEMA.relationships.items()
 }
 
-_LABEL_TO_TYPE = {
-    "Document": "document",
-    "POD": "pod",
-    "Project": "project",
-    "Field": "field",
-    "WorkingArea": "working_area",
-}
+_LABEL_TO_TYPE = {label: node.corpus_type for label, node in _SCHEMA.nodes.items()}
 _TYPE_TO_LABEL = {v: k for k, v in _LABEL_TO_TYPE.items()}
 
-_NODE_KEY_COL = {
-    "Document": "doc_id",
-    "POD": "pod_id",
-    "Project": "project_id",
-    "Field": "name",
-    "WorkingArea": "name",
-}
-_NODE_NAME_COL = {
-    "Document": "subject",
-    "POD": "pod_name",
-    "Project": "project_name",
-    "Field": "name",
-    "WorkingArea": "name",
-}
+_NODE_KEY_COL = {label: node.key for label, node in _SCHEMA.nodes.items()}
+_NODE_NAME_COL = {label: node.name for label, node in _SCHEMA.nodes.items()}
 
 # (label, fts index name, indexed properties)
 _FTS_INDEXES = [
-    ("POD", "pod_fts", ["pod_name"]),
-    ("Project", "project_fts", ["project_name"]),
-    ("Field", "field_fts", ["name"]),
-    ("WorkingArea", "wk_fts", ["name"]),
-    ("Document", "document_fts", ["subject"]),
+    (label, node.fts_index, list(node.fts_properties))
+    for label, node in _SCHEMA.nodes.items()
+    if node.fts_index is not None
 ]
 
 # Entity-resolution ranking policy for find(): LadybugDB computes BM25 stats
@@ -341,6 +486,7 @@ class InstanceGraphManager:
             logger.info("[InstanceGraph] graph_built | edges=%d", edge_count)
         except Exception as e:
             logger.error("[InstanceGraph] build_failed | error=%s", e)
+            self.close()
             self._available = False
         finally:
             conn.close()
@@ -403,6 +549,8 @@ class InstanceGraphManager:
         self, conn: sqlite3.Connection, project_names: dict[str, str]
     ) -> None:
         assert self._conn is not None
+        pod_label = _TYPE_TO_LABEL["pod"]
+        pod_key = _NODE_KEY_COL[pod_label]
 
         for row in conn.execute(
             "SELECT m.pod_id, m.pod_name, m.pod_letter_num, m.approval_date, "
@@ -417,7 +565,8 @@ class InstanceGraphManager:
                 pod_type = _cypher_escape(row["pod_type"] or "")
                 rev_num = int(row["rev_num"] or 0)
                 self._conn.execute(
-                    f"CREATE (:POD {{pod_id: '{pod_id}', pod_name: '{pod_name}', "
+                    f"CREATE (:{pod_label} {{{pod_key}: '{pod_id}', "
+                    f"pod_name: '{pod_name}', "
                     f"letter_num: '{letter_num}', "
                     f"approval_date: '{approval_date}', "
                     f"pod_type: '{pod_type}', rev_num: {rev_num}}})"
@@ -429,13 +578,15 @@ class InstanceGraphManager:
             "SELECT doc_id, file_name, doc_type, doc_date, subject FROM documents"
         ).fetchall():
             try:
+                doc_label = _TYPE_TO_LABEL["document"]
+                doc_key = _NODE_KEY_COL[doc_label]
                 doc_id = _cypher_escape(row["doc_id"])
                 file_name = _cypher_escape(row["file_name"] or "")
                 doc_type = _cypher_escape(row["doc_type"] or "")
                 doc_date = _cypher_escape(row["doc_date"] or "")
                 subject = _cypher_escape(row["subject"] or "")
                 self._conn.execute(
-                    f"CREATE (:Document {{doc_id: '{doc_id}', "
+                    f"CREATE (:{doc_label} {{{doc_key}: '{doc_id}', "
                     f"file_name: '{file_name}', doc_type: '{doc_type}', "
                     f"doc_date: '{doc_date}', subject: '{subject}'}})"
                 )
@@ -454,16 +605,18 @@ class InstanceGraphManager:
                 continue
             try:
                 esc_id = _cypher_escape(entity_id)
+                label = _TYPE_TO_LABEL.get(entity_type)
+                if label is None:
+                    continue
+                key_col = _NODE_KEY_COL[label]
                 if entity_type == "project":
                     esc_name = _cypher_escape(project_names.get(entity_id, entity_id))
                     self._conn.execute(
-                        f"CREATE (:Project {{project_id: '{esc_id}', "
-                        f"project_name: '{esc_name}'}})"
+                        f"CREATE (:{label} {{{key_col}: '{esc_id}', "
+                        f"{_NODE_NAME_COL[label]}: '{esc_name}'}})"
                     )
-                elif entity_type == "field":
-                    self._conn.execute(f"CREATE (:Field {{name: '{esc_id}'}})")
-                elif entity_type == "working_area":
-                    self._conn.execute(f"CREATE (:WorkingArea {{name: '{esc_id}'}})")
+                elif entity_type == "field" or entity_type == "working_area":
+                    self._conn.execute(f"CREATE (:{label} {{{key_col}: '{esc_id}'}})")
             except Exception as e:
                 logger.warning(
                     "[InstanceGraph] entity_node_error | type=%s id=%s err=%s",
@@ -479,11 +632,39 @@ class InstanceGraphManager:
             "method, valid_from, valid_to, properties_json FROM kg_edge"
         ).fetchall():
             rel = row["rel"]
-            mapping = _REL_MAP.get(rel)
-            if mapping is None:
-                logger.debug("[InstanceGraph] skip_unknown_rel | rel=%s", rel)
-                continue
-            src_label, src_key, dst_label, dst_key, has_props = mapping
+            rel_def = _SCHEMA.relationships.get(rel)
+            if rel_def is None:
+                raise _SchemaDriftError(
+                    f"kg_edge schema_drift | rel={rel!r} "
+                    f"src={row['src_type']}:{row['src_id']} "
+                    f"dst={row['dst_type']}:{row['dst_id']} "
+                    "unknown relationship"
+                )
+            expected_src = _SCHEMA.nodes[rel_def.from_label].corpus_type
+            expected_dst = _SCHEMA.nodes[rel_def.to_label].corpus_type
+            if row["src_type"] != expected_src or row["dst_type"] != expected_dst:
+                raise _SchemaDriftError(
+                    f"kg_edge schema_drift | rel={rel} "
+                    f"src={row['src_type']}:{row['src_id']} "
+                    f"dst={row['dst_type']}:{row['dst_id']} "
+                    f"expected {expected_src}->{expected_dst}"
+                )
+            src_label, src_key = rel_def.from_label, _NODE_KEY_COL[rel_def.from_label]
+            dst_label, dst_key = rel_def.to_label, _NODE_KEY_COL[rel_def.to_label]
+            for label, key, node_id, side in (
+                (src_label, src_key, row["src_id"], "src"),
+                (dst_label, dst_key, row["dst_id"], "dst"),
+            ):
+                exists = self._execute_cypher(
+                    f"MATCH (n:{label} {{{key}: '{_cypher_escape(node_id)}'}}) "
+                    f"RETURN n.{key} LIMIT 1"
+                )
+                if not exists:
+                    raise _SchemaDriftError(
+                        f"kg_edge schema_drift | rel={rel} "
+                        f"{side}={row[f'{side}_type']}:{node_id} "
+                        f"missing projected node {label} ({key})"
+                    )
             cypher = (
                 f"MATCH (a:{src_label} "
                 f"{{{src_key}: '{_cypher_escape(row['src_id'])}'}}), "
@@ -491,23 +672,14 @@ class InstanceGraphManager:
                 f"{{{dst_key}: '{_cypher_escape(row['dst_id'])}'}}) "
             )
             props = _rel_props_literal(row)
-            if has_props:
+            if set(_ABOUT_EVIDENCE_PROPS) <= set(rel_def.properties):
                 props = (
                     f"confidence: {float(row['confidence'])}, "
                     f"method: '{_cypher_escape(row['method'] or '')}', "
                     f"{props}"
                 )
             cypher += f"CREATE (a)-[:{rel} {{{props}}}]->(b)"
-            try:
-                self._conn.execute(cypher)
-            except Exception as e:
-                logger.warning(
-                    "[InstanceGraph] edge_error | rel=%s src=%s dst=%s err=%s",
-                    rel,
-                    row["src_id"],
-                    row["dst_id"],
-                    e,
-                )
+            self._conn.execute(cypher)
 
     def _create_fts_indexes(self) -> None:
         assert self._conn is not None

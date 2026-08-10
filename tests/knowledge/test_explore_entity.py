@@ -180,3 +180,23 @@ def test_tool_registered_in_agent_defaults():
     with open(agent_mod.__file__) as f:
         src = f.read()
     assert "explore_entity" in src
+
+
+def test_entity_type_label_mapping_survives_schema_refactor():
+    """explore_entity's accepted entity types come from the schema mapping."""
+    from esdc.chat.domain_knowledge.instance_graph import _TYPE_TO_LABEL
+
+    assert _TYPE_TO_LABEL == {
+        "document": "Document",
+        "pod": "POD",
+        "project": "Project",
+        "field": "Field",
+        "working_area": "WorkingArea",
+    }
+    assert set(_TYPE_TO_LABEL) == {
+        "pod",
+        "project",
+        "field",
+        "working_area",
+        "document",
+    }

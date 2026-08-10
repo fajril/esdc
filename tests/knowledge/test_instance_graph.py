@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
-from esdc.chat.domain_knowledge.instance_graph import InstanceGraphManager
+from esdc.chat.domain_knowledge.instance_graph import (
+    InstanceGraphManager,
+    _load_instance_graph_schema,
+    _node_ddl,
+    _rel_ddl,
+)
 from esdc.knowledge.linker import run_deterministic_linking
 from esdc.knowledge.store import Edge, KnowledgeStore
 
@@ -35,6 +43,283 @@ def test_unavailable_before_learn(tmp_path: Path):
     conn.close()
     mgr = InstanceGraphManager(sqlite_path=tmp_path / "fresh.sqlite")
     assert mgr.is_available() is False
+
+
+def test_schema_contract_declares_current_topology():
+    """The executable YAML contract must match the current LadybugDB graph."""
+    schema = _load_instance_graph_schema()
+
+    assert set(schema.nodes) == {
+        "Document",
+        "POD",
+        "Project",
+        "Field",
+        "WorkingArea",
+    }
+    expected_nodes = {
+        "Document": ("document", "doc_id", "subject"),
+        "POD": ("pod", "pod_id", "pod_name"),
+        "Project": ("project", "project_id", "project_name"),
+        "Field": ("field", "name", "name"),
+        "WorkingArea": ("working_area", "name", "name"),
+    }
+    for label, (corpus_type, key, name) in expected_nodes.items():
+        node = schema.nodes[label]
+        assert node.corpus_type == corpus_type
+        assert node.key == key
+        assert node.name == name
+
+    assert set(schema.relationships) == {
+        "ABOUT_POD",
+        "ABOUT_PROJECT",
+        "ABOUT_FIELD",
+        "ABOUT_WK",
+        "HAS_PROJECT",
+        "REVISES",
+        "SUPERSEDES",
+        "IN_FIELD",
+        "IN_WK",
+    }
+    endpoints = {
+        "ABOUT_POD": ("Document", "POD"),
+        "ABOUT_PROJECT": ("Document", "Project"),
+        "ABOUT_FIELD": ("Document", "Field"),
+        "ABOUT_WK": ("Document", "WorkingArea"),
+        "HAS_PROJECT": ("POD", "Project"),
+        "REVISES": ("POD", "POD"),
+        "SUPERSEDES": ("POD", "POD"),
+        "IN_FIELD": ("Project", "Field"),
+        "IN_WK": ("Field", "WorkingArea"),
+    }
+    temporal = {"valid_from", "valid_to", "properties_json"}
+    evidence = {"confidence", "method"}
+    for rel, (from_label, to_label) in endpoints.items():
+        definition = schema.relationships[rel]
+        assert definition.from_label == from_label
+        assert definition.to_label == to_label
+        assert temporal <= set(definition.properties)
+        if rel.startswith("ABOUT_"):
+            assert evidence <= set(definition.properties)
+
+
+def _base_schema_dict() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "nodes": {
+            "Document": {
+                "corpus_type": "document",
+                "key": "doc_id",
+                "name": "subject",
+                "properties": {
+                    "doc_id": "STRING",
+                    "file_name": "STRING",
+                    "doc_type": "STRING",
+                    "doc_date": "STRING",
+                    "subject": "STRING",
+                },
+                "fts": {"index": "document_fts", "properties": ["subject"]},
+            },
+            "POD": {
+                "corpus_type": "pod",
+                "key": "pod_id",
+                "name": "pod_name",
+                "properties": {
+                    "pod_id": "STRING",
+                    "pod_name": "STRING",
+                    "rev_num": "INT64",
+                },
+            },
+        },
+        "relationships": {
+            "ABOUT_POD": {
+                "from": "Document",
+                "to": "POD",
+                "properties": {
+                    "confidence": "DOUBLE",
+                    "method": "STRING",
+                    "valid_from": "STRING",
+                    "valid_to": "STRING",
+                    "properties_json": "STRING",
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda d: d.pop("schema_version"), "schema_version"),
+        (lambda d: d.update(schema_version=2), "schema_version"),
+        (lambda d: d.update(nodes="nodes"), "nodes"),
+        (lambda d: d.update(relationships=[]), "relationships"),
+        (
+            lambda d: d["nodes"].update(
+                {"Bad-Label": _base_schema_dict()["nodes"]["POD"]}
+            ),
+            "nodes.Bad-Label",
+        ),
+        (
+            lambda d: d["relationships"].update(
+                {"ABOUT POD": _base_schema_dict()["relationships"]["ABOUT_POD"]}
+            ),
+            "relationships.ABOUT POD",
+        ),
+        (lambda d: d["nodes"]["Document"].update(key="doc id"), "key"),
+        (
+            lambda d: d["nodes"]["Document"]["properties"].update(
+                {"bad prop": "STRING"}
+            ),
+            "properties.bad prop",
+        ),
+        (
+            lambda d: d["nodes"]["POD"].update(corpus_type="document"),
+            "corpus_type",
+        ),
+        (
+            lambda d: d["nodes"]["POD"].update(key="missing_key"),
+            "nodes.POD.key",
+        ),
+        (
+            lambda d: d["nodes"]["POD"].update(name="missing_name"),
+            "nodes.POD.name",
+        ),
+        (
+            lambda d: d["nodes"]["Document"]["properties"].update(subject="FLOAT"),
+            "properties.subject",
+        ),
+        (
+            lambda d: d["relationships"]["ABOUT_POD"].pop("from"),
+            "relationships.ABOUT_POD.from",
+        ),
+        (
+            lambda d: d["relationships"]["ABOUT_POD"].update(to="Ghost"),
+            "ABOUT_POD.to",
+        ),
+        (
+            lambda d: d["nodes"]["Document"]["fts"]["properties"].append("ghost"),
+            "fts.properties.ghost",
+        ),
+        (
+            lambda d: d["nodes"]["Document"].update(fts={"properties": ["subject"]}),
+            "fts.index",
+        ),
+        (
+            lambda d: d["nodes"]["Document"]["fts"].update(index="bad-index"),
+            "fts.index",
+        ),
+        (
+            lambda d: d["relationships"]["ABOUT_POD"]["properties"].pop("valid_from"),
+            "properties.valid_from",
+        ),
+        (
+            lambda d: d["relationships"]["ABOUT_POD"]["properties"].pop("confidence"),
+            "properties.confidence",
+        ),
+        (
+            lambda d: d["relationships"]["ABOUT_POD"]["properties"].pop("method"),
+            "properties.method",
+        ),
+    ],
+)
+def test_schema_validation_rejects_invalid_yaml(tmp_path: Path, mutate, message: str):
+    """Invalid contract files fail with path-aware ValueError messages."""
+    data = _base_schema_dict()
+    mutate(data)
+    path = tmp_path / "schema.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc:
+        _load_instance_graph_schema(path)
+
+    assert message in str(exc.value)
+    assert "schema.yaml" in str(exc.value)
+
+
+def test_node_ddl_from_schema_pins_primary_key_and_types(tmp_path: Path):
+    """Schema node definitions generate exact node tables with key as PK."""
+    path = tmp_path / "schema.yaml"
+    path.write_text(
+        yaml.safe_dump(_base_schema_dict(), sort_keys=False), encoding="utf-8"
+    )
+    schema = _load_instance_graph_schema(path)
+
+    doc_ddl = _node_ddl(schema.nodes["Document"])
+    assert doc_ddl == (
+        "CREATE NODE TABLE Document (doc_id STRING PRIMARY KEY, "
+        "file_name STRING, doc_type STRING, doc_date STRING, subject STRING)"
+    )
+    pod_ddl = _node_ddl(schema.nodes["POD"])
+    assert "pod_id STRING PRIMARY KEY" in pod_ddl
+    assert "rev_num INT64" in pod_ddl
+    for label, node in schema.nodes.items():
+        stmt = _node_ddl(node)
+        assert stmt.startswith(f"CREATE NODE TABLE {label} ")
+        assert re.fullmatch(r"CREATE NODE TABLE [A-Za-z_][A-Za-z0-9_]* \([^)]+\)", stmt)
+
+
+def test_rel_ddl_from_schema_pins_temporal_and_evidence_props(tmp_path: Path):
+    """Schema relationship definitions generate exact rel tables."""
+    path = tmp_path / "schema.yaml"
+    path.write_text(
+        yaml.safe_dump(_base_schema_dict(), sort_keys=False), encoding="utf-8"
+    )
+    schema = _load_instance_graph_schema(path)
+
+    stmt = _rel_ddl(schema.relationships["ABOUT_POD"])
+    assert stmt == (
+        "CREATE REL TABLE ABOUT_POD (FROM Document TO POD, "
+        "confidence DOUBLE, method STRING, valid_from STRING, "
+        "valid_to STRING, properties_json STRING)"
+    )
+    assert re.fullmatch(
+        r"CREATE REL TABLE [A-Za-z_][A-Za-z0-9_]* "
+        r"\(FROM [A-Za-z_][A-Za-z0-9_]* TO [A-Za-z_][A-Za-z0-9_]*"
+        r", [^)]+\)",
+        stmt,
+    )
+
+
+def test_runtime_topology_constants_derive_from_default_schema():
+    """Every hardcoded topology constant is a projection of the YAML schema."""
+    from esdc.chat.domain_knowledge.instance_graph import (
+        _FTS_INDEXES,
+        _LABEL_TO_TYPE,
+        _NODE_DDL,
+        _NODE_KEY_COL,
+        _NODE_NAME_COL,
+        _REL_DDL,
+        _REL_MAP,
+        _TYPE_TO_LABEL,
+    )
+
+    schema = _load_instance_graph_schema()
+    assert set(_NODE_DDL) == {_node_ddl(node) for node in schema.nodes.values()}
+    assert set(_REL_DDL) == {_rel_ddl(rel) for rel in schema.relationships.values()}
+    assert {
+        label: node.corpus_type for label, node in schema.nodes.items()
+    } == _LABEL_TO_TYPE
+    assert {
+        node.corpus_type: label for label, node in schema.nodes.items()
+    } == _TYPE_TO_LABEL
+    assert {label: node.key for label, node in schema.nodes.items()} == _NODE_KEY_COL
+    assert {label: node.name for label, node in schema.nodes.items()} == _NODE_NAME_COL
+    assert {(idx[0], idx[1], tuple(idx[2])) for idx in _FTS_INDEXES} == {
+        (label, node.fts_index, tuple(node.fts_properties))
+        for label, node in schema.nodes.items()
+        if node.fts_index is not None
+    }
+    expected_rel_map = {
+        rel_name: (
+            rel_def.from_label,
+            schema.nodes[rel_def.from_label].key,
+            rel_def.to_label,
+            schema.nodes[rel_def.to_label].key,
+            {"confidence", "method"} <= set(rel_def.properties),
+        )
+        for rel_name, rel_def in schema.relationships.items()
+    }
+    assert expected_rel_map == _REL_MAP
 
 
 def test_find_resolves_pod_by_name(learned_sqlite: Path):
@@ -126,6 +411,49 @@ def test_neighbors_groups_by_relation(learned_sqlite: Path):
     )
     about = n.get("ABOUT_POD", [])
     assert any(item["entity_type"] == "document" for item in about)
+
+
+def test_all_declared_relationships_traversable(learned_sqlite: Path, sqlite_conn):
+    """Every schema relationship must be reachable after building."""
+    store = KnowledgeStore(sqlite_conn)
+    store.upsert_edges(
+        [
+            Edge(
+                "document",
+                "DOC-A",
+                "ABOUT_PROJECT",
+                "project",
+                "PRJ-001",
+                confidence=1.0,
+                method="test",
+            ),
+            Edge(
+                "pod",
+                "PL-2022-0002-2-2-1",
+                "SUPERSEDES",
+                "pod",
+                "PL-2019-0001-2-2-0",
+                confidence=1.0,
+                method="registry",
+            ),
+        ]
+    )
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    for rel in _load_instance_graph_schema().relationships:
+        rows = mgr.query(f"MATCH ()-[r:{rel}]->() RETURN r LIMIT 1")
+        assert rows, f"relationship {rel} missing from traversable graph"
+
+    n = mgr.neighbors("pod", "PL-2019-0001-2-2-0")
+    revises = n.get("REVISES", [])
+    supersedes = n.get("SUPERSEDES", [])
+    assert any(
+        item["entity_id"] == "PL-2022-0002-2-2-1" and item["direction"] == "inbound"
+        for item in revises
+    )
+    assert any(
+        item["entity_id"] == "PL-2022-0002-2-2-1" and item["direction"] == "inbound"
+        for item in supersedes
+    )
 
 
 def test_cypher_query_passthrough(learned_sqlite: Path):
@@ -340,6 +668,113 @@ def test_query_validates_before_build(learned_sqlite: Path, monkeypatch):
     monkeypatch.setattr(mgr, "_ensure_built", _should_not_build)
     with pytest.raises(ValueError, match="read-only"):
         mgr.query("CREATE (:POD {pod_id: 'forbidden'})")
+
+
+@pytest.mark.parametrize(
+    ("edge", "fragment"),
+    [
+        (
+            Edge(
+                "document",
+                "DOC-A",
+                "MYSTERY_REL",
+                "pod",
+                "PL-2019-0001-2-2-0",
+                method="test",
+            ),
+            "MYSTERY_REL",
+        ),
+        (
+            Edge(
+                "field",
+                "Duri",
+                "ABOUT_POD",
+                "pod",
+                "PL-2019-0001-2-2-0",
+                method="test",
+            ),
+            "ABOUT_POD",
+        ),
+        (
+            Edge(
+                "document",
+                "DOC-A",
+                "ABOUT_POD",
+                "field",
+                "Duri",
+                method="test",
+            ),
+            "ABOUT_POD",
+        ),
+        (
+            Edge(
+                "document",
+                "DOC-MISSING",
+                "ABOUT_POD",
+                "pod",
+                "PL-2019-0001-2-2-0",
+                method="test",
+            ),
+            "DOC-MISSING",
+        ),
+        (
+            Edge(
+                "document",
+                "DOC-A",
+                "ABOUT_POD",
+                "pod",
+                "PL-MISSING",
+                method="test",
+            ),
+            "PL-MISSING",
+        ),
+    ],
+)
+def test_schema_drift_fails_build_without_touching_sqlite(
+    learned_sqlite: Path,
+    sqlite_conn,
+    caplog,
+    edge: Edge,
+    fragment: str,
+):
+    """Drifted kg_edge rows make the projection unavailable, never mutating."""
+    store = KnowledgeStore(sqlite_conn)
+    store.upsert_edges([edge])
+    sqlite_conn.commit()
+    before = sqlite_conn.execute(
+        "SELECT src_type, src_id, rel, dst_type, dst_id, confidence, method, "
+        "valid_from, valid_to, properties_json FROM kg_edge ORDER BY 1,2,3,4,5"
+    ).fetchall()
+
+    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
+    # esdc.chat.app may have globally disabled logging on import (chat level
+    # "0") and stopped esdc.chat from propagating to the root, where pytest's
+    # caplog handler lives. Attach caplog directly to the target logger for
+    # this assertion, and always restore global disable plus logger state.
+    target_logger = logging.getLogger("esdc.chat.domain_knowledge.instance_graph")
+    prior_disable = logging.root.manager.disable
+    prior_logger_level = target_logger.level
+    logging.disable(logging.NOTSET)
+    target_logger.setLevel(logging.ERROR)
+    target_logger.addHandler(caplog.handler)
+    try:
+        assert mgr.is_available() is False
+    finally:
+        target_logger.removeHandler(caplog.handler)
+        target_logger.setLevel(prior_logger_level)
+        logging.disable(prior_disable)
+
+    assert mgr._conn is None
+    assert mgr._db is None
+    assert any(
+        "build_failed" in record.message and fragment in record.message
+        for record in caplog.records
+    ), f"expected actionable drift log for {fragment}, got {caplog.records}"
+    after = sqlite_conn.execute(
+        "SELECT src_type, src_id, rel, dst_type, dst_id, confidence, method, "
+        "valid_from, valid_to, properties_json FROM kg_edge ORDER BY 1,2,3,4,5"
+    ).fetchall()
+    assert after == before
 
 
 def test_query_read_only_allowlist_succeeds(learned_sqlite: Path):
