@@ -183,6 +183,22 @@ for DeepSeek thinking mode. `provider_order` controls failover priority; ESDC
 uses `default_provider` first, then tries the remaining providers in order if
 the current provider fails.
 
+OpenCode Go can be configured as a first-class provider:
+
+```yaml
+default_provider: opencode
+providers:
+  opencode:
+    provider_type: opencode
+    api_key: sk-...
+    model: deepseek-v4-flash
+```
+
+`base_url` defaults to `https://opencode.ai/zen/go/v1`; set it to
+`https://opencode.ai/zen/v1` for OpenCode Zen. Requests carry a
+process-stable `x-opencode-session` header, overridable with the
+`ESDC_OPENCODE_SESSION` environment variable.
+
 ### Environment Variables
 
 Set credentials for data fetching:

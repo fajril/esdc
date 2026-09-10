@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode Go provider.** New first-class `opencode` provider type for
+  OpenCode Go (and Zen via a base URL override). It sends the required
+  `x-opencode-session` and self-identifying `User-Agent` headers, which fixes
+  the `400 MissingSessionID` error when pointing an OpenAI-compatible provider
+  at `https://opencode.ai/zen/go/v1`. Covered models are the chat-completions
+  catalog (GLM-5.x, Kimi K2.6/K2.7/K3, DeepSeek V4.x, LongCat-2.0, MiMo V2.5,
+  Hy3/Hy4); Anthropic- and Responses-API-only models are out of scope for now.
+  Set `ESDC_OPENCODE_SESSION` to override the process-stable session ID.
+
 ### Corpus retrieval
 
 **Added:** `corpus.max_chunks_per_doc` (default 2). `search()` returned
