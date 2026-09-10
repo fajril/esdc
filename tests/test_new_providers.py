@@ -559,6 +559,7 @@ class TestProviderRegistry:
             "groq",
             "deepseek",
             "ollama_cloud",
+            "opencode",
         }
         assert set(PROVIDER_CLASSES.keys()) == expected
         assert set(list_provider_types()) == expected
@@ -571,6 +572,7 @@ class TestProviderRegistry:
         assert PROVIDER_NAMES["azure_openai"] == "Azure OpenAI"
         assert PROVIDER_NAMES["groq"] == "Groq"
         assert PROVIDER_NAMES["deepseek"] == "DeepSeek"
+        assert PROVIDER_NAMES["opencode"] == "OpenCode Go"
 
     def test_get_provider(self):
         from esdc.providers import get_provider
@@ -587,6 +589,10 @@ class TestProviderRegistry:
         assert get_provider("deepseek") is DeepSeekProvider
         assert get_provider("nonexistent") is None
 
+        from esdc.providers.opencode import OpencodeProvider
+
+        assert get_provider("opencode") is OpencodeProvider
+
     def test_provider_type_literal(self):
         from esdc.providers.base import ProviderType
 
@@ -595,6 +601,7 @@ class TestProviderRegistry:
         assert "azure_openai" in ProviderType.__args__
         assert "groq" in ProviderType.__args__
         assert "deepseek" in ProviderType.__args__
+        assert "opencode" in ProviderType.__args__
 
 
 class TestOpenAICompatibleContextLength:

@@ -17,6 +17,7 @@ from esdc.providers.ollama import OllamaProvider
 from esdc.providers.ollama_cloud import OllamaCloudProvider
 from esdc.providers.openai import OpenAIProvider
 from esdc.providers.openai_compatible import OpenAICompatibleProvider
+from esdc.providers.opencode import OpencodeProvider
 
 PROVIDER_CLASSES: dict[str, type[Provider]] = {
     "ollama": OllamaProvider,
@@ -28,6 +29,7 @@ PROVIDER_CLASSES: dict[str, type[Provider]] = {
     "groq": GroqProvider,
     "deepseek": DeepSeekProvider,
     "ollama_cloud": OllamaCloudProvider,
+    "opencode": OpencodeProvider,
 }
 
 PROVIDER_NAMES: dict[str, str] = {
@@ -40,6 +42,7 @@ PROVIDER_NAMES: dict[str, str] = {
     "groq": "Groq",
     "deepseek": "DeepSeek",
     "ollama_cloud": "Ollama Cloud",
+    "opencode": "OpenCode Go",
 }
 
 
@@ -155,6 +158,7 @@ _TOKEN_KWARG: dict[str, str] = {
     "google": "max_tokens",
     "ollama": "num_predict",
     "ollama_cloud": "num_predict",
+    "opencode": "max_completion_tokens",
 }
 
 _TIMEOUT_KWARG: dict[str, str] = {
@@ -165,6 +169,7 @@ _TIMEOUT_KWARG: dict[str, str] = {
     "anthropic": "timeout",
     "groq": "timeout",
     "google": "request_timeout",
+    "opencode": "timeout",
 }
 
 _OLLAMA_TIMEOUT_PROVIDERS = frozenset({"ollama", "ollama_cloud"})
@@ -308,6 +313,7 @@ __all__ = [
     "AzureOpenAIProvider",
     "GroqProvider",
     "DeepSeekProvider",
+    "OpencodeProvider",
     "PROVIDER_CLASSES",
     "PROVIDER_NAMES",
     "ProviderFallbackChatModel",

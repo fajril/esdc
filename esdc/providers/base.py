@@ -18,6 +18,7 @@ ProviderType = Literal[
     "groq",
     "deepseek",
     "ollama_cloud",
+    "opencode",
 ]
 
 DEFAULT_CONTEXT_LENGTH = 32768

@@ -574,6 +574,12 @@ class TestBoundedLlmKwargs:
             "async_client_kwargs": {"timeout": 60.0},
         }
 
+    def test_opencode_bounded_llm_kwargs(self):
+        from esdc.providers import _bounded_llm_kwargs
+
+        kwargs = _bounded_llm_kwargs("opencode", 4096, 60)
+        assert kwargs == {"max_completion_tokens": 4096, "timeout": 60.0}
+
     def test_partial_bounds_disable_each_bound_independently(self):
         from esdc.providers import _bounded_llm_kwargs
 

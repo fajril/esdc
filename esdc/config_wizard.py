@@ -68,6 +68,7 @@ _PROVIDER_FIELDS: dict[str, list[str]] = {
     "groq": ["api_key", "model"],
     "deepseek": ["api_key", "model", "reasoning_effort"],
     "ollama_cloud": ["base_url", "api_key", "model"],
+    "opencode": ["api_key", "base_url", "model"],
 }
 
 
