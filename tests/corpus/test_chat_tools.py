@@ -98,6 +98,9 @@ def tool_env(tmp_path: Path, monkeypatch):
 
     db_path = tmp_path / "corpus.duckdb"
     monkeypatch.setattr(Config, "get_db_file", classmethod(lambda cls: db_path))
+    monkeypatch.setattr(
+        Config, "get_cache_dir", classmethod(lambda cls: tmp_path / "cache")
+    )
     monkeypatch.setattr(embedder_mod, "InternalEmbedder", FakeEmbedder)
     monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
@@ -110,7 +113,7 @@ def tool_env(tmp_path: Path, monkeypatch):
 @pytest.fixture
 def populated(tool_env: Path) -> Path:
     """Build a tmp DuckDB with one short and one long document ingested."""
-    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder())
+    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder(), read_only=False)
     store.ensure_tables()
     store.insert_document(DOC, [Chunk(0, "Surat", "persetujuan POD lapangan Duri")])
     store.insert_document(LONG_DOC, [Chunk(0, None, "notulen rapat panjang")])
@@ -145,7 +148,7 @@ def test_search_documents_filter_excludes(populated):
 def test_search_documents_doc_topic_filter(tool_env):
     from esdc.chat.tools import search_documents
 
-    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder())
+    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder(), read_only=False)
     store.ensure_tables()
     doc = dict(DOC)
     doc["doc_topic"] = ["wpnb"]
@@ -230,19 +233,14 @@ def test_aggregate_documents_not_available_carries_ingest_hint(tool_env):
     assert "esdc corpus extract" in result["message"]
 
 
-def test_search_documents_survives_missing_embed_text_column(populated):
-    """Simulate an upgraded install missing the embed_text column.
+def test_search_documents_missing_embed_text_degrades_then_repairs(populated):
+    """An upgraded install missing embed_text degrades actionably, not silently.
 
-    A pre-branch DuckDB has document_chunks
-    populated but lacks the embed_text column that this branch's
-    `_vector_search` now selects. `search_documents` builds its own
-    CorpusStore and must self-heal via `ensure_tables()` before calling
-    `store.search(...)`; without that call, DuckDB's Binder error
-    ("column embed_text not found") is caught and every chat search
-    returns status="error" until a corpus CLI command happens to run
-    `_open_corpus_store()` first. This test fails on unpatched
-    `search_documents` (proven: reverting the tools.py fix reproduces the
-    "error" status here).
+    A pre-branch DuckDB has document_chunks populated but lacks the
+    embed_text column that this branch's ``_vector_search`` selects. The
+    serving path must NOT self-heal mid-query: ``search_documents`` reports
+    ``not_available`` with the maintenance hint. A writable maintenance
+    pass (``ensure_tables``) then repairs the schema and search works.
     """
     from esdc.chat.tools import search_documents
 
@@ -257,7 +255,18 @@ def test_search_documents_survives_missing_embed_text_column(populated):
     conn.close()
 
     result = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
-    assert result["status"] in ("success", "no_results")
+    assert result["status"] == "not_available"
+    assert "embed_text" in result["message"]
+    assert "esdc corpus extract" in result["message"]
+    assert "esdc corpus commit" in result["message"]
+
+    # Writable maintenance (esdc corpus commit / CLI open path) repairs.
+    store = CorpusStore(db_path=populated, embedder=FakeEmbedder(), read_only=False)
+    store.ensure_tables()
+    store.close()
+
+    repaired = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
+    assert repaired["status"] in ("success", "no_results")
 
 
 def test_read_document_returns_markdown_and_metadata(populated):
@@ -301,6 +310,43 @@ class ExplodingStore:
         raise RuntimeError("store exploded")
 
 
+class _ReadinessFailStore:
+    """Double: validates as a readiness failure before any query runs."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def validate_readiness(self, operation="search"):
+        from esdc.corpus.store import CorpusNotReadyError
+
+        raise CorpusNotReadyError(f"Corpus schema is out of date ({operation}).")
+
+    def close(self):
+        pass
+
+
+class _SqlFailStore:
+    """Double: readiness passes, then the query hits an unrelated SQL defect."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def validate_readiness(self, operation="search"):
+        pass
+
+    def search(self, *args, **kwargs):
+        raise RuntimeError("Binder Error: unrelated column does not exist")
+
+    def aggregate(self, *args, **kwargs):
+        raise RuntimeError("Binder Error: unrelated column does not exist")
+
+    def get_document(self, *args, **kwargs):
+        raise RuntimeError("Binder Error: unrelated column does not exist")
+
+    def close(self):
+        pass
+
+
 def test_tools_never_raise_on_store_explosion(tool_env, monkeypatch):
     import importlib
 
@@ -315,6 +361,158 @@ def test_tools_never_raise_on_store_explosion(tool_env, monkeypatch):
 
     result = json.loads(read_document.invoke({"doc_id": "abc123"}))
     assert result["status"] == "error"
+
+
+def test_search_documents_readiness_failure_is_not_available_with_hint(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import search_documents
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _ReadinessFailStore)
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
+    assert result["query"] == "persetujuan POD"
+
+
+def test_search_documents_unrelated_sql_error_is_error_envelope(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import search_documents
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SqlFailStore)
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD"}))
+    assert result["status"] == "error"
+    assert "Binder Error" in result["message"]
+    assert "esdc corpus extract" not in result["message"]
+    assert result["query"] == "persetujuan POD"
+
+
+def test_aggregate_documents_readiness_failure_is_not_available_with_hint(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import aggregate_documents
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _ReadinessFailStore)
+
+    result = json.loads(aggregate_documents.invoke({"query": "persetujuan"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
+    assert result["query"] == "persetujuan"
+
+
+def test_read_document_readiness_failure_is_not_available_with_hint(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import read_document
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _ReadinessFailStore)
+
+    result = json.loads(read_document.invoke({"doc_id": "abc123"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
+    assert result["doc_id"] == "abc123"
+
+
+def test_aggregate_documents_unrelated_sql_error_is_error_envelope(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import aggregate_documents
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SqlFailStore)
+
+    result = json.loads(aggregate_documents.invoke({"query": "persetujuan"}))
+    assert result["status"] == "error"
+    assert "Binder Error" in result["message"]
+
+
+def test_read_document_unrelated_sql_error_is_error_envelope(tool_env, monkeypatch):
+    from esdc.chat.tools import read_document
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SqlFailStore)
+
+    result = json.loads(read_document.invoke({"doc_id": "abc123"}))
+    assert result["status"] == "error"
+    assert "Binder Error" in result["message"]
+
+
+def test_semantic_search_corpus_readiness_is_not_available_with_hint(
+    tool_env, monkeypatch
+):
+    """Expected readiness failure in the fan-out is not_available, remarks intact."""
+    from unittest.mock import Mock, patch
+
+    import esdc.chat.tools as tools_mod
+    from esdc.chat.tools import semantic_search
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _ReadinessFailStore)
+    tools_mod.invalidate_tool_cache()
+
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
+        mock_resolver = Mock()
+        mock_resolver.hybrid_search.return_value = {
+            "status": "no_results",
+            "count": 0,
+            "results": [],
+        }
+        mock_resolver.close = Mock()
+        resolver_cls.return_value = mock_resolver
+
+        result = json.loads(semantic_search.invoke({"query": "kendala teknis"}))
+
+    assert result["remarks"]["status"] == "no_results"
+    assert result["documents"]["status"] == "not_available"
+    assert "esdc corpus extract" in result["documents"]["message"]
+
+
+def test_semantic_search_missing_db_reaches_fts_fallback(tool_env, monkeypatch):
+    """A missing remarks DB must degrade to not_available and reach FTS fallback.
+
+    tool_env points the resolver at a nonexistent tmp DuckDB (read-only, so
+    it cannot be created). hybrid_search must return not_available rather than
+    raising, which makes the tool's FTS-fallback branch reachable.
+    """
+    import esdc.chat.tools as tools_mod
+    from esdc.chat.tools import semantic_search
+
+    assert not tool_env.exists()
+
+    fallback_calls: list[tuple] = []
+
+    def _spy_fts(query, limit=10, table_name=None):
+        fallback_calls.append((query, limit, table_name))
+        return {
+            "status": "fallback_to_fts",
+            "message": "keyword fallback",
+            "count": 0,
+            "results": [],
+        }
+
+    monkeypatch.setattr(tools_mod, "_search_remarks_via_fts", _spy_fts)
+
+    result = json.loads(semantic_search.invoke({"query": "kendala teknis"}))
+
+    assert fallback_calls == [("kendala teknis", 10, "project_resources")]
+    assert result["remarks"]["status"] == "fallback_to_fts"
+    assert not tool_env.exists()
+
+
+def test_search_documents_fts_absent_vector_only_fallback(tool_env):
+    """No FTS index must not fail search: vector results stand alone."""
+    from esdc.chat.tools import search_documents
+
+    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder(), read_only=False)
+    store.ensure_tables()
+    store.insert_document(DOC, [Chunk(0, "Surat", "persetujuan POD lapangan Duri")])
+    store.refresh_mirror()
+    # Deliberately skip rebuild_indexes(): no FTS index exists.
+    store.close()
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
+    assert result["status"] == "success"
+    assert result["results"][0]["doc_id"] == "abc123"
 
 
 def test_tools_registered_in_agent():
@@ -508,6 +706,9 @@ class TestSemanticSearchCorpusFanOut:
 
         class _SpyStore:
             def __init__(self, *args, **kwargs):
+                pass
+
+            def validate_readiness(self, operation="search"):
                 pass
 
             def search(self, query, limit, filters):

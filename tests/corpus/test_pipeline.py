@@ -128,7 +128,7 @@ def patch_seams(tmp_path, monkeypatch):
         pipeline,
         "CorpusStore",
         lambda *a, **kw: CorpusStore(
-            db_path=tmp_path / "_default.duckdb", embedder=FakeEmbedder()
+            db_path=tmp_path / "_default.duckdb", embedder=FakeEmbedder(), read_only=False
         ),
     )
 
@@ -179,7 +179,9 @@ def make_sidecar(
 def make_store(
     tmp_path: Path, embedder=None, db_name: str = "corpus.duckdb"
 ) -> CorpusStore:
-    return CorpusStore(db_path=tmp_path / db_name, embedder=embedder or FakeEmbedder())
+    return CorpusStore(
+        db_path=tmp_path / db_name, embedder=embedder or FakeEmbedder(), read_only=False
+    )
 
 
 def patch_store_factory(monkeypatch, store: CorpusStore) -> None:
@@ -2683,7 +2685,9 @@ def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkey
     store1.refresh_mirror()
     store1.close()
 
-    store2 = CorpusStore(db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder2())
+    store2 = CorpusStore(
+        db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder2(), read_only=False
+    )
     monkeypatch.setattr(pipeline, "CorpusStore", lambda *a, **kw: store2)
 
     orig_replace = store2.replace_chunks

@@ -44,17 +44,29 @@ import logging
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import duckdb
 
 from esdc.configs import Config
 from esdc.corpus.chunker import Chunk
+from esdc.dbmanager import get_duckdb_connection
 from esdc.embedders import MODEL_ID
 
 if TYPE_CHECKING:
     from esdc.corpus.mirror import MirrorReport
 
 logger = logging.getLogger(__name__)
+
+
+class CorpusNotReadyError(ValueError):
+    """Raised by ``CorpusStore.validate_readiness`` when a read cannot run.
+
+    A ``ValueError`` subclass so callers that already translate readiness
+    into a ``not_available`` envelope keep working, while serving call sites
+    can tell an expected readiness failure from an unrelated query defect
+    (which must keep its ``error`` envelope).
+    """
 
 # Qwen3-Embedding's documented task instruction for query-side embedding
 # (corpus.query_instruct). Chunks/documents are never prefixed — only
@@ -238,6 +250,71 @@ _DOC_JSON_FIELDS = (
     "metadata",
 )
 
+# Required schema per serving operation. Kept operation-specific so a pure
+# document lookup or metadata/keyword aggregate never acquires the chunk or
+# embedding dependency that only vector search actually consumes.
+#
+# document read (get_document) selects the full documents row, including the
+# metadata/embedding bookkeeping columns; it does not touch chunks at all.
+_DOC_READ_REQUIRED = frozenset(_DOC_COLUMNS)
+# search/aggregate join and filter on these documents columns and hydrate the
+# document metadata block for the result payload.
+_DOC_FILTER_REQUIRED = frozenset(
+    (
+        "doc_id",
+        "file_name",
+        "doc_type",
+        "doc_level",
+        "doc_topic",
+        "doc_date",
+        "subject",
+        "wk_name",
+        "field_name",
+        "project_name",
+        "pod_name",
+        "sender",
+        "recipient",
+        "doc_number",
+    )
+)
+# document_chunks columns: keyword/FTS paths use embed_text and chunk_id;
+# vector paths add the fixed-size embedding column.
+_CHUNK_KEYWORD_REQUIRED = frozenset(
+    ("chunk_id", "doc_id", "section", "chunk_text", "embed_text")
+)
+_CHUNK_VECTOR_REQUIRED = _CHUNK_KEYWORD_REQUIRED | {"embedding"}
+# `corpus list` projects these documents columns and LEFT JOINs chunks only to
+# count them, so it needs the join key and the counted column -- no
+# embed_text/embedding/section dependency. Deliberately not
+# _DOC_FILTER_REQUIRED: that set also carries sender/recipient/doc_number,
+# which list never reads, so reusing it would reject a schema that is
+# sufficient for listing.
+_DOC_LIST_REQUIRED = frozenset(
+    (
+        "doc_id",
+        "file_name",
+        "doc_type",
+        "doc_topic",
+        "doc_date",
+        "subject",
+        "doc_level",
+        "wk_name",
+        "field_name",
+        "project_name",
+        "pod_name",
+        "suggested_pod_ids",
+        "extraction_method",
+        "page_count",
+        "ingested_at",
+    )
+)
+_CHUNK_LIST_REQUIRED = frozenset(("chunk_id", "doc_id"))
+# Vector search and semantic/hybrid aggregates read corpus_meta.dim to size the
+# query vector; validate the table/column exists before SELECTing it so a
+# missing meta table is an actionable readiness failure, not a CatalogException.
+_META_REQUIRED = frozenset(("dim",))
+
+
 
 class CorpusStore:
     """DuckDB store for ingested corpus documents and chunk embeddings."""
@@ -251,6 +328,8 @@ class CorpusStore:
         db_path: Path | None = None,
         embedder: Any | None = None,
         sqlite_path: Path | None = None,
+        *,
+        read_only: bool = True,
     ) -> None:
         """Initialize with lazy DuckDB/SQLite connections and an embedder.
 
@@ -262,10 +341,13 @@ class CorpusStore:
                 Ollama daemon needed for corpus commit/search.
             sqlite_path: Operational SQLite db holding the documents
                 source of truth. Defaults to the shared esdc.sqlite.
+            read_only: Open the database in read-only mode. Defaults to
+                True; genuine writers must opt in with ``read_only=False``.
         """
         if db_path is None:
             db_path = Config.get_db_file()
         self._db_path = Path(db_path)
+        self._read_only = read_only
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._sqlite_path = Path(sqlite_path) if sqlite_path is not None else None
         self._sconn: sqlite3.Connection | None = None
@@ -288,17 +370,40 @@ class CorpusStore:
                 self._conn = None
 
         if self._conn is None:
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = duckdb.connect(str(self._db_path))
-            with contextlib.suppress(Exception):
-                self._conn.execute("INSTALL vss")
-            self._conn.execute("LOAD vss")
-            with contextlib.suppress(Exception):
-                self._conn.execute("INSTALL fts")
-            self._conn.execute("LOAD fts")
-            self._conn.execute("SET hnsw_enable_experimental_persistence = true")
+            if not self._read_only:
+                self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = get_duckdb_connection(self._db_path, read_only=self._read_only)
+            try:
+                with contextlib.suppress(Exception):
+                    conn.execute("INSTALL fts")
+                conn.execute("LOAD fts")
+                if not self._read_only:
+                    # HNSW persistence is a writer-side index setting; a
+                    # reader only needs the VSS extension loaded (above) to
+                    # open a database containing HNSW indexes.
+                    conn.execute("SET hnsw_enable_experimental_persistence = true")
+            except Exception:
+                with contextlib.suppress(Exception):
+                    conn.close()
+                raise
+            self._conn = conn
             logger.debug("[Corpus] DuckDB connection established with VSS/FTS")
         return self._conn
+
+    def _open_readonly_sqlite(self) -> sqlite3.Connection:
+        """Open the SQLite truth read-only, without schema creation/migration.
+
+        A reader must not create the file, its parent directory, or run the
+        `CREATE`/`ALTER`/`commit` sequence `get_sqlite_connection` performs.
+        """
+        path = self._resolved_sqlite_path()
+        # Percent-encode the path: sqlite URI parsing would otherwise treat a
+        # '?' or '#' inside the filename as the start of the query/fragment,
+        # silently reading the wrong file.
+        conn = sqlite3.connect(f"file:{quote(path.as_posix())}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
     def _get_sqlite(self) -> sqlite3.Connection:
         """Get or create the SQLite connection holding the documents table."""
@@ -310,6 +415,10 @@ class CorpusStore:
                     self._sconn.close()
                 self._sconn = None
         if self._sconn is None:
+            if self._read_only:
+                self._sconn = self._open_readonly_sqlite()
+                return self._sconn
+
             from esdc.pod_registry.store import get_sqlite_connection
 
             self._sconn = get_sqlite_connection(self._sqlite_path)
@@ -345,6 +454,7 @@ class CorpusStore:
         work without loading the embedding model. Pass ``validate_model=True`` from
         write paths (commit, reembed) to detect model mismatches.
         """
+        self._require_writable()
         conn = self._get_connection()
 
         # Check if all tables already exist
@@ -487,6 +597,94 @@ class CorpusStore:
         self._create_document_indexes()
         self._get_sqlite()  # documents source-of-truth table
 
+    def _require_writable(self) -> None:
+        if self._read_only:
+            raise PermissionError("This operation requires read_only=False")
+
+    def validate_readiness(self, operation: str = "search") -> None:
+        """Validate the DuckDB schema one serving operation will read.
+
+        Schema-only: reads ``information_schema`` and ``corpus_meta`` with
+        SELECTs. Never initializes SQLite, creates a file/directory or runs
+        DDL. Checks are operation-specific, so a pure document lookup or a
+        metadata/keyword aggregate never requires chunks, embeddings or
+        corpus_meta. A missing file/table/column/metadata raises
+        ``CorpusNotReadyError`` with a maintenance requirement; an
+        initialized-but-empty corpus is NOT a readiness failure — the
+        operation itself reports "No documents in corpus yet.".
+
+        Args:
+            operation: one of ``document``, ``list``, ``search``,
+                ``aggregate_metadata``, ``aggregate_keyword``,
+                ``aggregate_semantic``, ``aggregate``.
+        """
+        doc_read = _DOC_READ_REQUIRED
+        doc_filter = _DOC_FILTER_REQUIRED
+        schemas: dict[str, tuple[dict[str, frozenset[str]], bool]] = {
+            "document": ({self.DOC_TABLE: doc_read}, False),
+            "list": (
+                {
+                    self.DOC_TABLE: _DOC_LIST_REQUIRED,
+                    self.CHUNK_TABLE: _CHUNK_LIST_REQUIRED,
+                },
+                False,
+            ),
+            "search": (
+                {self.DOC_TABLE: doc_filter, self.CHUNK_TABLE: _CHUNK_VECTOR_REQUIRED},
+                True,
+            ),
+            "aggregate_metadata": ({self.DOC_TABLE: doc_filter}, False),
+            "aggregate_keyword": (
+                {self.DOC_TABLE: doc_filter, self.CHUNK_TABLE: _CHUNK_KEYWORD_REQUIRED},
+                False,
+            ),
+            "aggregate_semantic": (
+                {self.DOC_TABLE: doc_filter, self.CHUNK_TABLE: _CHUNK_VECTOR_REQUIRED},
+                True,
+            ),
+            "aggregate": (
+                {self.DOC_TABLE: doc_filter, self.CHUNK_TABLE: _CHUNK_VECTOR_REQUIRED},
+                True,
+            ),
+        }
+        spec = schemas.get(operation)
+        if spec is None:
+            raise ValueError(f"Unknown readiness operation {operation!r}")
+
+        required, needs_meta = spec
+        if needs_meta:
+            required = {**required, self.META_TABLE: _META_REQUIRED}
+        if not self._db_path.exists():
+            raise CorpusNotReadyError(
+                "Corpus database is not initialized. Run `esdc corpus commit` "
+                "to build it."
+            )
+
+        conn = self._get_connection()
+        for table, columns in required.items():
+            present = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = ?",
+                    [table],
+                ).fetchall()
+            }
+            missing = columns - present
+            if missing:
+                raise CorpusNotReadyError(
+                    f"Corpus schema is out of date ({table} is missing "
+                    f"{', '.join(sorted(missing))}). Run `esdc corpus commit` "
+                    "to rebuild it."
+                )
+        if needs_meta:
+            meta = conn.execute(f"SELECT dim FROM {self.META_TABLE} LIMIT 1").fetchone()
+            if meta is None or not isinstance(meta[0], int) or meta[0] <= 0:
+                raise CorpusNotReadyError(
+                    "Corpus embedding metadata is missing. Run "
+                    "`esdc corpus reembed` to rebuild it."
+                )
+
     def _migrate_legacy_entity_columns(self) -> None:
         """Wrap pre-JSON plain-text entity values into JSON arrays.
 
@@ -495,6 +693,7 @@ class CorpusStore:
         input, so one legacy row would break every filtered search.
         Idempotent: rows already holding valid JSON are untouched.
         """
+        self._require_writable()
         conn = self._get_connection()
         for col in _JSON_ARRAY_FILTER_COLUMNS:
             conn.execute(
@@ -507,6 +706,7 @@ class CorpusStore:
 
     def _create_document_indexes(self) -> None:
         """Create B-tree indexes on documents columns used for filtering."""
+        self._require_writable()
         conn = self._get_connection()
         doc_indexes = [
             ("idx_doc_doc_type", "doc_type"),
@@ -556,6 +756,7 @@ class CorpusStore:
         one edited through the portal — is left untouched. Returns the
         field names actually filled; doc_id not found -> [].
         """
+        self._require_writable()
         if not entities:
             return []
         sconn = self._get_sqlite()
@@ -636,6 +837,7 @@ class CorpusStore:
         batch — this call never writes it. No cross-db transaction
         exists, so the SQLite row is written LAST as the commit marker.
         """
+        self._require_writable()
         conn = self._get_connection()
         sconn = self._get_sqlite()
         from esdc.corpus.context import build_context_prefix, build_embed_text
@@ -714,6 +916,7 @@ class CorpusStore:
         would perform anyway, so it is idempotent and needs no rollback
         logic of its own beyond the transaction already here.
         """
+        self._require_writable()
         conn = self._get_connection()
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -912,6 +1115,7 @@ class CorpusStore:
 
     def clear(self) -> dict[str, int]:
         """Delete all documents (both stores) and chunks; corpus_meta is preserved."""
+        self._require_writable()
         conn = self._get_connection()
         sconn = self._get_sqlite()
         counts = self.counts()
@@ -931,6 +1135,7 @@ class CorpusStore:
 
     def replace_chunks(self, doc: dict[str, Any], chunks: list[Chunk]) -> None:
         """Replace all chunks for a document (used by `corpus reembed`)."""
+        self._require_writable()
         from esdc.corpus.context import build_context_prefix, build_embed_text
 
         doc_id = doc["doc_id"]
@@ -999,6 +1204,7 @@ class CorpusStore:
         DuckDB documents mirror and the SQLite source-of-truth table (matching
         the dual write in replace_chunks).
         """
+        self._require_writable()
         conn.execute(f"UPDATE {self.META_TABLE} SET embedding_model = ?", [new])
         conn.execute(
             f"UPDATE {self.DOC_TABLE} SET embedding_model = ? "
@@ -1020,6 +1226,7 @@ class CorpusStore:
         are derived data reproducible from documents.markdown via
         `corpus reembed`, unlike documents which holds the source of truth.
         """
+        self._require_writable()
         conn = self._get_connection()
         existing = conn.execute(
             f"SELECT embedding_model, dim FROM {self.META_TABLE} LIMIT 1"
@@ -1068,6 +1275,7 @@ class CorpusStore:
 
         Call once after a batch of inserts/updates, not per-document.
         """
+        self._require_writable()
         conn = self._get_connection()
         conn.execute("SET hnsw_enable_experimental_persistence = true")
 
@@ -1099,6 +1307,7 @@ class CorpusStore:
         rebuild of ~1k documents measures ~0.03s. Call it at the end of
         any batch that mutated the truth.
         """
+        self._require_writable()
         from esdc.corpus.mirror import refresh_all
 
         return refresh_all(self._get_connection(), self._resolved_sqlite_path())
@@ -1385,10 +1594,17 @@ class CorpusStore:
             docs[doc["doc_id"]] = doc
         return docs
 
-    def _corpus_unavailable(self) -> dict[str, Any] | None:
-        """not_available payload when there is nothing to search, else None."""
+    def _corpus_unavailable(
+        self, *, require_chunks: bool = True
+    ) -> dict[str, Any] | None:
+        """not_available payload when the operation's source is empty, else None.
+
+        Chunks back search and every query-bearing aggregate; a metadata-only
+        aggregate reads documents directly and must not require chunks.
+        """
+        table = self.CHUNK_TABLE if require_chunks else self.DOC_TABLE
         try:
-            n_chunks = self._count(self.CHUNK_TABLE)
+            n_rows = self._count(table)
         except Exception:
             return {
                 "status": "not_available",
@@ -1396,7 +1612,7 @@ class CorpusStore:
                 "results": [],
                 "count": 0,
             }
-        if n_chunks == 0:
+        if n_rows == 0:
             return {
                 "status": "not_available",
                 "message": "No documents in corpus yet.",
@@ -1564,7 +1780,7 @@ class CorpusStore:
         tokens forty pages apart. Doc-level conjunction (one EXISTS per
         term) is the alternative and was not chosen.
         """
-        unavailable = self._corpus_unavailable()
+        unavailable = self._corpus_unavailable(require_chunks=query is not None)
         if unavailable is not None:
             return unavailable
 

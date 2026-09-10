@@ -16,6 +16,7 @@ from typing import Any
 import duckdb
 
 from esdc.configs import Config
+from esdc.dbmanager import get_duckdb_connection
 from esdc.embedders import InternalEmbedder
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,8 @@ class SemanticResolver:
         self,
         db_path: Path | str | None = None,
         embedder: Any | None = None,
+        *,
+        read_only: bool = True,
     ) -> None:
         """Initialize with a DuckDB connection and an embedder.
 
@@ -53,10 +56,13 @@ class SemanticResolver:
                 Defaults to the in-process llama.cpp embedder — query-time
                 similarity always runs locally, with no daemon. Generation
                 call sites inject a backend from get_build_embedder.
+            read_only: Open the database in read-only mode. Defaults to
+                True; genuine writers must opt in with ``read_only=False``.
         """
         if db_path is None:
             db_path = Config.get_db_file()
         self._db_path = Path(db_path)
+        self._read_only = read_only
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._embedder = embedder if embedder is not None else InternalEmbedder()
         self._pin_verified_sig: tuple[int, int] | None = None
@@ -89,60 +95,94 @@ class SemanticResolver:
                 self._conn = None
 
         if self._conn is None:
-            self._conn = duckdb.connect(str(self._db_path))
-            with contextlib.suppress(Exception):
-                self._conn.execute("INSTALL vss")
-            self._conn.execute("LOAD vss")
+            self._conn = get_duckdb_connection(self._db_path, read_only=self._read_only)
             logger.debug("[Semantic] DuckDB connection established with VSS extension")
         return self._conn
 
-    def _ensure_semantic_meta(self) -> dict[str, Any] | None:
-        """Pin this space's embedding model and verify the active embedder.
+    @staticmethod
+    def _not_available(message: str) -> dict[str, Any]:
+        """The shared ``not_available`` envelope for a failed pin check."""
+        return {"status": "not_available", "message": message, "results": []}
 
-        Creates and seeds semantic_meta when missing — project_embeddings
-        predates the pin, so a legacy space adopts one on first use.
+    def _ensure_semantic_meta(self) -> dict[str, Any] | None:
+        """Validate the stored embedding pin against the active embedder.
+
+        Pure read in both access modes: semantic_meta is never created,
+        seeded or updated here. Verifies the table exists with the required
+        columns, holds a usable dimension and a non-null probe, then
+        regenerates PROBE_TEXT and compares dimension and cosine within
+        PROBE_TOLERANCE. A missing/legacy schema or an incompatible embedder
+        degrades to ``not_available`` with the maintenance command; an
+        unexpected database failure surfaces as ``error`` rather than a
+        clean result.
 
         Returns:
-            The ``not_available`` response dict when the active embedder
-            disagrees with the pin, else None. Query paths must degrade
+            The ``not_available``/``error`` response dict when the active
+            embedder cannot be verified, else None. Query paths must degrade
             rather than raise, matching _embeddings_available.
         """
         sig = self._db_signature()
         if sig is not None and sig == self._pin_verified_sig:
             return None
 
-        from esdc.embedders import PROBE_TEXT, check_or_seed_probe
+        from esdc.embedders import PROBE_TEXT, probe_mismatch
 
-        conn = self._get_connection()
         try:
-            conn.execute(self.SEMANTIC_META_DDL)
+            conn = self._get_connection()
+            columns = conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = ?",
+                [self.SEMANTIC_META],
+            ).fetchall()
+            required = {"embedding_model", "dim", "probe_vec"}
+            if not required.issubset({row[0] for row in columns}):
+                return self._not_available(
+                    "Embedding metadata is unavailable or legacy. Run "
+                    "'esdc reload --embeddings-only' to rebuild it."
+                )
             row = conn.execute(
-                f"SELECT embedding_model FROM {self.SEMANTIC_META} LIMIT 1"
+                f"SELECT dim, probe_vec FROM {self.SEMANTIC_META} LIMIT 1"
             ).fetchone()
             if row is None:
-                probe = self._embedder.generate_embedding(PROBE_TEXT)
-                conn.execute(
-                    f"INSERT INTO {self.SEMANTIC_META} "
-                    "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
-                    [self._embedder.model, len(probe), json.dumps(probe)],
+                return self._not_available(
+                    "Embedding metadata is empty. Run "
+                    "'esdc reload --embeddings-only' to rebuild it."
                 )
-                self._pin_verified_sig = sig
-                return None
-            check_or_seed_probe(conn, self.SEMANTIC_META, self._embedder)
+            dim, probe = row
+            if not isinstance(dim, int) or dim <= 0 or probe is None:
+                return self._not_available(
+                    "Embedding metadata has no usable dimension or probe. Run "
+                    "'esdc reload --embeddings-only' to rebuild it."
+                )
+            try:
+                stored = json.loads(probe) if isinstance(probe, str) else list(probe)
+            except (TypeError, ValueError):
+                return self._not_available(
+                    "Embedding metadata probe is unreadable. Run "
+                    "'esdc reload --embeddings-only' to rebuild it."
+                )
+            if len(stored) != dim:
+                return self._not_available(
+                    f"Embedding metadata probe has dimension {len(stored)} but "
+                    f"records dim={dim}. Run 'esdc reload --embeddings-only' "
+                    "to rebuild it."
+                )
+            current = self._embedder.generate_embedding(PROBE_TEXT)
+            mismatch = probe_mismatch(stored, current)
+            if mismatch is not None:
+                return self._not_available(
+                    "Stored embeddings were built with a different embedding "
+                    f"space ({mismatch}). Run 'esdc reload --embeddings-only' "
+                    "to rebuild them."
+                )
             self._pin_verified_sig = sig
-        except ValueError as e:
-            logger.warning("[Semantic] embedding pin mismatch | %s", e)
+        except Exception as e:  # pragma: no cover - DB-level failure
+            logger.warning("[Semantic] pin check failed | %s", e)
             return {
-                "status": "not_available",
-                "message": (
-                    "Stored project embeddings were built with a different "
-                    "embedding model. Run 'esdc reload --embeddings-only' to "
-                    "rebuild them."
-                ),
+                "status": "error",
+                "message": f"Unable to validate embedding metadata: {e}",
                 "results": [],
             }
-        except Exception as e:  # pragma: no cover - DB-level failure
-            logger.debug("[Semantic] pin check skipped | %s", e)
         return None
 
     def build_embeddings_table(self) -> bool:
@@ -155,6 +195,7 @@ class SemanticResolver:
         Returns:
             True if successful
         """
+        self._require_writable()
         conn = self._get_connection()
 
         try:
@@ -220,6 +261,14 @@ class SemanticResolver:
             from esdc.embedders import PROBE_TEXT
 
             conn.execute(self.SEMANTIC_META_DDL)
+            # probe_vec shipped after semantic_meta: CREATE TABLE IF NOT EXISTS
+            # is a no-op on a legacy table, so add the column before the INSERT
+            # below references it. This is what lets the reader-advertised
+            # `esdc reload --embeddings-only` actually repair a legacy pin.
+            conn.execute(
+                f"ALTER TABLE {self.SEMANTIC_META} "
+                "ADD COLUMN IF NOT EXISTS probe_vec JSON"
+            )
             probe = self._embedder.generate_embedding(PROBE_TEXT)
             conn.execute(f"DELETE FROM {self.SEMANTIC_META}")
             conn.execute(
@@ -277,6 +326,7 @@ class SemanticResolver:
         Returns:
             Dict with status and count
         """
+        self._require_writable()
         conn = self._get_connection()
 
         try:
@@ -384,8 +434,13 @@ class SemanticResolver:
             logger.error("[Semantic] generation failed | error=%s", e)
             return {"status": "error", "message": str(e)}
 
+    def _require_writable(self) -> None:
+        if self._read_only:
+            raise PermissionError("This operation requires read_only=False")
+
     def _create_hnsw_index(self) -> None:
         """Create HNSW index for fast similarity search."""
+        self._require_writable()
         conn = self._get_connection()
 
         try:
@@ -407,6 +462,7 @@ class SemanticResolver:
 
     def _create_embedding_indexes(self) -> None:
         """Create B-tree indexes on embedding contextual columns for fast filtering."""
+        self._require_writable()
         conn = self._get_connection()
 
         embedding_indexes = [
@@ -484,14 +540,16 @@ class SemanticResolver:
         (checked before the query is embedded, so no Ollama call is
         needed when there's nothing to search) and ``search_by_embedding``.
         """
-        conn = self._get_connection()
         try:
+            conn = self._get_connection()
             check = conn.execute(f"""
                 SELECT COUNT(*) FROM {self.EMBEDDING_TABLE}
             """).fetchone()
         except Exception:
             # Table doesn't exist yet (e.g. fresh DB, `esdc reload` never
-            # run) -- that's just another form of "no embeddings".
+            # run) or the DB file itself is absent — that's just another
+            # form of "no embeddings". A read-only resolver cannot create
+            # the file, so the connect error must degrade here too.
             check = None
 
         if check is None or check[0] == 0:
@@ -533,13 +591,13 @@ class SemanticResolver:
         Returns:
             Dict with status and results including all contextual columns
         """
-        conn = self._get_connection()
-
         try:
             # Check if embeddings table exists and has data
             unavailable = self._embeddings_available()
             if unavailable is not None:
                 return unavailable
+
+            conn = self._get_connection()
 
             # Build WHERE clause from filters
             where_conditions = ["table_name = 'project_resources'"]
@@ -616,7 +674,7 @@ class SemanticResolver:
                     list_dot_product(embedding, ?::FLOAT[]) /
                     (sqrt(list_dot_product(embedding,
                     embedding))
-                    * sqrt(list_dot_product(?::FLOAT[], ?::FLOAT[]))
+                    * sqrt(list_dot_product(?::FLOAT[], ?::FLOAT[])))
                     as similarity
                 FROM {self.EMBEDDING_TABLE}
                 WHERE {where_clause}
@@ -874,6 +932,13 @@ class SemanticResolver:
         Returns:
             Dict with status, count, results
         """
+        # A missing/unreadable DB file or an empty embeddings table degrades to
+        # not_available here, before the pin check or query embedding, so the
+        # serving tool falls back to FTS instead of seeing an error envelope.
+        unavailable = self._embeddings_available()
+        if unavailable is not None:
+            return unavailable
+
         # Check if embeddings are available
         mismatch = self._ensure_semantic_meta()
         if mismatch is not None:

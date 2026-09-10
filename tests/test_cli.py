@@ -195,7 +195,9 @@ class TestStatusCorpus:
         from esdc.corpus.store import CorpusStore
 
         db_file = isolated_config / ".esdc" / "esdc.duckdb"
-        store = CorpusStore(db_path=db_file, embedder=_FakeEmbedder())
+        store = CorpusStore(
+            db_path=db_file, embedder=_FakeEmbedder(), read_only=False
+        )
         store.ensure_tables()
         store.insert_document(
             {

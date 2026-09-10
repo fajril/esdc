@@ -355,6 +355,30 @@ def cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def probe_mismatch(stored: list[float], current: list[float]) -> str | None:
+    """Describe how two probe vectors disagree, or None when they match.
+
+    Pure comparison of dimension first, then cosine against PROBE_TOLERANCE.
+    Shared by the writer-side ``check_or_seed_probe`` (which raises on the
+    detail) and read-side semantic metadata validation (which degrades it to
+    a ``not_available`` message), so both enforce one compatibility rule.
+    The returned detail names the dimension or cosine, never a model label:
+    a label alone does not prove two vectors share a space.
+    """
+    if len(stored) != len(current):
+        return (
+            f"stored probe dimension {len(stored)} does not match the active "
+            f"embedder dimension {len(current)}"
+        )
+    sim = cosine(current, stored)
+    if sim < PROBE_TOLERANCE:
+        return (
+            f"stored probe cosine {sim:.6f} is below the required "
+            f"{PROBE_TOLERANCE}"
+        )
+    return None
+
+
 def check_or_seed_probe(conn: Any, meta_table: str, embedder: Any) -> None:
     """Verify `embedder` writes into the same space as the stored vectors.
 
@@ -380,21 +404,13 @@ def check_or_seed_probe(conn: Any, meta_table: str, embedder: Any) -> None:
 
     ref = json.loads(stored) if isinstance(stored, str) else list(stored)
 
-    if len(ref) != len(current):
+    mismatch = probe_mismatch(ref, current)
+    if mismatch is not None:
         raise ValueError(
-            f"[Embedding] embedding dimension changed for {meta_table} "
-            f"(stored {len(ref)}, backend produces {len(current)}). The "
-            "stored vectors are not comparable with this backend."
-        )
-
-    sim = cosine(current, ref)
-    if sim < PROBE_TOLERANCE:
-        raise ValueError(
-            f"[Embedding] parity probe failed for {meta_table}: cosine "
-            f"{sim:.6f} against the stored probe is below {PROBE_TOLERANCE}. "
+            f"[Embedding] parity probe failed for {meta_table}: {mismatch}. "
             f"The backend reporting model={embedder.model!r} is not producing "
             "vectors in the same space as the stored ones — likely a "
             "different quantization, pooling mode or model entirely. Check "
             "`embedding_model`/`embedding_host`, or rebuild this space."
         )
-    logger.debug("[Embedding] parity probe ok | table=%s cosine=%.6f", meta_table, sim)
+    logger.debug("[Embedding] parity probe ok | table=%s", meta_table)

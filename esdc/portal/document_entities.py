@@ -288,7 +288,9 @@ def _refresh_mirror_after_save(
 
     store = None
     try:
-        store = CorpusStore(db_path=db_path, sqlite_path=sqlite_path)
+        store = CorpusStore(
+            db_path=db_path, sqlite_path=sqlite_path, read_only=False
+        )
         store.refresh_mirror()
         return []
     except Exception as exc:
@@ -339,7 +341,9 @@ def _reembed_edited(
 
     store = None
     try:
-        store = CorpusStore(db_path=db_path, sqlite_path=sqlite_path)
+        store = CorpusStore(
+            db_path=db_path, sqlite_path=sqlite_path, read_only=False
+        )
         store.ensure_tables()
         report = run_reembed_documents(doc_ids, store=store)
     except Exception as exc:

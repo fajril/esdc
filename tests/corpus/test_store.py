@@ -9,7 +9,7 @@ import duckdb
 import pytest
 
 from esdc.corpus.chunker import Chunk, chunk_markdown
-from esdc.corpus.store import CorpusStore
+from esdc.corpus.store import CorpusNotReadyError, CorpusStore
 from esdc.embedders import MODEL_ID
 
 
@@ -49,7 +49,7 @@ class FakeEmbedder2(FakeEmbedder):
 
 @pytest.fixture
 def store(tmp_path: Path):
-    s = CorpusStore(db_path=tmp_path / "t.duckdb", embedder=FakeEmbedder())
+    s = CorpusStore(read_only=False, db_path=tmp_path / "t.duckdb", embedder=FakeEmbedder())
     s.ensure_tables()
     yield s
     s.close()
@@ -206,11 +206,11 @@ def test_set_meta_dim_change_recreates_chunks(store):
 
 def test_meta_mismatch_raises(tmp_path: Path):
     db_path = tmp_path / "mismatch.duckdb"
-    s1 = CorpusStore(db_path=db_path, embedder=FakeEmbedder())
+    s1 = CorpusStore(read_only=False, db_path=db_path, embedder=FakeEmbedder())
     s1.ensure_tables()
     s1.close()
 
-    s2 = CorpusStore(db_path=db_path, embedder=FakeEmbedder2())
+    s2 = CorpusStore(read_only=False, db_path=db_path, embedder=FakeEmbedder2())
     with pytest.raises(ValueError, match="reembed"):
         s2.ensure_tables(validate_model=True)
     s2.close()
@@ -226,12 +226,12 @@ class FakeCanonicalEmbedder(FakeEmbedder):
 
 def test_legacy_ollama_pin_is_repinned_not_rejected(tmp_path: Path):
     db_path = tmp_path / "legacy.duckdb"
-    s1 = CorpusStore(db_path=db_path, embedder=FakeLegacyEmbedder())
+    s1 = CorpusStore(read_only=False, db_path=db_path, embedder=FakeLegacyEmbedder())
     s1.ensure_tables()
     s1.insert_document(DOC, [Chunk(0, None, "isi")])
     s1.close()
 
-    s2 = CorpusStore(db_path=db_path, embedder=FakeCanonicalEmbedder())
+    s2 = CorpusStore(read_only=False, db_path=db_path, embedder=FakeCanonicalEmbedder())
     # Must NOT raise "embedding model changed" on a legacy pin.
     s2.ensure_tables(validate_model=True)
 
@@ -253,12 +253,12 @@ def test_legacy_ollama_pin_is_repinned_not_rejected(tmp_path: Path):
 
 def test_legacy_ollama_pin_rejects_unrelated_same_dimension_model(tmp_path: Path):
     db_path = tmp_path / "legacy-unrelated.duckdb"
-    s1 = CorpusStore(db_path=db_path, embedder=FakeLegacyEmbedder())
+    s1 = CorpusStore(read_only=False, db_path=db_path, embedder=FakeLegacyEmbedder())
     s1.ensure_tables()
     s1.insert_document(DOC, [Chunk(0, None, "isi")])
     s1.close()
 
-    s2 = CorpusStore(db_path=db_path, embedder=FakeEmbedder())
+    s2 = CorpusStore(read_only=False, db_path=db_path, embedder=FakeEmbedder())
     with pytest.raises(ValueError, match="reembed"):
         s2.ensure_tables(validate_model=True)
 
@@ -314,7 +314,7 @@ def test_ensure_tables_migrates_legacy_varchar_entities(tmp_path: Path):
     )
     conn.close()
 
-    store = CorpusStore(db_path=db, embedder=FakeEmbedder())
+    store = CorpusStore(read_only=False, db_path=db, embedder=FakeEmbedder())
     try:
         store.ensure_tables()
         row = (
@@ -334,7 +334,7 @@ def test_ensure_tables_migrates_legacy_varchar_entities(tmp_path: Path):
 
 
 def test_search_entity_filter_is_case_insensitive_substring(tmp_path: Path):
-    store = CorpusStore(db_path=tmp_path / "c.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(read_only=False, db_path=tmp_path / "c.duckdb", embedder=FakeEmbedder())
     try:
         store.ensure_tables()
         doc1 = _doc_variant("d1", "d1.pdf")
@@ -368,7 +368,7 @@ def test_search_entity_filter_is_case_insensitive_substring(tmp_path: Path):
 
 def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
     """search() results must return wk_name as a list, not a JSON string."""
-    store = CorpusStore(db_path=tmp_path / "c2.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(read_only=False, db_path=tmp_path / "c2.duckdb", embedder=FakeEmbedder())
     try:
         store.ensure_tables()
         doc = _doc_variant("d1", "d1.pdf")
@@ -412,7 +412,7 @@ def test_list_documents_includes_doc_topic(store):
 
 
 def test_build_filter_clause_doc_topic_case_insensitive_substring(tmp_path: Path):
-    store = CorpusStore(db_path=tmp_path / "c3.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(read_only=False, db_path=tmp_path / "c3.duckdb", embedder=FakeEmbedder())
     try:
         store.ensure_tables()
         doc1 = _doc_variant("d1", "d1.pdf")
@@ -435,7 +435,7 @@ def test_build_filter_clause_doc_topic_case_insensitive_substring(tmp_path: Path
 
 
 def test_search_filter_by_doc_topic_returns_matching_doc_only(tmp_path: Path):
-    store = CorpusStore(db_path=tmp_path / "c4.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(read_only=False, db_path=tmp_path / "c4.duckdb", embedder=FakeEmbedder())
     try:
         store.ensure_tables()
         doc1 = _doc_variant("d1", "d1.pdf")
@@ -485,7 +485,7 @@ def test_ensure_tables_adds_doc_topic_column_to_legacy_documents_table(
     )
     conn.close()
 
-    store = CorpusStore(db_path=db, embedder=FakeEmbedder())
+    store = CorpusStore(read_only=False, db_path=db, embedder=FakeEmbedder())
     try:
         store.ensure_tables()  # must not crash
         row = (
@@ -783,6 +783,7 @@ def test_default_embedder_is_internal(monkeypatch, tmp_path):
     from esdc.corpus.embedder import MODEL_ID
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "corpus.duckdb", sqlite_path=tmp_path / "esdc.sqlite"
     )
     assert store._embedder.model == MODEL_ID
@@ -818,6 +819,7 @@ def store_with_doc_factory(tmp_path):
 
     def factory(chunk_size=3000, **doc_fields):
         store = CorpusStore(
+            read_only=False,
             db_path=tmp_path / "corpus.duckdb",
             embedder=RecordingEmbedder(),
             sqlite_path=tmp_path / "esdc.sqlite",
@@ -1227,6 +1229,7 @@ def test_refresh_mirror_rebuilds_documents_from_sqlite_truth(tmp_path):
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "m.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "m.sqlite",
@@ -1303,6 +1306,7 @@ def test_get_sqlite_self_heals_missing_raw_entities_metadata_ingested_at(
     conn.close()
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "legacy.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=sqlite_path,
@@ -1331,6 +1335,7 @@ def test_insert_document_writes_truth_and_chunks_but_not_mirror(tmp_path):
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "i.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "i.sqlite",
@@ -1401,6 +1406,7 @@ def test_insert_document_cleans_up_chunks_when_truth_write_fails(tmp_path):
     the exception must still propagate (see insert_document's docstring).
     """
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "fail.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "fail.sqlite",
@@ -1434,6 +1440,7 @@ def test_serving_reads_use_the_mirror_and_deciding_reads_use_the_truth(tmp_path)
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "r.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "r.sqlite",
@@ -1496,6 +1503,7 @@ def test_hydrate_docs_returns_parsed_metadata(tmp_path):
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "h.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "h.sqlite",
@@ -1529,6 +1537,7 @@ def test_corpus_unavailable_on_empty_corpus(tmp_path):
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "u.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "u.sqlite",
@@ -1549,6 +1558,7 @@ def agg_store(tmp_path):
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "agg.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "agg.sqlite",
@@ -1673,6 +1683,7 @@ def test_aggregate_semantic_candidates_not_limit_controls_the_ranking(tmp_path):
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "big.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "big.sqlite",
@@ -1846,6 +1857,7 @@ def many_docs_store(tmp_path):
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "many.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "many.sqlite",
@@ -1939,6 +1951,7 @@ def test_aggregate_on_empty_corpus_is_not_available(tmp_path):
     from esdc.corpus.store import CorpusStore
 
     store = CorpusStore(
+        read_only=False,
         db_path=tmp_path / "empty2.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "empty2.sqlite",
@@ -2002,3 +2015,295 @@ def test_build_filter_clause_unchanged_without_new_keys(tmp_path):
     assert params == ["surat", "Duri"]
     store.close()
     store.close()
+
+
+# --- Read-only readiness, non-creation and SQLite reader robustness ---------
+
+
+class CountingEmbedder(FakeEmbedder):
+    """FakeEmbedder that records whether any embedding work was requested."""
+
+    def __init__(self, vec=(1.0, 0.0, 0.0)):
+        self._vec = list(vec)
+        self.calls = 0
+
+    def generate_embedding(self, text: str) -> list[float]:
+        self.calls += 1
+        return list(self._vec)
+
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        return [list(self._vec) for _ in texts]
+
+
+_DOCS_FILTER_DDL = (
+    "CREATE TABLE documents ("
+    "doc_id VARCHAR, file_name VARCHAR, doc_type VARCHAR, doc_level VARCHAR, "
+    "doc_topic JSON, doc_date DATE, subject TEXT, wk_name JSON, field_name JSON, "
+    "project_name JSON, pod_name JSON, sender VARCHAR, recipient VARCHAR, "
+    "doc_number VARCHAR)"
+)
+_CHUNKS_VECTOR_DDL = (
+    "CREATE TABLE document_chunks ("
+    "chunk_id VARCHAR, doc_id VARCHAR, section VARCHAR, chunk_text TEXT, "
+    "embed_text TEXT, embedding FLOAT[3])"
+)
+_META_DDL = "CREATE TABLE corpus_meta (embedding_model VARCHAR, dim INTEGER)"
+
+
+def _exec_sql(db_path: Path, statements: list[str]) -> None:
+    conn = duckdb.connect(str(db_path))
+    try:
+        for stmt in statements:
+            conn.execute(stmt)
+    finally:
+        conn.close()
+
+
+def _seed_corpus(
+    tmp_path: Path,
+    name: str = "c.duckdb",
+    doc: dict | None = DOC,
+    chunks: list[Chunk] | None = None,
+) -> tuple[Path, Path]:
+    """Build and close a writable corpus; safe to reopen as a reader."""
+    db = tmp_path / name
+    sqlite = tmp_path / f"{name}.sqlite"
+    store = CorpusStore(read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder())
+    store.ensure_tables()
+    if doc is not None:
+        store.insert_document(
+            doc, chunks if chunks is not None else [Chunk(0, None, "isi surat")]
+        )
+    store.refresh_mirror()
+    store.close()
+    return db, sqlite
+
+
+def _reader(db: Path, sqlite: Path, embedder=None) -> CorpusStore:
+    return CorpusStore(
+        db_path=db,
+        sqlite_path=sqlite,
+        embedder=embedder if embedder is not None else FakeEmbedder(),
+        read_only=True,
+    )
+
+
+def test_validate_readiness_missing_file_raises_and_creates_nothing(tmp_path):
+    db = tmp_path / "sub" / "missing.duckdb"
+    emb = CountingEmbedder()
+    reader = CorpusStore(
+        db_path=db,
+        sqlite_path=tmp_path / "sub" / "missing.sqlite",
+        embedder=emb,
+        read_only=True,
+    )
+    with pytest.raises(CorpusNotReadyError, match="not initialized"):
+        reader.validate_readiness("search")
+    assert emb.calls == 0
+    assert not db.exists()
+    assert not (tmp_path / "sub").exists()
+    reader.close()
+
+
+def test_validate_readiness_missing_table_raises(tmp_path):
+    db = tmp_path / "legacy.duckdb"
+    _exec_sql(db, [_DOCS_FILTER_DDL])
+    reader = _reader(db, tmp_path / "legacy.sqlite")
+    with pytest.raises(CorpusNotReadyError, match="document_chunks"):
+        reader.validate_readiness("search")
+    reader.close()
+
+
+def test_validate_readiness_missing_required_column_raises(tmp_path):
+    db = tmp_path / "legacy_col.duckdb"
+    _exec_sql(
+        db,
+        [
+            _DOCS_FILTER_DDL,
+            "CREATE TABLE document_chunks ("
+            "chunk_id VARCHAR, doc_id VARCHAR, section VARCHAR, chunk_text TEXT)",
+        ],
+    )
+    reader = _reader(db, tmp_path / "legacy_col.sqlite")
+    with pytest.raises(CorpusNotReadyError, match="embed_text"):
+        reader.validate_readiness("search")
+    reader.close()
+
+
+def test_validate_readiness_missing_meta_row_raises(tmp_path):
+    db = tmp_path / "nometa.duckdb"
+    _exec_sql(db, [_DOCS_FILTER_DDL, _CHUNKS_VECTOR_DDL, _META_DDL])
+    reader = _reader(db, tmp_path / "nometa.sqlite")
+    with pytest.raises(CorpusNotReadyError, match="embedding metadata is missing"):
+        reader.validate_readiness("search")
+    reader.close()
+
+
+def test_validate_readiness_invalid_dim_raises(tmp_path):
+    db = tmp_path / "baddim.duckdb"
+    _exec_sql(
+        db,
+        [
+            _DOCS_FILTER_DDL,
+            _CHUNKS_VECTOR_DDL,
+            _META_DDL,
+            "INSERT INTO corpus_meta VALUES ('fake-embed', 0)",
+        ],
+    )
+    reader = _reader(db, tmp_path / "baddim.sqlite")
+    with pytest.raises(CorpusNotReadyError, match="embedding metadata is missing"):
+        reader.validate_readiness("search")
+    reader.close()
+
+
+def test_validate_readiness_unknown_operation_is_plain_value_error(tmp_path):
+    db, sqlite = _seed_corpus(tmp_path, name="unknown_op.duckdb")
+    reader = _reader(db, sqlite)
+    with pytest.raises(ValueError) as ei:
+        reader.validate_readiness("bogus")
+    assert not isinstance(ei.value, CorpusNotReadyError)
+    assert "Unknown readiness operation" in str(ei.value)
+    reader.close()
+
+
+def test_empty_initialized_corpus_distinct_from_malformed_schema(tmp_path):
+    db, sqlite = _seed_corpus(tmp_path, name="empty_corpus.duckdb", doc=None)
+    reader = _reader(db, sqlite)
+    reader.validate_readiness("search")  # empty is not a readiness failure
+    result = reader.search("apapun")
+    assert result["status"] == "not_available"
+    assert "No documents in corpus yet" in result["message"]
+    reader.close()
+
+    _exec_sql(db, ["ALTER TABLE document_chunks DROP COLUMN embed_text"])
+    reader2 = _reader(db, sqlite)
+    with pytest.raises(CorpusNotReadyError) as ei:
+        reader2.validate_readiness("search")
+    assert "embed_text" in str(ei.value)
+    assert "No documents in corpus yet" not in str(ei.value)
+    reader2.close()
+
+
+def test_document_read_and_metadata_aggregate_ignore_embedding_dependency(tmp_path):
+    db, sqlite = _seed_corpus(tmp_path, name="noembed.duckdb")
+    _exec_sql(db, ["DROP TABLE document_chunks"])
+    emb = CountingEmbedder()
+    reader = _reader(db, sqlite, emb)
+
+    reader.validate_readiness("document")
+    reader.validate_readiness("aggregate_metadata")
+    assert emb.calls == 0
+
+    doc = reader.get_document(DOC["doc_id"])
+    assert doc is not None
+    assert doc["doc_id"] == DOC["doc_id"]
+
+    with pytest.raises(CorpusNotReadyError, match="document_chunks"):
+        reader.validate_readiness("search")
+    with pytest.raises(CorpusNotReadyError, match="document_chunks"):
+        reader.validate_readiness("aggregate_keyword")
+    reader.close()
+
+
+def test_list_readiness_requires_chunk_table_that_list_documents_joins(tmp_path):
+    """`corpus list` joins document_chunks to count chunks.
+
+    A documents-present/chunks-absent schema must fail the `list` readiness
+    check with the maintenance hint -- not reach list_documents() and raise a
+    raw CatalogException.
+    """
+    db, sqlite = _seed_corpus(tmp_path, name="list_nochunks.duckdb")
+    _exec_sql(db, ["DROP TABLE document_chunks"])
+    reader = _reader(db, sqlite)
+
+    # The narrow document-read shape is unaffected: get_document never joins.
+    reader.validate_readiness("document")
+
+    with pytest.raises(CorpusNotReadyError) as ei:
+        reader.validate_readiness("list")
+    message = str(ei.value)
+    assert "document_chunks" in message
+    assert "esdc corpus commit" in message
+    reader.close()
+
+
+def test_search_without_fts_index_uses_vector_only(tmp_path):
+    db, sqlite = _seed_corpus(tmp_path, name="nofts.duckdb")
+    reader = _reader(db, sqlite)
+    result = reader.search("isi", limit=5)
+    assert result["status"] == "success"
+    assert result["results"][0]["doc_id"] == DOC["doc_id"]
+    reader.close()
+
+
+def test_legacy_corpus_meta_missing_probe_repaired_on_write(tmp_path):
+    db, sqlite = _seed_corpus(tmp_path, name="legacy_probe.duckdb")
+    _exec_sql(db, ["ALTER TABLE corpus_meta DROP COLUMN probe_vec"])
+
+    writer = CorpusStore(read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder())
+    writer.ensure_tables(validate_model=True)
+    row = writer._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    writer.close()
+
+    assert row is not None
+    assert json.loads(row[0]) == _fake_vector("esdc corpus embedding parity probe")
+
+
+def test_readonly_sqlite_handles_uri_special_path(tmp_path):
+    """A '?'/'#' in the SQLite path must not break reader URI parsing."""
+    db = tmp_path / "uri.duckdb"
+    sqlite = tmp_path / "we?ird#name.sqlite"
+    writer = CorpusStore(read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder())
+    writer.ensure_tables()
+    writer.insert_document(DOC, [Chunk(0, None, "isi")])
+    writer.refresh_mirror()
+    writer.close()
+
+    reader = CorpusStore(
+        db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder(), read_only=True
+    )
+    assert reader.document_exists(DOC["file_hash"]) is True
+    doc = reader.get_document_by_id(DOC["doc_id"])
+    assert doc is not None
+    assert doc["doc_id"] == DOC["doc_id"]
+    reader.close()
+
+
+def test_validate_readiness_missing_meta_table_is_actionable(tmp_path):
+    """A documents+chunks schema with no corpus_meta table must fail readiness.
+
+    An actionable CorpusNotReadyError is required -- not a raw
+    CatalogException that the serving tool would surface as `error` instead
+    of `not_available`.
+    """
+    db = tmp_path / "nometatable.duckdb"
+    _exec_sql(db, [_DOCS_FILTER_DDL, _CHUNKS_VECTOR_DDL])
+    reader = _reader(db, tmp_path / "nometatable.sqlite")
+
+    with pytest.raises(CorpusNotReadyError) as ei:
+        reader.validate_readiness("search")
+    message = str(ei.value)
+    assert "corpus_meta" in message
+    assert "esdc corpus commit" in message
+    reader.close()
+
+
+def test_metadata_only_aggregate_without_chunks_succeeds(tmp_path):
+    """aggregate(query=None) counts documents and must not require chunks.
+
+    `aggregate_metadata` readiness accepts a documents-only database, so the
+    availability check inside aggregate() must be operation-specific too:
+    counting document_chunks here would falsely report 'Corpus not
+    initialized.' for a perfectly readable documents table.
+    """
+    db, sqlite = _seed_corpus(tmp_path, name="agg_nochunks.duckdb")
+    _exec_sql(db, ["DROP TABLE document_chunks"])
+    reader = _reader(db, sqlite)
+
+    reader.validate_readiness("aggregate_metadata")
+    result = reader.aggregate(query=None, mode="count")
+
+    assert result["status"] == "success"
+    assert result["count"] == 1
+    reader.close()

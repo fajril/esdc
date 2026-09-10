@@ -184,7 +184,7 @@ def test_clear_without_yes_exits_1_with_counts(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(esdc_cli, "_open_corpus_store", lambda: FakeStore())
+    monkeypatch.setattr(esdc_cli, "_open_corpus_store", lambda **kw: FakeStore())
 
     result = runner.invoke(app, ["corpus", "clear"])
     assert result.exit_code == 1
@@ -898,7 +898,7 @@ def test_corpus_sync_reports_refreshed_row_count(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr("esdc.corpus.store.CorpusStore", lambda: FakeStore())
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", lambda **kw: FakeStore())
 
     result = runner.invoke(app, ["corpus", "sync"])
 
@@ -1041,3 +1041,54 @@ def test_reembed_stale_rejects_an_embed_backend_override(monkeypatch):
 
     assert result.exit_code == 1
     assert "--embed-backend applies only to a full re-embed" in result.output
+
+
+def test_corpus_list_chunks_absent_is_actionable_not_a_traceback(
+    isolated_config, monkeypatch
+):
+    """`corpus list` validates the chunk-count join it performs.
+
+    A documents-present / document_chunks-absent schema must surface the
+    readiness maintenance hint (exit 1, clean "Error:" line), not an
+    uncaught duckdb.CatalogException traceback from list_documents().
+    """
+    import duckdb
+
+    import esdc.corpus.embedder as corpus_embedder_mod
+    from esdc.configs import Config
+    from esdc.corpus.store import CorpusStore
+
+    class _NoopEmbedder:
+        model = "fake-embed"
+
+        def generate_embedding(self, text):
+            return [1.0, 0.0, 0.0]
+
+        def generate_embeddings_batch(self, texts):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(corpus_embedder_mod, "InternalEmbedder", _NoopEmbedder)
+
+    db_path = Config.get_db_file()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = CorpusStore(
+        db_path=db_path,
+        sqlite_path=db_path.with_suffix(".sqlite"),
+        embedder=_NoopEmbedder(),
+        read_only=False,
+    )
+    writer.ensure_tables()
+    writer.close()
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute("DROP TABLE document_chunks")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["corpus", "list"])
+
+    assert result.exit_code == 1, result.output
+    assert "document_chunks" in result.output
+    assert "esdc corpus commit" in result.output
+    assert "Traceback" not in result.output

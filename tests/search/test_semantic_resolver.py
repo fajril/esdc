@@ -2,6 +2,9 @@
 
 from unittest.mock import MagicMock
 
+import duckdb
+import pytest
+
 from esdc.search.semantic_resolver import SemanticResolver
 
 
@@ -96,7 +99,7 @@ def test_build_embeddings_table():
     mock_emb = MagicMock()
     mock_emb.generate_embedding.return_value = [0.0] * 1024
 
-    resolver = SemanticResolver(embedder=mock_emb)
+    resolver = SemanticResolver(embedder=mock_emb, read_only=False)
     resolver._get_connection = MagicMock()
     mock_conn = MagicMock()
     resolver._get_connection.return_value = mock_conn
@@ -146,3 +149,79 @@ def test_search_by_text_no_embeddings_skips_query_embedding():
     result = resolver.search_by_text("test query")
 
     assert result["status"] == "not_available"
+
+
+def test_readonly_flag_is_recorded():
+    resolver = SemanticResolver(embedder=MagicMock(), read_only=True)
+    assert resolver._read_only is True
+    assert SemanticResolver(embedder=MagicMock())._read_only is True
+
+
+def test_hybrid_search_missing_db_degrades_not_raises(tmp_path):
+    """A missing DB file must degrade hybrid_search to not_available.
+
+    A read-only resolver cannot create the file; the serving tool keys its
+    FTS fallback off ``not_available``, so a raised IOException (mapped to a
+    status="error" envelope) would silently skip the fallback.
+    """
+    mock_emb = MagicMock()
+    resolver = SemanticResolver(
+        db_path=tmp_path / "sub" / "missing.duckdb",
+        embedder=mock_emb,
+        read_only=True,
+    )
+
+    result = resolver.hybrid_search("kendala teknis")
+
+    assert result["status"] == "not_available"
+    assert result["results"] == []
+    mock_emb.generate_embedding.assert_not_called()
+    resolver.close()
+
+
+def test_search_by_embedding_missing_db_degrades_not_raises(tmp_path):
+    """search_by_embedding must check availability before connecting."""
+    resolver = SemanticResolver(
+        db_path=tmp_path / "sub" / "missing.duckdb",
+        embedder=MagicMock(),
+        read_only=True,
+    )
+
+    result = resolver.search_by_embedding([0.1] * 8, limit=5)
+
+    assert result["status"] == "not_available"
+    assert result["results"] == []
+    resolver.close()
+
+
+def test_readonly_validation_does_not_create_semantic_meta(tmp_path):
+    """A read-only resolver must never seed semantic_meta on the read path."""
+    db_path = tmp_path / "empty.duckdb"
+    duckdb.connect(str(db_path)).close()
+
+    mock_emb = MagicMock()
+    resolver = SemanticResolver(db_path=db_path, embedder=mock_emb, read_only=True)
+    out = resolver._ensure_semantic_meta()
+    assert out is not None
+    assert out["status"] == "not_available"
+    # The read path neither created nor wrote semantic_meta.
+    columns = resolver._get_connection().execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'semantic_meta'"
+    ).fetchall()
+    assert columns == []
+    mock_emb.generate_embedding.assert_not_called()
+    resolver.close()
+
+
+def test_readonly_mutator_guard_precedes_embedder(tmp_path):
+    """build_embeddings_table rejects a reader before touching the embedder."""
+    mock_emb = MagicMock()
+    resolver = SemanticResolver(
+        db_path=tmp_path / "ro.duckdb", embedder=mock_emb, read_only=True
+    )
+    with pytest.raises(PermissionError, match="read_only=False"):
+        resolver.build_embeddings_table()
+    mock_emb.generate_embedding.assert_not_called()
+    assert resolver._conn is None
+    resolver.close()

@@ -576,11 +576,17 @@ def run_extract(
             "formatting cleanup skipped"
         )
 
+    matcher: PodMatcher | None = None
     store = CorpusStore()
     try:
         resolver = _entity_resolver_or_none(store, report)
         _validate_entity_overrides(resolver, overrides)
-        matcher = PodMatcher(store._get_sqlite())
+        try:
+            matcher = PodMatcher(store._get_sqlite())
+        except Exception as e:
+            # Extract is a reader: it must never create the SQLite truth, so
+            # POD suggestions degrade when the registry does not exist yet.
+            logger.debug("[Corpus] POD registry unavailable: %s", e)
 
         # (name, pages_ocr, page_count) collected so the final report can be
         # sorted by OCR ratio DESC once, instead of per-file.
@@ -698,8 +704,9 @@ def run_extract(
                             "re-extracted, set reviewed: true after re-review"
                         )
 
-                    p.status("suggest POD links")
-                    _apply_pod_suggestions(meta, matcher, report, name)
+                    if matcher is not None:
+                        p.status("suggest POD links")
+                        _apply_pod_suggestions(meta, matcher, report, name)
 
                     p.status("write sidecar")
                     write_sidecar(src, meta, markdown)
@@ -957,7 +964,7 @@ def run_commit(
     cfg = Config.get_corpus_config()
     sidecars = _collect_sidecars(paths)
 
-    store = CorpusStore(embedder=get_build_embedder(embed_backend))
+    store = CorpusStore(embedder=get_build_embedder(embed_backend), read_only=False)
     any_processed = False
     merged_doc_ids: list[str] = []
     try:
@@ -1195,7 +1202,6 @@ def run_status(paths: list[Path]) -> list[dict[str, str]]:
     if pending:
         try:
             store = CorpusStore()
-            store.ensure_tables()
             try:
                 for idx, file_hash in pending:
                     exists = bool(file_hash) and store.document_exists(file_hash)
@@ -1308,7 +1314,6 @@ def run_meta(
     try:
         try:
             store = CorpusStore()
-            store.ensure_tables()
             resolver = _entity_resolver_or_none(store, report)
             matcher = PodMatcher(store._get_sqlite())
         except Exception as e:
@@ -1439,7 +1444,7 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
     this run only; None uses the configured default.
     """
     report = CorpusReport()
-    store = CorpusStore(embedder=get_build_embedder(embed_backend))
+    store = CorpusStore(embedder=get_build_embedder(embed_backend), read_only=False)
     try:
         store.ensure_tables()
 
@@ -1502,7 +1507,9 @@ def run_reembed_documents(
     Call this once per batch; never once per document inside a loop.
 
     Pass an already-open ``store`` to reuse its connections and embedder;
-    otherwise one is created and closed here.
+    otherwise one is created and closed here. An injected store MUST be
+    writable (``read_only=False``): this is a mutation, and a read-only
+    store is rejected before any per-document work.
 
     ``progress=True`` renders the same two-line file-count bar as
     ``commit``/``extract`` (bar + current file/phase); it defaults off
@@ -1518,7 +1525,12 @@ def run_reembed_documents(
 
     owned = store is None
     if store is None:
-        store = CorpusStore()
+        store = CorpusStore(read_only=False)
+    else:
+        # Injected-store contract: re-embedding is a mutation (replace_chunks
+        # + rebuild_indexes), so a caller reusing an open store must supply a
+        # writable one. Fail here, before any per-document read or embed call.
+        store._require_writable()
     try:
         if owned:
             store.ensure_tables()

@@ -42,7 +42,9 @@ def _isolated_registry(tmp_path, monkeypatch):
 
 @pytest.fixture
 def store(tmp_path: Path) -> Iterator[CorpusStore]:
-    s = CorpusStore(db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder())
+    s = CorpusStore(
+        db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder(), read_only=False
+    )
     s.ensure_tables()
     s.insert_document(_doc("aaaa", "letter_a.pdf", "letter", "2019-01-01"), [])
     s.insert_document(_doc("bbbb", "letter_b.pdf", "letter", "2020-01-01"), [])
@@ -72,7 +74,7 @@ def test_find_doc_ids_empty_filters_returns_all(store):
 def _invoke_remove(monkeypatch, store, args):
     import esdc.esdc as cli
 
-    monkeypatch.setattr(cli, "_open_corpus_store", lambda: store)
+    monkeypatch.setattr(cli, "_open_corpus_store", lambda **kw: store)
     return CliRunner().invoke(cli.corpus_app, ["remove", *args])
 
 

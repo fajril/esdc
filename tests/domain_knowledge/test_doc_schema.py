@@ -233,7 +233,9 @@ def test_schema_field_names_are_columns_of_documents_table(tmp_path: Path):
     build in run_commit) so they're allowed via an explicit mapping rather
     than treated as schema/table drift.
     """
-    store = CorpusStore(db_path=tmp_path / "sync.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(
+        db_path=tmp_path / "sync.duckdb", embedder=FakeEmbedder(), read_only=False
+    )
     store.ensure_tables()
     try:
         columns = {

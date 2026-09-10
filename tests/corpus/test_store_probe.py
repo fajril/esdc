@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 
+import duckdb
 import pytest
 
 from esdc.corpus.store import CorpusStore
@@ -24,7 +25,9 @@ class _FixedEmbedder:
 
 
 def _store(tmp_path, vec, name="c.duckdb"):
-    return CorpusStore(db_path=tmp_path / name, embedder=_FixedEmbedder(vec))
+    return CorpusStore(
+        db_path=tmp_path / name, embedder=_FixedEmbedder(vec), read_only=False
+    )
 
 
 def test_probe_column_created(tmp_path):
@@ -96,3 +99,31 @@ def test_set_meta_rebaselines_probe(tmp_path):
     assert stored_row is not None
     stored = stored_row[0]
     assert json.loads(stored) == [0.0, 1.0, 0.0]
+
+
+def test_readonly_reader_does_not_seed_probe(tmp_path):
+    """A NULL probe stays NULL through a read-only validation.
+
+    Seeding is a writer concern (`ensure_tables(validate_model=True)`);
+    the reader path must not repair the pin as a side effect.
+    """
+    db_path = tmp_path / "ro_probe.duckdb"
+    s = _store(tmp_path, [1.0, 0.0, 0.0], name="ro_probe.duckdb")
+    s.ensure_tables(validate_model=True)
+    s.close()
+
+    conn = duckdb.connect(str(db_path))
+    conn.execute("UPDATE corpus_meta SET probe_vec = NULL")
+    conn.close()
+
+    reader = CorpusStore(
+        db_path=db_path, embedder=_FixedEmbedder([1.0, 0.0, 0.0]), read_only=True
+    )
+    reader.validate_readiness("search")  # read path validates schema only
+    reader.close()
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    stored = conn.execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    conn.close()
+    assert stored is not None
+    assert stored[0] is None

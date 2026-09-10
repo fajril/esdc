@@ -716,7 +716,7 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
         console.print("[dim]Or set embedding_backend: local to embed in-process.[/dim]")
         return
 
-    resolver = SemanticResolver(db_path=db_path, embedder=embedder)
+    resolver = SemanticResolver(db_path=db_path, embedder=embedder, read_only=False)
 
     try:
         # Drop existing embeddings table if it exists to ensure fresh start
@@ -2327,11 +2327,32 @@ def _validate_corpus_overrides(
         raise typer.Exit(1)
 
 
-def _open_corpus_store():
-    """Open a CorpusStore with tables ensured, or exit 1 with a clear error."""
+def _open_corpus_store(*, read_only: bool = True, operation: str = "document"):
+    """Open a CorpusStore for a CLI read/write, or exit 1 with a clear error.
+
+    Reader mode (the default) validates the committed corpus schema without
+    creating or migrating anything; writer mode is an explicit opt-in that
+    repairs/initializes the schema. Query commands must NOT pass
+    ``read_only=False`` merely to inherit automatic migrations.
+
+    Reader validation is operation-specific (see ``validate_readiness``) so a
+    command only requires the tables/columns it actually reads -- e.g.
+    ``corpus list`` validates ``list`` (documents + the chunk-count join)
+    rather than the narrow ``document`` lookup shape.
+    """
     from esdc.corpus.store import CorpusStore
 
-    store = CorpusStore()
+    if read_only:
+        store = CorpusStore(read_only=True)
+        try:
+            store.validate_readiness(operation)
+        except ValueError as e:
+            store.close()
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1) from None
+        return store
+
+    store = CorpusStore(read_only=False)
     try:
         store.ensure_tables()
     except ValueError as e:
@@ -2622,7 +2643,7 @@ def corpus_sync() -> None:
     """Rebuild DuckDB's derived tables from the SQLite source of truth."""
     from esdc.corpus.store import CorpusStore
 
-    store = CorpusStore()
+    store = CorpusStore(read_only=False)
     try:
         store.ensure_tables()
         report = store.refresh_mirror()
@@ -2794,7 +2815,7 @@ def _entity_display(d: dict) -> str:
 @corpus_app.command(name="list")
 def list_documents() -> None:
     """List all documents committed to the corpus."""
-    store = _open_corpus_store()
+    store = _open_corpus_store(operation="list")
     try:
         docs = store.list_documents()
     finally:
@@ -2876,7 +2897,10 @@ def remove(
         )
         raise typer.Exit(1)
 
-    store = _open_corpus_store()
+    # Only a deletion that will actually run needs write access: a dry-run
+    # preview and a filter match still awaiting --yes are both readers.
+    read_only = dry_run or (bool(filters) and not yes)
+    store = _open_corpus_store(read_only=read_only)
     removed = 0
     try:
         targets: list[tuple[str, str]] = []
@@ -2959,7 +2983,7 @@ def clear(
     ] = False,
 ) -> None:
     """Delete all documents and chunks from the corpus."""
-    store = _open_corpus_store()
+    store = _open_corpus_store(read_only=False)
     try:
         counts = store.counts()
         if not yes:
@@ -3041,7 +3065,7 @@ def reembed(
                 err=True,
             )
             raise typer.Exit(1)
-        store = CorpusStore()
+        store = CorpusStore(read_only=False)
         try:
             store.ensure_tables()
             doc_ids = store.stale_embed_docs()

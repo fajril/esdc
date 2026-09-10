@@ -59,6 +59,7 @@ def store(tmp_path: Path) -> Iterator[CorpusStore]:
         db_path=tmp_path / "e.duckdb",
         embedder=FakeEmbedder(),
         sqlite_path=tmp_path / "e.sqlite",
+        read_only=False,
     )
     s.ensure_tables()
     s.insert_document(DOC, [Chunk(0, "Surat", "isi surat")])

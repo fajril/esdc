@@ -211,7 +211,7 @@ def _get_semantic_resolver():
     if resolver is None:
         from esdc.search.semantic_resolver import SemanticResolver
 
-        resolver = SemanticResolver()
+        resolver = SemanticResolver(read_only=True)
         _semantic_resolver_tls.resolver = resolver
     return resolver
 
@@ -1535,6 +1535,14 @@ def resolve_spatial(
         resolver.close()
 
 
+# Actionable ingestion path appended to corpus readiness failures so the
+# agent can tell the user how to make the corpus servable.
+_CORPUS_INGEST_HINT = (
+    "Run: esdc corpus extract <folder>, review the sidecars, "
+    "then esdc corpus commit <folder>"
+)
+
+
 @tool("Semantic Search")
 def semantic_search(
     query: Annotated[
@@ -1712,11 +1720,14 @@ def semantic_search(
     # Fan out to the document corpus so issue/topic queries surface official
     # documents too. A corpus failure must never break the remarks result.
     documents_result: dict[str, Any] = {"status": "not_available"}
+    from esdc.corpus.store import CorpusNotReadyError
+
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder())
+        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
         try:
+            store.validate_readiness("search")
             documents_result = store.search(
                 query=query,
                 limit=5,
@@ -1724,6 +1735,12 @@ def semantic_search(
             )
         finally:
             store.close()
+    except CorpusNotReadyError as e:
+        logger.info("[SemanticSearch] corpus not ready: %s", e)
+        documents_result = {
+            "status": "not_available",
+            "message": f"{e} {_CORPUS_INGEST_HINT}",
+        }
     except Exception as e:
         logger.warning("[SemanticSearch] corpus fan-out failed: %s", e)
         documents_result = {"status": "error", "message": str(e)}
@@ -1950,17 +1967,13 @@ def search_documents(
     logger.debug("[CACHE] miss | tool=search_documents key=%s", cache_key[:16])
 
     store = None
+    from esdc.corpus.store import CorpusNotReadyError
+
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder())
-        # Mirror the CLI's _open_corpus_store: heal schema drift (e.g. a
-        # pre-branch DuckDB missing the embed_text column) before search
-        # runs its SELECT, so an upgraded install doesn't error on every
-        # chat search until the user happens to run a corpus CLI command.
-        # validate_model stays False (default) — chat search must not
-        # hard-fail on an embedding-model mismatch.
-        store.ensure_tables()
+        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        store.validate_readiness("search")
         result = store.search(
             query=query,
             limit=limit,
@@ -1969,12 +1982,12 @@ def search_documents(
 
         if result.get("status") == "not_available":
             # Keep the store's diagnostic and append the actionable steps.
-            hint = (
-                "Run: esdc corpus extract <folder>, review the sidecars, "
-                "then esdc corpus commit <folder>"
-            )
             store_msg = result.get("message")
-            result["message"] = f"{store_msg} {hint}" if store_msg else hint
+            result["message"] = (
+                f"{store_msg} {_CORPUS_INGEST_HINT}"
+                if store_msg
+                else _CORPUS_INGEST_HINT
+            )
 
         result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
         if result.get("status") in ("success", "no_results"):
@@ -1984,6 +1997,15 @@ def search_documents(
             )
         return result_str
 
+    except CorpusNotReadyError as e:
+        logger.warning("[DocSearch] corpus not ready | query=%s error=%s", query, e)
+        return json.dumps(
+            {
+                "status": "not_available",
+                "message": f"{e} {_CORPUS_INGEST_HINT}",
+                "query": query,
+            }
+        )
     except Exception as e:
         logger.error("[DocSearch] tool failed | query=%s error=%s", query, e)
         return json.dumps(
@@ -2165,11 +2187,24 @@ def aggregate_documents(
         return str(cache[cache_key])
 
     store = None
+    from esdc.corpus.store import CorpusNotReadyError
+
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder())
-        store.ensure_tables()
+        # Operation-specific readiness: metadata-only and keyword-only queries
+        # must not require the embedding column that semantic/hybrid consume.
+        if query is None:
+            readiness_op = "aggregate_metadata"
+        elif match == "semantic":
+            readiness_op = "aggregate_semantic"
+        elif match == "hybrid":
+            readiness_op = "aggregate"
+        else:
+            readiness_op = "aggregate_keyword"
+
+        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        store.validate_readiness(readiness_op)
         result = store.aggregate(
             query=query,
             mode=mode,
@@ -2181,18 +2216,27 @@ def aggregate_documents(
         )
 
         if result.get("status") == "not_available":
-            hint = (
-                "Run: esdc corpus extract <folder>, review the sidecars, "
-                "then esdc corpus commit <folder>"
-            )
             store_msg = result.get("message")
-            result["message"] = f"{store_msg} {hint}" if store_msg else hint
+            result["message"] = (
+                f"{store_msg} {_CORPUS_INGEST_HINT}"
+                if store_msg
+                else _CORPUS_INGEST_HINT
+            )
 
         result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
         if result.get("status") in ("success", "no_results"):
             cache.set(cache_key, result_str)
         return result_str
 
+    except CorpusNotReadyError as e:
+        logger.warning("[DocAggregate] corpus not ready | query=%s error=%s", query, e)
+        return json.dumps(
+            {
+                "status": "not_available",
+                "message": f"{e} {_CORPUS_INGEST_HINT}",
+                "query": query,
+            }
+        )
     except Exception as e:
         logger.error("[DocAggregate] tool failed | query=%s error=%s", query, e)
         return json.dumps({"status": "error", "message": str(e), "query": query})
@@ -2249,10 +2293,13 @@ def read_document(
     - read_document("a1b2c3", max_chars=5000) -> first 5000 chars only
     """
     store = None
+    from esdc.corpus.store import CorpusNotReadyError
+
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder())
+        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        store.validate_readiness("document")
         doc = store.get_document(doc_id)
         if doc is None:
             logger.debug("[DocRead] not_found | doc_id=%s", doc_id)
@@ -2276,6 +2323,15 @@ def read_document(
             default=str,
         )
 
+    except CorpusNotReadyError as e:
+        logger.warning("[DocRead] corpus not ready | doc_id=%s error=%s", doc_id, e)
+        return json.dumps(
+            {
+                "status": "not_available",
+                "message": f"{e} {_CORPUS_INGEST_HINT}",
+                "doc_id": doc_id,
+            }
+        )
     except Exception as e:
         logger.error("[DocRead] tool failed | doc_id=%s error=%s", doc_id, e)
         return json.dumps(
