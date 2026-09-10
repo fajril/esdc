@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import fitz
+import httpx
 import ollama
 from rich.console import Group
 from rich.live import Live
@@ -57,7 +58,7 @@ from esdc.corpus.metadata import (
     remap_legacy_doc_type,
     seed_topic_from_legacy,
 )
-from esdc.corpus.ocr import OllamaVisionOcr
+from esdc.corpus.ocr import DEFAULT_TIMEOUT, OllamaVisionOcr
 from esdc.corpus.pod_matcher import PodMatcher
 from esdc.corpus.sidecar import (
     read_sidecar,
@@ -123,7 +124,7 @@ def _collect_sidecars(paths: list[Path]) -> list[Path]:
 
 def _text_llm_caller(model: str, host: str | None = None) -> Any:
     """A prompt->text callable backed by a text-only Ollama chat model."""
-    client = ollama.Client(host=host)
+    client = ollama.Client(host=host, timeout=DEFAULT_TIMEOUT)
 
     def call(prompt: str) -> str:
         response = client.chat(
@@ -552,7 +553,12 @@ def run_extract(
 
     ollama_host = cfg.get("ollama_host") or None
     ocr = OllamaVisionOcr(
-        cfg["ocr_model"], num_ctx=cfg.get("num_ctx", 16384), host=ollama_host
+        cfg["ocr_model"],
+        num_ctx=cfg.get("num_ctx", 16384),
+        host=ollama_host,
+        timeout=httpx.Timeout(
+            float(cfg.get("extract_timeout_seconds") or 300), connect=10.0
+        ),
     )
     ocr_client = ocr if ocr.health_check() else None
 

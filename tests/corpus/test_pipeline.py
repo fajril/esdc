@@ -660,6 +660,25 @@ def test_resolve_text_caller_ollama_name(monkeypatch):
     assert pipeline._resolve_text_caller("qwen3:8b") is sentinel
 
 
+def test_text_llm_caller_client_has_timeout(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, host=None, **kwargs):
+            captured["host"] = host
+            captured["kwargs"] = kwargs
+
+        def chat(self, model, messages, options):
+            return {"message": {"content": "ok"}}
+
+    monkeypatch.setattr(pipeline.ollama, "Client", FakeClient)
+    caller = pipeline._text_llm_caller("qwen3:8b", host="http://gpu-box:11434")
+    assert captured["host"] == "http://gpu-box:11434"
+    assert captured["kwargs"]["timeout"] is not None
+    assert captured["kwargs"]["timeout"].connect < captured["kwargs"]["timeout"].read
+    assert caller("prompt") == "ok"
+
+
 def test_resolve_text_caller_named_provider(monkeypatch):
     import esdc.providers as providers
 
