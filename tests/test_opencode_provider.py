@@ -106,3 +106,25 @@ class TestOpencodeListAndContext:
     def test_context_length_api_failure_returns_zero(self, mock_openai):
         mock_openai.return_value.models.list.side_effect = RuntimeError("boom")
         assert OpencodeProvider.get_context_length_from_api("x", "sk-x") == 0
+
+
+class TestOpencodeTestConnection:
+    def test_missing_api_key(self):
+        config = ProviderConfig(name="oc", provider_type="opencode", api_key="")
+        ok, _ = OpencodeProvider.test_connection(config)
+        assert ok is False
+
+    @patch("esdc.providers.opencode.OpencodeProvider.create_llm")
+    @patch("esdc.providers.opencode.OpencodeProvider.list_models")
+    def test_empty_base_url_uses_default(self, mock_list, mock_create):
+        mock_list.return_value = ["deepseek-v4-flash"]
+        mock_create.return_value.invoke.return_value = None
+
+        config = ProviderConfig(
+            name="oc", provider_type="opencode", api_key="sk-x", model=""
+        )
+        ok, _ = OpencodeProvider.test_connection(config)
+
+        assert ok is True
+        assert mock_list.call_args.kwargs["base_url"] == OpencodeProvider.BASE_URL
+        assert mock_create.call_args.kwargs["base_url"] == OpencodeProvider.BASE_URL

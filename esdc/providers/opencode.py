@@ -72,6 +72,31 @@ class OpencodeProvider(OpenAICompatibleProvider):
         return bool(config.api_key)
 
     @classmethod
+    def test_connection(cls, config: ProviderConfig) -> tuple[bool, str]:
+        """Test OpenCode connection, defaulting the base URL when omitted."""
+        if not config.api_key:
+            return False, "Not configured. Please set your OpenCode API key."
+
+        effective_base_url = config.base_url or cls.BASE_URL
+        try:
+            models = cls.list_models(
+                base_url=effective_base_url,
+                api_key=config.api_key,
+            )
+            if not models:
+                return False, "Connected but no models available. Check your API key."
+
+            llm = cls.create_llm(
+                model=config.model or cls.DEFAULT_MODEL,
+                base_url=effective_base_url,
+                api_key=config.api_key,
+            )
+            llm.invoke("Hello")
+            return True, f"Connected. Available models: {len(models)} models"
+        except Exception as e:
+            return False, str(e)
+
+    @classmethod
     def create_llm(
         cls,
         model: str | None = None,
