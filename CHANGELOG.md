@@ -239,6 +239,22 @@ close never races a thread mid-load or mid-`embed()`.
   `~/.esdc/models` (follows `ESDC_CONFIG_DIR`) instead of the volatile system
   temp dir, so a warmed model survives reboots and tmp purges.
 
+### Corpus pipeline reliability
+
+**Fixed:** OCR and metadata LLM calls no longer hang forever against an
+unreachable `ollama_host`. ollama-python defaults to `timeout=None`, which
+disables httpx timeouts entirely, so a remote GPU host that accepted the TCP
+connection but never answered left `esdc corpus extract` / `esdc corpus rename`
+blocked with no error. The vision OCR client now always carries a bounded
+timeout (10 s connect, `corpus.extract_timeout_seconds` read, default 300 s),
+and the text-LLM caller used for metadata inference gets the same connect/read
+bounds.
+
+**Added:** `esdc corpus rename` now shows the live progress display already
+used by `extract` / `commit` / `eval`, reporting the per-file phase — `db
+lookup`, `llm infer`, `OCR + metadata inference`, `first-page OCR`, and `apply
+rename` — instead of appearing to stall on the first file.
+
 ## [0.8.0] - 2026-07-22
 
 ### Added

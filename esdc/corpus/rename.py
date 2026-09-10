@@ -13,11 +13,13 @@ import datetime
 import hashlib
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import fitz
+import httpx
 
 from esdc.configs import Config
 from esdc.corpus.extractor import extract_document
@@ -28,7 +30,12 @@ from esdc.corpus.metadata import (
     parse_llm_json,
 )
 from esdc.corpus.ocr import OllamaVisionOcr
-from esdc.corpus.pipeline import CorpusReport, _collect_sources, _resolve_text_caller
+from esdc.corpus.pipeline import (
+    CorpusReport,
+    _collect_sources,
+    _progress_with_status,
+    _resolve_text_caller,
+)
 from esdc.corpus.sidecar import read_sidecar, sidecar_path
 from esdc.corpus.store import CorpusStore
 
@@ -94,17 +101,26 @@ class _LlmContext:
         cfg = self._cfg
         host = cfg.get("ollama_host") or None
         ocr = OllamaVisionOcr(
-            cfg["ocr_model"], num_ctx=cfg.get("num_ctx", 16384), host=host
+            cfg["ocr_model"],
+            num_ctx=cfg.get("num_ctx", 16384),
+            host=host,
+            timeout=httpx.Timeout(
+                float(cfg.get("extract_timeout_seconds") or 300), connect=10.0
+            ),
         )
         self.ocr_client = ocr if ocr.health_check() else None
         self.metadata_caller = _resolve_text_caller(cfg.get("metadata_model"), host)
 
-    def infer(self, src: Path) -> dict[str, Any]:
+    def infer(
+        self, src: Path, status: Callable[[str], None] | None = None
+    ) -> dict[str, Any]:
         """Best-effort LLM/OCR metadata for src; {} when unavailable/failed."""
         self._build()
         cfg = self._cfg
         try:
             if self.metadata_caller is not None:
+                if status is not None:
+                    status("OCR + metadata inference")
                 result = extract_document(
                     src,
                     self.ocr_client,
@@ -116,6 +132,8 @@ class _LlmContext:
                     result.markdown, self.metadata_caller, filename=src.name
                 )
             if self.ocr_client is not None and src.suffix.lower() == ".pdf":
+                if status is not None:
+                    status("first-page OCR")
                 doc = fitz.open(str(src))
                 try:
                     pix = doc[0].get_pixmap(dpi=cfg.get("ocr_dpi", 200))
@@ -133,6 +151,7 @@ def _resolve_fields(
     src: Path,
     doc_type_override: str | None,
     llm: _LlmContext,
+    status: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], Path | None, str]:
     """Return (fields, sidecar_src, doc_date_source) via sidecar -> DB -> LLM."""
     fields: dict[str, Any] = dict.fromkeys(_FIELDS)
@@ -161,6 +180,8 @@ def _resolve_fields(
 
     # Tier 2: committed DB (by file_hash)
     if any(fields[k] is None for k in _FIELDS):
+        if status is not None:
+            status("db lookup")
         try:
             store = CorpusStore()
             try:
@@ -175,7 +196,9 @@ def _resolve_fields(
 
     # Tier 3: LLM/OCR inference
     if any(fields[k] is None for k in _FIELDS):
-        _fill(llm.infer(src), "llm")
+        if status is not None:
+            status("llm infer")
+        _fill(llm.infer(src, status=status), "llm")
 
     return fields, sidecar_src, source
 
@@ -188,7 +211,7 @@ def run_rename(
     """Plan (and, when apply=True, perform) canonical renames of source files.
 
     Returns (report, plans). Dry-run (apply=False) builds plans without
-    touching disk. Execution is handled in _apply_plans (Task 5).
+    touching disk.
     """
     report = CorpusReport()
     cfg = Config.get_corpus_config()
@@ -198,76 +221,90 @@ def run_rename(
     plans: list[RenamePlan] = []
     claimed: set[Path] = set()
 
-    for src in sources:
-        fields, sidecar_src, source = _resolve_fields(src, doc_type, llm)
-        dt = fields["doc_type"]
-        dd = format_doc_date(fields["doc_date"])
-        title = sanitize_title(fields["subject"])
-
-        missing = [
-            name
-            for name, val in (("doc_type", dt), ("doc_date", dd), ("title", title))
-            if not val
-        ]
-        if missing:
-            note = f"unresolved: missing {', '.join(missing)}"
-            report.skipped.append(f"{src.name} ({note})")
-            plans.append(
-                RenamePlan(src, None, dt, dd, title, "-", sidecar_src, None, note)
+    with _progress_with_status("rename", len(sources), "files") as p:
+        for src in sources:
+            p.file(src.name)
+            fields, sidecar_src, source = _resolve_fields(
+                src, doc_type, llm, status=p.status
             )
-            continue
+            dt = fields["doc_type"]
+            dd = format_doc_date(fields["doc_date"])
+            title = sanitize_title(fields["subject"])
 
-        new_path = src.with_name(f"{dt} - {dd} - {title}{src.suffix}")
-        sidecar_new = sidecar_path(new_path) if sidecar_src is not None else None
+            missing = [
+                name
+                for name, val in (("doc_type", dt), ("doc_date", dd), ("title", title))
+                if not val
+            ]
+            if missing:
+                note = f"unresolved: missing {', '.join(missing)}"
+                report.skipped.append(f"{src.name} ({note})")
+                plans.append(
+                    RenamePlan(src, None, dt, dd, title, "-", sidecar_src, None, note)
+                )
+                p.advance()
+                continue
 
-        if new_path == src:
-            report.skipped.append(f"{src.name} (already named)")
+            new_path = src.with_name(f"{dt} - {dd} - {title}{src.suffix}")
+            sidecar_new = sidecar_path(new_path) if sidecar_src is not None else None
+
+            if new_path == src:
+                report.skipped.append(f"{src.name} (already named)")
+                plans.append(
+                    RenamePlan(
+                        src,
+                        new_path,
+                        dt,
+                        dd,
+                        title,
+                        source,
+                        sidecar_src,
+                        sidecar_new,
+                        "already named",
+                    )
+                )
+                p.advance()
+                continue
+
+            conflict = None
+            for target in (new_path, sidecar_new):
+                if target is None:
+                    continue
+                if target in claimed or (target.exists() and target != src):
+                    conflict = target
+                    break
+            if conflict is not None:
+                note = f"target exists: {conflict.name}"
+                report.failed[src.name] = note
+                plans.append(
+                    RenamePlan(
+                        src, None, dt, dd, title, source, sidecar_src, None, note
+                    )
+                )
+                p.advance()
+                continue
+
+            claimed.add(new_path)
+            if sidecar_new is not None:
+                claimed.add(sidecar_new)
             plans.append(
                 RenamePlan(
-                    src,
-                    new_path,
-                    dt,
-                    dd,
-                    title,
-                    source,
-                    sidecar_src,
-                    sidecar_new,
-                    "already named",
+                    src, new_path, dt, dd, title, source, sidecar_src, sidecar_new, ""
                 )
             )
-            continue
+            p.advance()
 
-        conflict = None
-        for target in (new_path, sidecar_new):
-            if target is None:
-                continue
-            if target in claimed or (target.exists() and target != src):
-                conflict = target
-                break
-        if conflict is not None:
-            note = f"target exists: {conflict.name}"
-            report.failed[src.name] = note
-            plans.append(
-                RenamePlan(src, None, dt, dd, title, source, sidecar_src, None, note)
-            )
-            continue
-
-        claimed.add(new_path)
-        if sidecar_new is not None:
-            claimed.add(sidecar_new)
-        plans.append(
-            RenamePlan(
-                src, new_path, dt, dd, title, source, sidecar_src, sidecar_new, ""
-            )
-        )
-
-    if apply:
-        _apply_plans(plans, report)  # defined in Task 5
+        if apply:
+            _apply_plans(plans, report, status=p.status)
 
     return report, plans
 
 
-def _apply_plans(plans: list[RenamePlan], report: CorpusReport) -> None:
+def _apply_plans(
+    plans: list[RenamePlan],
+    report: CorpusReport,
+    status: Callable[[str], None] | None = None,
+) -> None:
     """Perform the disk renames for resolved plans; record results in report."""
     from esdc.corpus.sidecar import write_sidecar_file
 
@@ -275,6 +312,8 @@ def _apply_plans(plans: list[RenamePlan], report: CorpusReport) -> None:
         if plan.new_path is None or plan.note:
             continue
         try:
+            if status is not None:
+                status("apply rename")
             plan.src.rename(plan.new_path)
             if plan.sidecar_src is not None and plan.sidecar_new is not None:
                 meta, body = read_sidecar(plan.sidecar_src)

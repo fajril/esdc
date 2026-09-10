@@ -1,6 +1,7 @@
 """Tests for corpus file renaming."""
 
 import datetime
+from contextlib import contextmanager
 from pathlib import Path
 
 import esdc.corpus.rename as rename_mod
@@ -269,6 +270,142 @@ def test_run_rename_collision_within_batch(tmp_path, monkeypatch):
     assert len(blocked) == 1
     assert "target exists" in blocked[0].note
     assert report.failed
+
+
+class _FakeProgressHandle:
+    """Records file()/status()/advance() calls for assertions."""
+
+    def __init__(self):
+        self.files = []
+        self.statuses = []
+        self.advances = 0
+
+    def file(self, name):
+        self.files.append(name)
+
+    def status(self, phase):
+        self.statuses.append(phase)
+
+    def advance(self):
+        self.advances += 1
+
+
+def _fake_progress_with_status_factory(captured):
+    @contextmanager
+    def factory(verb, total, unit):
+        handle = _FakeProgressHandle()
+        captured.update(verb=verb, total=total, unit=unit, handle=handle)
+        yield handle
+
+    return factory
+
+
+def test_run_rename_shows_progress_bar(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        rename_mod,
+        "_progress_with_status",
+        _fake_progress_with_status_factory(captured),
+    )
+    _stub_no_llm(monkeypatch)
+    for name, subject in (("a.pdf", "Judul A"), ("b.pdf", "Judul B")):
+        src = tmp_path / name
+        src.write_bytes(b"%PDF-1.4 dummy")
+        _write_sidecar(
+            src,
+            {
+                "file_hash": "h",
+                "doc_type": "letter",
+                "doc_date": "2024-01-15",
+                "subject": subject,
+            },
+        )
+
+    _report, _plans = rename_mod.run_rename([tmp_path], apply=False)
+
+    assert captured["verb"] == "rename"
+    assert captured["total"] == 2
+    assert captured["unit"] == "files"
+    handle = captured["handle"]
+    assert handle.files == ["a.pdf", "b.pdf"]
+    assert handle.advances == 2
+    # sidecar tier resolves without touching db or llm tiers
+    assert "db lookup" not in handle.statuses
+    assert "llm infer" not in handle.statuses
+
+
+def test_run_rename_progress_reports_llm_and_apply(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        rename_mod,
+        "_progress_with_status",
+        _fake_progress_with_status_factory(captured),
+    )
+    monkeypatch.setattr(
+        rename_mod.Config,
+        "get_corpus_config",
+        staticmethod(
+            lambda: {
+                "ocr_model": "x",
+                "metadata_model": "main",
+                "num_ctx": 16384,
+                "min_chars_per_page": 50,
+                "ocr_dpi": 200,
+                "min_image_area": 0.05,
+                "ollama_host": None,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        rename_mod, "_resolve_text_caller", lambda *a, **k: lambda p: "{}"
+    )
+
+    class _DeadOcr:
+        def __init__(self, *a, **k):
+            pass
+
+        def health_check(self):
+            return False
+
+    monkeypatch.setattr(rename_mod, "OllamaVisionOcr", _DeadOcr)
+
+    class _NoStore:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_document_by_hash(self, h):
+            return None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(rename_mod, "CorpusStore", _NoStore)
+
+    class _Result:
+        markdown = "body"
+
+    monkeypatch.setattr(rename_mod, "extract_document", lambda *a, **k: _Result())
+    monkeypatch.setattr(
+        rename_mod,
+        "llm_extract",
+        lambda markdown, caller, filename=None: {
+            "doc_type": "note",
+            "doc_date": "2022-06-30",
+            "subject": "Catatan",
+        },
+    )
+
+    src = tmp_path / "memo.pdf"
+    src.write_bytes(b"%PDF-1.4 dummy")
+
+    _report, _plans = rename_mod.run_rename([tmp_path], apply=True)
+
+    handle = captured["handle"]
+    assert handle.files == ["memo.pdf"]
+    assert handle.advances == 1
+    assert "db lookup" in handle.statuses
+    assert "llm infer" in handle.statuses
+    assert "apply rename" in handle.statuses
 
 
 def test_apply_renames_source_and_sidecar(tmp_path, monkeypatch):
