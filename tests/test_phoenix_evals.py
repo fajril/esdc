@@ -36,6 +36,16 @@ def mock_provider_config_openai_compatible():
     }
 
 
+@pytest.fixture
+def mock_provider_config_opencode():
+    return {
+        "provider_type": "opencode",
+        "model": "deepseek-v4-flash",
+        "base_url": None,
+        "api_key": "sk-opencode",
+    }
+
+
 class TestCreateJudgeLLMOllama:
     def test_judge_llm_ollama(self, mock_provider_config_ollama):
         from phoenix.evals import LLM
@@ -86,6 +96,38 @@ class TestCreateJudgeLLMOpenAICompatible:
 
             llm = _create_judge_llm()
             assert isinstance(llm, LLM)
+
+
+class TestCreateJudgeLLMOpencode:
+    def test_judge_llm_opencode_uses_go_base_url(
+        self, mock_provider_config_opencode
+    ):
+        from phoenix.evals import LLM
+
+        with patch("esdc.configs.Config.get_provider_config") as mock_get:
+            mock_get.return_value = mock_provider_config_opencode
+
+            from esdc.phoenix.phoenix_evals import _create_judge_llm
+
+            llm = _create_judge_llm()
+
+        assert isinstance(llm, LLM)
+        base_url = str(llm._sync_client.base_url).rstrip("/")
+        assert base_url == "https://opencode.ai/zen/go/v1"
+
+    def test_judge_llm_opencode_sends_session_headers(
+        self, mock_provider_config_opencode
+    ):
+        with patch("esdc.configs.Config.get_provider_config") as mock_get:
+            mock_get.return_value = mock_provider_config_opencode
+
+            from esdc.phoenix.phoenix_evals import _create_judge_llm
+
+            llm = _create_judge_llm()
+
+        headers = llm._sync_client.client.default_headers
+        assert headers.get("x-opencode-session")
+        assert str(headers.get("User-Agent", "")).startswith("esdc/")
 
 
 class TestCreateJudgeLLMErrors:
