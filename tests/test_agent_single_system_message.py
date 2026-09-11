@@ -119,3 +119,76 @@ async def test_manual_trailing_system_messages_are_merged():
     merged = str(request[0].content)
     assert "strategy-1" in merged
     assert "strategy-2" in merged
+
+
+@pytest.mark.asyncio
+async def test_ordinary_request_excludes_strategic_skill_in_system_prompt():
+    llm = RecordingLLM(AIMessage(content="jawaban"))
+    agent = create_agent(
+        cast(BaseChatModel, llm), tools=[], checkpointer=None, context_length=8000
+    )
+
+    await agent.ainvoke(
+        {"messages": [HumanMessage(content="halo")]},
+        config={"recursion_limit": 10},
+    )
+
+    system_text = str(llm.seen[-1][0].content)
+    assert "# Strategic Analysis Skill" not in system_text
+
+    await agent.ainvoke(
+        {"messages": [HumanMessage(content="berapa potensi lapangan Duri?")]},
+        config={"recursion_limit": 10},
+    )
+
+    resource_system_text = str(llm.seen[-1][0].content)
+    assert "# Strategic Analysis Skill" not in resource_system_text
+
+
+@pytest.mark.asyncio
+async def test_explicit_strategic_request_includes_strategic_skill_in_system_prompt():
+    llm = RecordingLLM(AIMessage(content="jawaban"))
+    agent = create_agent(
+        cast(BaseChatModel, llm), tools=[], checkpointer=None, context_length=8000
+    )
+
+    await agent.ainvoke(
+        {"messages": [HumanMessage(content="buat analisis strategis nasional")]},
+        config={"recursion_limit": 10},
+    )
+
+    system_text = str(llm.seen[-1][0].content)
+    assert "# Strategic Analysis Skill" in system_text
+
+
+@pytest.mark.asyncio
+async def test_strategic_prompt_is_much_larger_than_ordinary_prompt():
+    ordinary_llm = RecordingLLM(AIMessage(content="jawaban"))
+    ordinary_agent = create_agent(
+        cast(BaseChatModel, ordinary_llm),
+        tools=[],
+        checkpointer=None,
+        context_length=8000,
+    )
+    await ordinary_agent.ainvoke(
+        {"messages": [HumanMessage(content="halo")]},
+        config={"recursion_limit": 10},
+    )
+
+    strategic_llm = RecordingLLM(AIMessage(content="jawaban"))
+    strategic_agent = create_agent(
+        cast(BaseChatModel, strategic_llm),
+        tools=[],
+        checkpointer=None,
+        context_length=8000,
+    )
+    await strategic_agent.ainvoke(
+        {"messages": [HumanMessage(content="buat analisis strategis nasional")]},
+        config={"recursion_limit": 10},
+    )
+
+    ordinary_len = len(str(ordinary_llm.seen[-1][0].content))
+    strategic_len = len(str(strategic_llm.seen[-1][0].content))
+
+    assert strategic_len > ordinary_len
+    assert strategic_len - ordinary_len > 10_000

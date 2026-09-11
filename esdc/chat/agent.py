@@ -31,7 +31,7 @@ from esdc.chat.query_classifier import (
     format_classification_for_prompt,
     get_tools_for_classification,
 )
-from esdc.chat.skills import discover_skills, inject_skills_into_prompt
+from esdc.chat.skills import discover_skills, inject_skills_into_prompt, select_skills
 from esdc.chat.smart_query import simple_data_query
 from esdc.chat.tools import (
     aggregate_documents,
@@ -461,6 +461,16 @@ async def generate_conversation_tags(
         return query_clean
 
 
+def _latest_human_text(messages: list[AnyMessage]) -> str:
+    for message in reversed(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        if isinstance(message.content, str) and message.content.strip():
+            return message.content
+        return ""
+    return ""
+
+
 def create_agent(
     llm: BaseChatModel,
     tools: list | None = None,
@@ -538,9 +548,14 @@ def create_agent(
     def init_node(state: AgentState) -> dict[str, Any]:
         """Initialize system prompt and defaults in state (runs once)."""
         system_prompt = get_system_prompt()
-        if skills:
-            system_prompt = inject_skills_into_prompt(system_prompt, skills)
-        logger.debug("[INIT] system_prompt_set | len=%d", len(system_prompt))
+        selected_skills = select_skills(_latest_human_text(state["messages"]), skills)
+        if selected_skills:
+            system_prompt = inject_skills_into_prompt(system_prompt, selected_skills)
+        logger.debug(
+            "[INIT] system_prompt_set | len=%d | selected_skills=%s",
+            len(system_prompt),
+            [skill.name for skill in selected_skills],
+        )
         return {
             "system_prompt": system_prompt,
             "allowed_tools": list(all_tools.keys()),
