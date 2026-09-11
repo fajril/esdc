@@ -1,0 +1,129 @@
+schema_version: 1
+nodes:
+  Document:
+    corpus_type: document
+    key: doc_id
+    name: subject
+    properties:
+      doc_id: STRING
+      file_name: STRING
+      doc_type: STRING
+      doc_date: STRING
+      subject: STRING
+    fts:
+      index: document_fts
+      properties: [subject]
+  POD:
+    corpus_type: pod
+    key: pod_id
+    name: pod_name
+    properties:
+      pod_id: STRING
+      pod_name: STRING
+      letter_num: STRING
+      approval_date: STRING
+      pod_type: STRING
+      rev_num: INT64
+    fts:
+      index: pod_fts
+      properties: [pod_name]
+  Project:
+    corpus_type: project
+    key: project_id
+    name: project_name
+    properties:
+      project_id: STRING
+      project_name: STRING
+    fts:
+      index: project_fts
+      properties: [project_name]
+  Field:
+    corpus_type: field
+    key: name
+    name: name
+    properties:
+      name: STRING
+    fts:
+      index: field_fts
+      properties: [name]
+  WorkingArea:
+    corpus_type: working_area
+    key: name
+    name: name
+    properties:
+      name: STRING
+    fts:
+      index: wk_fts
+      properties: [name]
+relationships:
+  ABOUT_POD:
+    from: Document
+    to: POD
+    properties:
+      confidence: DOUBLE
+      method: STRING
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING
+  ABOUT_PROJECT:
+    from: Document
+    to: Project
+    properties:
+      confidence: DOUBLE
+      method: STRING
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING
+  ABOUT_FIELD:
+    from: Document
+    to: Field
+    properties:
+      confidence: DOUBLE
+      method: STRING
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING
+  ABOUT_WK:
+    from: Document
+    to: WorkingArea
+    properties:
+      confidence: DOUBLE
+      method: STRING
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING
+  HAS_PROJECT:
+    from: POD
+    to: Project
+    properties:
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING
+  REVISES:
+    from: POD
+    to: POD
+    properties:
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING
+  SUPERSEDES:
+    from: POD
+    to: POD
+    properties:
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING
+  IN_FIELD:
+    from: Project
+    to: Field
+    properties:
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING
+  IN_WK:
+    from: Field
+    to: WorkingArea
+    properties:
+      valid_from: STRING
+      valid_to: STRING
+      properties_json: STRING

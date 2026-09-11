@@ -1,3 +1,5 @@
+"""FastAPI application factory and uvicorn entrypoint."""
+
 # Standard library
 import logging
 

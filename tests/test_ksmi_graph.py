@@ -237,8 +237,26 @@ class TestKSMIGraphManagerFormatReachability:
 
     def test_format_reachability_includes_all_levels(self, manager):
         result = manager.format_reachability()
-        for code in ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8",
-                     "X0", "X1", "X2", "X3", "X4", "X5", "X6", "A1", "A2"]:
+        for code in [
+            "E0",
+            "E1",
+            "E2",
+            "E3",
+            "E4",
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "X0",
+            "X1",
+            "X2",
+            "X3",
+            "X4",
+            "X5",
+            "X6",
+            "A1",
+            "A2",
+        ]:
             assert f"{code} →" in result, f"Missing level {code}"
 
     def test_format_reachability_header(self, manager):
@@ -271,12 +289,31 @@ class TestKSMIGraphManagerFormatReachability:
     def test_format_reachability_sorted_order(self, manager):
         result = manager.format_reachability()
         lines = [
-            line for line in result.split("\n")
+            line
+            for line in result.split("\n")
             if "→" in line and not line.startswith("#")
         ]
         codes = [line.split("→")[0].strip().lstrip(">").strip() for line in lines]
-        expected_order = ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8",
-                          "X0", "X1", "X2", "X3", "X4", "X5", "X6", "A1", "A2"]
+        expected_order = [
+            "E0",
+            "E1",
+            "E2",
+            "E3",
+            "E4",
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "X0",
+            "X1",
+            "X2",
+            "X3",
+            "X4",
+            "X5",
+            "X6",
+            "A1",
+            "A2",
+        ]
         assert codes == expected_order
 
 
@@ -318,6 +355,7 @@ class TestCypherEscaping:
     def test_entity_with_single_quote_stored_and_retrievable(self):
         builder = KSMIGraphBuilder()
         builder.build_from_yaml()
+        assert builder._conn is not None
         builder._conn.execute(
             "CREATE (e:KSMIEntity {code: 'QUOTE_TEST', "
             "name: 'Indonesia\\'s Reserve', "
@@ -329,7 +367,7 @@ class TestCypherEscaping:
             "MATCH (e:KSMIEntity {code: 'QUOTE_TEST'}) "
             "RETURN e.name, e.aliases, e.definition"
         )
-        rows = list(result)
+        rows = [tuple(row) for row in result]
         assert len(rows) == 1
         assert rows[0][0] == "Indonesia's Reserve"
         assert rows[0][1] == "Indonesia's oil"
@@ -339,6 +377,7 @@ class TestCypherEscaping:
     def test_project_level_with_quotes_stored_and_retrievable(self):
         builder = KSMIGraphBuilder()
         builder.build_from_yaml()
+        assert builder._conn is not None
         builder._conn.execute(
             "CREATE (l:ProjectLevel {code: 'Q_LEVEL', "
             "name: 'Level\\'s Name', "
@@ -353,7 +392,7 @@ class TestCypherEscaping:
             "RETURN l.name, l.project_classification, "
             "l.definition, l.rule_note"
         )
-        rows = list(result)
+        rows = [tuple(row) for row in result]
         assert len(rows) == 1
         assert rows[0][0] == "Level's Name"
         assert rows[0][1] == "Reserve's Class"

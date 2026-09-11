@@ -61,14 +61,28 @@ def _fetch_refs() -> dict:
     conn = get_sqlite_connection()
     try:
         return {
-            "institutions": [dict(r) for r in conn.execute(
-                "SELECT code, institution FROM r_institution ORDER BY code")],
-            "pod_types": [dict(r) for r in conn.execute(
-                "SELECT code, pod_type FROM r_pod_type ORDER BY code")],
-            "pods": [dict(r) for r in conn.execute(
-                "SELECT id, pod_id, pod_name FROM m_pod ORDER BY approval_seq")],
-            "pod_ids": [r["pod_id"] for r in conn.execute(
-                "SELECT pod_id FROM m_pod ORDER BY approval_seq")],
+            "institutions": [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT code, institution FROM r_institution ORDER BY code"
+                )
+            ],
+            "pod_types": [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT code, pod_type FROM r_pod_type ORDER BY code"
+                )
+            ],
+            "pods": [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT id, pod_id, pod_name FROM m_pod ORDER BY approval_seq"
+                )
+            ],
+            "pod_ids": [
+                r["pod_id"]
+                for r in conn.execute("SELECT pod_id FROM m_pod ORDER BY approval_seq")
+            ],
         }
     finally:
         conn.close()
@@ -232,7 +246,8 @@ def create_portal_app() -> FastAPI:
             return []
         ql = q.lower()
         matches = sorted(
-            (pid, name) for pid, name in known.items()
+            (pid, name)
+            for pid, name in known.items()
             if ql in pid.lower() or ql in name.lower()
         )
         return [
@@ -247,8 +262,7 @@ def create_portal_app() -> FastAPI:
 
 def _grid_payload(table: str) -> dict:
     cfg = TABLE_CONFIGS[table]
-    return {"table": table, "title": cfg["title"],
-            "config": {"table": table, **cfg}}
+    return {"table": table, "title": cfg["title"], "config": {"table": table, **cfg}}
 
 
 def _register_pages(app: FastAPI, templates: Jinja2Templates) -> None:
@@ -262,15 +276,22 @@ def _register_pages(app: FastAPI, templates: Jinja2Templates) -> None:
         # mtime-based cache buster: StaticFiles sends no Cache-Control, so
         # browsers heuristically cache portal.js/css and keep serving stale
         # code after an upgrade. A changed ?v= forces a refetch.
-        return int(max(
-            (static_dir / name).stat().st_mtime for name in ("portal.js", "portal.css")
-        ))
+        return int(
+            max(
+                (static_dir / name).stat().st_mtime
+                for name in ("portal.js", "portal.css")
+            )
+        )
 
     def _page(request: Request, title: str, tables: list[str]):
         return templates.TemplateResponse(
-            request, "grid.html",
-            {"title": title, "grids": [_grid_payload(t) for t in tables],
-             "asset_version": _asset_version()},
+            request,
+            "grid.html",
+            {
+                "title": title,
+                "grids": [_grid_payload(t) for t in tables],
+                "asset_version": _asset_version(),
+            },
         )
 
     @app.get("/pods")

@@ -1,3 +1,5 @@
+"""SSE event payload builders for streaming responses."""
+
 # Standard library
 import copy
 import json

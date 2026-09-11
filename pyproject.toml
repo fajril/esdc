@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esdc"
-version = "0.8.0"
+version = "0.9.0"
 description = "IRIS - Intelligent Reservoir Inference System for Indonesian oil & gas reserves database"
 requires-python = ">=3.10,<3.15"
 authors = [
@@ -40,6 +40,11 @@ dependencies = [
     "tiktoken>=0.12.0",
     # Direct APIs
     "ollama>=0.4.0",
+    # Corpus embeddings + rerank: llama.cpp in-process, Qwen3 GGUFs (no daemon).
+    # Prebuilt wheels: https://abetlen.github.io/llama-cpp-python/whl/<cpu|metal|cuda>
+    # GGUF download/cache for corpus models (imported by corpus/llama_backend)
+    "huggingface-hub>=0.23.0",
+    "llama-cpp-python>=0.3.0",
     "click>=8.0.0",
     # Web server
     "fastapi>=0.100.0",
@@ -95,6 +100,7 @@ esdc = ["tests"]
 [tool.basedpyright]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
+exclude = ["**/node_modules", "**/__pycache__", "**/.*", "build"]
 
 # These are expected in this codebase - suppress them
 reportMissingTypeStubs = false
@@ -126,22 +132,20 @@ select = [
     "SIM",  # flake8-simplify
 ]
 ignore = [
-    "D100",  # Missing docstring in public module
     "D101",  # Missing docstring in public class
     "D102",  # Missing docstring in public method
     "D103",  # Missing docstring in public function
     "D104",  # Missing docstring in public package
     "D107",  # Missing docstring in __init__
-    "D203",  # 1 blank line required before class docstring
-    "D212",  # Multi-line docstring summary should start at first line
-    "N811",  # Constant imported as non-constant name
+    "D203",  # 1 blank line required before class docstring (google uses D211)
+    "D212",  # Multi-line docstring summary should start at first line (google uses D213)
 ]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["N806", "E501"]  # Mock variable names use convention like MockClient; long SQL in tests
+"tests/**" = ["E501"]  # Long prompt strings / SQL in tests
 "esdc/validate/rule_re*.py" = ["E501"]  # Long LaTeX formal strings
 
 [dependency-groups]
@@ -158,6 +162,29 @@ dev = [
     "pandas-stubs>=2.2.2",
     "types-requests>=2.33.0.20260402",
     "types-tabulate>=0.10.0.20260308",
+]
+
+# llama-cpp-python: pull abetlen's PREBUILT wheels via `uv sync` instead of
+# compiling from source (cmake + C++ toolchain, slow + risks CI timeouts).
+# Platform markers pick the right binary: metal on macOS (keeps GPU offload
+# available — still CPU by default via corpus.n_gpu_layers=0) and cpu on
+# Linux/CI. Any other platform falls back to the PyPI sdist (source build).
+# Indexes are `explicit` so they serve ONLY the package pinned to them below;
+# nothing else in the tree resolves through them.
+[[tool.uv.index]]
+name = "llama-cpp-metal"
+url = "https://abetlen.github.io/llama-cpp-python/whl/metal"
+explicit = true
+
+[[tool.uv.index]]
+name = "llama-cpp-cpu"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+llama-cpp-python = [
+    { index = "llama-cpp-metal", marker = "sys_platform == 'darwin'" },
+    { index = "llama-cpp-cpu", marker = "sys_platform == 'linux'" },
 ]
 
 [tool.pytest.ini_options]

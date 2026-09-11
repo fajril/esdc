@@ -20,16 +20,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import fitz
+import httpx
 import ollama
 from rich.console import Group
 from rich.live import Live
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 
 from esdc.chat.domain_knowledge.doc_schema import legacy_doc_type_map, legacy_topic_seed
 from esdc.chat.domain_knowledge.entity_registry import ENTITY_REGISTRY
@@ -57,7 +58,7 @@ from esdc.corpus.metadata import (
     remap_legacy_doc_type,
     seed_topic_from_legacy,
 )
-from esdc.corpus.ocr import OllamaVisionOcr
+from esdc.corpus.ocr import DEFAULT_TIMEOUT, OllamaVisionOcr
 from esdc.corpus.pod_matcher import PodMatcher
 from esdc.corpus.sidecar import (
     read_sidecar,
@@ -66,6 +67,7 @@ from esdc.corpus.sidecar import (
     write_sidecar_file,
 )
 from esdc.corpus.store import CorpusStore
+from esdc.embedders import get_build_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +124,7 @@ def _collect_sidecars(paths: list[Path]) -> list[Path]:
 
 def _text_llm_caller(model: str, host: str | None = None) -> Any:
     """A prompt->text callable backed by a text-only Ollama chat model."""
-    client = ollama.Client(host=host)
+    client = ollama.Client(host=host, timeout=DEFAULT_TIMEOUT)
 
     def call(prompt: str) -> str:
         response = client.chat(
@@ -135,9 +137,7 @@ def _text_llm_caller(model: str, host: str | None = None) -> Any:
     return call
 
 
-def _resolve_text_caller(
-    model_spec: str | None, host: str | None = None
-) -> Any | None:
+def _resolve_text_caller(model_spec: str | None, host: str | None = None) -> Any | None:
     """Turn a corpus model config string into a prompt->text callable.
 
     "" / None -> None (feature off). "main" -> the default chat provider
@@ -153,7 +153,7 @@ def _resolve_text_caller(
         return None
 
     if model_spec.startswith("provider:"):
-        name = model_spec[len("provider:"):]
+        name = model_spec[len("provider:") :]
         named_config = Config.get_provider_config_by_name(name)
         if not isinstance(named_config, dict):
             logger.warning(
@@ -165,9 +165,7 @@ def _resolve_text_caller(
         # Same shape get_provider_configs_by_priority produces for "main".
         provider_config = dict(named_config)
         provider_config.setdefault("name", name)
-        provider_config.setdefault(
-            "provider_type", provider_config.get("type") or name
-        )
+        provider_config.setdefault("provider_type", provider_config.get("type") or name)
     elif model_spec != "main":
         return _text_llm_caller(model_spec, host)
     else:
@@ -468,7 +466,9 @@ class _ProgressHandle:
     in place. Both lines share one Live so they refresh together.
     """
 
-    def __init__(self, bar: Progress, bar_id: int, status: Progress, status_id: int):
+    def __init__(
+        self, bar: Progress, bar_id: TaskID, status: Progress, status_id: TaskID
+    ):
         self._bar = bar
         self._bar_id = bar_id
         self._status = status
@@ -553,7 +553,12 @@ def run_extract(
 
     ollama_host = cfg.get("ollama_host") or None
     ocr = OllamaVisionOcr(
-        cfg["ocr_model"], num_ctx=cfg.get("num_ctx", 16384), host=ollama_host
+        cfg["ocr_model"],
+        num_ctx=cfg.get("num_ctx", 16384),
+        host=ollama_host,
+        timeout=httpx.Timeout(
+            float(cfg.get("extract_timeout_seconds") or 300), connect=10.0
+        ),
     )
     ocr_client = ocr if ocr.health_check() else None
 
@@ -571,11 +576,17 @@ def run_extract(
             "formatting cleanup skipped"
         )
 
+    matcher: PodMatcher | None = None
     store = CorpusStore()
     try:
         resolver = _entity_resolver_or_none(store, report)
         _validate_entity_overrides(resolver, overrides)
-        matcher = PodMatcher(store._get_sqlite())
+        try:
+            matcher = PodMatcher(store._get_sqlite())
+        except Exception as e:
+            # Extract is a reader: it must never create the SQLite truth, so
+            # POD suggestions degrade when the registry does not exist yet.
+            logger.debug("[Corpus] POD registry unavailable: %s", e)
 
         # (name, pages_ocr, page_count) collected so the final report can be
         # sorted by OCR ratio DESC once, instead of per-file.
@@ -636,13 +647,17 @@ def run_extract(
                     if preserved_meta is None:
                         p.status("prefill metadata")
                         meta_fields = _prefill_metadata(
-                            src, markdown, metadata_caller, ocr_client, cfg,
-                            report, name,
+                            src,
+                            markdown,
+                            metadata_caller,
+                            ocr_client,
+                            cfg,
+                            report,
+                            name,
                         )
                     else:
                         meta_fields = {
-                            key: preserved_meta.get(key)
-                            for key in _PRESERVED_FIELDS
+                            key: preserved_meta.get(key) for key in _PRESERVED_FIELDS
                         }
 
                     meta = {
@@ -689,8 +704,9 @@ def run_extract(
                             "re-extracted, set reviewed: true after re-review"
                         )
 
-                    p.status("suggest POD links")
-                    _apply_pod_suggestions(meta, matcher, report, name)
+                    if matcher is not None:
+                        p.status("suggest POD links")
+                        _apply_pod_suggestions(meta, matcher, report, name)
 
                     p.status("write sidecar")
                     write_sidecar(src, meta, markdown)
@@ -718,7 +734,7 @@ def run_extract(
                     p.advance()
 
         entries.sort(
-            key=lambda e: (e[1] / e[2] if e[2] else 0.0),
+            key=lambda e: e[1] / e[2] if e[2] else 0.0,
             reverse=True,
         )
         for name, pages_ocr, _page_count in entries:
@@ -937,14 +953,20 @@ def run_commit(
     skip_review: bool = False,
     force: bool = False,
     dry_run: bool = False,
+    embed_backend: str | None = None,
 ) -> CorpusReport:
-    """Ingest reviewed ``.corpus.md`` sidecars into the corpus store."""
+    """Ingest reviewed ``.corpus.md`` sidecars into the corpus store.
+
+    ``embed_backend`` overrides the ``embedding_backend`` config key for
+    this run only; None uses the configured default.
+    """
     report = CorpusReport()
     cfg = Config.get_corpus_config()
     sidecars = _collect_sidecars(paths)
 
-    store = CorpusStore()
+    store = CorpusStore(embedder=get_build_embedder(embed_backend), read_only=False)
     any_processed = False
+    merged_doc_ids: list[str] = []
     try:
         # also needed to reach the conn for canonical names
         store.ensure_tables(validate_model=True)
@@ -1004,6 +1026,18 @@ def run_commit(
                             report.processed.append(
                                 f"{name} (entities merged: {', '.join(filled)})"
                             )
+                            # fill_blank_entities only writes the SQLite
+                            # truth (no more row-by-row DuckDB mirror
+                            # write); the batch-end refresh below is now
+                            # the only thing that makes the mirror see this
+                            # write, so a merge-only batch must trigger it
+                            # too, not just an insert_document batch.
+                            any_processed = True
+                            # The merged names are baked into every chunk's
+                            # embed_text prefix, so those chunks are now
+                            # stale. Collected here, re-embedded once after
+                            # the batch-end mirror refresh.
+                            merged_doc_ids.append((file_hash or "")[:16])
                         else:
                             report.skipped.append(f"{name} (already committed)")
                         continue
@@ -1078,6 +1112,53 @@ def run_commit(
 
         if any_processed and not dry_run:
             store.rebuild_indexes()
+            # insert_document no longer writes the mirror row (Task 7), so
+            # the mirror is only correct once the batch ends with a
+            # refresh. The refresh is best-effort: DuckDB is single-writer,
+            # so it can lose the lock to a concurrent corpus command. The
+            # SQLite truth above is already committed, so a refresh failure
+            # here is a stale mirror, not a corrupted commit -- same
+            # non-fatal contract as the portal's
+            # _refresh_mirror_after_save.
+            try:
+                store.refresh_mirror()
+            except Exception as e:
+                logger.warning("[Corpus] mirror refresh failed: %s", e)
+                report.warnings.append(
+                    f"DuckDB mirror refresh failed: {e} — run "
+                    "`esdc corpus sync` to converge"
+                )
+                if merged_doc_ids:
+                    # `corpus sync` converges the mirror but never touches
+                    # chunks, so without this the user fixes the mirror and
+                    # is never told the chunks are still on the old names.
+                    report.warnings.append(
+                        f"Chunk re-embed skipped for {len(merged_doc_ids)} "
+                        "merged document(s) because the mirror is stale — run "
+                        "`esdc corpus reembed --stale` after `esdc corpus sync`"
+                    )
+            else:
+                # Only once the mirror carries the merged names: the
+                # re-embed reads document metadata from it, so running
+                # this after a FAILED refresh would rebuild the chunks
+                # from exactly the stale values it is meant to replace.
+                # Its own rebuild_indexes() supersedes the one above.
+                if merged_doc_ids:
+                    try:
+                        reembed_report = run_reembed_documents(
+                            merged_doc_ids, store=store
+                        )
+                        report.warnings.extend(
+                            f"re-embed failed for {name}: {err} — run "
+                            "`esdc corpus reembed --stale`"
+                            for name, err in reembed_report.failed.items()
+                        )
+                    except Exception as e:
+                        logger.warning("[Corpus] re-embed after merge failed: %s", e)
+                        report.warnings.append(
+                            f"Chunk re-embed after entity merge failed: {e} — "
+                            "run `esdc corpus reembed --stale`"
+                        )
     finally:
         store.close()
 
@@ -1121,7 +1202,6 @@ def run_status(paths: list[Path]) -> list[dict[str, str]]:
     if pending:
         try:
             store = CorpusStore()
-            store.ensure_tables()
             try:
                 for idx, file_hash in pending:
                     exists = bool(file_hash) and store.document_exists(file_hash)
@@ -1159,9 +1239,21 @@ _REGENERATE_FIELDS = (
 
 # Reviewed frontmatter preserved by `extract --force` on a reviewed sidecar.
 _PRESERVED_FIELDS = (
-    "doc_type", "doc_topic", "doc_number", "doc_date", "subject",
-    "sender", "recipient", "doc_level", "wk_name", "field_name",
-    "project_name", "pod_name", "extras", "raw_entities", "entity_warnings",
+    "doc_type",
+    "doc_topic",
+    "doc_number",
+    "doc_date",
+    "subject",
+    "sender",
+    "recipient",
+    "doc_level",
+    "wk_name",
+    "field_name",
+    "project_name",
+    "pod_name",
+    "extras",
+    "raw_entities",
+    "entity_warnings",
 )
 
 
@@ -1222,7 +1314,6 @@ def run_meta(
     try:
         try:
             store = CorpusStore()
-            store.ensure_tables()
             resolver = _entity_resolver_or_none(store, report)
             matcher = PodMatcher(store._get_sqlite())
         except Exception as e:
@@ -1251,6 +1342,7 @@ def run_meta(
 
                     if regenerate:
                         p.status("regenerate metadata")
+                        assert regen_caller is not None
                         regen_fields = llm_extract(body, regen_caller)
                         for key in _REGENERATE_FIELDS:
                             meta[key] = regen_fields.get(key)
@@ -1337,7 +1429,7 @@ def run_meta_show(paths: list[Path]) -> list[dict[str, Any]]:
     return rows
 
 
-def run_reembed() -> CorpusReport:
+def run_reembed(embed_backend: str | None = None) -> CorpusReport:
     """Rebuild chunk embeddings for every document with the current embedder.
 
     ``CorpusStore.ensure_tables`` (default ``validate_model=False``)
@@ -1347,9 +1439,12 @@ def run_reembed() -> CorpusReport:
     ``set_meta`` then re-pins the new model/dim, recreating
     document_chunks if the dimension changed, and every document's chunks
     are regenerated from its stored markdown.
+
+    ``embed_backend`` overrides the ``embedding_backend`` config key for
+    this run only; None uses the configured default.
     """
     report = CorpusReport()
-    store = CorpusStore()
+    store = CorpusStore(embedder=get_build_embedder(embed_backend), read_only=False)
     try:
         store.ensure_tables()
 
@@ -1359,21 +1454,29 @@ def run_reembed() -> CorpusReport:
         report.embedding_model = new_model
 
         cfg = Config.get_corpus_config()
-        for summary in store.list_documents():
-            doc_id = summary["doc_id"]
-            name = summary.get("file_name") or doc_id
-            try:
-                doc = store.get_document(doc_id)
-                if doc is None:
-                    report.failed[name] = "document not found"
-                    continue
-                chunks = chunk_markdown(
-                    doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
-                )
-                store.replace_chunks(doc_id, chunks)
-                report.processed.append(name)
-            except Exception as e:
-                report.failed[name] = str(e)
+        documents = store.list_documents()
+        with _progress_with_status("reembed", len(documents), "docs") as p:
+            for summary in documents:
+                doc_id = summary["doc_id"]
+                name = summary.get("file_name") or doc_id
+                p.file(name)
+                try:
+                    p.status("read document")
+                    doc = store.get_document(doc_id)
+                    if doc is None:
+                        report.failed[name] = "document not found"
+                        continue
+                    p.status("chunk markdown")
+                    chunks = chunk_markdown(
+                        doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
+                    )
+                    p.status("embed + replace")
+                    store.replace_chunks(doc, chunks)
+                    report.processed.append(name)
+                except Exception as e:
+                    report.failed[name] = str(e)
+                finally:
+                    p.advance()
 
         store.rebuild_indexes()
     finally:
@@ -1382,10 +1485,99 @@ def run_reembed() -> CorpusReport:
     return report
 
 
+def run_reembed_documents(
+    doc_ids: list[str],
+    store: CorpusStore | None = None,
+    progress: bool = False,
+) -> CorpusReport:
+    """Re-chunk and re-embed only the named documents.
+
+    Used after a metadata edit changes the context prefix baked into
+    embed_text. The embedding model is unchanged, so unlike run_reembed
+    this never calls set_meta and never re-pins corpus_meta.
+
+    Reads each document through CorpusStore.get_document, i.e. from the
+    DuckDB mirror. A caller that has just written entity names to the
+    SQLite truth MUST refresh the mirror before calling this, or the
+    re-embed faithfully reproduces the values it was meant to replace.
+
+    Ends in rebuild_indexes(), which rebuilds FTS and HNSW over every
+    chunk in the corpus — DuckDB's FTS index is not incremental, so
+    skipping it would drop the re-embedded chunks out of BM25 entirely.
+    Call this once per batch; never once per document inside a loop.
+
+    Pass an already-open ``store`` to reuse its connections and embedder;
+    otherwise one is created and closed here. An injected store MUST be
+    writable (``read_only=False``): this is a mutation, and a read-only
+    store is rejected before any per-document work.
+
+    ``progress=True`` renders the same two-line file-count bar as
+    ``commit``/``extract`` (bar + current file/phase); it defaults off
+    because the commit-merge and portal-save callers run inside their own
+    output contexts and must not flash a bar. The CLI ``--stale`` path
+    passes ``progress=True``.
+    """
+    report = CorpusReport()
+    if not doc_ids:
+        # Nothing to do, and rebuild_indexes() below is a whole-corpus
+        # reindex — an empty call must not pay for it.
+        return report
+
+    owned = store is None
+    if store is None:
+        store = CorpusStore(read_only=False)
+    else:
+        # Injected-store contract: re-embedding is a mutation (replace_chunks
+        # + rebuild_indexes), so a caller reusing an open store must supply a
+        # writable one. Fail here, before any per-document read or embed call.
+        store._require_writable()
+    try:
+        if owned:
+            store.ensure_tables()
+        report.embedding_model = store._embedder.model
+        cfg = Config.get_corpus_config()
+        with (
+            _progress_with_status("reembed", len(doc_ids), "docs")
+            if progress
+            else nullcontext()
+        ) as p:
+            for doc_id in doc_ids:
+                name = doc_id
+                if p is not None:
+                    p.file(name)
+                try:
+                    if p is not None:
+                        p.status("read document")
+                    doc = store.get_document(doc_id)
+                    if doc is None:
+                        report.failed[name] = "document not found"
+                        continue
+                    name = doc.get("file_name") or doc_id
+                    if p is not None:
+                        p.status("chunk markdown")
+                    chunks = chunk_markdown(
+                        doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
+                    )
+                    if p is not None:
+                        p.status("embed + replace")
+                    store.replace_chunks(doc, chunks)
+                    report.processed.append(name)
+                except Exception as e:
+                    report.failed[name] = str(e)
+                finally:
+                    if p is not None:
+                        p.advance()
+        store.rebuild_indexes()
+    finally:
+        if owned:
+            store.close()
+    return report
+
+
 def _sidecar_meta_from_doc(doc: dict[str, Any]) -> dict[str, Any]:
     """Invert ``run_commit``'s doc-dict -> DB mapping into sidecar frontmatter.
 
-    ``doc`` is a ``CorpusStore.get_document`` row: JSON-array columns
+    ``doc`` is a ``CorpusStore.get_document_by_id`` row: JSON-array columns
     (``doc_topic``, ``wk_name``/``field_name``/``project_name``,
     ``pod_name``, ``suggested_pod_ids``) and JSON-object columns
     (``raw_entities``, ``metadata``) already come back parsed to
@@ -1431,9 +1623,13 @@ def run_export(paths: list[Path], all_docs: bool = False) -> CorpusReport:
     frontmatter rebuilt from the row (see ``_sidecar_meta_from_doc``) and
     body set to the row's ``markdown`` column.
 
-    SQLite-only: unlike ``commit``/``reembed``, export never opens DuckDB
-    or the embedder, so it works even when Ollama/the embedding model is
-    unavailable.
+    Both target resolution and each row's full content (via
+    ``CorpusStore.get_document_by_id``) read the SQLite truth directly,
+    never the DuckDB mirror: export rewrites sidecar files a user diffs,
+    so a stale or empty mirror (fresh install, or a refresh that lost the
+    DuckDB single-writer lock) must not produce a false "document not
+    found" or write stale content. It never loads the embedder or opens
+    DuckDB, unlike ``commit``/``reembed``.
     """
     report = CorpusReport()
     store = CorpusStore()
@@ -1453,16 +1649,14 @@ def run_export(paths: list[Path], all_docs: bool = False) -> CorpusReport:
                     [str(p)],
                 ).fetchone()
                 if row is None:
-                    report.failed[p.name] = (
-                        f"no committed document with file_path={p}"
-                    )
+                    report.failed[p.name] = f"no committed document with file_path={p}"
                     continue
                 targets.append((row["doc_id"], p))
 
         for doc_id, path in targets:
             name = path.name
             try:
-                doc = store.get_document(doc_id)
+                doc = store.get_document_by_id(doc_id)
                 if doc is None:
                     report.failed[name] = "document not found"
                     continue

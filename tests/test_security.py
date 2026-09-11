@@ -1,3 +1,5 @@
+"""Tests for database security controls."""
+
 import pytest
 
 from esdc.db_security import SQLSanitizer, _load_sql_script

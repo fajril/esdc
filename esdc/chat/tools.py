@@ -1,3 +1,5 @@
+"""LangChain tools backing the chat agent's domain actions."""
+
 # Standard library
 import asyncio
 import hashlib
@@ -5,6 +7,7 @@ import json
 import logging
 import re
 import shutil
+import threading
 from typing import Annotated, Any
 
 # Third-party
@@ -170,19 +173,47 @@ _corpus_embedder = None
 
 
 def _get_corpus_embedder():
-    """Lazily create and reuse one EmbeddingManager for corpus tools.
+    """Lazily create and reuse one InternalEmbedder for corpus tools.
 
-    The embedder is a stateless HTTP client; recreating it per tool call
-    wasted setup time. The CorpusStore/DuckDB connection is deliberately
-    NOT cached (short-lived connections avoid file-lock conflicts with
-    the corpus CLI).
+    The embedder loads an in-process llama.cpp Qwen3 embedding model; recreating it per
+    tool call wasted setup time. The CorpusStore/DuckDB connection is
+    deliberately NOT cached (short-lived connections avoid file-lock
+    conflicts with the corpus CLI).
     """
     global _corpus_embedder
     if _corpus_embedder is None:
-        from esdc.search.embedding_manager import EmbeddingManager
+        from esdc.corpus.embedder import InternalEmbedder
 
-        _corpus_embedder = EmbeddingManager()
+        _corpus_embedder = InternalEmbedder()
     return _corpus_embedder
+
+
+_semantic_resolver_tls = threading.local()
+
+
+def _get_semantic_resolver():
+    """Reuse one SemanticResolver PER THREAD for the semantic_search tool.
+
+    Reusing the resolver instance (not just the embedder) is what lets its
+    DB-signature-keyed semantic_meta pin memo actually pay off: a fresh
+    SemanticResolver() per call meant the memo never survived past a single
+    tool invocation. semantic_search is a sync LangChain tool run on a
+    threadpool worker, and the chat server serves requests concurrently, so
+    a single module-global resolver would let two threads share one
+    DuckDBPyConnection -- a non-thread-safe object -- and race on
+    resolver.close() (thread X nulling self._conn while thread Y is
+    mid-query). Caching per-thread instead keeps the memo win without any
+    cross-thread sharing: each thread gets its own resolver (and its own
+    connection), and resolver.close() in the caller's finally block only
+    ever affects that thread's own connection.
+    """
+    resolver = getattr(_semantic_resolver_tls, "resolver", None)
+    if resolver is None:
+        from esdc.search.semantic_resolver import SemanticResolver
+
+        resolver = SemanticResolver(read_only=True)
+        _semantic_resolver_tls.resolver = resolver
+    return resolver
 
 
 def _get_disk_cache_stats(
@@ -1504,6 +1535,14 @@ def resolve_spatial(
         resolver.close()
 
 
+# Actionable ingestion path appended to corpus readiness failures so the
+# agent can tell the user how to make the corpus servable.
+_CORPUS_INGEST_HINT = (
+    "Run: esdc corpus extract <folder>, review the sidecars, "
+    "then esdc corpus commit <folder>"
+)
+
+
 @tool("Semantic Search")
 def semantic_search(
     query: Annotated[
@@ -1610,8 +1649,6 @@ def semantic_search(
     """
     import json
 
-    from esdc.search.semantic_resolver import SemanticResolver
-
     # Build filters dict from optional parameters
     filters: dict[str, Any] = {}
     if report_year is not None:
@@ -1656,7 +1693,7 @@ def semantic_search(
 
     logger.debug("[CACHE] miss | tool=semantic_search key=%s", cache_key[:16])
 
-    resolver = SemanticResolver()
+    resolver = _get_semantic_resolver()
 
     try:
         remarks_result = resolver.hybrid_search(
@@ -1683,11 +1720,14 @@ def semantic_search(
     # Fan out to the document corpus so issue/topic queries surface official
     # documents too. A corpus failure must never break the remarks result.
     documents_result: dict[str, Any] = {"status": "not_available"}
+    from esdc.corpus.store import CorpusNotReadyError
+
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder())
+        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
         try:
+            store.validate_readiness("search")
             documents_result = store.search(
                 query=query,
                 limit=5,
@@ -1695,6 +1735,12 @@ def semantic_search(
             )
         finally:
             store.close()
+    except CorpusNotReadyError as e:
+        logger.info("[SemanticSearch] corpus not ready: %s", e)
+        documents_result = {
+            "status": "not_available",
+            "message": f"{e} {_CORPUS_INGEST_HINT}",
+        }
     except Exception as e:
         logger.warning("[SemanticSearch] corpus fan-out failed: %s", e)
         documents_result = {"status": "error", "message": str(e)}
@@ -1842,6 +1888,11 @@ _DOC_TOPIC_VALUES = enum_values("doc_topic")
 _DOC_SCHEMA_CONTEXT = render_tool_context()
 
 
+def _doc_filters_from_args(**kwargs: Any) -> dict[str, Any]:
+    """Collect the non-None corpus filter arguments into a filters dict."""
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
 @tool("Document Search")
 def search_documents(
     query: Annotated[
@@ -1851,9 +1902,7 @@ def search_documents(
         "Example: 'persetujuan POD lapangan Duri 2025'.",
     ],
     limit: Annotated[int, "Maximum results (default 5)."] = 5,
-    doc_type: Annotated[
-        str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."
-    ] = None,
+    doc_type: Annotated[str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."] = None,
     doc_topic: Annotated[
         str | None, f"Filter by business topic: {', '.join(_DOC_TOPIC_VALUES)}."
     ] = None,
@@ -1900,25 +1949,17 @@ def search_documents(
     - search_documents("rencana kerja", doc_topic="wpnb") -> WP&B documents
     - search_documents("berita acara serah terima", year=2025) -> 2025 BA docs
     """
-    # Build filters dict from optional parameters
-    filters: dict[str, Any] = {}
-    if doc_type is not None:
-        filters["doc_type"] = doc_type
-    if doc_topic is not None:
-        filters["doc_topic"] = doc_topic
-    if year is not None:
-        filters["year"] = year
-    if wk_name is not None:
-        filters["wk_name"] = wk_name
-    if field_name is not None:
-        filters["field_name"] = field_name
-    if project_name is not None:
-        filters["project_name"] = project_name
+    filters = _doc_filters_from_args(
+        doc_type=doc_type,
+        doc_topic=doc_topic,
+        year=year,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+    )
 
     cache = _get_tool_cache()
-    cache_key = _tool_cache_key(
-        "search_documents", query=query, limit=limit, **filters
-    )
+    cache_key = _tool_cache_key("search_documents", query=query, limit=limit, **filters)
     if cache_key in cache:
         logger.debug("[CACHE] hit | tool=search_documents key=%s", cache_key[:16])
         return str(cache[cache_key])
@@ -1926,10 +1967,13 @@ def search_documents(
     logger.debug("[CACHE] miss | tool=search_documents key=%s", cache_key[:16])
 
     store = None
+    from esdc.corpus.store import CorpusNotReadyError
+
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder())
+        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        store.validate_readiness("search")
         result = store.search(
             query=query,
             limit=limit,
@@ -1938,12 +1982,12 @@ def search_documents(
 
         if result.get("status") == "not_available":
             # Keep the store's diagnostic and append the actionable steps.
-            hint = (
-                "Run: esdc corpus extract <folder>, review the sidecars, "
-                "then esdc corpus commit <folder>"
-            )
             store_msg = result.get("message")
-            result["message"] = f"{store_msg} {hint}" if store_msg else hint
+            result["message"] = (
+                f"{store_msg} {_CORPUS_INGEST_HINT}"
+                if store_msg
+                else _CORPUS_INGEST_HINT
+            )
 
         result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
         if result.get("status") in ("success", "no_results"):
@@ -1953,6 +1997,15 @@ def search_documents(
             )
         return result_str
 
+    except CorpusNotReadyError as e:
+        logger.warning("[DocSearch] corpus not ready | query=%s error=%s", query, e)
+        return json.dumps(
+            {
+                "status": "not_available",
+                "message": f"{e} {_CORPUS_INGEST_HINT}",
+                "query": query,
+            }
+        )
     except Exception as e:
         logger.error("[DocSearch] tool failed | query=%s error=%s", query, e)
         return json.dumps(
@@ -1978,6 +2031,239 @@ search_documents.description = (
     + "\n\nDocument metadata schema:\n"
     + _DOC_SCHEMA_CONTEXT
 )
+
+
+@tool("Document Aggregator")
+def aggregate_documents(
+    query: Annotated[
+        str | None,
+        "Term or phrase to match in document BODY text. Leave empty for a "
+        "pure metadata count/list by doc_type/doc_topic/year/entity.",
+    ] = None,
+    mode: Annotated[
+        str, "'count' (exhaustive total) or 'list' (deduped documents + count)."
+    ] = "count",
+    match: Annotated[
+        str,
+        "'hybrid' (default) = exact count plus semantically-similar "
+        "candidates. 'keyword' = exact only. 'semantic' = ranking only.",
+    ] = "hybrid",
+    group_by: Annotated[
+        str | None,
+        "Facet dimension: year, doc_type, doc_level, doc_topic, wk_name, "
+        "field_name, project_name.",
+    ] = None,
+    semantic_candidates: Annotated[
+        int,
+        "How many semantically-similar documents to return alongside the "
+        "exact count. Does not affect count.",
+    ] = 20,
+    limit: Annotated[
+        int, "Max documents returned in list mode. Counts are always exhaustive."
+    ] = 50,
+    doc_type: Annotated[str | None, f"Filter: {', '.join(_DOC_TYPE_VALUES)}."] = None,
+    doc_topic: Annotated[
+        str | None, f"Filter by business topic: {', '.join(_DOC_TOPIC_VALUES)}."
+    ] = None,
+    doc_level: Annotated[str | None, "Filter by document level."] = None,
+    year: Annotated[int | None, "Filter by document year."] = None,
+    wk_name: Annotated[str | None, "Filter by working area (ILIKE pattern)."] = None,
+    field_name: Annotated[str | None, "Filter by field name (ILIKE pattern)."] = None,
+    project_name: Annotated[
+        str | None, "Filter by project name (ILIKE pattern)."
+    ] = None,
+    pod_name: Annotated[str | None, "Filter by POD name (ILIKE pattern)."] = None,
+    sender: Annotated[
+        str | None,
+        "Filter by sending party ('dari X'), substring match. On an approval "
+        "letter the SENDER is the approving authority, so 'disetujui oleh "
+        "Menteri ESDM' means sender='Menteri ESDM' (also SKK Migas, BPMA).",
+    ] = None,
+    recipient: Annotated[
+        str | None,
+        "Filter by receiving party ('untuk X' / 'kepada X'), substring match. "
+        "On an approval letter this is the KKKS being approved.",
+    ] = None,
+    subject: Annotated[
+        str | None, "Filter by letter subject line, substring match."
+    ] = None,
+    doc_number: Annotated[
+        str | None, "Filter by document/letter number, substring match."
+    ] = None,
+) -> str:
+    """Count or list ALL documents matching a criterion — not the top few.
+
+    Use this tool when:
+    - The user asks HOW MANY documents: "berapa dokumen ...", "how many
+      documents ..."
+    - The user asks WHICH documents, exhaustively: "dokumen apa saja ...",
+      "dokumen mana saja ...", "list all documents that ..."
+    - The user wants a breakdown by year/type/topic/entity (use group_by)
+
+    DO NOT use search_documents for these — it returns only the top few
+    passages, so any count derived from it is wrong.
+
+    match="hybrid" (default) gives you both: `count` is the EXACT number
+    of documents whose body literally contains every query term, and
+    `semantic_candidates` lists documents that are semantically related
+    but did NOT contain the terms, each with a similarity score.
+
+    How to report a hybrid result:
+    - `count` is the answer. It is exact, reproducible, and safe to state
+      as a number.
+    - `semantic_candidates` are SUGGESTIONS, not part of the count. Say
+      "N documents contain the term; M others appear related and may be
+      worth reviewing". Never add the two together into one figure.
+    - `provenance.exact_total` equals `count` and is a real total.
+      `provenance.semantic_extra` is how many candidates were RETURNED —
+      the size of a ranking you requested, not a measurement. Ask for 200
+      and it says 200. Never report it as "200 related documents exist".
+
+    match="keyword" skips the semantic pass entirely when you only want
+    the defensible count. match="semantic" returns just the ranking; there
+    `count` means "candidates returned", NOT a total, and approximate is
+    true -- say so.
+
+    There is no similarity threshold: absolute similarity scores are not
+    comparable between queries (a 0.5 cutoff selects 6 documents for one
+    query and 342 for another on this corpus), so the semantic side is
+    always a ranking, capped by semantic_candidates.
+
+    Offshore/onshore is a SQL attribute, not a document field: use
+    execute_sql with is_offshore for that, not this tool.
+
+    Returns:
+    JSON string with status, mode, match, approximate, count, and either
+    doc_ids (count mode) or documents (list mode), plus facets when
+    group_by is set. Facets over multi-valued columns (doc_topic,
+    wk_name, field_name, project_name) are flagged multi_valued and do
+    NOT sum to count.
+
+    `count` is ALWAYS the complete, exhaustive total over every matching
+    document — it never shrinks because of `limit`. The doc_ids/documents
+    ARRAY, however, is capped at `limit` items. When the array holds
+    fewer items than `count`, the payload adds `returned` (items in the
+    array) and `truncated: true`, plus a `note` string spelling out that
+    the array is a partial page. NEVER report `returned` or the array's
+    length as if it were the answer to "how many" — always report `count`,
+    and when `truncated` is true, say the list you're showing is partial
+    (e.g. "150 documents match; showing the first 50") rather than
+    presenting the partial array as the complete set. Raise `limit` or add
+    filters if the user needs to see more of the array itself.
+
+    Examples:
+    - aggregate_documents("separator", mode="list") -> every doc mentioning it
+    - aggregate_documents("akan onstream 2026", match="semantic", year=2026)
+    - aggregate_documents(mode="count", doc_topic="pod", group_by="year")
+    """
+    filters = _doc_filters_from_args(
+        doc_type=doc_type,
+        doc_topic=doc_topic,
+        doc_level=doc_level,
+        year=year,
+        wk_name=wk_name,
+        field_name=field_name,
+        project_name=project_name,
+        pod_name=pod_name,
+        sender=sender,
+        recipient=recipient,
+        subject=subject,
+        doc_number=doc_number,
+    )
+
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "aggregate_documents",
+        query=query,
+        mode=mode,
+        match=match,
+        group_by=group_by,
+        semantic_candidates=semantic_candidates,
+        limit=limit,
+        **filters,
+    )
+    if cache_key in cache:
+        logger.debug("[CACHE] hit | tool=aggregate_documents key=%s", cache_key[:16])
+        return str(cache[cache_key])
+
+    store = None
+    from esdc.corpus.store import CorpusNotReadyError
+
+    try:
+        from esdc.corpus.store import CorpusStore
+
+        # Operation-specific readiness: metadata-only and keyword-only queries
+        # must not require the embedding column that semantic/hybrid consume.
+        if query is None:
+            readiness_op = "aggregate_metadata"
+        elif match == "semantic":
+            readiness_op = "aggregate_semantic"
+        elif match == "hybrid":
+            readiness_op = "aggregate"
+        else:
+            readiness_op = "aggregate_keyword"
+
+        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        store.validate_readiness(readiness_op)
+        result = store.aggregate(
+            query=query,
+            mode=mode,
+            match=match,
+            group_by=group_by,
+            semantic_candidates=semantic_candidates,
+            limit=limit,
+            filters=filters if filters else None,
+        )
+
+        if result.get("status") == "not_available":
+            store_msg = result.get("message")
+            result["message"] = (
+                f"{store_msg} {_CORPUS_INGEST_HINT}"
+                if store_msg
+                else _CORPUS_INGEST_HINT
+            )
+
+        result_str = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        if result.get("status") in ("success", "no_results"):
+            cache.set(cache_key, result_str)
+        return result_str
+
+    except CorpusNotReadyError as e:
+        logger.warning("[DocAggregate] corpus not ready | query=%s error=%s", query, e)
+        return json.dumps(
+            {
+                "status": "not_available",
+                "message": f"{e} {_CORPUS_INGEST_HINT}",
+                "query": query,
+            }
+        )
+    except Exception as e:
+        logger.error("[DocAggregate] tool failed | query=%s error=%s", query, e)
+        return json.dumps({"status": "error", "message": str(e), "query": query})
+    finally:
+        if store is not None:
+            store.close()
+
+
+# Same reasoning as search_documents.description above: the LLM-facing
+# text is `.description`, captured at decoration time.
+aggregate_documents.description = (
+    aggregate_documents.description
+    + "\n\nDocument metadata schema:\n"
+    + _DOC_SCHEMA_CONTEXT
+)
+
+# `similarity_threshold` was removed rather than deprecated (see the
+# docstring above): a caller that still passes it must get a loud error,
+# not a silent no-op. Pydantic v2's default is to ignore unrecognized
+# fields, so without this the removed kwarg would be dropped quietly and
+# the caller would never learn it did nothing. Forbidding extras on this
+# tool's schema turns that into a ValidationError.
+args_schema = aggregate_documents.args_schema
+if not isinstance(args_schema, type):
+    raise TypeError("aggregate_documents has no args_schema model")
+args_schema.model_config["extra"] = "forbid"
+args_schema.model_rebuild(force=True)
 
 
 @tool("Document Reader")
@@ -2007,10 +2293,13 @@ def read_document(
     - read_document("a1b2c3", max_chars=5000) -> first 5000 chars only
     """
     store = None
+    from esdc.corpus.store import CorpusNotReadyError
+
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder())
+        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        store.validate_readiness("document")
         doc = store.get_document(doc_id)
         if doc is None:
             logger.debug("[DocRead] not_found | doc_id=%s", doc_id)
@@ -2034,6 +2323,15 @@ def read_document(
             default=str,
         )
 
+    except CorpusNotReadyError as e:
+        logger.warning("[DocRead] corpus not ready | doc_id=%s error=%s", doc_id, e)
+        return json.dumps(
+            {
+                "status": "not_available",
+                "message": f"{e} {_CORPUS_INGEST_HINT}",
+                "doc_id": doc_id,
+            }
+        )
     except Exception as e:
         logger.error("[DocRead] tool failed | doc_id=%s error=%s", doc_id, e)
         return json.dumps(
@@ -2231,9 +2529,7 @@ def _query_graph(
         if entity and relationship:
             results = mgr.traverse(entity, relationship)
             if results:
-                base_output = _format_traverse_results(
-                    entity, relationship, results
-                )
+                base_output = _format_traverse_results(entity, relationship, results)
         if base_output is None and entity:
             results = mgr.find_all(entity)
             if results:
@@ -2242,9 +2538,165 @@ def _query_graph(
             try:
                 matrix_text = mgr.format_reachability(highlight=entity)
             except Exception as e:
-                logger.warning(
-                    "[KSMI-KG] reachability_format_error | %s", e
-                )
+                logger.warning("[KSMI-KG] reachability_format_error | %s", e)
     except Exception as e:
         logger.warning("[KSMI-KG] graph_fallback | error=%s", e)
     return base_output, matrix_text
+
+
+def _get_instance_graph():
+    """Seam for tests; returns the singleton instance graph manager."""
+    from esdc.chat.domain_knowledge.instance_graph import get_instance_graph
+
+    return get_instance_graph()
+
+
+def _get_knowledge_context(
+    entity_type: str, entity_id: str
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Fetch dossier (duckdb) and claims (sqlite) for one resolved entity."""
+    from esdc.knowledge.dossier import get_dossier
+    from esdc.knowledge.store import KnowledgeStore
+    from esdc.pod_registry.store import get_sqlite_connection
+
+    dossier = None
+    conn = None
+    try:
+        conn = get_db_connection()
+        dossier = get_dossier(conn, entity_type, entity_id)
+    except Exception as e:  # table may not exist before first learn
+        logger.debug("[ExploreEntity] no dossier | %s", e)
+    finally:
+        if conn:
+            conn.close()
+
+    claims: list[dict[str, Any]] = []
+    sconn = get_sqlite_connection()
+    try:
+        store = KnowledgeStore(sconn)
+        store.ensure_tables()
+        claims = [
+            {
+                "doc_id": c.doc_id,
+                "type": c.claim_type,
+                "predicate": c.predicate,
+                "value": c.value,
+                "evidence": c.evidence,
+            }
+            for c in store.claims_for(entity_type, entity_id)
+        ]
+    finally:
+        sconn.close()
+    return dossier, claims
+
+
+@tool("Entity Knowledge Explorer")
+def explore_entity(
+    entity: Annotated[
+        str,
+        "Entity name to explore: POD name, field name, working area, "
+        "project name, or document subject. Free text, bilingual. "
+        "Example: 'POD I Duri Revisi 1'.",
+    ],
+    entity_type: Annotated[
+        str | None,
+        "Optional filter: 'pod', 'project', 'field', 'working_area', "
+        "'document'. Leave empty to search all types.",
+    ] = None,
+) -> str:
+    """Explore everything known about one entity via the knowledge graph.
+
+    Built by `esdc corpus learn`. For a POD this returns its full dossier
+    (approval, economics, commitments, meeting history, current issues —
+    with [doc_id] citations), all related entities (documents about it,
+    projects under it, revision chain, field/WK), and extracted claims.
+
+    Use this tool when:
+    - The user asks a broad question about one POD/field/project/WK:
+      "bagaimana keekonomian POD X", "status proyek Y", "ceritakan POD Z"
+    - You need the connections: which MoMs discussed a POD, what a POD
+      revised, which projects implement it
+    - A search_documents hit mentions a POD and you want its full context
+
+    Follow-ups: use read_document(doc_id) on any cited doc_id; use
+    execute_sql for current numbers.
+    DO NOT use for aggregate portfolio queries (use execute_sql).
+
+    Returns JSON with entity, dossier (markdown), related (edges grouped
+    by relation), claims, status.
+    """
+    from esdc.chat.domain_knowledge.instance_graph import _TYPE_TO_LABEL
+
+    if entity_type:
+        # Normalize LLM-provided variants ('POD', 'working area', ...) to the
+        # canonical keys graph.find() understands, same convention as the
+        # entity_key normalization in get_recommended_table (tools.py:737).
+        entity_type = entity_type.strip().lower().replace(" ", "_")
+        if entity_type not in _TYPE_TO_LABEL:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": (
+                        f"Unknown entity_type '{entity_type}'. Valid: pod, "
+                        "project, field, working_area, document."
+                    ),
+                }
+            )
+
+    cache = _get_tool_cache()
+    cache_key = _tool_cache_key(
+        "explore_entity", entity=entity, entity_type=entity_type
+    )
+    if cache_key in cache:
+        return str(cache[cache_key])
+
+    try:
+        graph = _get_instance_graph()
+        if not graph.is_available():
+            return json.dumps(
+                {
+                    "status": "not_available",
+                    "message": (
+                        "Knowledge graph not built yet. Run: esdc corpus learn"
+                    ),
+                }
+            )
+        hits = graph.find(entity, top_k=5, entity_type=entity_type)
+        if entity_type:
+            # Harmless safety net: find() already restricts to entity_type
+            # when given, so this should be a no-op in practice.
+            hits = [h for h in hits if h["entity_type"] == entity_type]
+        if not hits:
+            return json.dumps(
+                {
+                    "status": "not_found",
+                    "message": f"No entity matching '{entity}'.",
+                }
+            )
+        top = hits[0]
+        related = graph.neighbors(top["entity_type"], top["entity_id"])
+        dossier, claims = _get_knowledge_context(top["entity_type"], top["entity_id"])
+        result = json.dumps(
+            {
+                "status": "success",
+                "entity": top,
+                "other_matches": hits[1:],
+                "dossier": dossier["dossier_text"] if dossier else None,
+                "related": related,
+                "claims": claims,
+                "message": (
+                    None
+                    if dossier
+                    else "No dossier for this entity yet (dossiers exist for "
+                    "PODs after `esdc corpus learn`)."
+                ),
+            },
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        )
+        cache.set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.error("[ExploreEntity] failed | entity=%s error=%s", entity, e)
+        return json.dumps({"status": "error", "message": str(e)})

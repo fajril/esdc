@@ -1,3 +1,5 @@
+"""Phoenix LLM evals for RAG output quality."""
+
 from __future__ import annotations
 
 import logging
@@ -69,8 +71,7 @@ def _create_judge_llm() -> PhoenixLLM:
     provider_config = Config.get_provider_config()
     if not provider_config:
         raise RuntimeError(
-            "Cannot create judge LLM: no provider configured. "
-            "Run 'esdc configs' first."
+            "Cannot create judge LLM: no provider configured. Run 'esdc configs' first."
         )
 
     provider_type: str = provider_config["provider_type"]
@@ -93,14 +94,26 @@ def _create_judge_llm() -> PhoenixLLM:
             base_url=base_url,
             api_key=api_key,
         )
-    elif provider_type == "openai_compatible":
-        base_url = provider_config["base_url"]
+    elif provider_type in ("openai_compatible", "opencode"):
+        if provider_type == "opencode":
+            from esdc.providers.opencode import OpencodeProvider
+
+            base_url = provider_config.get("base_url") or OpencodeProvider.BASE_URL
+            headers = OpencodeProvider._default_headers()
+        else:
+            base_url = provider_config["base_url"]
+            headers = None
         api_key = provider_config.get("api_key") or "not-needed"
+        client_kwargs: dict[str, Any] = {}
+        if headers is not None:
+            client_kwargs["sync_client_kwargs"] = {"default_headers": headers}
+            client_kwargs["async_client_kwargs"] = {"default_headers": headers}
         _judge_llm = LLM(
             provider="openai",
             model=model_name,
             base_url=base_url,
             api_key=api_key,
+            **client_kwargs,
         )
     else:
         logger.warning(

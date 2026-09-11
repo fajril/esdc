@@ -1,5 +1,7 @@
 """Token events must not render directly; a 10Hz flush renders instead."""
 
+from typing import cast
+
 
 class _FakeMarkdown:
     def __init__(self):
@@ -13,10 +15,11 @@ class _FakeMarkdown:
 
 def _make_app_with_stream():
     from esdc.chat.app import ESDCChatApp
+    from esdc.chat.widgets import ChatMessage
 
     app = ESDCChatApp()
     fake = _FakeMarkdown()
-    app._streaming_message = fake
+    app._streaming_message = cast(ChatMessage, fake)
     app._accumulated_content = ""
     return app, fake
 

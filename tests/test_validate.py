@@ -355,9 +355,7 @@ class TestValidateCommand:
             patch("esdc.validate.rules.Config.get_db_file", return_value=db_path),
             patch("esdc.esdc.input", return_value=""),
         ):
-            result = runner.invoke(
-                app, ["validate", "--force-fix", "--group", "RE9"]
-            )
+            result = runner.invoke(app, ["validate", "--force-fix", "--group", "RE9"])
             assert result.exit_code == 0
             assert "Warning: --force-fix" in result.stdout
 

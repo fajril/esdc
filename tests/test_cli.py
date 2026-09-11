@@ -1,3 +1,5 @@
+"""Tests for the esdc CLI."""
+
 import os
 from unittest.mock import MagicMock, patch
 
@@ -193,7 +195,9 @@ class TestStatusCorpus:
         from esdc.corpus.store import CorpusStore
 
         db_file = isolated_config / ".esdc" / "esdc.duckdb"
-        store = CorpusStore(db_path=db_file, embedder=_FakeEmbedder())
+        store = CorpusStore(
+            db_path=db_file, embedder=_FakeEmbedder(), read_only=False
+        )
         store.ensure_tables()
         store.insert_document(
             {
@@ -243,6 +247,11 @@ class TestStatusCorpus:
             },
             [Chunk(0, "MoM", "isi mom satu")],
         )
+        # `status corpus` reads the DuckDB `documents` mirror directly (it
+        # never instantiates CorpusStore); insert_document no longer writes
+        # that mirror row, so populate it the same way a real commit batch
+        # does before checking on disk.
+        store.refresh_mirror()
         store.close()
 
         result = runner.invoke(app, ["status", "corpus"])

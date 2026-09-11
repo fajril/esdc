@@ -1,3 +1,4 @@
+"""Tests for the chat application."""
 # tests/test_chat_app.py
 
 import pytest

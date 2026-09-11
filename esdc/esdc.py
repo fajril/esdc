@@ -54,6 +54,7 @@ from rich.progress import (
     BarColumn,
     DownloadColumn,
     Progress,
+    SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
@@ -73,11 +74,12 @@ from esdc.dbmanager import (  # noqa: E402
 )
 from esdc.loaders import (  # noqa: E402
     LoadSchemaError,
+    PodProjectionError,
     SpreadsheetLoadError,
     copy_pod_schema_template,
     generate_schema_template_from_excel,
     load_excel_to_duckdb,
-    load_pod_workbook_to_duckdb,
+    load_pod_workbook_to_sqlite,
     print_load_result,
 )
 from esdc.pod_registry.importer import (  # noqa: E402
@@ -177,10 +179,7 @@ def schema_command(
             file_okay=True,
             dir_okay=False,
             writable=True,
-            help=(
-                "Schema YAML output path. Defaults to "
-                "./<excel-stem>.schema.yaml."
-            ),
+            help=("Schema YAML output path. Defaults to ./<excel-stem>.schema.yaml."),
         ),
     ] = None,
     overwrite: Annotated[
@@ -293,7 +292,15 @@ def load(
             typer.echo("POD registry seeded and published to DuckDB.")
             return
         if schema_pod:
-            results = load_pod_workbook_to_duckdb(from_excel)
+            try:
+                results = load_pod_workbook_to_sqlite(from_excel)
+            except PodProjectionError as e:
+                typer.echo(f"Error: {e}")
+                typer.echo(
+                    "The POD value cases were committed to SQLite. "
+                    "Run 'esdc corpus sync' to retry the DuckDB projection."
+                )
+                raise typer.Exit(1) from None
             for result in results:
                 print_load_result(result)
             return
@@ -608,6 +615,13 @@ def reload(
             help="Only regenerate embeddings, skip data reload.",
         ),
     ] = False,
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
 ) -> None:
     """Reload data from binary files and save it to a file.
 
@@ -621,13 +635,15 @@ def reload(
         only rebuild FTS and B-tree indexes without reloading data.
         no_embeddings: If True, skip semantic embeddings generation.
         embeddings_only: If True, only regenerate embeddings without reloading data.
+        embed_backend: Override embedding_backend for this run
+        (local, ollama or openai).
 
     Returns:
         None
     """
     # Handle embeddings-only mode
     if embeddings_only:
-        _generate_embeddings()
+        _generate_embeddings(embed_backend=embed_backend)
         return
 
     # Handle reindex-only mode
@@ -655,13 +671,17 @@ def reload(
 
     # Generate embeddings after reload (unless disabled)
     if not no_embeddings:
-        _generate_embeddings()
+        _generate_embeddings(embed_backend=embed_backend)
 
 
-def _generate_embeddings() -> None:
-    """Generate semantic embeddings for project_remarks with progress bar."""
+def _generate_embeddings(embed_backend: str | None = None) -> None:
+    """Generate semantic embeddings for project_remarks with progress bar.
+
+    ``embed_backend`` overrides the ``embedding_backend`` config key for
+    this run only. Query-time similarity always runs locally regardless.
+    """
     from esdc.configs import Config
-    from esdc.search.embedding_manager import EmbeddingManager
+    from esdc.embedders import get_build_embedder
     from esdc.search.semantic_resolver import SemanticResolver
 
     logger = logging.getLogger(__name__)
@@ -679,11 +699,13 @@ def _generate_embeddings() -> None:
         )
         return
 
-    # Check if Ollama is available
-    embedding_manager = EmbeddingManager()
-    logger.info(f"Initialized embedding manager with model: {embedding_manager.model}")
+    embedder = get_build_embedder(embed_backend)
+    logger.info(f"Initialized embedder with model: {embedder.model}")
 
-    if not embedding_manager.health_check():
+    # Only daemon-backed backends can be health-checked; the in-process one
+    # has nothing to check and the OpenAI-compatible one fails loudly on use.
+    health_check = getattr(embedder, "health_check", None)
+    if health_check is not None and not health_check():
         logger.warning("Ollama not available, cannot generate embeddings")
         console.print(
             "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"  # noqa: E501
@@ -691,10 +713,10 @@ def _generate_embeddings() -> None:
         console.print(
             "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"  # noqa: E501
         )
+        console.print("[dim]Or set embedding_backend: local to embed in-process.[/dim]")
         return
 
-    logger.info(f"Ollama is available, model {embedding_manager.model} is loaded")
-    resolver = SemanticResolver(db_path=db_path)
+    resolver = SemanticResolver(db_path=db_path, embedder=embedder, read_only=False)
 
     try:
         # Drop existing embeddings table if it exists to ensure fresh start
@@ -737,7 +759,7 @@ def _generate_embeddings() -> None:
             console=console,
         ) as progress:
             task = progress.add_task(
-                f"Processing with {embedding_manager.model}", total=total_docs
+                f"Processing with {embedder.model}", total=total_docs
             )
 
             # Progress callback function
@@ -1385,8 +1407,8 @@ def _humanize_bytes(n: int) -> str:
     if n < 1024**2:
         return f"{n / 1024:.1f} KB"
     if n < 1024**3:
-        return f"{n / (1024 ** 2):.1f} MB"
-    return f"{n / (1024 ** 3):.1f} GB"
+        return f"{n / (1024**2):.1f} MB"
+    return f"{n / (1024**3):.1f} GB"
 
 
 def _status_fetch_report() -> bool:
@@ -1649,8 +1671,7 @@ def _status_corpus_report() -> None:
                 conn.execute("SELECT COUNT(*) FROM documents").fetchone() or (0,)
             )[0]
             chunk_count = (
-                conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()
-                or (0,)
+                conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone() or (0,)
             )[0]
             doc_type_rows = conn.execute(
                 "SELECT COALESCE(doc_type, 'unknown'), COUNT(*) FROM documents "
@@ -1913,12 +1934,8 @@ def serve(
     """
     from esdc.server.app import run_server
 
-    rich.print(
-        f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]"
-    )
-    rich.print(
-        f"[dim]API documentation available at http://{host}:{port}/docs[/dim]"
-    )
+    rich.print(f"[bold green]Starting ESDC server on http://{host}:{port}[/bold green]")
+    rich.print(f"[dim]API documentation available at http://{host}:{port}/docs[/dim]")
     run_server(host=host, port=port, log_level=log_level)
 
 
@@ -1931,9 +1948,7 @@ def portal(
     """Launch the POD registry portal (Excel-like master data editor)."""
     from esdc.portal.app import run_portal
 
-    rich.print(
-        f"[bold green]Starting POD portal on http://{host}:{port}/[/bold green]"
-    )
+    rich.print(f"[bold green]Starting POD portal on http://{host}:{port}/[/bold green]")
     run_portal(host=host, port=port, log_level=log_level)
 
 
@@ -2287,9 +2302,7 @@ def _validate_corpus_overrides(
         )
         raise typer.Exit(1)
     if topic is not None and topic not in DOC_TOPICS:
-        typer.echo(
-            f"Error: --topic must be one of {', '.join(DOC_TOPICS)}.", err=True
-        )
+        typer.echo(f"Error: --topic must be one of {', '.join(DOC_TOPICS)}.", err=True)
         raise typer.Exit(1)
 
     rule = doc_level_rule(doc_type, [topic] if topic is not None else None)
@@ -2304,8 +2317,8 @@ def _validate_corpus_overrides(
         )
         raise typer.Exit(1)
 
-    if level is not None and implied_level is not None and level != implied_level:
-        kind, key, _ = rule
+    if level is not None and rule is not None and level != rule[2]:
+        kind, key, implied_level = rule
         typer.echo(
             f"Error: --level {level} conflicts with the {kind} '{key}' rule "
             f"(implies {implied_level}).",
@@ -2314,11 +2327,32 @@ def _validate_corpus_overrides(
         raise typer.Exit(1)
 
 
-def _open_corpus_store():
-    """Open a CorpusStore with tables ensured, or exit 1 with a clear error."""
+def _open_corpus_store(*, read_only: bool = True, operation: str = "document"):
+    """Open a CorpusStore for a CLI read/write, or exit 1 with a clear error.
+
+    Reader mode (the default) validates the committed corpus schema without
+    creating or migrating anything; writer mode is an explicit opt-in that
+    repairs/initializes the schema. Query commands must NOT pass
+    ``read_only=False`` merely to inherit automatic migrations.
+
+    Reader validation is operation-specific (see ``validate_readiness``) so a
+    command only requires the tables/columns it actually reads -- e.g.
+    ``corpus list`` validates ``list`` (documents + the chunk-count join)
+    rather than the narrow ``document`` lookup shape.
+    """
     from esdc.corpus.store import CorpusStore
 
-    store = CorpusStore()
+    if read_only:
+        store = CorpusStore(read_only=True)
+        try:
+            store.validate_readiness(operation)
+        except ValueError as e:
+            store.close()
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1) from None
+        return store
+
+    store = CorpusStore(read_only=False)
     try:
         store.ensure_tables()
     except ValueError as e:
@@ -2389,6 +2423,66 @@ def extract(
         typer.echo("Review the .corpus.md files, then run: esdc corpus commit <folder>")
 
 
+@corpus_app.command(name="rename")
+def corpus_rename(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(
+            exists=True, help="Source file(s) (.pdf, .docx, .md) or folder(s)."
+        ),
+    ],
+    doc_type: Annotated[
+        str | None, typer.Option("--doc-type", help="Override doc_type.")
+    ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Apply the renames (default: dry-run preview)."),
+    ] = False,
+) -> None:
+    """Rename sources to `DOC_TYPE - YYYY.MM.DD - title.<ext>` (dry-run by default).
+
+    Resolves doc_type/doc_date/title from an existing .corpus.md sidecar, the
+    committed corpus DB, or LLM/OCR inference (filename passed as a hint).
+    Renames the matching .corpus.md sidecar in lockstep. Preview only unless
+    --yes is given.
+    """
+    from esdc.corpus.rename import run_rename
+
+    _validate_corpus_overrides(None, doc_type)
+
+    report, plans = run_rename(paths, doc_type=doc_type, apply=yes)
+
+    table = [
+        (
+            p.src.name,
+            "->",
+            p.new_path.name if p.new_path is not None else "",
+            p.doc_type or "",
+            p.doc_date or "",
+            p.title or "",
+            p.source,
+            p.note,
+        )
+        for p in plans
+    ]
+    headers = [
+        "file",
+        "",
+        "new name",
+        "doc_type",
+        "doc_date",
+        "title",
+        "source",
+        "note",
+    ]
+    rich.print(tabulate(table, headers=headers, tablefmt="psql"))
+
+    if not yes:
+        typer.echo("Dry run — re-run with --yes to apply.")
+        return
+    _print_corpus_report(report)
+
+
 @corpus_app.command()
 def commit(
     paths: Annotated[
@@ -2408,6 +2502,13 @@ def commit(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Validate and report without writing.")
     ] = False,
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
 ) -> None:
     """Ingest reviewed .corpus.md sidecars into the searchable corpus (step 2 of 2)."""
     from esdc.corpus.pipeline import run_commit
@@ -2418,11 +2519,142 @@ def commit(
             skip_review=skip_review,
             force=force,
             dry_run=dry_run,
+            embed_backend=embed_backend,
         )
-    except ValueError as e:  # e.g. embedding-model mismatch -> `corpus reembed`
+    except (ValueError, RuntimeError) as e:
+        # e.g. embedding-model mismatch -> `corpus reembed`
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
     _print_corpus_report(report)
+
+
+@corpus_app.command()
+def learn(
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Reprocess all docs and rebuild dossiers."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report what would be processed; no writes."),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Process at most N documents (smoke runs)."),
+    ] = None,
+    init_guideline: Annotated[
+        bool,
+        typer.Option(
+            "--init-guideline",
+            help="Draft ~/.esdc/guideline.yaml from the corpus via LLM, "
+            "then exit. Review it before running learn.",
+        ),
+    ] = False,
+) -> None:
+    """Reconstruct the knowledge graph from the committed corpus (eager)."""
+    from esdc.knowledge import learn as learn_mod
+
+    if init_guideline:
+        from esdc.knowledge.bootstrap import init_guideline as init_fn
+
+        try:
+            path = init_fn(force=force)
+        except (ValueError, FileExistsError, FileNotFoundError) as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1) from None
+        rich.print(f"[green]Guideline draft written:[/green] {path}")
+        rich.print("Review and edit it, then run: [cyan]esdc corpus learn[/cyan]")
+        return
+
+    try:
+        report = learn_mod.run_learn(force=force, dry_run=dry_run, limit=limit)
+    except (ValueError, FileNotFoundError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
+
+    if report.dry_run:
+        rich.print(
+            f"[yellow]Dry run:[/yellow] would process "
+            f"{report.docs_processed}/{report.docs_total} documents "
+            f"({report.docs_skipped} up to date)."
+        )
+        return
+
+    rich.print("[bold]Corpus learn complete[/bold]")
+    rich.print(
+        f"  Documents: {report.docs_processed} processed, "
+        f"{report.docs_skipped} skipped, {report.docs_failed} failed "
+        f"(of {report.docs_total})"
+    )
+    rich.print(
+        f"  Edges: {report.edges_written} written "
+        f"({report.pod_document_added} pod_document links promoted)"
+    )
+    rich.print(
+        f"  Claims: {report.claims_written} "
+        f"| unresolved mentions: {report.unresolved_mentions}"
+    )
+    rich.print(
+        f"  Dossiers: {report.dossiers_built} built, "
+        f"{report.dossiers_skipped} up to date"
+    )
+    if report.proposals_pending:
+        rich.print(
+            f"[yellow]  {report.proposals_pending} schema proposal(s) pending "
+            f"— review with: esdc corpus proposals[/yellow]"
+        )
+    if report.docs_failed:
+        rich.print(
+            f"[red]  {report.docs_failed} document(s) failed — "
+            f"rerun 'esdc corpus learn' to retry.[/red]"
+        )
+
+
+@corpus_app.command()
+def proposals() -> None:
+    """List pending schema proposals discovered by `esdc corpus learn`."""
+    from esdc.knowledge.store import KnowledgeStore
+    from esdc.pod_registry.store import get_sqlite_connection
+
+    conn = get_sqlite_connection()
+    try:
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        props = store.pending_proposals()
+    finally:
+        conn.close()
+    if not props:
+        rich.print("No pending proposals.")
+        return
+    for p in props:
+        rich.print(
+            f"[cyan]{p['proposal_type']}[/cyan] {p['name']} "
+            f"— seen in {p['evidence_count']} doc(s): "
+            f"{', '.join(p['sample_doc_ids'][:5])}"
+        )
+    rich.print(
+        "\nTo adopt a proposal, add it to esdc/knowledge/guideline.yaml "
+        "and rerun: esdc corpus learn"
+    )
+
+
+@corpus_app.command(name="sync")
+def corpus_sync() -> None:
+    """Rebuild DuckDB's derived tables from the SQLite source of truth."""
+    from esdc.corpus.store import CorpusStore
+
+    store = CorpusStore(read_only=False)
+    try:
+        store.ensure_tables()
+        report = store.refresh_mirror()
+        typer.echo(f"documents mirrored: {report.documents}")
+        if report.orphan_chunks:
+            typer.echo(f"orphan chunks removed: {report.orphan_chunks}")
+        for table, n in sorted(report.registry.items()):
+            typer.echo(f"  {table}: {n}")
+        typer.echo(f"views: {', '.join(report.views)}")
+    finally:
+        store.close()
 
 
 @corpus_app.command(name="status")
@@ -2461,9 +2693,7 @@ def corpus_meta(
     ],
     level: Annotated[
         str | None,
-        typer.Option(
-            "--level", help="Set doc_level: wk, field, project, regulation."
-        ),
+        typer.Option("--level", help="Set doc_level: wk, field, project, regulation."),
     ] = None,
     doc_type: Annotated[
         str | None, typer.Option("--doc-type", help="Set doc_type.")
@@ -2525,8 +2755,14 @@ def corpus_meta(
             for r in rows
         ]
         headers = [
-            "file", "doc_type", "topic", "doc_date", "doc_level", "entity",
-            "reviewed", "note",
+            "file",
+            "doc_type",
+            "topic",
+            "doc_date",
+            "doc_level",
+            "entity",
+            "reviewed",
+            "note",
         ]
         rich.print(tabulate(table, headers=headers, tablefmt="psql"))
         return
@@ -2579,7 +2815,7 @@ def _entity_display(d: dict) -> str:
 @corpus_app.command(name="list")
 def list_documents() -> None:
     """List all documents committed to the corpus."""
-    store = _open_corpus_store()
+    store = _open_corpus_store(operation="list")
     try:
         docs = store.list_documents()
     finally:
@@ -2598,8 +2834,13 @@ def list_documents() -> None:
         for d in docs
     ]
     headers = [
-        "doc_id", "file_name", "doc_type", "doc_date",
-        "doc_level", "entity", "n_chunks",
+        "doc_id",
+        "file_name",
+        "doc_type",
+        "doc_date",
+        "doc_level",
+        "entity",
+        "n_chunks",
     ]
     rich.print(tabulate(rows, headers=headers, tablefmt="psql"))
 
@@ -2656,7 +2897,10 @@ def remove(
         )
         raise typer.Exit(1)
 
-    store = _open_corpus_store()
+    # Only a deletion that will actually run needs write access: a dry-run
+    # preview and a filter match still awaiting --yes are both readers.
+    read_only = dry_run or (bool(filters) and not yes)
+    store = _open_corpus_store(read_only=read_only)
     removed = 0
     try:
         targets: list[tuple[str, str]] = []
@@ -2739,7 +2983,7 @@ def clear(
     ] = False,
 ) -> None:
     """Delete all documents and chunks from the corpus."""
-    store = _open_corpus_store()
+    store = _open_corpus_store(read_only=False)
     try:
         counts = store.counts()
         if not yes:
@@ -2780,9 +3024,7 @@ def export(
     from esdc.corpus.pipeline import run_export
 
     if not all_docs and not paths:
-        typer.echo(
-            "Nothing to export: pass sidecar path(s) or --all.", err=True
-        )
+        typer.echo("Nothing to export: pass sidecar path(s) or --all.", err=True)
         raise typer.Exit(1)
 
     report = run_export(paths or [], all_docs=all_docs)
@@ -2790,11 +3032,61 @@ def export(
 
 
 @corpus_app.command()
-def reembed() -> None:
-    """Rebuild chunk embeddings for the whole corpus after an embedding-model change."""
-    from esdc.corpus.pipeline import run_reembed
+def reembed(
+    embed_backend: Annotated[
+        str | None,
+        typer.Option(
+            "--embed-backend",
+            help="Override embedding_backend for this run: local, ollama or openai.",
+        ),
+    ] = None,
+    stale: Annotated[
+        bool,
+        typer.Option(
+            "--stale",
+            help="Only re-embed documents whose chunk context prefix is "
+            "out of date (e.g. after portal entity edits).",
+        ),
+    ] = False,
+) -> None:
+    """Rebuild chunk embeddings: whole corpus, or --stale after entity edits."""
+    from esdc.corpus.pipeline import run_reembed, run_reembed_documents
+    from esdc.corpus.store import CorpusStore
 
-    report = run_reembed()
+    if stale:
+        if embed_backend is not None:
+            # --stale re-embeds a subset with the model the rest of the
+            # corpus already uses; honouring a different backend here would
+            # leave one corpus holding vectors from two models, which no
+            # similarity comparison can span.
+            typer.echo(
+                "Error: --stale re-embeds with the corpus's current model; "
+                "--embed-backend applies only to a full re-embed. Drop one.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        store = CorpusStore(read_only=False)
+        try:
+            store.ensure_tables()
+            doc_ids = store.stale_embed_docs()
+            if not doc_ids:
+                typer.echo("No stale documents — every chunk prefix is current.")
+                return
+            report = run_reembed_documents(doc_ids, store=store, progress=True)
+        finally:
+            store.close()
+        _print_corpus_report(report)
+        typer.echo(
+            f"Re-embedded {len(report.processed)} stale document(s) "
+            f"with model '{report.embedding_model}'."
+        )
+        return
+
+    try:
+        report = run_reembed(embed_backend=embed_backend)
+    except (ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from None
     _print_corpus_report(report)
     typer.echo(
         f"Re-embedded {len(report.processed)} document(s) "
@@ -2802,6 +3094,267 @@ def reembed() -> None:
     )
 
 
+@corpus_app.command(name="eval")
+def corpus_eval(
+    queries: Annotated[
+        Path | None,
+        typer.Argument(
+            help="JSONL query set (default: ~/.esdc/corpus_queries.jsonl)",
+        ),
+    ] = None,
+    init: Annotated[
+        bool,
+        typer.Option(
+            "--init",
+            help="Generate query set (auto-sized from --margin unless "
+            "--samples given).",
+        ),
+    ] = False,
+    samples: Annotated[
+        int | None,
+        typer.Option(
+            "--samples", "-n", help="Explicit sample size for --init (default: auto)."
+        ),
+    ] = None,
+    refresh: Annotated[
+        bool,
+        typer.Option("--refresh", help="Incrementally sync query set to corpus."),
+    ] = False,
+    margin: Annotated[
+        float, typer.Option("--margin", help="CI half-width for auto sample size.")
+    ] = 0.05,
+    seed: Annotated[int, typer.Option("--seed", help="Sampling seed.")] = 42,
+    ks: str = typer.Option("1,5,10", "--k", help="Comma-separated k values"),
+    classes: str = typer.Option(
+        "lookup,cross_reference,thematic",
+        "--classes",
+        help="Query classes to generate with --init "
+        "(negatives are hand-authored, never generated)",
+    ),
+    rerank: bool | None = typer.Option(
+        None,
+        "--rerank/--no-rerank",
+        help="Force rerank on/off (default: corpus.rerank config)",
+    ),
+) -> None:
+    """Score retrieval quality (Pass@k, latency) against a query set.
+
+    With no query set present, run `--init` first to generate one.
+    """
+    import esdc.corpus.evaluate as evaluate_mod
+    from esdc.corpus.query_gen import (
+        _make_meta,
+        generate,
+        generate_cross_reference,
+        generate_thematic,
+        read_query_file,
+        reconcile,
+        write_query_file,
+    )
+    from esdc.corpus.sampling import corpus_fingerprint
+    from esdc.corpus.store import CorpusStore
+
+    path = queries or Config.get_corpus_queries_path()
+    k_values = tuple(int(k.strip()) for k in ks.split(",") if k.strip())
+
+    def _llm_call():
+        cfg = Config.get_provider_config()
+        if not cfg:
+            typer.echo(
+                "Error: no LLM provider configured; query synthesis needs one.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        import esdc.providers as providers
+
+        llm = providers.create_llm_from_config(cfg)
+        return lambda prompt: str(llm.invoke(prompt).content)
+
+    def _progress_run(fn):
+        with Progress(
+            SpinnerColumn(),
+            *Progress.get_default_columns(),
+            TimeElapsedColumn(),
+        ) as progress:
+            task = progress.add_task("[cyan]Synthesizing queries...", total=None)
+
+            def cb(done: int, total: int) -> None:
+                progress.update(task, total=total, completed=done)
+
+            return fn(cb)
+
+    if init or refresh:
+        if refresh and not path.exists():
+            typer.echo(
+                f"No query set at {path}. Run: esdc corpus eval --init", err=True
+            )
+            raise typer.Exit(1)
+        store = CorpusStore()
+        try:
+            call = _llm_call()
+            wanted = {c.strip() for c in classes.split(",") if c.strip()}
+            if init:
+                rows, meta = _progress_run(
+                    lambda cb: generate(
+                        store,
+                        call,
+                        margin=margin,
+                        n=samples,
+                        seed=seed,
+                        ks=k_values,
+                        progress_cb=cb,
+                    )
+                )
+                if "cross_reference" in wanted:
+                    rows += generate_cross_reference(store, call, seed=seed)
+                if "thematic" in wanted:
+                    rows += generate_thematic(store, call, seed=seed)
+                # meta.n must count every class, not just the lookup pass.
+                meta = _make_meta(store, rows, margin, k_values)
+                write_query_file(path, rows, meta)
+                rich.print(f"Generated {len(rows)} queries → {path}")
+            else:  # --refresh
+                all_old, old_meta = read_query_file(path)
+                # reconcile keys on expected[0], which is meaningless for a
+                # multi-document row and destructive for a negative one
+                # (expected == []). Only lookup rows go through it.
+                old_rows = [
+                    r
+                    for r in all_old
+                    if str(r.get("class") or "lookup_legacy").startswith("lookup")
+                ]
+                carried = [r for r in all_old if r not in old_rows]
+                rows, meta = _progress_run(
+                    lambda cb: reconcile(
+                        store,
+                        call,
+                        old_rows,
+                        old_meta,
+                        seed=seed,
+                        progress_cb=cb,
+                    )
+                )
+                rows = rows + carried
+                meta = _make_meta(store, rows, meta.margin, meta.ks)
+                write_query_file(path, rows, meta)
+                # Delta is reported over the lookup rows only — the carried
+                # classes are untouched by definition.
+                new_lookup = [r for r in rows if r not in carried]
+                old_ids = {r["expected"][0] for r in old_rows if r.get("expected")}
+                new_ids = {r["expected"][0] for r in new_lookup if r.get("expected")}
+                added = len(new_ids - old_ids)
+                removed = len(old_ids - new_ids)
+                old_by_id = {
+                    r["expected"][0]: r.get("file_hash")
+                    for r in old_rows
+                    if r.get("expected")
+                }
+                new_by_id = {
+                    r["expected"][0]: r.get("file_hash")
+                    for r in new_lookup
+                    if r.get("expected")
+                }
+                changed = sum(
+                    1
+                    for d in (old_by_id.keys() & new_by_id.keys())
+                    if old_by_id[d] and new_by_id[d] and old_by_id[d] != new_by_id[d]
+                )
+                rich.print(
+                    f"Refreshed: +{added} new, -{removed} removed, "
+                    f"~{changed} changed → {len(rows)} queries"
+                )
+        finally:
+            store.close()
+    else:
+        if not path.exists():
+            typer.echo(
+                f"No query set at {path}. Run: esdc corpus eval --init", err=True
+            )
+            raise typer.Exit(1)
+        _rows, meta = read_query_file(path)
+        if meta is None:
+            rich.print(
+                "[yellow]Legacy query file (no fingerprint); scoring as-is.[/yellow]"
+            )
+        else:
+            store = CorpusStore()
+            try:
+                fp_rows = store.fingerprint_rows()
+                live = corpus_fingerprint(fp_rows)
+                live_ids = {r[0] for r in fp_rows}
+            finally:
+                store.close()
+            if live != meta.fingerprint:
+                live_hash = dict(fp_rows)
+                existing_ids = {r["expected"][0] for r in _rows if r.get("expected")}
+                added = len(live_ids - existing_ids)
+                removed = len(existing_ids - live_ids)
+                changed = sum(
+                    1
+                    for r in _rows
+                    if r.get("expected")
+                    and r["expected"][0] in live_hash
+                    and r.get("file_hash")
+                    and r["file_hash"] != live_hash[r["expected"][0]]
+                )
+                typer.echo(
+                    f"Corpus changed (+{added} new, -{removed} removed, "
+                    f"~{changed} changed). Rerun with --refresh or --init.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+    report = evaluate_mod.run_eval(path, ks=k_values, rerank=rerank)
+    rich.print(f"Queries scored: {report.n_queries}")
+    for cls in sorted(report.by_class):
+        cr = report.by_class[cls]
+        rich.print(f"\n[bold]{cls}[/bold] (n={cr.n_queries})")
+        for k in k_values:
+            if k in cr.pass_at:
+                rich.print(f"  Pass@{k}:   {cr.pass_at[k] * 100:.1f}%")
+            if k in cr.recall_at:
+                rich.print(f"  Recall@{k}: {cr.recall_at[k] * 100:.1f}%")
+        if cr.abstention is not None:
+            rich.print(f"  Abstention: {cr.abstention * 100:.1f}%")
+        elif cls == "negative":
+            rich.print("  Abstention: not scored (needs --rerank)")
+    if report.by_class:
+        # Blended across classes of unequal difficulty — kept for
+        # continuity, dimmed so nobody quotes it across set versions.
+        blended = report.pass_at.get(k_values[0], 0.0) * 100
+        rich.print(
+            f"\n[dim]All classes blended (not comparable across query-set "
+            f"versions): Pass@{k_values[0]} {blended:.1f}%[/dim]"
+        )
+    else:
+        for k in k_values:
+            rich.print(f"  Pass@{k}: {report.pass_at.get(k, 0.0) * 100:.1f}%")
+    rich.print(f"  Mean latency: {report.mean_latency_ms:.0f} ms")
+    for f in report.failures:
+        rich.print(f"[yellow]  skipped: {f}[/yellow]")
+    if not report.n_queries:
+        raise typer.Exit(code=1)
+
+
+@corpus_app.command(name="warmup")
+def corpus_warmup(
+    rerank: bool | None = typer.Option(
+        None,
+        "--rerank/--no-rerank",
+        help="Also warm the reranker (default: corpus.rerank config)",
+    ),
+) -> None:
+    """Pre-download corpus models (embedder + optional reranker) for offline use."""
+    from esdc.corpus.warmup import run_warmup
+
+    results = run_warmup(rerank=rerank)
+    failed = False
+    for r in results:
+        mark = "[green]OK[/green]" if r.ok else "[red]FAIL[/red]"
+        rich.print(f"{mark} {r.component}: {r.model} — {r.detail}")
+        failed = failed or not r.ok
+    if failed:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

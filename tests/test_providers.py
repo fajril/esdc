@@ -1,3 +1,5 @@
+"""Tests for the LLM provider layer."""
+
 import time
 from unittest.mock import MagicMock, patch
 
@@ -231,11 +233,11 @@ class TestCreateLlmFromConfigFallback:
                         }
                     ],
                 }
-        )
+            )
 
         assert llm is fallback_model
-        assert llm._esdc_provider_name == "deepseek"
-        assert llm._esdc_model_name == "deepseek-v4-flash"
+        assert getattr(llm, "_esdc_provider_name") == "deepseek"  # noqa: B009
+        assert getattr(llm, "_esdc_model_name") == "deepseek-v4-flash"  # noqa: B009
 
     @patch("esdc.providers.anthropic.ChatAnthropic")
     def test_anthropic_no_config_leak(self, mock_cls):
@@ -374,9 +376,7 @@ class TestTemperaturePassthrough:
                 return _FakeLLM()
 
         with patch("esdc.providers.get_provider", return_value=_FakeProvider):
-            _create_single_llm_from_config(
-                {"provider_type": "fake", "model": "m"}
-            )
+            _create_single_llm_from_config({"provider_type": "fake", "model": "m"})
         assert "temperature" not in captured_kwargs
 
 
@@ -530,6 +530,170 @@ class TestOAuthRefreshPersistence:
 
         assert llm is not None
         assert config.oauth["access_token"] == "new"
+
+
+class TestBoundedLlmKwargs:
+    """Provider-type keyed output-cap and timeout kwargs mapping."""
+
+    @pytest.mark.parametrize(
+        ("provider_type", "token_key", "timeout_key"),
+        [
+            ("openai_compatible", "max_completion_tokens", "timeout"),
+            ("openai", "max_completion_tokens", "timeout"),
+            ("azure_openai", "max_completion_tokens", "timeout"),
+            ("deepseek", "max_completion_tokens", "timeout"),
+            ("anthropic", "max_tokens_to_sample", "timeout"),
+            ("groq", "max_tokens", "timeout"),
+            ("google", "max_tokens", "request_timeout"),
+        ],
+    )
+    def test_bounded_llm_kwargs(self, provider_type, token_key, timeout_key):
+        from esdc.providers import _bounded_llm_kwargs
+
+        kwargs = _bounded_llm_kwargs(provider_type, 8192, 300)
+        assert kwargs[token_key] == 8192
+        assert kwargs[timeout_key] == 300.0
+
+    def test_ollama_bounded_llm_kwargs(self):
+        from esdc.providers import _bounded_llm_kwargs
+
+        kwargs = _bounded_llm_kwargs("ollama", 8192, 300)
+        assert kwargs == {
+            "num_predict": 8192,
+            "sync_client_kwargs": {"timeout": 300.0},
+            "async_client_kwargs": {"timeout": 300.0},
+        }
+
+    def test_ollama_cloud_bounded_llm_kwargs(self):
+        from esdc.providers import _bounded_llm_kwargs
+
+        kwargs = _bounded_llm_kwargs("ollama_cloud", 2048, 60)
+        assert kwargs == {
+            "num_predict": 2048,
+            "sync_client_kwargs": {"timeout": 60.0},
+            "async_client_kwargs": {"timeout": 60.0},
+        }
+
+    def test_opencode_bounded_llm_kwargs(self):
+        from esdc.providers import _bounded_llm_kwargs
+
+        kwargs = _bounded_llm_kwargs("opencode", 4096, 60)
+        assert kwargs == {"max_completion_tokens": 4096, "timeout": 60.0}
+
+    def test_partial_bounds_disable_each_bound_independently(self):
+        from esdc.providers import _bounded_llm_kwargs
+
+        assert _bounded_llm_kwargs("openai", 8192, 0) == {"max_completion_tokens": 8192}
+        assert _bounded_llm_kwargs("openai", 0, 300) == {"timeout": 300.0}
+
+    def test_zero_bounds_produce_no_kwargs(self):
+        from esdc.providers import _bounded_llm_kwargs
+
+        assert _bounded_llm_kwargs("openai_compatible", 0, 0) == {}
+
+    def test_unknown_provider_type_raises(self):
+        from esdc.providers import _bounded_llm_kwargs
+
+        with pytest.raises(ValueError, match="Unknown provider type"):
+            _bounded_llm_kwargs("mystery_provider", 8192, 300)
+
+    def test_bounded_kwargs_match_installed_constructor_signatures(self):
+        """Dependency drift must fail loudly, not silently drop a bound."""
+        import inspect
+
+        from langchain_anthropic import ChatAnthropic
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain_groq import ChatGroq
+        from langchain_ollama import ChatOllama
+        from langchain_openai import AzureChatOpenAI, ChatOpenAI
+
+        assert "max_completion_tokens" in inspect.signature(ChatOpenAI).parameters
+        assert "timeout" in inspect.signature(ChatOpenAI).parameters
+        assert "max_completion_tokens" in inspect.signature(AzureChatOpenAI).parameters
+        assert "timeout" in inspect.signature(AzureChatOpenAI).parameters
+        assert "max_tokens_to_sample" in inspect.signature(ChatAnthropic).parameters
+        assert "timeout" in inspect.signature(ChatAnthropic).parameters
+        assert "max_tokens" in inspect.signature(ChatGroq).parameters
+        assert "timeout" in inspect.signature(ChatGroq).parameters
+        assert "num_predict" in inspect.signature(ChatOllama).parameters
+        assert "sync_client_kwargs" in inspect.signature(ChatOllama).parameters
+        assert "async_client_kwargs" in inspect.signature(ChatOllama).parameters
+        assert "max_tokens" in inspect.signature(ChatGoogleGenerativeAI).parameters
+        assert "request_timeout" in inspect.signature(ChatGoogleGenerativeAI).parameters
+
+
+class TestCreateLlmFromConfigBounds:
+    """Bounds must reach every primary and fallback provider client."""
+
+    def test_bounds_propagate_to_primary_and_fallback(self):
+        from esdc.providers import create_llm_from_config
+
+        captured: list[dict[str, object]] = []
+
+        class _RecordingProvider:
+            @classmethod
+            def create_llm(
+                cls,
+                model=None,
+                base_url=None,
+                api_key=None,
+                **kwargs,
+            ):
+                captured.append(dict(kwargs, model=model))
+                return _StaticChatModel(content="ok")
+
+        with patch("esdc.providers.get_provider", return_value=_RecordingProvider):
+            create_llm_from_config(
+                {
+                    "provider_type": "openai",
+                    "model": "gpt-4o-mini",
+                    "api_key": "sk-primary",
+                    "fallback_configs": [
+                        {
+                            "provider_type": "openai",
+                            "model": "gpt-4o",
+                            "api_key": "sk-fallback",
+                        }
+                    ],
+                },
+                max_output_tokens=8192,
+                timeout_seconds=300.0,
+            )
+
+        assert len(captured) == 2
+        for kwargs in captured:
+            assert kwargs["max_completion_tokens"] == 8192
+            assert kwargs["timeout"] == 300.0
+
+    def test_no_bounds_leaves_factory_unbounded(self):
+        from esdc.providers import create_llm_from_config
+
+        captured: list[dict[str, object]] = []
+
+        class _RecordingProvider:
+            @classmethod
+            def create_llm(
+                cls,
+                model=None,
+                base_url=None,
+                api_key=None,
+                **kwargs,
+            ):
+                captured.append(dict(kwargs, model=model))
+                return _StaticChatModel(content="ok")
+
+        with patch("esdc.providers.get_provider", return_value=_RecordingProvider):
+            create_llm_from_config(
+                {
+                    "provider_type": "openai",
+                    "model": "gpt-4o-mini",
+                    "api_key": "sk-test",
+                }
+            )
+
+        assert len(captured) == 1
+        assert "max_completion_tokens" not in captured[0]
+        assert "timeout" not in captured[0]
 
 
 class TestProviderFallbackChatModelMismatch:

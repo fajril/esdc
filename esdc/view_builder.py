@@ -1,3 +1,5 @@
+"""SQL view construction for dataset selection."""
+
 import re
 from dataclasses import dataclass, field
 from enum import Enum

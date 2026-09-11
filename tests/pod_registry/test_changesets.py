@@ -1,3 +1,5 @@
+"""Tests for POD registry changesets."""
+
 import esdc.configs as configs
 from esdc.corpus.store import _SQLITE_DOC_DDL
 from esdc.pod_registry.changesets import apply_changeset
@@ -16,8 +18,15 @@ def _seed_documents(doc_ids):
             "INSERT INTO documents (doc_id, file_name, file_path, file_hash,"
             " markdown, extraction_method, embedding_model)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (doc_id, f"{doc_id}.pdf", f"/x/{doc_id}.pdf", doc_id * 4,
-             "# isi", "native", "fake-embed"),
+            (
+                doc_id,
+                f"{doc_id}.pdf",
+                f"/x/{doc_id}.pdf",
+                doc_id * 4,
+                "# isi",
+                "native",
+                "fake-embed",
+            ),
         )
     conn.commit()
     conn.close()
@@ -233,9 +242,7 @@ def test_pod_document_rejects_updates_and_duplicates(monkeypatch, tmp_path):
         "pod_document", {"updates": [{"pod_id": 900, "doc_id": "abc123"}]}
     )
     assert not result.ok
-    apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
+    apply_changeset("pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]})
     result = apply_changeset(
         "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
     )
@@ -245,12 +252,221 @@ def test_pod_document_rejects_updates_and_duplicates(monkeypatch, tmp_path):
 
 def test_delete_m_pod_blocked_by_pod_document(monkeypatch, tmp_path):
     _insert_pod_900(monkeypatch, tmp_path)
-    apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
+    apply_changeset("pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]})
     result = apply_changeset("m_pod", {"deletes": [{"id": 900}]})
     assert not result.ok
     assert "pod_document" in result.errors[0].message
+
+
+def _seed_pod_pair(monkeypatch, tmp_path):
+    _seed_refs(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "m_pod",
+        {
+            "inserts": [
+                {
+                    "id": 900,
+                    "pod_name": "POD Succ",
+                    "approval_date": "2026-07-15",
+                    "institution_code": 4,
+                    "pod_type_code": 1,
+                    "rev_num": 0,
+                },
+                {
+                    "id": 901,
+                    "pod_name": "POD Pred",
+                    "approval_date": "2025-07-15",
+                    "institution_code": 4,
+                    "pod_type_code": 1,
+                    "rev_num": 0,
+                },
+            ]
+        },
+    )
+    return result.generated[0]["pod_id"], result.generated[1]["pod_id"]
+
+
+def test_pod_revision_insert_full_temporal_fields(monkeypatch, tmp_path):
+    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_revision",
+        {
+            "inserts": [
+                {
+                    "successor_id": succ,
+                    "predecessor_id": pred,
+                    "revision_effect": "full_replacement",
+                    "effective_date": "2026-08-01",
+                    "amended_scope": "all clauses",
+                    "previous_remains_valid": False,
+                }
+            ]
+        },
+    )
+    assert result.ok
+    conn = get_sqlite_connection()
+    try:
+        row = conn.execute(
+            "SELECT revision_effect, effective_date, amended_scope,"
+            " previous_remains_valid FROM pod_revision"
+        ).fetchone()
+        assert tuple(row) == ("full_replacement", "2026-08-01", "all clauses", 0)
+    finally:
+        conn.close()
+
+
+def test_pod_revision_insert_partial_temporal_fields(monkeypatch, tmp_path):
+    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_revision",
+        {
+            "inserts": [
+                {
+                    "successor_id": succ,
+                    "predecessor_id": pred,
+                    "revision_effect": "partial_amendment",
+                    "effective_date": "2026-09-01",
+                    "amended_scope": "clause 4",
+                    "previous_remains_valid": True,
+                }
+            ]
+        },
+    )
+    assert result.ok
+    conn = get_sqlite_connection()
+    try:
+        row = conn.execute(
+            "SELECT revision_effect, effective_date, amended_scope,"
+            " previous_remains_valid FROM pod_revision"
+        ).fetchone()
+        assert tuple(row) == ("partial_amendment", "2026-09-01", "clause 4", 1)
+    finally:
+        conn.close()
+
+
+def test_pod_revision_insert_legacy_defaults_to_unknown(monkeypatch, tmp_path):
+    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_revision",
+        {"inserts": [{"successor_id": succ, "predecessor_id": pred}]},
+    )
+    assert result.ok
+    conn = get_sqlite_connection()
+    try:
+        row = conn.execute(
+            "SELECT revision_effect, effective_date, amended_scope,"
+            " previous_remains_valid FROM pod_revision"
+        ).fetchone()
+        assert tuple(row) == ("unknown", None, None, None)
+    finally:
+        conn.close()
+
+
+def test_pod_revision_insert_rejects_inconsistent_effect(monkeypatch, tmp_path):
+    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_revision",
+        {
+            "inserts": [
+                {
+                    "successor_id": succ,
+                    "predecessor_id": pred,
+                    "revision_effect": "full_replacement",
+                    "previous_remains_valid": True,
+                }
+            ]
+        },
+    )
+    assert not result.ok
+    assert "previous_remains_valid" in result.errors[0].message
+
+
+def test_pod_revision_insert_rejects_unknown_effect(monkeypatch, tmp_path):
+    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
+    result = apply_changeset(
+        "pod_revision",
+        {
+            "inserts": [
+                {
+                    "successor_id": succ,
+                    "predecessor_id": pred,
+                    "revision_effect": "supersedes_entirely",
+                }
+            ]
+        },
+    )
+    assert not result.ok
+    assert "revision_effect" in result.errors[0].message
+
+
+def test_pod_revision_change_is_delete_plus_insert(monkeypatch, tmp_path):
+    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
+    apply_changeset(
+        "pod_revision",
+        {
+            "inserts": [
+                {
+                    "successor_id": succ,
+                    "predecessor_id": pred,
+                    "revision_effect": "partial_amendment",
+                    "previous_remains_valid": True,
+                }
+            ]
+        },
+    )
+    result = apply_changeset(
+        "pod_revision",
+        {
+            "deletes": [{"successor_id": succ, "predecessor_id": pred}],
+            "inserts": [
+                {
+                    "successor_id": succ,
+                    "predecessor_id": pred,
+                    "revision_effect": "full_replacement",
+                    "effective_date": "2026-08-01",
+                    "amended_scope": "all clauses",
+                    "previous_remains_valid": False,
+                }
+            ],
+        },
+    )
+    assert result.ok
+    conn = get_sqlite_connection()
+    try:
+        row = conn.execute(
+            "SELECT revision_effect, effective_date, amended_scope,"
+            " previous_remains_valid FROM pod_revision"
+        ).fetchone()
+        assert tuple(row) == ("full_replacement", "2026-08-01", "all clauses", 0)
+    finally:
+        conn.close()
+
+
+def test_pod_revision_insert_rejects_invalid_previous_remains_valid(
+    monkeypatch, tmp_path
+):
+    """An invalid non-null previous_remains_valid must fail validation.
+
+    Previously _bool_or_none coerced it to None, so revision_effect='unknown'
+    passed validation and storage silently wrote NULL.
+    """
+    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
+    for invalid in ("garbage", 2):
+        result = apply_changeset(
+            "pod_revision",
+            {
+                "inserts": [
+                    {
+                        "successor_id": succ,
+                        "predecessor_id": pred,
+                        "revision_effect": "unknown",
+                        "previous_remains_valid": invalid,
+                    }
+                ]
+            },
+        )
+        assert not result.ok
+        assert "previous_remains_valid" in result.errors[0].message
 
 
 def test_pod_revision_rejects_self_link(monkeypatch, tmp_path):

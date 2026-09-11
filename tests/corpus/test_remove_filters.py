@@ -1,5 +1,6 @@
 """Tests for CorpusStore.find_doc_ids and `esdc corpus remove` filters."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -36,18 +37,21 @@ def _isolated_registry(tmp_path, monkeypatch):
     """Keep _warn_pod_links' registry lookup off the user's real ~/.esdc."""
     import esdc.configs as configs
 
-    monkeypatch.setattr(
-        configs.Config, "get_db_dir", classmethod(lambda cls: tmp_path)
-    )
+    monkeypatch.setattr(configs.Config, "get_db_dir", classmethod(lambda cls: tmp_path))
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> CorpusStore:
-    s = CorpusStore(db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder())
+def store(tmp_path: Path) -> Iterator[CorpusStore]:
+    s = CorpusStore(
+        db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder(), read_only=False
+    )
     s.ensure_tables()
     s.insert_document(_doc("aaaa", "letter_a.pdf", "letter", "2019-01-01"), [])
     s.insert_document(_doc("bbbb", "letter_b.pdf", "letter", "2020-01-01"), [])
     s.insert_document(_doc("cccc", "regulation.pdf", "permen", "2019-06-01"), [])
+    # find_doc_ids/get_document are serving reads off the DuckDB mirror
+    # (Task 8); populate it so `corpus remove` can find/check these docs.
+    s.refresh_mirror()
     yield s
     s.close()
 
@@ -70,7 +74,7 @@ def test_find_doc_ids_empty_filters_returns_all(store):
 def _invoke_remove(monkeypatch, store, args):
     import esdc.esdc as cli
 
-    monkeypatch.setattr(cli, "_open_corpus_store", lambda: store)
+    monkeypatch.setattr(cli, "_open_corpus_store", lambda **kw: store)
     return CliRunner().invoke(cli.corpus_app, ["remove", *args])
 
 
@@ -88,18 +92,14 @@ def test_remove_filter_requires_yes(monkeypatch, store):
 
 
 def test_remove_filter_dry_run_lists_without_deleting(monkeypatch, store):
-    result = _invoke_remove(
-        monkeypatch, store, ["--doc-type", "letter", "--dry-run"]
-    )
+    result = _invoke_remove(monkeypatch, store, ["--doc-type", "letter", "--dry-run"])
     assert result.exit_code == 0
     assert "letter_a.pdf" in result.output
     assert store.counts()["documents"] == 3
 
 
 def test_remove_filter_with_yes_deletes(monkeypatch, store):
-    result = _invoke_remove(
-        monkeypatch, store, ["--doc-type", "letter", "--yes"]
-    )
+    result = _invoke_remove(monkeypatch, store, ["--doc-type", "letter", "--yes"])
     assert result.exit_code == 0
     assert store.counts()["documents"] == 1
     assert store.get_document("cccc") is not None

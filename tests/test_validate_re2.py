@@ -1698,7 +1698,9 @@ class TestRe2Registry:
         assert re1_count == 32
         assert re0_count == 66
         assert re9_count == 1
-        assert len(all_rules) == re0_count + re1_count + re2_count + re5_count + re9_count
+        assert (
+            len(all_rules) == re0_count + re1_count + re2_count + re5_count + re9_count
+        )
 
     def test_re2_rules_have_correct_group(self):
         import esdc.validate.rule_re2  # noqa: F401

@@ -1,3 +1,5 @@
+"""Tests for identifier generation."""
+
 from esdc.idgen import (
     _luhn_mod16,
     gen_field_id,

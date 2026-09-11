@@ -17,7 +17,14 @@ from rich import print as rich_print
 from rich.panel import Panel
 
 # Local
-from esdc.configs import ENUM_CHOICES, KEY_DESCRIPTIONS, SENSITIVE_KEYS, Config
+from esdc.configs import (
+    ENUM_CHOICES,
+    KEY_DESCRIPTIONS,
+    MODEL_SECTIONS,
+    SENSITIVE_KEYS,
+    SETTINGS_SECTIONS,
+    Config,
+)
 from esdc.providers import PROVIDER_CLASSES, PROVIDER_NAMES, get_provider
 from esdc.providers.base import ProviderConfig
 
@@ -61,6 +68,7 @@ _PROVIDER_FIELDS: dict[str, list[str]] = {
     "groq": ["api_key", "model"],
     "deepseek": ["api_key", "model", "reasoning_effort"],
     "ollama_cloud": ["base_url", "api_key", "model"],
+    "opencode": ["api_key", "base_url", "model"],
 }
 
 
@@ -245,14 +253,22 @@ def _check_default_provider_warning() -> None:
 
 
 def _prompt_for_config_value(key: str, current: Any) -> Any:
-    """Prompt the user for a single config value using the best widget."""
+    """Prompt the user for a single config value using the best widget.
+
+    The key's description (if any) is passed via questionary's
+    ``instruction=`` so it renders dim beside the prompt instead of being
+    concatenated into the message label.
+    """
+    label = f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}]"
+    instruction = KEY_DESCRIPTIONS.get(key, "")
+
     # 1. Boolean key?
     if key in Config.BOOLEAN_KEYS or isinstance(current, bool):
         selected = questionary.select(
-            f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
-            f"[{_VALUE_COLOR}]{KEY_DESCRIPTIONS.get(key, '')}[/{_VALUE_COLOR}]",
+            label,
             choices=["True", "False"],
             default="True" if current else "False",
+            instruction=instruction,
             style=_WIZARD_STYLE,
         ).ask()
         if selected is None:
@@ -262,19 +278,45 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
     # 2. Corpus model key? Offer main / local Ollama models / custom.
     if key in _CORPUS_MODEL_KEYS:
         choices = _corpus_model_choices(key)
-        default_choice = next(
-            (c for c in choices if c.value == str(current)), None
-        )
+        default_choice = next((c for c in choices if c.value == str(current)), None)
         selected = questionary.select(
-            f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
-            f"[{_VALUE_COLOR}]{KEY_DESCRIPTIONS.get(key, '')}[/{_VALUE_COLOR}]",
+            label,
             choices=choices,
             default=default_choice,
+            instruction=instruction,
             style=_WIZARD_STYLE,
         ).ask()
         if selected == "__custom__":
             return questionary.text(
-                f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — model name:",
+                f"{label} — model name:",
+                default=str(current),
+                style=_WIZARD_STYLE,
+            ).ask()
+        return selected
+
+    # 2b. Reranker model key? Curated GGUF choice (llama.cpp registry) +
+    # custom escape. Keep in sync with esdc/corpus/reranker.py.
+    if key == "corpus.rerank_model":
+        choices = [
+            questionary.Choice(
+                "Qwen3-Reranker-0.6B Q8_0 (default, llama.cpp GGUF)",
+                value="ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
+            ),
+            questionary.Choice("Custom…", value="__custom__"),
+        ]
+        default_choice = next(
+            (c for c in choices if c.value == str(current)), choices[0]
+        )
+        selected = questionary.select(
+            label,
+            choices=choices,
+            default=default_choice,
+            instruction=instruction,
+            style=_WIZARD_STYLE,
+        ).ask()
+        if selected == "__custom__":
+            return questionary.text(
+                f"{label} — model name:",
                 default=str(current),
                 style=_WIZARD_STYLE,
             ).ask()
@@ -285,10 +327,10 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
         choices = ENUM_CHOICES[key]
         default = str(current) if str(current) in choices else choices[0]
         selected = questionary.select(
-            f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
-            f"[{_VALUE_COLOR}]{KEY_DESCRIPTIONS.get(key, '')}[/{_VALUE_COLOR}]",
+            label,
             choices=choices,
             default=default,
+            instruction=instruction,
             style=_WIZARD_STYLE,
         ).ask()
         return selected
@@ -297,9 +339,9 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
     if key in Config.INT_KEYS:
         default_str = str(current)
         new_str = questionary.text(
-            f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
-            f"[{_VALUE_COLOR}]{KEY_DESCRIPTIONS.get(key, '')}[/{_VALUE_COLOR}]",
+            label,
             default=default_str,
+            instruction=instruction,
             style=_WIZARD_STYLE,
         ).ask()
         return int(new_str) if new_str is not None else None
@@ -307,8 +349,8 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
     # 5. Sensitive key?
     if any(s in key for s in SENSITIVE_KEYS):
         new = questionary.password(
-            f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
-            f"[{_VALUE_COLOR}]{KEY_DESCRIPTIONS.get(key, '')}[/{_VALUE_COLOR}]",
+            label,
+            instruction=instruction,
             style=_WIZARD_STYLE,
         ).ask()
         return new
@@ -317,10 +359,10 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
     if key == "database_path":
         default = str(current)
         new = questionary.path(
-            f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
-            f"[{_VALUE_COLOR}]{KEY_DESCRIPTIONS.get(key, '')}[/{_VALUE_COLOR}]",
+            label,
             default=default,
             only_directories=False,
+            instruction=instruction,
             style=_WIZARD_STYLE,
         ).ask()
         return new
@@ -328,9 +370,9 @@ def _prompt_for_config_value(key: str, current: Any) -> Any:
     # 7. Generic text key
     default = str(current)
     new = questionary.text(
-        f"[{_KEY_COLOR}]{key}[/{_KEY_COLOR}] — "
-        f"[{_VALUE_COLOR}]{KEY_DESCRIPTIONS.get(key, '')}[/{_VALUE_COLOR}]",
+        label,
         default=default,
+        instruction=instruction,
         style=_WIZARD_STYLE,
     ).ask()
     return new
@@ -818,42 +860,35 @@ def _set_provider_order_flow() -> None:
 # ---------------------------------------------------------------------------
 # General config flows
 # ---------------------------------------------------------------------------
-def _edit_general_config_flow() -> None:
-    """Edit general (non-provider) configuration."""
+def _get_merged_flat() -> dict[str, Any]:
+    """Flat config view with every editable key present.
+
+    Config.get_all_config_flat() merges Config.get_defaults() over the saved
+    config, so all default sections (corpus, phoenix, logging, …) are always
+    populated even when config.yaml has no such section yet.
+    """
+    return Config.get_all_config_flat()
+
+
+def _edit_section(title: str, keys: list[str]) -> None:
+    """Generic editor for a fixed, ordered list of config keys.
+
+    Renders one row per key (``key = masked_value``); selecting a row
+    reuses ``_prompt_for_config_value`` + ``Config.set_config_value``.
+    Loops until the user picks Back.
+    """
     while True:
-        flat = Config.get_all_config_flat()
+        flat = _get_merged_flat()
+        choices = [
+            questionary.Choice(f"{key} = {_mask_value(key, flat.get(key))}", value=key)
+            for key in keys
+        ]
 
-        # Corpus settings live behind defaults; surface them even when the
-        # config file has no corpus section yet.
-        for k, v in Config.CORPUS_DEFAULTS.items():
-            flat.setdefault(f"corpus.{k}", v)
-
-        if not flat:
-            rich_print(f"[{_WARNING_COLOR}]No configuration found.[/{_WARNING_COLOR}]")
-            break
-
-        # Group keys by top-level section
-        groups: dict[str, list[str]] = {}
-        for key in sorted(flat.keys()):
-            section = key.split(".")[0]
-            groups.setdefault(section, []).append(key)
-
-        choices = []
-        for section in sorted(groups.keys()):
-            choices.append(questionary.Separator(f"── {section} ──"))
-            for key in groups[section]:
-                value = _mask_value(key, flat[key])
-                desc = KEY_DESCRIPTIONS.get(key, "")
-                label = f"{key} = {value}"
-                if desc:
-                    label += f" — {desc}"
-                choices.append(questionary.Choice(label, value=key))
-
-        selected = _select_with_back("Select setting to edit:", choices=choices)
+        selected = _select_with_back(title, choices=choices)
         if selected == "__back__":
             break
 
-        current = flat[selected]
+        current = flat.get(selected)
         new_value = _prompt_for_config_value(selected, current)
         if new_value is None:
             rich_print(f"[{_SEP_COLOR}]Edit cancelled, no changes made.[/{_SEP_COLOR}]")
@@ -865,7 +900,6 @@ def _edit_general_config_flow() -> None:
             f"[{_SUCCESS_COLOR}]Saved '[{_KEY_COLOR}]{selected}[/{_KEY_COLOR}]' = "
             f"[{_VALUE_COLOR}]{masked}[/{_VALUE_COLOR}][/{_SUCCESS_COLOR}]"
         )
-        continue
 
 
 def _show_config_flow() -> None:
@@ -886,12 +920,165 @@ def _show_config_flow() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Submenus
+# ---------------------------------------------------------------------------
+def _providers_menu() -> None:
+    """Chat providers submenu — groups the existing provider CRUD flows."""
+    while True:
+        selected = _select_with_back(
+            "Chat providers",
+            choices=[
+                questionary.Choice("Add provider", value="Add provider"),
+                questionary.Choice("Edit provider", value="Edit provider"),
+                questionary.Choice("Remove provider", value="Remove provider"),
+                questionary.Choice(
+                    "Set default provider", value="Set default provider"
+                ),
+                questionary.Choice(
+                    "Set provider failover order", value="Set provider order"
+                ),
+                questionary.Choice("Test connection", value="Test connection"),
+            ],
+        )
+        if selected == "__back__":
+            break
+
+        if selected == "Add provider":
+            _add_provider_flow()
+        elif selected == "Edit provider":
+            _edit_provider_flow()
+        elif selected == "Remove provider":
+            _remove_provider_flow()
+        elif selected == "Set default provider":
+            _set_default_provider_flow()
+        elif selected == "Set provider order":
+            _set_provider_order_flow()
+        elif selected == "Test connection":
+            _test_provider_standalone()
+
+
+def _models_menu() -> None:
+    """Models & endpoints submenu — every model/endpoint choice in one place."""
+    while True:
+        selected = _select_with_back(
+            "Models & endpoints",
+            choices=[
+                questionary.Choice("Chat providers ▸", value="Chat providers"),
+                *(
+                    questionary.Choice(f"{name} ▸", value=name)
+                    for name in MODEL_SECTIONS
+                ),
+            ],
+        )
+        if selected == "__back__":
+            break
+
+        if selected == "Chat providers":
+            _providers_menu()
+        elif selected in MODEL_SECTIONS:
+            _edit_section(selected, MODEL_SECTIONS[selected])
+
+
+def _settings_menu() -> None:
+    """Settings submenu — everything that is not a model/endpoint choice."""
+    while True:
+        selected = _select_with_back(
+            "Settings",
+            choices=[
+                questionary.Choice(f"{name} ▸", value=name)
+                for name in SETTINGS_SECTIONS
+            ],
+        )
+        if selected == "__back__":
+            break
+
+        if selected in SETTINGS_SECTIONS:
+            _edit_section(selected, SETTINGS_SECTIONS[selected])
+
+
+def _reset_single_key_flow() -> None:
+    """Pick a key from the grouped Models/Settings tree, then reset it."""
+    all_sections: dict[str, list[str]] = {**MODEL_SECTIONS, **SETTINGS_SECTIONS}
+
+    while True:
+        section = _select_with_back(
+            "Reset a single key",
+            choices=[questionary.Choice(name, value=name) for name in all_sections],
+        )
+        if section == "__back__":
+            return
+
+        flat = _get_merged_flat()
+        key_choices = [
+            questionary.Choice(f"{key} = {_mask_value(key, flat.get(key))}", value=key)
+            for key in all_sections[section]
+        ]
+        key = _select_with_back(section, choices=key_choices)
+        if key == "__back__":
+            continue
+
+        confirm = _prompt(
+            questionary.confirm(
+                f"Reset '[{_KEY_COLOR}]{key}[/{_KEY_COLOR}]' to its default?",
+                default=False,
+                style=_WIZARD_STYLE,
+            )
+        )
+        if confirm:
+            Config.reset_config(key)
+            rich_print(
+                f"[{_SUCCESS_COLOR}]Reset '[{_KEY_COLOR}]{key}[/{_KEY_COLOR}]' "
+                f"to default.[/{_SUCCESS_COLOR}]"
+            )
+        return
+
+
+def _reset_menu() -> None:
+    """Reset submenu — single-key reset, or reset-all behind a confirm gate."""
+    while True:
+        selected = _select_with_back(
+            "Reset",
+            choices=[
+                questionary.Choice("Reset a single key…", value="Reset key"),
+                questionary.Choice("Reset ALL to defaults", value="Reset all"),
+            ],
+        )
+        if selected == "__back__":
+            break
+
+        if selected == "Reset key":
+            _reset_single_key_flow()
+        elif selected == "Reset all":
+            confirm = _prompt(
+                questionary.confirm(
+                    "Reset ALL configuration to defaults? This cannot be undone.",
+                    default=False,
+                    style=_WIZARD_STYLE,
+                )
+            )
+            if confirm:
+                Config.reset_config()
+                rich_print(
+                    f"[{_SUCCESS_COLOR}]All configuration reset to "
+                    f"defaults.[/{_SUCCESS_COLOR}]"
+                )
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 def run_wizard() -> None:
     """Run the interactive configuration wizard."""
     Config.init_config()
     _check_default_provider_warning()
+
+    rich_print(
+        Panel.fit(
+            "[bold]ESDC Configuration Manager[/bold]",
+            border_style=_HEADER_BORDER,
+            padding=(1, 4),
+        )
+    )
 
     with contextlib.suppress(WizardCancelledError, KeyboardInterrupt):
         _run_wizard_loop()
@@ -902,36 +1089,16 @@ def run_wizard() -> None:
 def _run_wizard_loop() -> None:
     """Core wizard loop (catches WizardCancelledError to exit cleanly)."""
     while True:
-        rich_print(
-            Panel.fit(
-                "[bold]ESDC Configuration Manager[/bold]",
-                border_style=_HEADER_BORDER,
-                padding=(1, 4),
-            )
-        )
-
         selected = _prompt(
             questionary.select(
                 "What would you like to do?",
                 choices=[
-                    questionary.Separator("Provider Management"),
-                    questionary.Choice("  — Add new provider", value="Add provider"),
-                    questionary.Choice("  — Edit provider", value="Edit provider"),
-                    questionary.Choice("  — Remove provider", value="Remove provider"),
                     questionary.Choice(
-                        "  — Set default provider", value="Set default provider"
+                        "Models & endpoints ▸", value="Models & endpoints"
                     ),
-                    questionary.Choice(
-                        "  — Set provider failover order",
-                        value="Set provider order",
-                    ),
-                    questionary.Choice("  — Test connection", value="Test connection"),
-                    questionary.Separator("Configuration"),
-                    questionary.Choice(
-                        "  — Edit general settings", value="Edit general config"
-                    ),
-                    questionary.Choice("  — Show full config", value="Show config"),
-                    questionary.Separator(""),
+                    questionary.Choice("Settings ▸", value="Settings"),
+                    questionary.Choice("Show config", value="Show config"),
+                    questionary.Choice("Reset ▸", value="Reset"),
                     questionary.Choice("Exit", value="Exit"),
                 ],
                 style=_WIZARD_STYLE,
@@ -942,22 +1109,14 @@ def _run_wizard_loop() -> None:
             break
 
         try:
-            if selected == "Add provider":
-                _add_provider_flow()
-            elif selected == "Edit general config":
-                _edit_general_config_flow()
-            elif selected == "Edit provider":
-                _edit_provider_flow()
-            elif selected == "Remove provider":
-                _remove_provider_flow()
-            elif selected == "Set default provider":
-                _set_default_provider_flow()
-            elif selected == "Set provider order":
-                _set_provider_order_flow()
-            elif selected == "Test connection":
-                _test_provider_standalone()
+            if selected == "Models & endpoints":
+                _models_menu()
+            elif selected == "Settings":
+                _settings_menu()
             elif selected == "Show config":
                 _show_config_flow()
+            elif selected == "Reset":
+                _reset_menu()
         except Exception:
             traceback.print_exc()
             rich_print(

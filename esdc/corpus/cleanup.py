@@ -12,6 +12,8 @@ rejected.
 import re
 from collections.abc import Callable
 
+from esdc.llm_text import strip_thinking_tags
+
 CLEANUP_PROMPT = """You are reformatting one page of an Indonesian oil & gas \
 official document that was auto-extracted from PDF to markdown. Fix ONLY formatting:
 - correct heading levels (# only for real top-level sections)
@@ -30,9 +32,7 @@ Page content:
 Cleaned markdown:"""
 
 # Same marker family the extractor emits and the chunker strips.
-_MARKER_SPLIT_RE = re.compile(
-    r"(<!--\s*page\s+\d+(?:\s+image\s+\d+)?:\s*\w+\s*-->\n?)"
-)
+_MARKER_SPLIT_RE = re.compile(r"(<!--\s*page\s+\d+(?:\s+image\s+\d+)?:\s*\w+\s*-->\n?)")
 _NATIVE_MARKER_RE = re.compile(r"<!--\s*page\s+\d+:\s*native(?:_docx|_md)?\s*-->")
 _DIGIT_RUN_RE = re.compile(r"\d+")
 _CODE_FENCE_RE = re.compile(r"^```[a-z]*\n|\n?```\s*$")
@@ -72,9 +72,8 @@ def cleanup_markdown(
             out.append(piece)
             continue
         try:
-            cleaned = _CODE_FENCE_RE.sub(
-                "", caller(CLEANUP_PROMPT.format(segment=piece)).strip()
-            ).strip()
+            raw = caller(CLEANUP_PROMPT.format(segment=piece))
+            cleaned = _CODE_FENCE_RE.sub("", strip_thinking_tags(raw).strip()).strip()
         except Exception:
             n_rejected += 1
             out.append(piece)

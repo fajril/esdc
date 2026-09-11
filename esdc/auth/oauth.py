@@ -1,3 +1,5 @@
+"""OAuth 2.0 device-flow authentication for LLM providers."""
+
 import base64
 import hashlib
 import html

@@ -1,3 +1,5 @@
+"""Tests for the new provider integrations."""
+
 from unittest.mock import MagicMock, patch
 
 from esdc.providers.base import DEFAULT_CONTEXT_LENGTH, ProviderConfig
@@ -328,7 +330,9 @@ class TestDeepSeekProvider:
         mock_instance = MagicMock()
         mock_chat_cls.return_value = mock_instance
 
-        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+        with patch.object(
+            DeepSeekProvider, "get_actual_context_length", return_value=0
+        ):
             llm = DeepSeekProvider.create_llm(
                 model="deepseek-v4-pro",
                 api_key="sk-xxx",
@@ -349,7 +353,9 @@ class TestDeepSeekProvider:
 
         mock_chat_cls.return_value = MagicMock()
 
-        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+        with patch.object(
+            DeepSeekProvider, "get_actual_context_length", return_value=0
+        ):
             DeepSeekProvider.create_llm(
                 model="deepseek-v4-flash",
                 api_key="sk-xxx",
@@ -366,7 +372,9 @@ class TestDeepSeekProvider:
 
         mock_chat_cls.return_value = MagicMock()
 
-        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+        with patch.object(
+            DeepSeekProvider, "get_actual_context_length", return_value=0
+        ):
             DeepSeekProvider.create_llm(
                 model="deepseek-v4-flash",
                 api_key="sk-xxx",
@@ -383,7 +391,9 @@ class TestDeepSeekProvider:
 
         mock_chat_cls.return_value = MagicMock()
 
-        with patch.object(DeepSeekProvider, "get_actual_context_length", return_value=0):
+        with patch.object(
+            DeepSeekProvider, "get_actual_context_length", return_value=0
+        ):
             DeepSeekProvider.create_llm(
                 model="deepseek-v4-flash",
                 api_key="sk-xxx",
@@ -549,6 +559,7 @@ class TestProviderRegistry:
             "groq",
             "deepseek",
             "ollama_cloud",
+            "opencode",
         }
         assert set(PROVIDER_CLASSES.keys()) == expected
         assert set(list_provider_types()) == expected
@@ -561,6 +572,7 @@ class TestProviderRegistry:
         assert PROVIDER_NAMES["azure_openai"] == "Azure OpenAI"
         assert PROVIDER_NAMES["groq"] == "Groq"
         assert PROVIDER_NAMES["deepseek"] == "DeepSeek"
+        assert PROVIDER_NAMES["opencode"] == "OpenCode Go"
 
     def test_get_provider(self):
         from esdc.providers import get_provider
@@ -577,6 +589,10 @@ class TestProviderRegistry:
         assert get_provider("deepseek") is DeepSeekProvider
         assert get_provider("nonexistent") is None
 
+        from esdc.providers.opencode import OpencodeProvider
+
+        assert get_provider("opencode") is OpencodeProvider
+
     def test_provider_type_literal(self):
         from esdc.providers.base import ProviderType
 
@@ -585,6 +601,7 @@ class TestProviderRegistry:
         assert "azure_openai" in ProviderType.__args__
         assert "groq" in ProviderType.__args__
         assert "deepseek" in ProviderType.__args__
+        assert "opencode" in ProviderType.__args__
 
 
 class TestOpenAICompatibleContextLength:
@@ -597,7 +614,8 @@ class TestOpenAICompatibleContextLength:
         model_extra: dict | None = None,
     ):
         class FakeModel:
-            pass
+            id: str
+            model_extra: dict | None
 
         obj = FakeModel()
         obj.id = id

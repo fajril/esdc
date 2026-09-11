@@ -51,6 +51,64 @@ uv pip install -e ".[phoenix]"
 uv sync --dev
 ```
 
+### Corpus embeddings/rerank (llama.cpp)
+
+The corpus uses `llama-cpp-python` (Qwen3 GGUFs, in-process, no daemon).
+Plain `pip install` compiles from source (needs cmake + a C++ compiler).
+For a prebuilt wheel, add the matching index for your accelerator:
+
+    pip install esdc --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu     # CPU
+    #                                                                         .../whl/metal   # macOS
+    #                                                                         .../whl/cu124   # CUDA 12.4
+
+Models (~1.2 GB total) download to `~/.esdc/models` on first use; run
+`esdc corpus warmup` to pre-fetch them for offline use.
+
+GPU offload: `corpus.n_gpu_layers` defaults to `-1` (offload all layers
+when a GPU backend is present, else run on CPU — inert on the CPU-only
+wheel, so a GPU-less VPS just uses CPU). Set it to `0` to force CPU. The
+macOS metal wheel and a CUDA build both honour it; for CUDA install a CUDA
+build once (`CMAKE_ARGS="-DGGML_CUDA=on" pip install --force-reinstall
+--no-cache-dir llama-cpp-python`, or use the `cu124` wheel index above).
+
+### Embedding backends
+
+Query-time similarity **always** runs on the in-process llama.cpp model, so
+semantic search works offline and needs no daemon. Only bulk generation —
+`esdc corpus commit`, `esdc corpus reembed`, `esdc reload` — uses the
+configured backend.
+
+| key | values | default |
+|---|---|---|
+| `embedding_backend` | `local`, `ollama`, `openai` | `ollama` |
+| `embedding_host` | URL, `""` = local daemon | `""` |
+| `embedding_model` | wire model id, `openai` only | `""` |
+| `embedding_api_key` | bearer token, `openai` only | `""` |
+
+`local` runs in-process with no daemon. `ollama` needs
+`ollama pull qwen3-embedding:0.6b` on the target host. `openai` works with
+any OpenAI-compatible `/v1/embeddings` server — LM Studio, llama-server,
+vLLM, TEI — and needs `embedding_model` set to whatever that server calls
+the model:
+
+```yaml
+embedding_backend: openai
+embedding_host: http://localhost:8889/v1
+embedding_model: Qwen3-Embedding-0.6B-8bit
+```
+
+Each vector space stores a probe vector. If a backend produces vectors that
+disagree with the stored ones by more than a small tolerance — a different
+quantization, pooling mode, or model — writes are rejected and searches
+report that embeddings need rebuilding. Measured cosine between the local
+GGUF, Ollama `qwen3-embedding:0.6b` and an MLX 8-bit build is ≥ 0.9986.
+
+Per-run override: `--embed-backend local|ollama|openai` on
+`esdc corpus commit`, `esdc corpus reembed` and `esdc reload`.
+
+`corpus.ollama_host` is unrelated — it points corpus OCR and text models at
+a host, not embeddings.
+
 ## Quick Start
 
 ### Chat Interface
@@ -124,6 +182,22 @@ Use `reasoning_effort: none` for non-thinking mode, or `high` / `max`
 for DeepSeek thinking mode. `provider_order` controls failover priority; ESDC
 uses `default_provider` first, then tries the remaining providers in order if
 the current provider fails.
+
+OpenCode Go can be configured as a first-class provider:
+
+```yaml
+default_provider: opencode
+providers:
+  opencode:
+    provider_type: opencode
+    api_key: sk-...
+    model: deepseek-v4-flash
+```
+
+`base_url` defaults to `https://opencode.ai/zen/go/v1`; set it to
+`https://opencode.ai/zen/v1` for OpenCode Zen. Requests carry a
+process-stable `x-opencode-session` header, overridable with the
+`ESDC_OPENCODE_SESSION` environment variable.
 
 ### Environment Variables
 
@@ -380,6 +454,79 @@ esdc corpus remove <doc_id>...       # remove document(s) (files on disk untouch
 esdc corpus clear --yes              # delete the entire corpus
 esdc corpus reembed                  # rebuild embeddings after an embedding-model change
 ```
+
+### Rename sources to a canonical structure
+
+```bash
+esdc corpus rename <file|folder>...            # preview (dry-run)
+esdc corpus rename <file|folder>... --yes      # apply
+esdc corpus rename report.pdf --doc-type letter --yes
+```
+
+Renames each source (and its `.corpus.md` sidecar, if present) to
+`DOC_TYPE - YYYY.MM.DD - title.<ext>`. The three parts are resolved from an
+existing sidecar, the committed corpus database, or — as a fallback —
+LLM/OCR inference with the filename passed as a hint. `--doc-type` overrides
+the detected type. Dry-run is the default; pass `--yes` to rename on disk.
+Files whose date/type/title cannot be resolved are skipped, not renamed.
+
+### Learn the knowledge graph
+
+```bash
+esdc corpus learn --dry-run          # report what would be processed
+esdc corpus learn                    # process every new/changed document
+esdc corpus learn --limit 3          # process at most N documents (smoke runs)
+esdc corpus learn --force            # reprocess every document and rebuild all dossiers
+esdc corpus learn --init-guideline   # draft ~/.esdc/guideline.yaml from the corpus, then exit
+esdc corpus proposals                # list schema proposals discovered along the way
+```
+
+`esdc corpus learn` reconstructs a knowledge graph over the committed corpus,
+eagerly, so chat never needs an LLM to serve learned knowledge. Four phases,
+incremental per document (a per-doc hash of file content + guideline content
+decides whether it needs relearning):
+
+1. **Deterministic linking** — registry-backed edges (letter-number matches,
+   `suggested_pod_ids`, field/WK/project metadata) with no LLM; exact
+   letter-number matches auto-promote `pod_document` links.
+2. **Guideline-driven extraction** — an LLM reads each new/changed document
+   against `~/.esdc/guideline.yaml` (falling back to the packaged default)
+   and proposes entities, claims, and any types missing from the guideline.
+3. **Registry-backed resolution** — extracted mentions are resolved to
+   canonical POD/project/field/WK entities; unresolved mentions are
+   discarded, not guessed at.
+4. **Dossier synthesis** — one Markdown case file per POD with at least one
+   linked document, cached by source hash so unaffected PODs are skipped on
+   rerun.
+
+Types the LLM proposes that aren't in the guideline yet (new claim types,
+entity types, etc.) are queued as schema proposals rather than silently
+accepted — review them with `esdc corpus proposals` and add accepted ones to
+`~/.esdc/guideline.yaml` by hand.
+
+In chat, the `explore_entity` tool traverses the resulting graph (a
+disposable in-memory LadybugDB instance graph rebuilt from `esdc.sqlite`) to
+answer broad questions about one POD/field/project/WK — its dossier, related
+documents/projects/revisions, and extracted claims.
+
+### Evaluating retrieval quality
+
+Generate a statistically-sized, stratified query set (one synthesized query
+per sampled document, allocated across `doc_type`), then score retrieval
+Pass@k and latency:
+
+```bash
+esdc corpus eval --init              # auto sample size (95% CI, ±5%)
+esdc corpus eval --init --samples 100   # fixed 100 samples
+esdc corpus eval --init --margin 0.10   # cheaper, ±10% margin (auto-size)
+esdc corpus eval                     # score existing set
+esdc corpus eval --refresh           # incremental sync after corpus changes
+```
+
+The query set lives at `~/.esdc/corpus_queries.jsonl`. If the corpus changes,
+`esdc corpus eval` refuses to run (exit 1, reporting new/removed documents) and
+prompts you to rerun with `--refresh` (incremental) or `--init` (regenerate).
+Query synthesis uses the configured chat LLM provider.
 
 ### Remote Ollama
 

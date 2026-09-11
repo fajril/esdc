@@ -1,3 +1,4 @@
+"""Chat application entrypoint: CLI, streaming, and API glue."""
 # esdc/chat/app.py
 
 # Standard library
@@ -793,9 +794,7 @@ class ESDCChatApp(App):
                 tool_calls = getattr(ai_message, "tool_calls", None) or []
                 for tc in tool_calls:
                     args = tc.get("args", {}) or {}
-                    if tc.get("name") in _SQL_EXECUTOR_NAMES and isinstance(
-                        args, dict
-                    ):
+                    if tc.get("name") in _SQL_EXECUTOR_NAMES and isinstance(args, dict):
                         pending_sql[tc.get("id") or ""] = args.get("query", "")
                     yield {
                         "type": "tool_call",

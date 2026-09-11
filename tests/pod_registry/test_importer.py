@@ -1,3 +1,5 @@
+"""Tests for the POD importer."""
+
 # tests/pod_registry/test_importer.py
 from datetime import datetime
 
@@ -20,23 +22,66 @@ def _patch_dirs(monkeypatch, tmp_path):
 
 
 def _write_workbook(
-    path, pod_rows=None, project_rows=None, revision_rows=None, institution_rows=None
+    path,
+    pod_rows=None,
+    project_rows=None,
+    revision_rows=None,
+    institution_rows=None,
+    revision_temporal=False,
 ):
     wb = openpyxl.Workbook()
-    wb.remove(wb.active)
+    active = wb.active
+    assert active is not None
+    wb.remove(active)
 
     ws = wb.create_sheet("POD Record")
-    ws.append([
-        "pod_id_itb", "approval_date", "institution", "pod_type", "rev_ num",
-        "pod_name", "pod_letter_num", "approval_seq", "pod_id_skk",
-        "preceded_by", "superseded_by",
-    ])
-    for row in pod_rows if pod_rows is not None else [
-        [645, datetime(2003, 11, 21), "BP Migas", "POD/Waterflood/EOR", 0,
-         "POD Mengoepeh", "294/BP", 5, "PL-2003-0005-3-2-0", None, "PL-2005-0051-3-2-1"],
-        [700, datetime(2005, 6, 1), "BP Migas", "POD/Waterflood/EOR", 1,
-         "POD Mengoepeh Rev", "51/BP", 51, "PL-2005-0051-3-2-1", "PL-2003-0005-3-2-0", None],
-    ]:
+    ws.append(
+        [
+            "pod_id_itb",
+            "approval_date",
+            "institution",
+            "pod_type",
+            "rev_ num",
+            "pod_name",
+            "pod_letter_num",
+            "approval_seq",
+            "pod_id_skk",
+            "preceded_by",
+            "superseded_by",
+        ]
+    )
+    for row in (
+        pod_rows
+        if pod_rows is not None
+        else [
+            [
+                645,
+                datetime(2003, 11, 21),
+                "BP Migas",
+                "POD/Waterflood/EOR",
+                0,
+                "POD Mengoepeh",
+                "294/BP",
+                5,
+                "PL-2003-0005-3-2-0",
+                None,
+                "PL-2005-0051-3-2-1",
+            ],
+            [
+                700,
+                datetime(2005, 6, 1),
+                "BP Migas",
+                "POD/Waterflood/EOR",
+                1,
+                "POD Mengoepeh Rev",
+                "51/BP",
+                51,
+                "PL-2005-0051-3-2-1",
+                "PL-2003-0005-3-2-0",
+                None,
+            ],
+        ]
+    ):
         ws.append(row)
 
     ws = wb.create_sheet("project_pod")
@@ -45,17 +90,29 @@ def _write_workbook(
         ws.append(row)
 
     ws = wb.create_sheet("pod_revision")
-    ws.append(["rev_id", "successor_id", "predecessor_id"])
-    for row in revision_rows if revision_rows is not None else [
-        [1, "PL-2005-0051-3-2-1", "PL-2003-0005-3-2-0"]
-    ]:
+    revision_headers = ["rev_id", "successor_id", "predecessor_id"]
+    if revision_temporal:
+        revision_headers += [
+            "revision_effect",
+            "effective_date",
+            "amended_scope",
+            "previous_remains_valid",
+        ]
+    ws.append(revision_headers)
+    for row in (
+        revision_rows
+        if revision_rows is not None
+        else [[1, "PL-2005-0051-3-2-1", "PL-2003-0005-3-2-0"]]
+    ):
         ws.append(row)
 
     ws = wb.create_sheet("institution")
     ws.append(["code", "institution", "description"])
-    for row in institution_rows if institution_rows is not None else [
-        [3, "BP Migas", "POD 2003 to 2012"], [4, "SKK Migas", "POD 2013 onward"]
-    ]:
+    for row in (
+        institution_rows
+        if institution_rows is not None
+        else [[3, "BP Migas", "POD 2003 to 2012"], [4, "SKK Migas", "POD 2013 onward"]]
+    ):
         ws.append(row)
 
     ws = wb.create_sheet("pod_type")
@@ -72,8 +129,11 @@ def test_import_seeds_all_tables(monkeypatch, tmp_path):
     xlsx = _write_workbook(tmp_path / "pod.xlsx")
     counts = import_pod_registry_workbook(xlsx)
     assert counts == {
-        "r_institution": 2, "r_pod_type": 2, "m_pod": 2,
-        "project_pod": 1, "pod_revision": 1,
+        "r_institution": 2,
+        "r_pod_type": 2,
+        "m_pod": 2,
+        "project_pod": 1,
+        "pod_revision": 1,
     }
     conn = get_sqlite_connection()
     try:
@@ -104,9 +164,23 @@ def test_import_rejects_unknown_institution(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     xlsx = _write_workbook(
         tmp_path / "pod.xlsx",
-        pod_rows=[[1, datetime(2003, 1, 1), "Unknown Body", "POD I", 0,
-                   "X", None, 1, "PL-2003-0001-1-1-0", None, None]],
-        project_rows=[], revision_rows=[],
+        pod_rows=[
+            [
+                1,
+                datetime(2003, 1, 1),
+                "Unknown Body",
+                "POD I",
+                0,
+                "X",
+                None,
+                1,
+                "PL-2003-0001-1-1-0",
+                None,
+                None,
+            ]
+        ],
+        project_rows=[],
+        revision_rows=[],
     )
     with pytest.raises(PodRegistryImportError) as exc:
         import_pod_registry_workbook(xlsx)
@@ -145,9 +219,23 @@ def test_import_rejects_missing_approval_seq(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     xlsx = _write_workbook(
         tmp_path / "pod.xlsx",
-        pod_rows=[[645, datetime(2003, 11, 21), "BP Migas", "POD/Waterflood/EOR", 0,
-                   "POD Mengoepeh", "294/BP", None, "PL-2003-0005-3-2-0", None, None]],
-        project_rows=[], revision_rows=[],
+        pod_rows=[
+            [
+                645,
+                datetime(2003, 11, 21),
+                "BP Migas",
+                "POD/Waterflood/EOR",
+                0,
+                "POD Mengoepeh",
+                "294/BP",
+                None,
+                "PL-2003-0005-3-2-0",
+                None,
+                None,
+            ]
+        ],
+        project_rows=[],
+        revision_rows=[],
     )
     with pytest.raises(PodRegistryImportError) as exc:
         import_pod_registry_workbook(xlsx)
@@ -188,6 +276,123 @@ def test_import_rejects_text_project_pod_id(monkeypatch, tmp_path):
     assert exc.value.errors == ["project_pod row 2: invalid pod_id 'abc'"]
 
 
+def test_import_full_replacement_revision(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        revision_rows=[
+            [
+                1,
+                "PL-2005-0051-3-2-1",
+                "PL-2003-0005-3-2-0",
+                "full_replacement",
+                datetime(2005, 6, 1),
+                "all clauses",
+                False,
+            ]
+        ],
+        revision_temporal=True,
+    )
+    import_pod_registry_workbook(xlsx)
+    conn = get_sqlite_connection()
+    try:
+        row = conn.execute(
+            "SELECT revision_effect, effective_date, amended_scope,"
+            " previous_remains_valid FROM pod_revision"
+        ).fetchone()
+        assert tuple(row) == ("full_replacement", "2005-06-01", "all clauses", 0)
+    finally:
+        conn.close()
+
+
+def test_import_partial_amendment_revision(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        revision_rows=[
+            [
+                1,
+                "PL-2005-0051-3-2-1",
+                "PL-2003-0005-3-2-0",
+                "partial_amendment",
+                datetime(2006, 3, 15),
+                "clause 4 only",
+                True,
+            ]
+        ],
+        revision_temporal=True,
+    )
+    import_pod_registry_workbook(xlsx)
+    conn = get_sqlite_connection()
+    try:
+        row = conn.execute(
+            "SELECT revision_effect, effective_date, amended_scope,"
+            " previous_remains_valid FROM pod_revision"
+        ).fetchone()
+        assert tuple(row) == ("partial_amendment", "2006-03-15", "clause 4 only", 1)
+    finally:
+        conn.close()
+
+
+def test_import_legacy_revision_imports_as_unknown(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(tmp_path / "pod.xlsx")
+    import_pod_registry_workbook(xlsx)
+    conn = get_sqlite_connection()
+    try:
+        row = conn.execute(
+            "SELECT revision_effect, effective_date, amended_scope,"
+            " previous_remains_valid FROM pod_revision"
+        ).fetchone()
+        assert tuple(row) == ("unknown", None, None, None)
+    finally:
+        conn.close()
+
+
+def test_import_rejects_inconsistent_revision_effect(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        revision_rows=[
+            [
+                1,
+                "PL-2005-0051-3-2-1",
+                "PL-2003-0005-3-2-0",
+                "full_replacement",
+                datetime(2005, 6, 1),
+                None,
+                True,
+            ]
+        ],
+        revision_temporal=True,
+    )
+    with pytest.raises(PodRegistryImportError) as exc:
+        import_pod_registry_workbook(xlsx)
+    assert any("full_replacement" in e for e in exc.value.errors)
+
+
+def test_import_rejects_unknown_revision_effect(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    xlsx = _write_workbook(
+        tmp_path / "pod.xlsx",
+        revision_rows=[
+            [
+                1,
+                "PL-2005-0051-3-2-1",
+                "PL-2003-0005-3-2-0",
+                "supersedes_entirely",
+                None,
+                None,
+                None,
+            ]
+        ],
+        revision_temporal=True,
+    )
+    with pytest.raises(PodRegistryImportError) as exc:
+        import_pod_registry_workbook(xlsx)
+    assert any("revision_effect" in e for e in exc.value.errors)
+
+
 def test_import_rejects_non_numeric_institution_code(monkeypatch, tmp_path):
     """A non-numeric institution code cell must surface as a row error, not crash.
 
@@ -198,7 +403,9 @@ def test_import_rejects_non_numeric_institution_code(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     xlsx = _write_workbook(
         tmp_path / "pod.xlsx",
-        pod_rows=[], project_rows=[], revision_rows=[],
+        pod_rows=[],
+        project_rows=[],
+        revision_rows=[],
         institution_rows=[
             ["XX", "BP Migas", "POD 2003 to 2012"],
             [4, "SKK Migas", "POD 2013 onward"],

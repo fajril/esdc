@@ -1,10 +1,14 @@
+"""Tests for the corpus ingestion pipeline."""
+
 import json
 from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import fitz
 import pytest
 
+from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.corpus import pipeline
 from esdc.corpus.chunker import Chunk
 from esdc.corpus.extractor import ExtractionResult
@@ -50,6 +54,7 @@ class FakeEntityResolver:
     def suggest_names(self, name, entity_type, limit=5):
         # Configured per raw name: {"Rokann": ["ROKAN", "ROKAN HILIR"]}.
         return list(self._suggestions.get(name, []))[:limit]
+
 
 DEFAULT_CFG = {
     "chunk_size": 500,
@@ -123,7 +128,7 @@ def patch_seams(tmp_path, monkeypatch):
         pipeline,
         "CorpusStore",
         lambda *a, **kw: CorpusStore(
-            db_path=tmp_path / "_default.duckdb", embedder=FakeEmbedder()
+            db_path=tmp_path / "_default.duckdb", embedder=FakeEmbedder(), read_only=False
         ),
     )
 
@@ -171,8 +176,12 @@ def make_sidecar(
     return sidecar_path(pdf)
 
 
-def make_store(tmp_path: Path, embedder=None, db_name: str = "corpus.duckdb") -> CorpusStore:
-    return CorpusStore(db_path=tmp_path / db_name, embedder=embedder or FakeEmbedder())
+def make_store(
+    tmp_path: Path, embedder=None, db_name: str = "corpus.duckdb"
+) -> CorpusStore:
+    return CorpusStore(
+        db_path=tmp_path / db_name, embedder=embedder or FakeEmbedder(), read_only=False
+    )
 
 
 def patch_store_factory(monkeypatch, store: CorpusStore) -> None:
@@ -196,7 +205,7 @@ def make_docx(tmp_path: Path, name: str = "doc.docx") -> Path:
     d.add_heading("Judul", level=1)
     d.add_paragraph("isi dokumen penting")
     path = tmp_path / name
-    d.save(path)
+    d.save(str(path))
     return path
 
 
@@ -361,7 +370,9 @@ def test_extract_topic_override_normalized_to_list(tmp_path, monkeypatch):
 def test_extract_skips_existing_sidecar(tmp_path, monkeypatch):
     pdf = make_pdf(tmp_path, "surat.pdf")
     write_sidecar(
-        pdf, {"source_file": "surat.pdf", "file_hash": "x", "reviewed": False}, "old body"
+        pdf,
+        {"source_file": "surat.pdf", "file_hash": "x", "reviewed": False},
+        "old body",
     )
 
     called = []
@@ -381,7 +392,9 @@ def test_extract_skips_existing_sidecar(tmp_path, monkeypatch):
 def test_extract_force_overwrites(tmp_path, monkeypatch):
     pdf = make_pdf(tmp_path, "surat.pdf")
     write_sidecar(
-        pdf, {"source_file": "surat.pdf", "file_hash": "x", "reviewed": True}, "old body"
+        pdf,
+        {"source_file": "surat.pdf", "file_hash": "x", "reviewed": True},
+        "old body",
     )
 
     def fake_extract(path, ocr_client, min_chars, dpi, min_image_area=0.05):
@@ -406,13 +419,18 @@ def test_extract_force_overwrites(tmp_path, monkeypatch):
 def test_extract_force_preserves_reviewed_metadata(tmp_path, monkeypatch):
     pdf = make_pdf(tmp_path)
     sc = make_sidecar(
-        tmp_path, "doc.pdf", reviewed=True, file_hash="oldhash",
-        doc_number="KEEP-123", subject="human-reviewed subject",
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash="oldhash",
+        doc_number="KEEP-123",
+        subject="human-reviewed subject",
         raw_entities={"wk_name": "Raw WK"},
     )
     calls = []
     monkeypatch.setattr(
-        pipeline, "llm_extract",
+        pipeline,
+        "llm_extract",
         lambda markdown, caller: calls.append(1) or {"doc_type": "letter"},
     )
 
@@ -433,26 +451,33 @@ def test_extract_force_preserves_reviewed_metadata(tmp_path, monkeypatch):
 def test_extract_force_overrides_beat_preserved_metadata(tmp_path, monkeypatch):
     pdf = make_pdf(tmp_path)
     sc = make_sidecar(
-        tmp_path, "doc.pdf", reviewed=True, file_hash="oldhash",
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash="oldhash",
         doc_number="KEEP-123",
     )
     report = pipeline.run_extract([pdf], force=True, level="national")
 
     assert report.processed and not report.failed
     meta, _body = read_sidecar(sc)
-    assert meta["doc_level"] == "national"      # override wins
-    assert meta["doc_number"] == "KEEP-123"     # untouched field preserved
+    assert meta["doc_level"] == "national"  # override wins
+    assert meta["doc_number"] == "KEEP-123"  # untouched field preserved
 
 
 def test_extract_force_unreviewed_sidecar_fully_regenerated(tmp_path, monkeypatch):
     pdf = make_pdf(tmp_path)
     sc = make_sidecar(
-        tmp_path, "doc.pdf", reviewed=False, file_hash="oldhash",
+        tmp_path,
+        "doc.pdf",
+        reviewed=False,
+        file_hash="oldhash",
         doc_number="DISPOSABLE",
     )
     calls = []
     monkeypatch.setattr(
-        pipeline, "llm_extract",
+        pipeline,
+        "llm_extract",
         lambda markdown, caller: calls.append(1) or {"doc_type": "letter"},
     )
     report = pipeline.run_extract([pdf], force=True)
@@ -637,6 +662,25 @@ def test_resolve_text_caller_ollama_name(monkeypatch):
     assert pipeline._resolve_text_caller("qwen3:8b") is sentinel
 
 
+def test_text_llm_caller_client_has_timeout(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, host=None, **kwargs):
+            captured["host"] = host
+            captured["kwargs"] = kwargs
+
+        def chat(self, model, messages, options):
+            return {"message": {"content": "ok"}}
+
+    monkeypatch.setattr(pipeline.ollama, "Client", FakeClient)
+    caller = pipeline._text_llm_caller("qwen3:8b", host="http://gpu-box:11434")
+    assert captured["host"] == "http://gpu-box:11434"
+    assert captured["kwargs"]["timeout"] is not None
+    assert captured["kwargs"]["timeout"].connect < captured["kwargs"]["timeout"].read
+    assert caller("prompt") == "ok"
+
+
 def test_resolve_text_caller_named_provider(monkeypatch):
     import esdc.providers as providers
 
@@ -669,9 +713,7 @@ def test_resolve_text_caller_named_provider(monkeypatch):
 
 
 def test_resolve_text_caller_unknown_provider_returns_none(monkeypatch, caplog):
-    monkeypatch.setattr(
-        pipeline.Config, "get_providers", classmethod(lambda cls: {})
-    )
+    monkeypatch.setattr(pipeline.Config, "get_providers", classmethod(lambda cls: {}))
     with caplog.at_level("WARNING"):
         assert pipeline._resolve_text_caller("provider:nope", None) is None
     assert any("nope" in r.message for r in caplog.records)
@@ -805,7 +847,9 @@ def test_apply_entity_resolution_none_stays_none_without_warning():
     meta = {"wk_name": None, "field_name": None, "project_name": None}
     resolver = FakeEntityResolver()
 
-    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "doc.pdf"
+    )
 
     assert meta["wk_name"] is None
     assert meta["field_name"] is None
@@ -819,7 +863,9 @@ def test_apply_entity_resolution_unresolved_name_kept_with_warning():
     meta = {"wk_name": ["Nowhere Area"], "field_name": None, "project_name": None}
     resolver = FakeEntityResolver()  # no matches configured -> everything unresolved
 
-    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "doc.pdf"
+    )
 
     assert meta["wk_name"] == ["Nowhere Area"]  # kept, not dropped to None
     assert any(
@@ -834,11 +880,11 @@ def test_apply_entity_resolution_unresolved_name_kept_with_warning():
 def test_apply_entity_resolution_unresolved_warning_includes_suggestions():
     report = pipeline.CorpusReport()
     meta = {"wk_name": ["Rokann"], "field_name": None, "project_name": None}
-    resolver = FakeEntityResolver(
-        suggestions={"Rokann": ["ROKAN", "ROKAN HILIR"]}
-    )
+    resolver = FakeEntityResolver(suggestions={"Rokann": ["ROKAN", "ROKAN HILIR"]})
 
-    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "doc.pdf"
+    )
 
     assert meta["wk_name"] == ["Rokann"]  # still kept as-is
     assert any(
@@ -853,7 +899,9 @@ def test_apply_entity_resolution_no_suggestions_keeps_old_message():
     meta = {"wk_name": ["Nowhere Area"], "field_name": None, "project_name": None}
     resolver = FakeEntityResolver()  # no matches, no suggestions
 
-    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "doc.pdf"
+    )
 
     assert any(
         "wk_name 'Nowhere Area' unresolved — kept as-is, verify manually" in w
@@ -874,7 +922,9 @@ def test_apply_entity_resolution_multiple_matches_all_kept():
                 {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0},
             ]
 
-    pipeline._apply_entity_resolution(meta, MultiMatchResolver(), report, "doc.pdf")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, MultiMatchResolver()), report, "doc.pdf"
+    )
 
     assert meta["wk_name"] == ["WK Rokan", "Rokan"]  # every match kept, in order
     assert any(
@@ -903,7 +953,9 @@ def test_apply_entity_resolution_stale_warnings_cleared_on_clean_rerun():
         }
     )
 
-    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "doc.pdf"
+    )
 
     assert "entity_warnings" not in meta
 
@@ -912,10 +964,14 @@ def test_apply_entity_resolution_no_warnings_key_absent():
     report = pipeline.CorpusReport()
     meta = {"wk_name": ["Rokan"], "field_name": None, "project_name": None}
     resolver = FakeEntityResolver(
-        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}}
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}
+        }
     )
 
-    pipeline._apply_entity_resolution(meta, resolver, report, "doc.pdf")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "doc.pdf"
+    )
 
     assert "entity_warnings" not in meta
     assert report.warnings == []
@@ -925,13 +981,21 @@ def test_apply_entity_resolution_hierarchical_drops_mismatch():
     """Field not belonging to resolved wk is DROPPED (None) with warning."""
     report = pipeline.CorpusReport()
     # Duri lives under WK Widuri in the fake hierarchy, not WK Rokan
-    resolver = FakeEntityResolver(matches={
-        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
-        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
-                 "wk_name": "WK Widuri"},
-    })
+    resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+            "Duri": {
+                "entity_type": "field_name",
+                "name": "Duri",
+                "confidence": 1.0,
+                "wk_name": "WK Widuri",
+            },
+        }
+    )
     meta = {"wk_name": "WK Rokan", "field_name": "Duri"}
-    pipeline._apply_entity_resolution(meta, resolver, report, "test.md")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "test.md"
+    )
     assert meta["field_name"] is None
     assert any("does not belong to" in w for w in report.warnings)
 
@@ -939,13 +1003,21 @@ def test_apply_entity_resolution_hierarchical_drops_mismatch():
 def test_apply_entity_resolution_hierarchical_no_warning_when_valid():
     """When hierarchy is valid, value kept, no warning emitted."""
     report = pipeline.CorpusReport()
-    resolver = FakeEntityResolver(matches={
-        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
-        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
-                 "wk_name": "WK Rokan"},
-    })
+    resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+            "Duri": {
+                "entity_type": "field_name",
+                "name": "Duri",
+                "confidence": 1.0,
+                "wk_name": "WK Rokan",
+            },
+        }
+    )
     meta = {"wk_name": "WK Rokan", "field_name": "Duri"}
-    pipeline._apply_entity_resolution(meta, resolver, report, "test.md")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "test.md"
+    )
     assert meta["field_name"] == ["Duri"]
     # No hierarchy warning (entity_warnings may exist for other reasons)
     assert not any("does not belong to" in w for w in report.warnings)
@@ -954,11 +1026,15 @@ def test_apply_entity_resolution_hierarchical_no_warning_when_valid():
 def test_apply_entity_resolution_unknown_name_still_kept():
     """Unknown name (matches nothing anywhere) keeps existing kept-as-is behavior."""
     report = pipeline.CorpusReport()
-    resolver = FakeEntityResolver(matches={
-        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
-    })
+    resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+        }
+    )
     meta = {"wk_name": "WK Rokan", "field_name": "Totally Unknown"}
-    pipeline._apply_entity_resolution(meta, resolver, report, "test.md")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "test.md"
+    )
     # Unknown != proven mismatch: kept for reviewer, warned as unresolved
     assert meta["field_name"] == ["Totally Unknown"]
     assert any("unresolved" in w for w in report.warnings)
@@ -967,15 +1043,27 @@ def test_apply_entity_resolution_unknown_name_still_kept():
 def test_apply_entity_resolution_mixed_list_drops_only_mismatch():
     """List value: valid names kept, cross-hierarchy names dropped."""
     report = pipeline.CorpusReport()
-    resolver = FakeEntityResolver(matches={
-        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
-        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
-                 "wk_name": "WK Rokan"},
-        "Bekasap": {"entity_type": "field_name", "name": "Bekasap", "confidence": 1.0,
-                    "wk_name": "WK Widuri"},
-    })
+    resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+            "Duri": {
+                "entity_type": "field_name",
+                "name": "Duri",
+                "confidence": 1.0,
+                "wk_name": "WK Rokan",
+            },
+            "Bekasap": {
+                "entity_type": "field_name",
+                "name": "Bekasap",
+                "confidence": 1.0,
+                "wk_name": "WK Widuri",
+            },
+        }
+    )
     meta = {"wk_name": "WK Rokan", "field_name": ["Duri", "Bekasap"]}
-    pipeline._apply_entity_resolution(meta, resolver, report, "test.md")
+    pipeline._apply_entity_resolution(
+        meta, cast(EntityResolver, resolver), report, "test.md"
+    )
     assert meta["field_name"] == ["Duri"]
     assert any("does not belong to" in w for w in report.warnings)
 
@@ -998,7 +1086,9 @@ def test_extract_resolves_entities_with_canonical_names_and_raw_entities(
         },
     )
     fake_resolver = FakeEntityResolver(
-        matches={"Rokann": {"entity_type": "wk_name", "name": "Rokan", "confidence": 0.9}}
+        matches={
+            "Rokann": {"entity_type": "wk_name", "name": "Rokan", "confidence": 0.9}
+        }
     )
     monkeypatch.setattr(
         pipeline, "_entity_resolver_or_none", lambda store, report: fake_resolver
@@ -1047,7 +1137,9 @@ def test_extract_no_resolver_keeps_raw_names_with_skip_warning(tmp_path, monkeyp
     assert "raw_entities" not in meta
 
 
-def test_extract_entity_resolver_or_none_skips_when_tables_missing(tmp_path, monkeypatch):
+def test_extract_entity_resolver_or_none_skips_when_tables_missing(
+    tmp_path, monkeypatch
+):
     """No lookup tables in the (fresh, empty) test DB -> resolution skipped once."""
     pdf = make_pdf(tmp_path, "surat.pdf")
 
@@ -1069,46 +1161,68 @@ def test_extract_entity_resolver_or_none_skips_when_tables_missing(tmp_path, mon
 
 def test_validate_entity_overrides_hierarchy_mismatch():
     """CLI overrides with invalid hierarchy raise ValueError."""
-    resolver = FakeEntityResolver(matches={
-        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
-        # Mahakam belongs to WK Mahakam in the fake hierarchy, not WK Rokan
-        "Mahakam": {"entity_type": "field_name", "name": "Mahakam", "confidence": 1.0,
-                    "wk_name": "WK Mahakam"},
-    })
+    resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+            # Mahakam belongs to WK Mahakam in the fake hierarchy, not WK Rokan
+            "Mahakam": {
+                "entity_type": "field_name",
+                "name": "Mahakam",
+                "confidence": 1.0,
+                "wk_name": "WK Mahakam",
+            },
+        }
+    )
     overrides = {"wk_name": "WK Rokan", "field_name": "Mahakam"}
     with pytest.raises(ValueError, match="does not belong to"):
-        pipeline._validate_entity_overrides(resolver, overrides)
+        pipeline._validate_entity_overrides(cast(EntityResolver, resolver), overrides)
 
 
 def test_validate_entity_overrides_hierarchy_valid():
     """CLI overrides with valid hierarchy pass."""
-    resolver = FakeEntityResolver(matches={
-        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
-        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
-                 "wk_name": "WK Rokan"},
-    })
+    resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+            "Duri": {
+                "entity_type": "field_name",
+                "name": "Duri",
+                "confidence": 1.0,
+                "wk_name": "WK Rokan",
+            },
+        }
+    )
     overrides = {"wk_name": "WK Rokan", "field_name": "Duri"}
     # Should not raise
-    pipeline._validate_entity_overrides(resolver, overrides)
+    pipeline._validate_entity_overrides(cast(EntityResolver, resolver), overrides)
 
 
 def test_validate_entity_overrides_project_hierarchy_mismatch():
     """--project-name under a different field/wk raises, naming both flags."""
-    resolver = FakeEntityResolver(matches={
-        "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
-        "Duri": {"entity_type": "field_name", "name": "Duri", "confidence": 1.0,
-                 "wk_name": "WK Rokan"},
-        "POD Mahakam": {"entity_type": "project_name", "name": "POD Mahakam",
-                         "confidence": 1.0, "wk_name": "WK Mahakam",
-                         "field_name": "Mahakam"},
-    })
+    resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+            "Duri": {
+                "entity_type": "field_name",
+                "name": "Duri",
+                "confidence": 1.0,
+                "wk_name": "WK Rokan",
+            },
+            "POD Mahakam": {
+                "entity_type": "project_name",
+                "name": "POD Mahakam",
+                "confidence": 1.0,
+                "wk_name": "WK Mahakam",
+                "field_name": "Mahakam",
+            },
+        }
+    )
     overrides = {
         "wk_name": "WK Rokan",
         "field_name": "Duri",
         "project_name": "POD Mahakam",
     }
     with pytest.raises(ValueError, match="does not belong to") as excinfo:
-        pipeline._validate_entity_overrides(resolver, overrides)
+        pipeline._validate_entity_overrides(cast(EntityResolver, resolver), overrides)
     assert "--wk-name" in str(excinfo.value)
     assert "--field-name" in str(excinfo.value)
 
@@ -1181,9 +1295,7 @@ def test_extract_unknown_entity_override_rejected(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
 
-    with pytest.raises(
-        ValueError, match="not found in database and no close matches"
-    ):
+    with pytest.raises(ValueError, match="not found in database and no close matches"):
         pipeline.run_extract([pdf], wk_name="Bogus")
 
     assert not (tmp_path / "surat.corpus.md").exists()
@@ -1291,8 +1403,13 @@ def test_commit_skip_review_ingests_pending_and_writes_back(tmp_path, monkeypatc
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
     patch_entity_resolver(monkeypatch)
-    sc = make_sidecar(tmp_path, "pending.pdf", reviewed=False, file_hash="aa" * 32,
-                      subject="orig subject")
+    sc = make_sidecar(
+        tmp_path,
+        "pending.pdf",
+        reviewed=False,
+        file_hash="aa" * 32,
+        subject="orig subject",
+    )
 
     report = pipeline.run_commit([tmp_path], skip_review=True)
 
@@ -1300,8 +1417,8 @@ def test_commit_skip_review_ingests_pending_and_writes_back(tmp_path, monkeypatc
     assert report.skipped == []
     assert any("ingested without review" in w for w in report.warnings)
     meta, body = read_sidecar(sc)
-    assert meta["reviewed"] is True          # flipped
-    assert meta["subject"] == "orig subject" # everything else untouched
+    assert meta["reviewed"] is True  # flipped
+    assert meta["subject"] == "orig subject"  # everything else untouched
     store.close()
 
 
@@ -1310,13 +1427,18 @@ def test_commit_skip_review_dry_run_no_write_back(tmp_path, monkeypatch):
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
     patch_entity_resolver(monkeypatch)
-    sc = make_sidecar(tmp_path, "pending.pdf", reviewed=False, file_hash="aa" * 32,
-                      subject="orig subject")
+    sc = make_sidecar(
+        tmp_path,
+        "pending.pdf",
+        reviewed=False,
+        file_hash="aa" * 32,
+        subject="orig subject",
+    )
 
     report = pipeline.run_commit([tmp_path], skip_review=True, dry_run=True)
     assert report.processed == ["pending.corpus.md"]
     meta, _ = read_sidecar(sc)
-    assert meta["reviewed"] is False         # dry run never touches the file
+    assert meta["reviewed"] is False  # dry run never touches the file
     store.close()
 
 
@@ -1375,6 +1497,42 @@ def test_commit_dedupe_and_force(tmp_path, monkeypatch):
     store.close()
 
 
+def test_commit_mirror_refresh_failure_is_warning_not_fatal(tmp_path, monkeypatch):
+    """A refresh_mirror failure during commit degrades to a warning, not a fatal error.
+
+    A refresh_mirror failure (e.g. lost DuckDB write lock) must not abort
+    commit or fail the batch -- the SQLite truth is already written by
+    then, so it's a stale mirror, not a corrupted commit (same contract
+    as the portal's _refresh_mirror_after_save).
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+    make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash="ee" * 32,
+        body="# Doc\nisi dokumen penting",
+    )
+
+    def boom():
+        raise RuntimeError("lock held by another process")
+
+    monkeypatch.setattr(store, "refresh_mirror", boom)
+
+    report = pipeline.run_commit([tmp_path])
+
+    assert report.processed == ["doc.corpus.md"]
+    assert report.failed == {}
+    assert any(
+        "mirror refresh failed" in w and "esdc corpus sync" in w
+        for w in report.warnings
+    )
+    store.close()
+
+
 def test_commit_entity_resolution(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     store.ensure_tables()
@@ -1416,6 +1574,7 @@ def test_commit_entity_resolution(tmp_path, monkeypatch):
     assert any("project_name" in w and "unresolved" in w for w in report.warnings)
 
     doc = store.get_document(file_hash[:16])
+    assert doc is not None
     assert doc["wk_name"] == ["Rokan"]
     # Unresolved names are kept as-is for manual review, never dropped.
     assert doc["project_name"] == ["Unknown Project XYZ"]
@@ -1437,12 +1596,17 @@ def test_commit_entity_warnings_and_raw_entities_dont_leak_into_doc_columns(
         reviewed=True,
         file_hash=file_hash,
         wk_name="Some Area",
-        raw_entities={"wk_name": ["Some Area"], "field_name": None, "project_name": None},
+        raw_entities={
+            "wk_name": ["Some Area"],
+            "field_name": None,
+            "project_name": None,
+        },
     )
 
     pipeline.run_commit([tmp_path])
 
     doc = store.get_document(file_hash[:16])
+    assert doc is not None
     assert "entity_warnings" not in doc
     assert "entity_warnings" not in (doc.get("metadata") or {})
     # sidecar-authored raw_entities is preferred over the commit-time resolve.
@@ -1526,7 +1690,9 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
     # write path, not write raw sidecar text straight into the truth table.
     patch_entity_resolver(
         monkeypatch,
-        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}},
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}
+        },
     )
 
     file_hash = "aa" * 32
@@ -1544,6 +1710,7 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
     assert report1.processed == ["doc.corpus.md"]
 
     doc_before = store.get_document(doc_id)
+    assert doc_before is not None
     assert doc_before["wk_name"] is None
     assert doc_before["project_name"] is None
 
@@ -1554,6 +1721,11 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
             "UPDATE documents SET project_name = ? WHERE doc_id = ?",
             (json.dumps(["Portal Project"]), doc_id),
         )
+    # A real portal save triggers _refresh_mirror_after_save; this direct
+    # SQL write bypasses that, so refresh explicitly — get_document is a
+    # serving read off the mirror, and the assertion below runs before the
+    # merge-only commit gets a chance to refresh.
+    store.refresh_mirror()
 
     # Re-extract updates the same sidecar: wk_name now populated, and a
     # DIFFERENT project_name than the portal-edited one.
@@ -1572,6 +1744,7 @@ def test_commit_already_committed_fills_blank_and_preserves_portal_edit(
     assert report2.processed == ["doc.corpus.md (entities merged: wk_name)"]
     assert report2.skipped == []
     doc_after = store.get_document(doc_id)
+    assert doc_after is not None
     assert doc_after["wk_name"] == ["Rokan"]
     assert doc_after["field_name"] is None
     # The portal edit was preserved, not overwritten by the sidecar value.
@@ -1597,12 +1770,12 @@ def test_commit_already_committed_fill_blank_merge_resolves_alias(
 
     file_hash = "1a" * 32
     doc_id = file_hash[:16]
-    make_sidecar(
-        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
-    )
+    make_sidecar(tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None)
     report1 = pipeline.run_commit([tmp_path])
     assert report1.processed == ["doc.corpus.md"]
-    assert store.get_document(doc_id)["wk_name"] is None
+    doc_before = store.get_document(doc_id)
+    assert doc_before is not None
+    assert doc_before["wk_name"] is None
 
     # Hand-edited sidecar now carries an alias that resolves to a
     # DIFFERENT canonical name.
@@ -1620,6 +1793,7 @@ def test_commit_already_committed_fill_blank_merge_resolves_alias(
 
     assert report2.processed == ["doc.corpus.md (entities merged: wk_name)"]
     doc_after = store.get_document(doc_id)
+    assert doc_after is not None
     # Canonical name stored, not the raw alias.
     assert doc_after["wk_name"] == ["WK Rokan"]
     store.close()
@@ -1636,12 +1810,12 @@ def test_commit_already_committed_fill_blank_merge_drops_unresolvable(
 
     file_hash = "2b" * 32
     doc_id = file_hash[:16]
-    make_sidecar(
-        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
-    )
+    make_sidecar(tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None)
     report1 = pipeline.run_commit([tmp_path])
     assert report1.processed == ["doc.corpus.md"]
-    assert store.get_document(doc_id)["wk_name"] is None
+    doc_before = store.get_document(doc_id)
+    assert doc_before is not None
+    assert doc_before["wk_name"] is None
 
     make_sidecar(
         tmp_path,
@@ -1656,7 +1830,9 @@ def test_commit_already_committed_fill_blank_merge_drops_unresolvable(
     # Nothing merged: field stays None, doc reported as still-blank/skipped.
     assert report2.processed == []
     assert report2.skipped == ["doc.corpus.md (already committed)"]
-    assert store.get_document(doc_id)["wk_name"] is None
+    doc = store.get_document(doc_id)
+    assert doc is not None
+    assert doc["wk_name"] is None
     assert any(
         "wk_name 'Totally Unknown WK' not found — not merged" in w
         for w in report2.warnings
@@ -1676,7 +1852,9 @@ def test_commit_already_committed_no_blanks_still_skips(tmp_path, monkeypatch):
         tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name="Rokan"
     )
     pipeline.run_commit([tmp_path])
-    assert store.get_document(doc_id)["wk_name"] == ["Rokan"]
+    doc = store.get_document(doc_id)
+    assert doc is not None
+    assert doc["wk_name"] == ["Rokan"]
 
     # Re-commit with the exact same (already non-blank) entity values.
     report2 = pipeline.run_commit([tmp_path])
@@ -1720,6 +1898,7 @@ def test_commit_force_overwrites_entities_ignoring_merge(tmp_path, monkeypatch):
 
     assert report.processed == ["doc.corpus.md"]
     doc = store.get_document(doc_id)
+    assert doc is not None
     assert doc["wk_name"] == ["Rokan Hilir"]
     store.close()
 
@@ -1732,11 +1911,11 @@ def test_commit_dry_run_skips_entity_merge(tmp_path, monkeypatch):
 
     file_hash = "df" * 32
     doc_id = file_hash[:16]
-    make_sidecar(
-        tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None
-    )
+    make_sidecar(tmp_path, "doc.pdf", reviewed=True, file_hash=file_hash, wk_name=None)
     pipeline.run_commit([tmp_path])
-    assert store.get_document(doc_id)["wk_name"] is None
+    doc = store.get_document(doc_id)
+    assert doc is not None
+    assert doc["wk_name"] is None
 
     fill_calls = []
     orig_fill = store.fill_blank_entities
@@ -1755,6 +1934,7 @@ def test_commit_dry_run_skips_entity_merge(tmp_path, monkeypatch):
     assert fill_calls == []
     assert report.skipped == ["doc.corpus.md (already committed)"]
     doc_after = store.get_document(doc_id)
+    assert doc_after is not None
     assert doc_after["wk_name"] is None  # dry_run: no write at all
     store.close()
 
@@ -1935,9 +2115,7 @@ def test_commit_regulation_rule_strips_entities_and_warns(tmp_path, monkeypatch)
         "doc_level 'wk' overridden to 'regulation' (doc_type 'uu' rule)" in w
         for w in report.warnings
     )
-    assert any(
-        "regulation" in w and "wk_name" in w for w in report.warnings
-    )
+    assert any("regulation" in w and "wk_name" in w for w in report.warnings)
     store.close()
 
 
@@ -1966,20 +2144,36 @@ def test_commit_no_rule_warning_when_level_already_matches(tmp_path, monkeypatch
 
 
 def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
-    """An exception raised after read_sidecar succeeds (e.g. store.insert_document choking on an unparseable hand-edited doc_date) must not abort the batch -- it's recorded as a per-file failure and the rest of the batch still commits."""
+    """An exception after read_sidecar succeeds is isolated to its own file, not the batch.
+
+    An exception raised after read_sidecar succeeds (e.g. store.insert_document
+    choking on a malformed row) must not abort the batch -- it's recorded as a
+    per-file failure and the rest of the batch still commits.
+
+    Task 7 dropped insert_document's DuckDB `documents` write (now derived via
+    refresh_mirror(), which tolerates a bad doc_date by TRY_CAST-ing it to NULL
+    instead of raising), so an unparseable hand-edited doc_date no longer fails
+    at insert time -- the scenario this test used to rely on. insert_document
+    is monkeypatched to fail for one doc instead, to keep testing the
+    per-file-isolation contract on its own terms.
+    """
     store = make_store(tmp_path)
     store.ensure_tables()
     patch_store_factory(monkeypatch, store)
     patch_entity_resolver(monkeypatch)
 
-    make_sidecar(
-        tmp_path,
-        "bad.pdf",
-        reviewed=True,
-        file_hash="55" * 32,
-        doc_date="31 Februari dua ribu",
-    )
+    bad_hash = "55" * 32
+    make_sidecar(tmp_path, "bad.pdf", reviewed=True, file_hash=bad_hash)
     make_sidecar(tmp_path, "good.pdf", reviewed=True, file_hash="66" * 32)
+
+    original_insert = store.insert_document
+
+    def flaky_insert(doc, chunks):
+        if doc["file_hash"] == bad_hash:
+            raise RuntimeError("simulated insert failure")
+        return original_insert(doc, chunks)
+
+    monkeypatch.setattr(store, "insert_document", flaky_insert)
 
     report = pipeline.run_commit([tmp_path])
 
@@ -1996,7 +2190,9 @@ def test_commit_exception_after_read_sidecar_isolated(tmp_path, monkeypatch):
 def _patch_rokan_resolver(monkeypatch):
     """Fake resolver knowing 'Rokan' — entity overrides are DB-validated now."""
     fake = FakeEntityResolver(
-        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}}
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}
+        }
     )
     monkeypatch.setattr(
         pipeline, "_entity_resolver_or_none", lambda store, report: fake
@@ -2239,9 +2435,7 @@ def test_meta_warns_when_already_committed(tmp_path, monkeypatch):
 
     report = pipeline.run_meta([tmp_path], wk_name="Rokan")
 
-    assert any(
-        "already committed" in w and "--force" in w for w in report.warnings
-    )
+    assert any("already committed" in w and "--force" in w for w in report.warnings)
     store.close()
 
 
@@ -2286,7 +2480,9 @@ def test_meta_unknown_entity_override_rejected_before_write(tmp_path, monkeypatc
 
 def test_meta_valid_entity_override_proceeds(tmp_path, monkeypatch):
     fake = FakeEntityResolver(
-        matches={"Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}}
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "Rokan", "confidence": 1.0}
+        }
     )
     monkeypatch.setattr(
         pipeline, "_entity_resolver_or_none", lambda store, report: fake
@@ -2484,17 +2680,22 @@ def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkey
     }
     store1.insert_document(doc_a, [Chunk(0, None, "isi dokumen a")])
     store1.insert_document(doc_b, [Chunk(0, None, "isi dokumen b")])
+    # list_documents/get_document are serving reads off the DuckDB mirror
+    # (Task 8); populate it so run_reembed's list_documents() sees these docs.
+    store1.refresh_mirror()
     store1.close()
 
-    store2 = CorpusStore(db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder2())
+    store2 = CorpusStore(
+        db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder2(), read_only=False
+    )
     monkeypatch.setattr(pipeline, "CorpusStore", lambda *a, **kw: store2)
 
     orig_replace = store2.replace_chunks
 
-    def flaky_replace(doc_id, chunks):
-        if doc_id == doc_b["doc_id"]:
+    def flaky_replace(doc, chunks):
+        if doc["doc_id"] == doc_b["doc_id"]:
             raise RuntimeError("embedding backend down")
-        return orig_replace(doc_id, chunks)
+        return orig_replace(doc, chunks)
 
     monkeypatch.setattr(store2, "replace_chunks", flaky_replace)
 
@@ -2504,6 +2705,7 @@ def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkey
     assert "b.pdf" in report.failed
 
     updated_a = store2.get_document(doc_a["doc_id"])
+    assert updated_a is not None
     assert updated_a["embedding_model"] == "fake-embed-v2"
     store2.close()
 
@@ -2578,6 +2780,7 @@ def fake_progress_with_status_factory(captured):
         handle = FakeProgressHandle()
         captured.update(verb=verb, total=total, unit=unit, handle=handle)
         yield handle
+
     return factory
 
 
@@ -2724,7 +2927,8 @@ def test_extract_writes_pod_suggestions(tmp_path, monkeypatch):
     patch_store_factory(monkeypatch, store)
     _seed_registry_pod(store)
     monkeypatch.setattr(
-        pipeline, "llm_extract",
+        pipeline,
+        "llm_extract",
         lambda markdown, caller: {
             "doc_type": "letter",
             "doc_number": "SRT-0368",
@@ -2747,12 +2951,17 @@ def test_commit_stores_pod_fields(tmp_path, monkeypatch):
     patch_entity_resolver(monkeypatch)
     _seed_registry_pod(store)
     sc = make_sidecar(
-        tmp_path, "doc.pdf", reviewed=True, file_hash="cc" * 32,
-        pod_name=["POD I Lapangan Abadi"], doc_number="SRT-0368",
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash="cc" * 32,
+        pod_name=["POD I Lapangan Abadi"],
+        doc_number="SRT-0368",
     )
     report = pipeline.run_commit([sc])
     assert report.processed and not report.failed
     doc = store.get_document(("cc" * 32)[:16])
+    assert doc is not None
     assert doc["pod_name"] == ["POD I Lapangan Abadi"]
     assert doc["suggested_pod_ids"] == ["PL-2019-0300-4-1-0"]
     store.close()
@@ -2799,6 +3008,12 @@ def test_export_writes_sidecar_reflecting_db_including_portal_edits(
             "UPDATE documents SET wk_name = ?, subject = ? WHERE doc_id = ?",
             (json.dumps(["Portal WK"]), "portal-edited subject", doc_id),
         )
+    # A real portal save triggers _refresh_mirror_after_save; this direct
+    # SQL write bypasses that. run_export now reads the SQLite truth
+    # directly (via get_document_by_id), so this refresh isn't required
+    # for the assertions below -- kept anyway to exercise the normal
+    # post-edit path and keep the mirror in sync too.
+    store.refresh_mirror()
 
     report = pipeline.run_export([sc])
 
@@ -2882,4 +3097,44 @@ def test_export_all_covers_every_committed_row(tmp_path, monkeypatch):
 
     assert sorted(report.processed) == ["a.corpus.md", "b.corpus.md"]
     assert report.failed == {}
+    store.close()
+
+
+def test_export_reads_truth_when_mirror_is_empty(tmp_path, monkeypatch):
+    """Export reads document content from the SQLite truth even when the mirror is empty.
+
+    Export's content fetch must come from the SQLite truth, not the
+    DuckDB mirror: a fresh install or a refresh that lost the DuckDB
+    single-writer lock leaves `documents` empty/stale in DuckDB while the
+    truth already has every byte. Simulate that by making refresh_mirror
+    a no-op for the commit, so the mirror never gets the row, then assert
+    export still finds the document and writes the correct markdown.
+    """
+    store = make_store(tmp_path)
+    store.ensure_tables()
+    patch_store_factory(monkeypatch, store)
+    patch_entity_resolver(monkeypatch)
+
+    monkeypatch.setattr(store, "refresh_mirror", lambda: None)
+
+    sc = make_sidecar(
+        tmp_path,
+        "doc.pdf",
+        reviewed=True,
+        file_hash="dd" * 32,
+        body="# Doc\nisi dokumen penting",
+    )
+    commit_report = pipeline.run_commit([tmp_path])
+    assert commit_report.processed == ["doc.corpus.md"]
+
+    # The mirror never got the row: refresh_mirror was a no-op above.
+    doc_id = ("dd" * 32)[:16]
+    assert store.get_document(doc_id) is None
+
+    report = pipeline.run_export([sc])
+
+    assert report.processed == ["doc.corpus.md"]
+    assert report.failed == {}
+    _meta, body = read_sidecar(sc)
+    assert "isi dokumen penting" in body
     store.close()

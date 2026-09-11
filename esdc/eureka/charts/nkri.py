@@ -166,12 +166,14 @@ def nkri_timeseries_oc(
             "x": 0.5,
         },
         margin={"l": 50, "r": 30, "t": 30, "b": 80},
-        **{k: v for k, v in PLOTLY_LAYOUT_DEFAULTS.items()
-           if k not in ("margin", "legend")},
+        **{
+            k: v
+            for k, v in PLOTLY_LAYOUT_DEFAULTS.items()
+            if k not in ("margin", "legend")
+        },
     )
     totals = [
-        sum(values[c][i] for c in TIMESERIES_CATEGORIES)
-        for i in range(len(years))
+        sum(values[c][i] for c in TIMESERIES_CATEGORIES) for i in range(len(years))
     ]
     fig.add_trace(
         go.Scatter(
@@ -225,12 +227,14 @@ def nkri_timeseries_an(
             "x": 0.5,
         },
         margin={"l": 50, "r": 30, "t": 30, "b": 80},
-        **{k: v for k, v in PLOTLY_LAYOUT_DEFAULTS.items()
-           if k not in ("margin", "legend")},
+        **{
+            k: v
+            for k, v in PLOTLY_LAYOUT_DEFAULTS.items()
+            if k not in ("margin", "legend")
+        },
     )
     totals = [
-        sum(values[c][i] for c in TIMESERIES_CATEGORIES)
-        for i in range(len(years))
+        sum(values[c][i] for c in TIMESERIES_CATEGORIES) for i in range(len(years))
     ]
     fig.add_trace(
         go.Scatter(
@@ -287,9 +291,7 @@ def nkri_onstream_chart(
         elif cls == "3. Prospective Resources":
             by_year[yr]["Prospective Resources"] += row.project_count
 
-    sorted_years = sorted(
-        y for y in years_set if y >= report_year + 1
-    )
+    sorted_years = sorted(y for y in years_set if y >= report_year + 1)
     if not sorted_years:
         return go.Figure()
 
@@ -307,8 +309,11 @@ def nkri_onstream_chart(
             "x": 0.5,
         },
         margin={"l": 50, "r": 30, "t": 30, "b": 80},
-        **{k: v for k, v in PLOTLY_LAYOUT_DEFAULTS.items()
-           if k not in ("margin", "legend")},
+        **{
+            k: v
+            for k, v in PLOTLY_LAYOUT_DEFAULTS.items()
+            if k not in ("margin", "legend")
+        },
     )
     for cat in ONSTREAM_CATEGORIES:
         vals = [by_year[y].get(cat, 0) for y in sorted_years]

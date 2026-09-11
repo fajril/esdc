@@ -1,8 +1,10 @@
+"""Tests for application configuration."""
+
 import os
 from pathlib import Path
 from unittest.mock import patch
 
-from esdc.configs import Config
+from esdc.configs import KEY_DESCRIPTIONS, MODEL_SECTIONS, SETTINGS_SECTIONS, Config
 
 
 class TestConfigDir:
@@ -201,3 +203,128 @@ class TestDbFile:
         """Test get_db_path returns directory (backwards compatibility)."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             assert Config.get_db_path() == tmp_path
+
+
+class TestWizardSectionCoverage:
+    """MODEL_SECTIONS + SETTINGS_SECTIONS must cover every editable key once.
+
+    The wizard redesign groups flat config keys into a domain tree. This
+    invariant guards against a new key silently falling out of the tree
+    (no home) or landing in two groups at once.
+    """
+
+    def _editable_flat_keys(self) -> set[str]:
+        flat_defaults = Config._flatten(Config.get_defaults())
+        editable = set(flat_defaults.keys())
+        editable |= {f"corpus.{k}" for k in Config.CORPUS_DEFAULTS}
+        editable |= {
+            "phoenix.enabled",
+            "phoenix.collector_endpoint",
+            "phoenix.project_name",
+        }
+        # default_provider / provider_order are edited only via the
+        # provider CRUD flows, never via the flat key sections.
+        editable -= {"default_provider", "provider_order"}
+        return editable
+
+    def test_union_matches_editable_keys(self):
+        grouped_keys: list[str] = []
+        for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values():
+            grouped_keys.extend(keys)
+
+        assert set(grouped_keys) == self._editable_flat_keys()
+
+    def test_no_key_duplicated_across_groups(self):
+        grouped_keys: list[str] = []
+        for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values():
+            grouped_keys.extend(keys)
+
+        assert len(grouped_keys) == len(set(grouped_keys))
+
+    def test_no_orphan_keys(self):
+        grouped_keys = {
+            key
+            for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
+            for key in keys
+        }
+        orphans = self._editable_flat_keys() - grouped_keys
+        assert orphans == set()
+
+
+class TestBooleanAndIntKeyCoercion:
+    """Guard the coercion sets that drive the wizard and YAML/env parsing.
+
+    BOOLEAN_KEYS/INT_KEYS membership drives both wizard widget selection
+    and Config._coerce_value's YAML/env normalization. A key whose default is
+    bool/int but missing from these sets is silently saved/read as a string.
+    """
+
+    def test_phoenix_enabled_in_boolean_keys(self):
+        assert "phoenix.enabled" in Config.BOOLEAN_KEYS
+
+    def test_corpus_int_keys_in_int_keys(self):
+        expected = {
+            "corpus.chunk_size",
+            "corpus.chunk_overlap",
+            "corpus.ocr_dpi",
+            "corpus.num_ctx",
+            "corpus.min_chars_per_page",
+        }
+        assert expected <= Config.INT_KEYS
+
+    def test_coerce_phoenix_enabled_true(self):
+        assert Config._coerce_value("phoenix.enabled", "true") is True
+
+    def test_coerce_phoenix_enabled_false(self):
+        assert Config._coerce_value("phoenix.enabled", "false") is False
+
+    def test_coerce_corpus_chunk_size(self):
+        assert Config._coerce_value("corpus.chunk_size", "3000") == 3000
+
+    def test_coerce_corpus_ocr_dpi(self):
+        assert Config._coerce_value("corpus.ocr_dpi", "200") == 200
+
+    def test_coerce_malformed_int_stays_string(self):
+        assert Config._coerce_value("corpus.chunk_size", "abc") == "abc"
+
+    def test_all_bool_and_int_defaults_are_registered(self):
+        """Completeness guard over every default key.
+
+        Bool defaults must land in BOOLEAN_KEYS and int defaults must land
+        in INT_KEYS, so no sibling gap can reappear (floats like
+        corpus.min_image_area are excluded on purpose).
+        """
+        flat_defaults = Config._flatten(Config.get_defaults())
+        flat_defaults.update(
+            {f"corpus.{k}": v for k, v in Config.CORPUS_DEFAULTS.items()}
+        )
+        for key, value in flat_defaults.items():
+            if isinstance(value, bool):
+                assert key in Config.BOOLEAN_KEYS, f"{key} missing from BOOLEAN_KEYS"
+            elif isinstance(value, int):
+                assert key in Config.INT_KEYS, f"{key} missing from INT_KEYS"
+
+
+class TestCorpusExtractionBounds:
+    """Defaults and descriptions for bounded extraction calls."""
+
+    def test_extract_max_tokens_default(self):
+        assert Config.CORPUS_DEFAULTS["extract_max_tokens"] == 8192
+
+    def test_extract_timeout_seconds_default(self):
+        assert Config.CORPUS_DEFAULTS["extract_timeout_seconds"] == 300
+
+    def test_extract_keys_have_descriptions(self):
+        assert "corpus.extract_max_tokens" in KEY_DESCRIPTIONS
+        assert "corpus.extract_timeout_seconds" in KEY_DESCRIPTIONS
+
+    def test_extract_keys_listed_in_wizard_sections(self):
+        from esdc.configs import SETTINGS_SECTIONS
+
+        section_keys = set(SETTINGS_SECTIONS["Corpus processing"])
+        assert "corpus.extract_max_tokens" in section_keys
+        assert "corpus.extract_timeout_seconds" in section_keys
+
+    def test_extract_keys_coerce_as_ints(self):
+        assert Config._coerce_value("corpus.extract_max_tokens", "0") == 0
+        assert Config._coerce_value("corpus.extract_timeout_seconds", "0") == 0

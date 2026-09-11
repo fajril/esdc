@@ -1,3 +1,5 @@
+"""Tests for the portal API."""
+
 import duckdb
 from fastapi.testclient import TestClient
 
@@ -22,22 +24,34 @@ def _seed_documents(doc_ids):
             "INSERT INTO documents (doc_id, file_name, file_path, file_hash,"
             " markdown, extraction_method, embedding_model)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (doc_id, f"{doc_id}.pdf", f"/x/{doc_id}.pdf", doc_id * 4,
-             "# isi", "native", "fake-embed"),
+            (
+                doc_id,
+                f"{doc_id}.pdf",
+                f"/x/{doc_id}.pdf",
+                doc_id * 4,
+                "# isi",
+                "native",
+                "fake-embed",
+            ),
         )
     conn.commit()
     conn.close()
 
 
 def _seed_duckdb_entities(
-    tmp_path, wk_name=None, field_name=None, project_name=None,
-    mirror_documents=True, mirror_doc_ids=(),
+    tmp_path,
+    wk_name=None,
+    field_name=None,
+    project_name=None,
+    mirror_documents=True,
+    mirror_doc_ids=(),
 ):
     """Seed the DuckDB file `_patch_dirs` points Config.get_db_file() at.
 
     Populates the `project_resources` lookup table EntityResolver queries,
-    plus (optionally) a `documents` mirror table for `_mirror_updates` to
-    write into. Mirrors the setup in tests/portal/test_document_entities.py's
+    plus (optionally) a `documents` mirror table pre-seeded before
+    `_refresh_mirror_after_save`'s wholesale rebuild runs. Mirrors the setup
+    in tests/portal/test_document_entities.py's
     test_default_resolver_and_mirror_share_db_path.
     """
     path = tmp_path / "esdc.duckdb"
@@ -56,9 +70,7 @@ def _seed_duckdb_entities(
             " field_name JSON, project_name JSON)"
         )
         for doc_id in mirror_doc_ids:
-            conn.execute(
-                "INSERT INTO documents VALUES (?, NULL, NULL, NULL)", [doc_id]
-            )
+            conn.execute("INSERT INTO documents VALUES (?, NULL, NULL, NULL)", [doc_id])
     conn.close()
     return path
 
@@ -66,7 +78,9 @@ def _seed_duckdb_entities(
 def _client(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     conn = get_sqlite_connection()
-    conn.execute("INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')")
+    conn.execute(
+        "INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')"
+    )
     conn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (1, 'POD I')")
     conn.commit()
     conn.close()
@@ -79,9 +93,7 @@ def test_get_table_rows_and_refs(monkeypatch, tmp_path):
     assert resp.status_code == 200
     body = resp.json()
     assert body["rows"] == []
-    assert body["refs"]["institutions"] == [
-        {"code": 4, "institution": "SKK Migas"}
-    ]
+    assert body["refs"]["institutions"] == [{"code": 4, "institution": "SKK Migas"}]
 
 
 def test_get_unknown_table_404(monkeypatch, tmp_path):
@@ -89,22 +101,55 @@ def test_get_unknown_table_404(monkeypatch, tmp_path):
     assert client.get("/api/tables/nope").status_code == 404
 
 
+def test_m_pod_columns_distinguish_revision_from_supersession(monkeypatch, tmp_path):
+    """Portal m_pod view exposes revised_by and full-replacement superseded_by."""
+    from esdc.portal.tables import TABLE_CONFIGS
+
+    config = TABLE_CONFIGS["m_pod"]
+    fields = {column["field"] for column in config["columns"]}
+    assert {"preceded_by", "revised_by", "superseded_by"} <= fields
+    assert "revised_by" in config["sql"]
+    assert "revision_effect = 'full_replacement'" in config["sql"]
+
+
 def test_save_insert_returns_generated_pod_id(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    resp = client.post("/api/tables/m_pod/save", json={"inserts": [{
-        "id": 1, "pod_name": "POD Baru", "approval_date": "2026-07-15",
-        "institution_code": 4, "pod_type_code": 1, "rev_num": 0,
-    }]})
+    resp = client.post(
+        "/api/tables/m_pod/save",
+        json={
+            "inserts": [
+                {
+                    "id": 1,
+                    "pod_name": "POD Baru",
+                    "approval_date": "2026-07-15",
+                    "institution_code": 4,
+                    "pod_type_code": 1,
+                    "rev_num": 0,
+                }
+            ]
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["generated"][0]["pod_id"] == "PL-2026-0001-4-1-0"
 
 
 def test_save_validation_error_422(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    resp = client.post("/api/tables/m_pod/save", json={"inserts": [{
-        "id": 1, "pod_name": "Bad", "approval_date": "2026-07-15",
-        "institution_code": 99, "pod_type_code": 1, "rev_num": 0,
-    }]})
+    resp = client.post(
+        "/api/tables/m_pod/save",
+        json={
+            "inserts": [
+                {
+                    "id": 1,
+                    "pod_name": "Bad",
+                    "approval_date": "2026-07-15",
+                    "institution_code": 99,
+                    "pod_type_code": 1,
+                    "rev_num": 0,
+                }
+            ]
+        },
+    )
     assert resp.status_code == 422
     assert resp.json()["errors"]
 
@@ -118,10 +163,21 @@ def test_save_does_not_run_publish(monkeypatch, tmp_path):
         raise RuntimeError("duckdb locked")
 
     monkeypatch.setattr("esdc.portal.app.publish_pod_registry", boom)
-    resp = client.post("/api/tables/m_pod/save", json={"inserts": [{
-        "id": 1, "pod_name": "POD Baru", "approval_date": "2026-07-15",
-        "institution_code": 4, "pod_type_code": 1, "rev_num": 0,
-    }]})
+    resp = client.post(
+        "/api/tables/m_pod/save",
+        json={
+            "inserts": [
+                {
+                    "id": 1,
+                    "pod_name": "POD Baru",
+                    "approval_date": "2026-07-15",
+                    "institution_code": 4,
+                    "pod_type_code": 1,
+                    "rev_num": 0,
+                }
+            ]
+        },
+    )
     assert resp.status_code == 200
     assert "publish_error" not in resp.json()
 
@@ -148,10 +204,21 @@ def test_projects_autocomplete_empty_when_no_duckdb(monkeypatch, tmp_path):
 
 
 def _insert_pod(client):
-    resp = client.post("/api/tables/m_pod/save", json={"inserts": [{
-        "id": 1, "pod_name": "POD Baru", "approval_date": "2026-07-15",
-        "institution_code": 4, "pod_type_code": 1, "rev_num": 0,
-    }]})
+    resp = client.post(
+        "/api/tables/m_pod/save",
+        json={
+            "inserts": [
+                {
+                    "id": 1,
+                    "pod_name": "POD Baru",
+                    "approval_date": "2026-07-15",
+                    "institution_code": 4,
+                    "pod_type_code": 1,
+                    "rev_num": 0,
+                }
+            ]
+        },
+    )
     assert resp.status_code == 200
 
 
@@ -162,18 +229,21 @@ def test_pod_document_refs_include_documents(monkeypatch, tmp_path):
     assert resp.status_code == 200
     body = resp.json()
     assert body["rows"] == []
-    assert body["refs"]["documents"] == {
-        "ccbd4f3f27635c76": "ccbd4f3f27635c76.pdf"
-    }
+    assert body["refs"]["documents"] == {"ccbd4f3f27635c76": "ccbd4f3f27635c76.pdf"}
 
 
 def test_pod_document_save_rejects_unknown_doc_id(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     _insert_pod(client)
     _seed_documents(["ccbd4f3f27635c76"])
-    resp = client.post("/api/tables/pod_document/save", json={"inserts": [
-        {"pod_id": 1, "doc_id": "nope"},
-    ]})
+    resp = client.post(
+        "/api/tables/pod_document/save",
+        json={
+            "inserts": [
+                {"pod_id": 1, "doc_id": "nope"},
+            ]
+        },
+    )
     assert resp.status_code == 422
     assert "nope" in resp.json()["errors"][0]["message"]
 
@@ -182,9 +252,14 @@ def test_pod_document_save_and_roundtrip(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     _insert_pod(client)
     _seed_documents(["ccbd4f3f27635c76"])
-    resp = client.post("/api/tables/pod_document/save", json={"inserts": [
-        {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
-    ]})
+    resp = client.post(
+        "/api/tables/pod_document/save",
+        json={
+            "inserts": [
+                {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
+            ]
+        },
+    )
     assert resp.status_code == 200
     rows = client.get("/api/tables/pod_document").json()["rows"]
     assert rows == [{"pod_id": 1, "doc_id": "ccbd4f3f27635c76"}]
@@ -197,9 +272,14 @@ def test_pod_document_save_skips_doc_check_when_corpus_unavailable(
     # project ids), it must not hard-fail the save.
     client = _client(monkeypatch, tmp_path)
     _insert_pod(client)
-    resp = client.post("/api/tables/pod_document/save", json={"inserts": [
-        {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
-    ]})
+    resp = client.post(
+        "/api/tables/pod_document/save",
+        json={
+            "inserts": [
+                {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
+            ]
+        },
+    )
     assert resp.status_code == 200
 
 
@@ -207,9 +287,14 @@ def test_documents_grid_rows_and_linked_count(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     _insert_pod(client)
     _seed_documents(["ccbd4f3f27635c76", "def456"])
-    resp = client.post("/api/tables/pod_document/save", json={"inserts": [
-        {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
-    ]})
+    resp = client.post(
+        "/api/tables/pod_document/save",
+        json={
+            "inserts": [
+                {"pod_id": 1, "doc_id": "ccbd4f3f27635c76"},
+            ]
+        },
+    )
     assert resp.status_code == 200
 
     rows = client.get("/api/tables/documents").json()["rows"]
@@ -246,9 +331,14 @@ def test_documents_save_updates_entity_fields(monkeypatch, tmp_path):
     _seed_documents(["D1"])
     _seed_duckdb_entities(tmp_path, wk_name="Rokan", mirror_doc_ids=["D1"])
 
-    resp = client.post("/api/tables/documents/save", json={"updates": [
-        {"doc_id": "D1", "wk_name": "Rokan"},
-    ]})
+    resp = client.post(
+        "/api/tables/documents/save",
+        json={
+            "updates": [
+                {"doc_id": "D1", "wk_name": "Rokan"},
+            ]
+        },
+    )
 
     assert resp.status_code == 200
     body = resp.json()
@@ -260,10 +350,13 @@ def test_documents_save_updates_entity_fields(monkeypatch, tmp_path):
 
 def test_documents_save_inserts_and_deletes_rejected_422(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    resp = client.post("/api/tables/documents/save", json={
-        "inserts": [{"doc_id": "D2"}],
-        "deletes": [{"doc_id": "D1"}],
-    })
+    resp = client.post(
+        "/api/tables/documents/save",
+        json={
+            "inserts": [{"doc_id": "D2"}],
+            "deletes": [{"doc_id": "D1"}],
+        },
+    )
     assert resp.status_code == 422
     kinds = {e["kind"] for e in resp.json()["errors"]}
     assert kinds == {"insert", "delete"}
@@ -274,26 +367,48 @@ def test_documents_save_unknown_name_rejected_422(monkeypatch, tmp_path):
     _seed_documents(["D1"])
     _seed_duckdb_entities(tmp_path, wk_name="Rokan", mirror_doc_ids=["D1"])
 
-    resp = client.post("/api/tables/documents/save", json={"updates": [
-        {"doc_id": "D1", "wk_name": "Nonexistent"},
-    ]})
+    resp = client.post(
+        "/api/tables/documents/save",
+        json={
+            "updates": [
+                {"doc_id": "D1", "wk_name": "Nonexistent"},
+            ]
+        },
+    )
 
     assert resp.status_code == 422
     assert "Nonexistent" in resp.json()["errors"][0]["message"]
 
 
 def test_documents_save_warnings_passthrough(monkeypatch, tmp_path):
+    """A refresh that loses the DuckDB lock degrades to a warning, not a failed save.
+
+    `refresh_mirror()` rebuilds `documents` wholesale (`CREATE OR REPLACE
+    TABLE`), so a missing mirror table no longer reproduces a failure --
+    unlike the old row-by-row UPDATE mirror, it just creates the table.
+    Instead, hold a read-only DuckDB connection open on the same file:
+    DuckDB refuses a second connection under a different configuration,
+    which is exactly what happens if `esdc corpus commit` still holds
+    the write lock when the portal save's refresh runs.
+    """
     client = _client(monkeypatch, tmp_path)
     _seed_documents(["D1"])
-    # No documents mirror table -> the DuckDB UPDATE fails after the SQLite
-    # commit already succeeded, downgraded to a warning (never a 422/500).
     _seed_duckdb_entities(tmp_path, wk_name="Rokan", mirror_documents=False)
 
-    resp = client.post("/api/tables/documents/save", json={"updates": [
-        {"doc_id": "D1", "wk_name": "Rokan"},
-    ]})
+    lock_conn = duckdb.connect(str(tmp_path / "esdc.duckdb"), read_only=True)
+    try:
+        resp = client.post(
+            "/api/tables/documents/save",
+            json={
+                "updates": [
+                    {"doc_id": "D1", "wk_name": "Rokan"},
+                ]
+            },
+        )
+    finally:
+        lock_conn.close()
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["warnings"]
-    assert "D1" in body["warnings"][0]
+    assert "esdc corpus sync" in body["warnings"][0]

@@ -1,0 +1,100 @@
+schema_version: 1
+
+query_patterns:
+  profil_produksi:
+    description: Production profile forecast for a field
+    keywords: [profil, produksi, forecast, profile, prediksi, tpf]
+    primary_entity: Field
+    requires_entity: true
+    default_table: field_timeseries
+    suggested_columns: [tpf_oc, tpf_an, slf_oc, slf_an]
+
+  cadangan:
+    description: Reserve/resource volumes
+    keywords: [cadangan, reserves, sumber daya, resources]
+    primary_entity: Field
+    requires_entity: true
+    default_table: field_resources
+    suggested_columns: [res_oc, res_an, rec_oc, rec_an]
+
+  top_n:
+    description: Top N entities by volume
+    keywords: [top, tertinggi, terbesar, largest, ranking]
+    primary_entity: Field
+    requires_entity: false
+
+  per_operator:
+    description: All projects/fields by operator
+    keywords: [operator, perusahaan, company, Pertamina, Chevron]
+    primary_entity: Operator
+    requires_entity: true
+
+  per_wk:
+    description: All projects/fields in working area
+    keywords: [wilayah kerja, wk, working area, blok]
+    primary_entity: WorkingArea
+    requires_entity: true
+
+  issues_remarks:
+    description: Look for qualitative issues/problems in project_remarks or vol_remarks. YearOverYearChange is for quantitative volume changes only.
+    keywords: [isu, masalah, problem, issue, catatan, remarks]
+    primary_entity: Report
+    requires_entity: true
+
+  last_production_year:
+    description: Find the last year a field/project produced (non-zero production). Use direct FIELD_HAS_YEARLY_RATE relationship.
+    keywords: [terakhir berproduksi, last produced, produksi terakhir, kapan, when]
+    primary_entity: Field
+    requires_entity: true
+
+  field_complete_status:
+    description: "Get complete field information: attributes, latest report status, reserves, and issues in SINGLE query"
+    keywords: [status lapangan, informasi lengkap, complete field info, gambaran lapangan]
+    primary_entity: Field
+    requires_entity: true
+
+  field_reserves_with_report:
+    description: Get field reserves and associated report details in single query
+    keywords: [cadangan lapangan, reserves field, GRR lapangan, sumber daya lapangan]
+    primary_entity: Field
+    requires_entity: true
+    default_table: field_resources
+    suggested_columns: [res_oc, res_an, rec_oc, rec_an]
+
+  field_production_timeline:
+    description: Get complete production history for a field (single query)
+    keywords: [profil produksi, produksi historis, riwayat produksi, production history, timeline]
+    primary_entity: Field
+    requires_entity: true
+
+  field_forecast_timeline:
+    description: Get production forecast for a field (single query)
+    keywords: [forecast, prediksi, ramalan, proyeksi, prospective production]
+    primary_entity: Field
+    requires_entity: true
+
+  field_issues_remarks:
+    description: Get field issues from project_remarks in single query (not from YearOverYearChange)
+    keywords: [isu lapangan, masalah lapangan, catatan lapangan, problems, issues]
+    primary_entity: Field
+    requires_entity: true
+
+  working_area_aggregated_reserves:
+    description: Get aggregated reserves for a Working Area (single query)
+    keywords: [cadangan WK, cadangan wilayah kerja, reserves working area, total WK]
+    primary_entity: WorkingArea
+    requires_entity: true
+    default_table: wa_resources
+    suggested_columns: [res_oc, res_an, rec_oc, rec_an]
+
+  field_recovery_metrics:
+    description: Get recovery factor and in-place volumes for a field
+    keywords: [recovery factor, rf oil, rf gas, in place, ioip, igip]
+    primary_entity: Field
+    requires_entity: true
+
+  field_volume_changes:
+    description: Get year-over-year volume changes by category (UM, PPA, WI, CIO, GTR, UC)
+    keywords: [perubahan volume, kenapa turun, volume change, discrepancy, update model, EUR change]
+    primary_entity: Field
+    requires_entity: true

@@ -52,9 +52,7 @@ class ContextHealth(Static):
         """Update the context pressure display."""
         if compacted:
             self._compacted = True
-        pct = (
-            int((token_count / context_length) * 100) if context_length > 0 else 0
-        )
+        pct = int((token_count / context_length) * 100) if context_length > 0 else 0
         filled = min(self._BAR_CELLS, round(pct / self._BAR_CELLS))
         bar = "▓" * filled + "░" * (self._BAR_CELLS - filled)
         if self._compacted:

@@ -7,6 +7,267 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-11
+
+### Added
+
+- **OpenCode Go provider.** New first-class `opencode` provider type for
+  OpenCode Go (and Zen via a base URL override). It sends the required
+  `x-opencode-session` and self-identifying `User-Agent` headers, which fixes
+  the `400 MissingSessionID` error when pointing an OpenAI-compatible provider
+  at `https://opencode.ai/zen/go/v1`. Covered models are the chat-completions
+  catalog (GLM-5.x, Kimi K2.6/K2.7/K3, DeepSeek V4.x, LongCat-2.0, MiMo V2.5,
+  Hy3/Hy4); Anthropic- and Responses-API-only models are out of scope for now.
+  Set `ESDC_OPENCODE_SESSION` to override the process-stable session ID.
+
+### Corpus retrieval
+
+**Added:** `corpus.max_chunks_per_doc` (default 2). `search()` returned
+`merged[:limit]` with no per-document cap, so several chunks of one document
+could fill several result slots — over 20 real queries the top-10 held a mean
+of 5.05 distinct documents, minimum 1, and `lookup` Pass@5 equalled Pass@10
+exactly because ranks 6-10 were repeats. The cap is applied after reranking,
+so the chunk kept per document is the best-scoring one rather than whichever
+one RRF ranked first. `aggregate()` is unaffected; it already dedupes fully.
+Set to 0 to restore the old behaviour.
+
+**Added:** `corpus.query_instruct` (default on). Qwen3-Embedding is
+instruction-tuned and asymmetric — queries are meant to be wrapped in
+`Instruct: {task}\nQuery: {q}` while documents stay raw — but `search()` was
+embedding queries with the same call used for chunks, i.e. off the format the
+model was trained for. Chunks were already raw, which is correct, so enabling
+this needs **no re-embed** and does not touch the vector-space identity.
+
+Together, over 189 queries with reranking off: `lookup` Pass@1 78.3% → 81.7%,
+`cross_reference` Recall@5 75.0% → 83.3%, Recall@10 83.3% → 90.0%. The cap
+alone accounts for most of the cross-reference gain; the instruction prefix
+for the Pass@1 gain, at a cost of roughly one query at Pass@5/Pass@10.
+
+**Measured:** `corpus.rerank` does not pay for itself on this corpus, and the
+default stays `false`. Over 189 queries with full GPU offload, reranking left
+`lookup` Pass@1 unchanged at 78.3%, cost `cross_reference` 10pp of Pass@1
+(and 5pp of Recall at every k), gained 15pp only on the weakest-labelled
+class, and raised mean latency from 69 ms to 41 s per query — 594×, which
+makes the chat `Document Search` tool unusable interactively.
+
+It also scores template match rather than entity identity. Asked
+`"persetujuan POFD Lapangan Volve"` — a Norwegian field, unanswerable in an
+Indonesian upstream corpus — it returns `"Persetujuan POFD Lapangan Securai"`
+at P("yes") = 0.9999, because both are POFD approval letters and the field
+name does not move the score. Across 19 such queries the scores (max 0.9999)
+overlap the answerable ones (min 0.9968), so no threshold separates them.
+With rerank on, chat therefore receives confidently ranked context for
+questions the corpus cannot answer. The full measurement is in the
+`esdc/corpus/reranker.py` module docstring.
+
+**Removed:** `corpus.negative_floor`, added earlier in this same unreleased
+cycle. It thresholded the reranker score to decide that a query found
+nothing; the measurement above shows that signal cannot discriminate absence,
+so the knob promised a capability that does not exist. `esdc corpus eval`
+now counts negative-class queries and reports them as unscored.
+
+### Corpus evaluation
+
+**Fixed:** `esdc corpus eval --init` no longer generates queries that score
+themselves. Each query was synthesized from its document's `subject`, which the
+context prefix stamps onto every chunk's `embed_text` — the text both the
+vector and FTS indexes are built on — so the benchmark was matching a
+paraphrase of indexed metadata. On a 20-query sample the old set scored
+Pass@10 1.00, leaving no headroom to detect an improvement or a regression.
+The subject is now withheld from the generator, and the excerpt is picked
+deterministically from anywhere in the document instead of always being chunk
+0, which for a letter is the letterhead.
+
+**Added:** query classes. Rows carry a `class` field — `lookup`,
+`cross_reference`, `thematic`, or `negative` — and results are reported per
+class instead of as one blended number that a corpus of near-identical
+approval letters will always flatter. `cross_reference` and `thematic` name
+several documents and are scored by Recall@k as well as Pass@k. `negative`
+rows have no answer in the corpus and are scored by abstention against
+`corpus.negative_floor` (requires rerank; RRF scores are not calibrated).
+Cross-reference pairs are discovered deterministically from letter numbers in
+body text via the new `esdc/corpus/citations.py`, so the labels are ground
+truth rather than model opinion. Existing query files without a `class` field
+load unchanged and score in their own `lookup_legacy` bucket.
+
+### Knowledge graph
+
+**Added:** POD temporal harmonization. `pod_revision` carries explicit
+revision semantics (`revision_effect` of `unknown`, `partial_amendment`, or
+`full_replacement`, plus `effective_date`, `amended_scope`, and
+`previous_remains_valid`), with in-place migration for legacy two-column
+rows. Registry-derived edges are reconciled on every learn run:
+`REVISES` covers every revision link, while `SUPERSEDES` is emitted only for
+`full_replacement`; both carry `valid_from`/`valid_to`/`properties_json`.
+`pod_registry` now exposes `revised_by` alongside `preceded_by` and
+`superseded_by`, and the POD portal shows the same distinction.
+
+**Added:** POD value cases move to SQLite as `pod_value_case` truth
+(`pod_id`, `case_type`, `report_date`, `as_of_date`, `pod_scope`, metrics).
+The analytical workbook loader validates against canonical `m_pod` and
+`project_pod` instead of replacing canonical linkage, then refreshes the
+DuckDB `pod_economics`, `pod_plan`, `pod_monitoring`, and
+`pod_project_economics` views; projection failure keeps the committed SQLite
+payload and asks for `esdc corpus sync`.
+
+**Added:** the LadybugDB instance graph is generated from a versioned,
+executable `instance_graph_schema.yaml` contract, and public Cypher queries
+now reject any mutation or unsupported statement before execution.
+
+**Fixed:** `esdc corpus learn` now links documents to their fields and working
+areas. `documents.field_name` and `wk_name` are stored as JSON array strings
+(`'["Gebang"]'`, `'["DAYUNG", "GELAM", "LETANG"]'`), but the deterministic
+linker compared them as scalars — the lookup key `'["gebang"]'` could never
+match a canonical name keyed `'gebang'`, so `ABOUT_FIELD` and `ABOUT_WK` edges
+had never been produced even once. Both columns are now parsed as arrays and
+every element is matched, so a document naming six fields gets six edges. On a
+972-document corpus this adds ~2 180 edges and drops the number of documents
+with no graph edge at all from 371 to 43; of the 43 remaining, 27 are
+regulations that carry no entity metadata by nature.
+
+### Chat
+
+**Fixed:** conversation titles and tags no longer contain raw reasoning. With a
+reasoning model that embeds thinking in the message content (Qwen3 via
+llama.cpp/vLLM, DeepSeek-R1), the `<thinking>` block reliably defeated the JSON
+slice in `generate_conversation_title` / `generate_conversation_tags` — the
+model reasons about the requested `{"title": "…"}` format, so the block itself
+contains braces — and the plain-text fallback then copied the whole tagged
+response into the title. Thinking blocks are now stripped before parsing. A
+response cut off mid-reasoning (no closing tag) yields an empty title rather
+than leaking the reasoning prose. Models that carry reasoning in a separate
+field (Ollama, OpenAI o-series, Gemini) are unaffected — the strip is a no-op
+when no tags are present.
+
+**Fixed:** chat requests now carry exactly one system message, always first.
+The query-classifier strategy (and tool-limit nudges / compaction summaries)
+used to be appended as extra `SystemMessage`s after the user message;
+Qwen3.x chat templates (e.g. Qwen3.6-27B) reject any system message that is
+not the first message, which llama.cpp surfaced as HTTP 400 "Unable to
+generate parser for this template ... System message must be at the
+beginning". Trailing system content is now merged into the leading system
+prompt.
+
+### Reasoning models: thinking blocks no longer corrupt LLM output
+
+**Fixed:** every place the app parses or stores an LLM's text response now
+strips `<think>`/`<thinking>` blocks first, via the new shared
+`esdc.llm_text.strip_thinking_tags`. Models that keep reasoning in a separate
+field (Ollama, OpenAI o-series, Gemini) are unaffected; the strip is a no-op
+on tag-free text.
+
+This mattered most for `esdc corpus learn`, where ten consecutive documents
+failed with `LLM response contained invalid JSON`. The extraction prompt asks
+for a JSON object, so the model's reasoning discusses that schema and contains
+braces — the greedy `{.*}` match then started *inside* the reasoning prose and
+produced an unparseable slice. All ten captured responses recover with the fix.
+
+Sites corrected:
+
+- `esdc corpus learn` knowledge extraction — documents were dropped from the
+  knowledge graph with only a logged error.
+- `esdc corpus extract` metadata (`parse_llm_json`) — failed **silently**,
+  returning `{}`, so documents were committed with blank metadata.
+- POD dossier generation — reasoning prose was persisted verbatim into
+  `knowledge_dossiers`. Because dossiers are gated on `source_hash`, a polluted
+  dossier was not regenerated on later runs without `--force`.
+- `esdc corpus eval --init` query synthesis — reasoning prose was written into
+  the benchmark query file, silently invalidating every Pass@k number computed
+  from it.
+- OCR cleanup passes and strategic-summary parsing, which each carried their
+  own partial or missing handling.
+
+**Added:** unparseable knowledge-extraction responses are now written in full
+to `<cache>/extract_failures/`, with the reason, response length, think-tag
+presence, and brace counts recorded — the 100-character error excerpt could not
+distinguish a reasoning-prefixed response from one with no JSON at all.
+
+### Corpus: SQLite truth, DuckDB mirror
+
+- `documents` now lives in the operational SQLite db (`esdc.sqlite`) as the
+  source of truth for everything a human writes or corrects; DuckDB holds
+  derived data only — chunk embeddings, a wholesale-rebuilt mirror of
+  `documents`, and mirrors of the POD registry and knowledge-graph tables
+  (`m_pod`, `project_pod`, `pod_document`, `pod_revision`, `kg_edge`,
+  `kg_claim`, ...), all now queryable from DuckDB (`execute_sql`, iris
+  chat tools) alongside the rest of the corpus. Mutations write SQLite;
+  `refresh_mirror()` rebuilds the DuckDB side wholesale at the end of each
+  batch (commit, learn, portal save, `esdc corpus sync`) — there is no
+  row-by-row mirroring and so no drift to reconcile.
+- New `esdc corpus sync` — rebuilds the DuckDB mirror on demand (documents,
+  POD registry, knowledge-graph tables, orphan chunk sweep) without running
+  a commit or learn.
+- Read-path routing rule: serving reads (`search`, `get_document`,
+  `list_documents`, `find_doc_ids`) answer from the DuckDB mirror and
+  tolerate its refresh window; deciding reads (`document_exists`,
+  `fingerprint_rows`, `get_document_by_hash`) and truth-backed reads
+  (`get_document_by_id`, used by export) go straight to the SQLite truth so
+  a stale mirror can never cause a re-ingest, a double-delete, or an export
+  overwriting a sidecar with stale content.
+
+### Embedding backends
+
+**Changed:** `embedding_model` no longer selects the Ollama tag. The `local`
+and `ollama` backends pin their model in code; only `openai` reads the key.
+Anyone who had it set moves to `qwen3-embedding:0.6b` for project
+embeddings on their next `esdc reload --embeddings-only`.
+
+**Changed:** `esdc corpus commit` and `esdc corpus reembed` now use the
+shared `embedding_backend`, which defaults to `ollama`. Set
+`embedding_backend: local` to keep embedding in-process with no daemon.
+
+**Fixed:** semantic project search no longer requires a reachable Ollama —
+queries embed locally.
+
+**Fixed:** processes that load a llama.cpp model no longer abort with exit 134
+on macOS. ggml-metal's dylib destructor runs at `exit()` and asserts every
+residency set was released; the embedding and reranker singletons were never
+closed, so any live model reference at interpreter shutdown — pytest's
+retained tracebacks, a background thread parked inside an inference call —
+left Metal buffers alive and the process died with SIGABRT *after* its work
+had finished and its output had printed. Both singletons now free the model from
+an `atexit` handler, taking the load and inference locks with a timeout so a
+close never races a thread mid-load or mid-`embed()`.
+
+### Corpus retrieval overhaul
+
+- Embeddings are now internal (fastembed ONNX, pinned `intfloat/multilingual-e5-large`) — corpus
+  commit/search no longer needs an Ollama daemon. Existing corpora: run
+  `esdc corpus reembed` once (the commit command will tell you).
+- Contextual retrieval: each chunk is embedded and FTS-indexed with its
+  document context (doc type, subject, entities, section) prepended, so
+  queries mixing topic + entity rank the right document. Display text is
+  unchanged.
+- Search over-retrieves (min 50 candidates per path) before RRF fusion.
+- Optional local reranker (`corpus.rerank: true`, default off): fastembed
+  cross-encoder reorders the top `corpus.rerank_pool` (default 30) candidates.
+  The model is configurable via `corpus.rerank_model` — default
+  `jinaai/jina-reranker-v2-base-multilingual` (CC-BY-NC, non-commercial); set
+  `BAAI/bge-reranker-v2-m3` (Apache-2.0, Bahasa Indonesia) for commercial use,
+  registered on demand from a fastembed-compatible ONNX (no torch pulled in).
+- New `esdc corpus eval <queries.jsonl>` scores retrieval Pass@k and latency;
+  use `--rerank/--no-rerank` to compare modes.
+- New `esdc corpus warmup` pre-downloads the embedder and (with `--rerank`) the
+  reranker model for offline/air-gapped setups. Model weights are cached under
+  `~/.esdc/models` (follows `ESDC_CONFIG_DIR`) instead of the volatile system
+  temp dir, so a warmed model survives reboots and tmp purges.
+
+### Corpus pipeline reliability
+
+**Fixed:** OCR and metadata LLM calls no longer hang forever against an
+unreachable `ollama_host`. ollama-python defaults to `timeout=None`, which
+disables httpx timeouts entirely, so a remote GPU host that accepted the TCP
+connection but never answered left `esdc corpus extract` / `esdc corpus rename`
+blocked with no error. The vision OCR client now always carries a bounded
+timeout (10 s connect, `corpus.extract_timeout_seconds` read, default 300 s),
+and the text-LLM caller used for metadata inference gets the same connect/read
+bounds.
+
+**Added:** `esdc corpus rename` now shows the live progress display already
+used by `extract` / `commit` / `eval`, reporting the per-file phase — `db
+lookup`, `llm infer`, `OCR + metadata inference`, `first-page OCR`, and `apply
+rename` — instead of appearing to stall on the first file.
+
 ## [0.8.0] - 2026-07-22
 
 ### Added
@@ -29,6 +290,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Management commands: `esdc corpus status`, `list`, `remove`, `clear`, `reembed`
   - New iris chat tools `search_documents` and `read_document` for querying the corpus from chat; tool descriptions carry the schema glossary and hierarchy
   - Configurable via `corpus.*` in `~/.esdc/config.yaml` (chunk size/overlap, OCR model, DPI, context window, native-text threshold, `metadata_model`/`cleanup_model` incl. `main` provider routing, `ollama_host` for remote OCR/embedding)
+- **`esdc corpus rename`** — rename source files and their sidecars to `DOC_TYPE - YYYY.MM.DD - title.<ext>`, resolving fields from the sidecar, the committed corpus DB, or LLM/OCR inference; dry-run by default, `--yes` to apply, `--doc-type` to override
+- **`esdc corpus learn`** — eager knowledge-graph reconstruction over the committed corpus: deterministic registry edges (letter-number matches now auto-promote `pod_document` links), guideline-driven LLM claim extraction (`~/.esdc/guideline.yaml`, falling back to the packaged default; `--init-guideline` drafts one from the corpus), registry-backed entity resolution, per-POD dossiers cached by source hash, and schema proposals (`esdc corpus proposals`)
+- **Chat tool `explore_entity`** — traverses the learned knowledge graph (LadybugDB instance graph) and returns the entity's dossier, related documents/projects/revisions, and extracted claims
 - **Auto-reindex after `esdc fetch`** — FTS and B-tree indexes are rebuilt automatically after data loading, ensuring ILIKE queries return correct results for newly-fetched data
   - Default behavior: reindex is ON after every fetch (both full-replace and per-year append modes)
   - Use `--no-reindex` flag on `esdc fetch` to skip reindexing if desired
@@ -547,4 +811,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Database location in user directory
   - Basic error handling and logging
   - Initial project structure and documentation
-

@@ -88,7 +88,9 @@ class TestGetSqlCacheStats:
         """Test that get_sql_cache_stats returns all expected keys."""
         with (
             patch("esdc.chat.tools._sql_cache", None),
-            patch("esdc.configs.Config.get_cache_dir", return_value=Path("/nonexistent")),
+            patch(
+                "esdc.configs.Config.get_cache_dir", return_value=Path("/nonexistent")
+            ),
         ):
             result = get_sql_cache_stats()
 
@@ -111,7 +113,9 @@ class TestGetToolCacheStats:
         """Test that get_tool_cache_stats returns all expected keys."""
         with (
             patch("esdc.chat.tools._tool_cache", None),
-            patch("esdc.configs.Config.get_cache_dir", return_value=Path("/nonexistent")),
+            patch(
+                "esdc.configs.Config.get_cache_dir", return_value=Path("/nonexistent")
+            ),
         ):
             result = get_tool_cache_stats()
 

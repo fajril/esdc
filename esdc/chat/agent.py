@@ -1,3 +1,5 @@
+"""LangGraph chat agent: graph state, workflow, and tool dispatch."""
+
 # Standard library
 import asyncio
 import contextlib
@@ -29,11 +31,13 @@ from esdc.chat.query_classifier import (
     format_classification_for_prompt,
     get_tools_for_classification,
 )
-from esdc.chat.skills import discover_skills, inject_skills_into_prompt
+from esdc.chat.skills import discover_skills, inject_skills_into_prompt, select_skills
 from esdc.chat.smart_query import simple_data_query
 from esdc.chat.tools import (
+    aggregate_documents,
     entity_resolver,
     execute_sql,
+    explore_entity,
     get_recommended_table,
     get_resources_columns,
     get_schema,
@@ -47,12 +51,12 @@ from esdc.chat.tools import (
     search_problem_cluster,
     semantic_search,
 )
+from esdc.llm_text import strip_thinking_tags
 
 # Logger is configured by app.py (runs first)
 logger = logging.getLogger("esdc.chat.agent")
 
 MAX_TOOL_CALLS = 50
-
 
 _context_length_cache: dict[str, int] = {}
 
@@ -326,6 +330,7 @@ async def generate_conversation_title(
         )
 
         raw_text = str(response.content).strip() if response.content else ""
+        raw_text = strip_thinking_tags(raw_text)
 
         # Parse JSON title
         title = ""
@@ -423,6 +428,7 @@ async def generate_conversation_tags(
         )
 
         raw_text = str(response.content).strip() if response.content else ""
+        raw_text = strip_thinking_tags(raw_text)
 
         # Parse JSON tags
         tags = ""
@@ -453,6 +459,16 @@ async def generate_conversation_tags(
         if len(query_clean) > 100:
             return query_clean[:97] + "..."
         return query_clean
+
+
+def _latest_human_text(messages: list[AnyMessage]) -> str:
+    for message in reversed(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        if isinstance(message.content, str) and message.content.strip():
+            return message.content
+        return ""
+    return ""
 
 
 def create_agent(
@@ -492,10 +508,12 @@ def create_agent(
             simple_data_query,
             entity_resolver,
             knowledge_traversal,
+            explore_entity,
             resolve_spatial,
             semantic_search,
             search_documents,
             read_document,
+            aggregate_documents,
             execute_sql,
             get_schema,
             list_tables,
@@ -530,9 +548,14 @@ def create_agent(
     def init_node(state: AgentState) -> dict[str, Any]:
         """Initialize system prompt and defaults in state (runs once)."""
         system_prompt = get_system_prompt()
-        if skills:
-            system_prompt = inject_skills_into_prompt(system_prompt, skills)
-        logger.debug("[INIT] system_prompt_set | len=%d", len(system_prompt))
+        selected_skills = select_skills(_latest_human_text(state["messages"]), skills)
+        if selected_skills:
+            system_prompt = inject_skills_into_prompt(system_prompt, selected_skills)
+        logger.debug(
+            "[INIT] system_prompt_set | len=%d | selected_skills=%s",
+            len(system_prompt),
+            [skill.name for skill in selected_skills],
+        )
         return {
             "system_prompt": system_prompt,
             "allowed_tools": list(all_tools.keys()),
@@ -615,6 +638,50 @@ def create_agent(
                 "[AGENT] gentle_nudge_injected | tool_call_count=%d",
                 tool_call_count,
             )
+
+        # Qwen-family chat templates (Qwen3.x, e.g. Qwen3.6-27B) reject ANY
+        # system message that is not the very first message: the template
+        # raises a Jinja exception ("System message must be at the
+        # beginning") which llama.cpp surfaces as HTTP 400 "Unable to
+        # generate parser for this template. Automatic parser generation
+        # failed". Trailing system messages here are the classifier
+        # strategy, tool-limit nudges, and compaction summaries, so merge
+        # all of their content into the leading system prompt. Providers
+        # that support mid-conversation system messages keep their current
+        # placement; an unknown model is treated as strict (a single
+        # leading system message works on every template).
+        if model_name is None or "qwen" in str(model_name).lower():
+            leading_system = messages_with_system[0]
+            trailing_system_text: list[str] = []
+            merged_messages = [leading_system]
+            for msg in messages_with_system[1:]:
+                if isinstance(msg, SystemMessage):
+                    if isinstance(msg.content, str):
+                        if msg.content:
+                            trailing_system_text.append(msg.content)
+                        # Empty system messages are noise; dropped.
+                    else:
+                        # Non-text content can't merge into the prompt
+                        # text; keep it in place so no content vanishes,
+                        # though a strict Qwen template may reject it.
+                        merged_messages.append(msg)
+                        logger.warning(
+                            "[AGENT] kept trailing SystemMessage with non-text "
+                            "content in place (Qwen template may reject it)"
+                        )
+                else:
+                    merged_messages.append(msg)
+            if trailing_system_text:
+                merged_system_content = "\n\n".join(
+                    [str(leading_system.content), *trailing_system_text]
+                )
+                merged_messages[0] = SystemMessage(content=merged_system_content)
+                messages_with_system = merged_messages
+                logger.info(
+                    "[AGENT] merged %d trailing SystemMessage(s) into leading "
+                    "system prompt",
+                    len(trailing_system_text),
+                )
 
         allowed_tools = state.get("allowed_tools", list(all_tools.keys()))
         selected_tools = [

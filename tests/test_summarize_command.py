@@ -1,3 +1,5 @@
+"""Tests for the summarize CLI command."""
+
 import json
 
 import duckdb
@@ -10,6 +12,7 @@ from esdc.esdc import app
 from esdc.summarizer import (
     SummaryEntityResult,
     _commit_live_tokens,
+    _parse_summary_response,
     _preview_live_tokens,
     _strategic_analysis_data,
     _summarize_entity,
@@ -18,39 +21,43 @@ from esdc.summarizer import (
 )
 
 
+def _default_summary_payload() -> str:
+    return json.dumps(
+        {
+            "headline": "Peluang produksi dan cadangan perlu diprioritaskan",
+            "executive_summary": (
+                "Terdapat kendala subsurface dan fasilitas, namun remarks "
+                "menunjukkan peluang optimasi produksi dan penambahan cadangan."
+            ),
+            "current_situation": "Beberapa proyek masih memerlukan tindak lanjut.",
+            "key_challenges": ["Kendala fasilitas", "Ketidakpastian subsurface"],
+            "solution_proposals": ["Lanjutkan workover dan evaluasi reservoir"],
+            "production_or_reserve_opportunities": [
+                "Optimasi produksi dan maturation resources ke reserves"
+            ],
+            "management_attention": ["Perlu prioritas keputusan eksekusi"],
+            "ksmi_context": {
+                "resource_classes": ["Contingent Resources"],
+                "project_levels": ["E2"],
+                "constraint_types": ["technical"],
+                "mentions_groovy": False,
+                "mentions_pod_or_pse": False,
+            },
+            "source_coverage": {
+                "source_items_reviewed": 1,
+                "source_items_with_material_issues": 1,
+            },
+        }
+    )
+
+
 class FakeLLM:
     def __init__(self):
         self.prompts = []
 
     def invoke(self, prompt):
         self.prompts.append(prompt)
-        return json.dumps(
-            {
-                "headline": "Peluang produksi dan cadangan perlu diprioritaskan",
-                "executive_summary": (
-                    "Terdapat kendala subsurface dan fasilitas, namun remarks "
-                    "menunjukkan peluang optimasi produksi dan penambahan cadangan."
-                ),
-                "current_situation": "Beberapa proyek masih memerlukan tindak lanjut.",
-                "key_challenges": ["Kendala fasilitas", "Ketidakpastian subsurface"],
-                "solution_proposals": ["Lanjutkan workover dan evaluasi reservoir"],
-                "production_or_reserve_opportunities": [
-                    "Optimasi produksi dan maturation resources ke reserves"
-                ],
-                "management_attention": ["Perlu prioritas keputusan eksekusi"],
-                "ksmi_context": {
-                    "resource_classes": ["Contingent Resources"],
-                    "project_levels": ["E2"],
-                    "constraint_types": ["technical"],
-                    "mentions_groovy": False,
-                    "mentions_pod_or_pse": False,
-                },
-                "source_coverage": {
-                    "source_items_reviewed": 1,
-                    "source_items_with_material_issues": 1,
-                },
-            }
-        )
+        return _default_summary_payload()
 
 
 class StrategicAnalysisLLM(FakeLLM):
@@ -81,9 +88,34 @@ class MetadataLLM(FakeLLM):
     last_model_name = "deepseek-v4-flash"
 
 
-class UsageMetadataLLM(FakeLLM):
-    def invoke(self, prompt):
-        content = super().invoke(prompt)
+class _AIMessageLLM:
+    """Base for fakes that return an AIMessage instead of a JSON string.
+
+    Split from FakeLLM so the invoke override does not change the base
+    return type from str into AIMessage.
+    """
+
+    def __init__(self):
+        self.prompts = []
+
+    def invoke(self, prompt) -> AIMessage:
+        self.prompts.append(prompt)
+        return self._build_message(prompt)
+
+    def _build_message(self, prompt) -> AIMessage:
+        content = _default_summary_payload()
+        message = AIMessage(content=content)
+        message.usage_metadata = {  # type: ignore[attr-defined]
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+        return message
+
+
+class UsageMetadataLLM(_AIMessageLLM):
+    def _build_message(self, prompt) -> AIMessage:
+        content = _default_summary_payload()
         message = AIMessage(content=content)
         message.usage_metadata = {  # type: ignore[attr-defined]
             "input_tokens": 100,
@@ -93,18 +125,8 @@ class UsageMetadataLLM(FakeLLM):
         return message
 
 
-class ZeroUsageMetadataLLM(FakeLLM):
+class ZeroUsageMetadataLLM(_AIMessageLLM):
     """Simulates vLLM-style provider that returns all-zero usage."""
-
-    def invoke(self, prompt):
-        content = super().invoke(prompt)
-        message = AIMessage(content=content)
-        message.usage_metadata = {  # type: ignore[attr-defined]
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-        }
-        return message
 
 
 def _patch_llm(monkeypatch):
@@ -122,6 +144,45 @@ def _patch_llm(monkeypatch):
     )
     monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     return llm
+
+
+def test_parse_summary_response_strips_thinking_spelling():
+    """The "<thinking>" spelling was never recognized by the old code.
+
+    The old code only checked the literal "<think>" prefix, so a
+    "<thinking>" block (a real spelling used by some reasoning models) was
+    never stripped. Because the block below contains an unmatched "{" of
+    its own, the old code's brace-slicing grabbed content starting inside
+    the thinking block, producing invalid JSON and raising
+    JSONDecodeError. With strip_thinking_tags removing the whole block
+    first, only the real JSON object remains.
+    """
+    content = (
+        "<thinking>value should be like {invalid} but let's see</thinking>\n"
+        '{"status": "ok", "count": 1}'
+    )
+    assert _parse_summary_response(content) == {"status": "ok", "count": 1}
+
+
+def test_parse_summary_response_strips_think_block_after_preamble():
+    """A thinking block preceded by a preamble was never recognized either.
+
+    The old code only stripped when the thinking tag was the literal
+    first characters of the stripped content. A short preamble before the
+    tag meant the ``startswith("<think>")`` check never fired. Because the
+    thinking block here also contains a stray "{", the old code's
+    brace-slicing spanned from inside the thinking block to the real
+    closing brace, yielding invalid multi-object JSON and raising
+    JSONDecodeError. strip_thinking_tags removes the tagged block
+    regardless of position, leaving the preamble text and the real JSON;
+    brace-slicing then isolates the JSON object correctly.
+    """
+    content = (
+        "Sure, here is the analysis.\n"
+        "<think>Let me consider the numbers {a: 1}</think>\n"
+        '{"status": "ok"}'
+    )
+    assert _parse_summary_response(content) == {"status": "ok"}
 
 
 def _create_minimal_project_resources():
@@ -164,31 +225,91 @@ def _create_minimal_project_resources():
         )
         rows = [
             (
-                2025, "P-1", "Project Alpha", "F-1", "Field Alpha",
-                "WK-1", "WK Alpha", "Contingent Resources", "Development",
-                "E2", "2. Middle Value",
+                2025,
+                "P-1",
+                "Project Alpha",
+                "F-1",
+                "Field Alpha",
+                "WK-1",
+                "WK Alpha",
+                "Contingent Resources",
+                "Development",
+                "E2",
+                "2. Middle Value",
                 "Ada peluang workover untuk menaikkan produksi.",
-                2026, "Op A", 150.0,
-                100.0, 50.0, 200.0, 100.0, 150.0, 75.0,
-                1000.0, 500.0, 10.0, 5.0, 300.0, 150.0,
+                2026,
+                "Op A",
+                150.0,
+                100.0,
+                50.0,
+                200.0,
+                100.0,
+                150.0,
+                75.0,
+                1000.0,
+                500.0,
+                10.0,
+                5.0,
+                300.0,
+                150.0,
             ),
             (
-                2025, "P-2", "Project Beta", "F-2", "Field Beta",
-                "WK-1", "WK Alpha", "Reserves & GRR", "Production",
-                "E0", "2. Middle Value",
+                2025,
+                "P-2",
+                "Project Beta",
+                "F-2",
+                "Field Beta",
+                "WK-1",
+                "WK Alpha",
+                "Reserves & GRR",
+                "Production",
+                "E0",
+                "2. Middle Value",
                 "Perlu debottlenecking fasilitas untuk menjaga produksi.",
-                2026, "Op A", 300.0,
-                300.0, 150.0, 400.0, 200.0, 350.0, 175.0,
-                2000.0, 1000.0, 20.0, 10.0, 600.0, 300.0,
+                2026,
+                "Op A",
+                300.0,
+                300.0,
+                150.0,
+                400.0,
+                200.0,
+                350.0,
+                175.0,
+                2000.0,
+                1000.0,
+                20.0,
+                10.0,
+                600.0,
+                300.0,
             ),
             (
-                2025, "P-3", "Project Gamma", "F-3", "Field Gamma",
-                "WK-2", "WK Beta", "Prospective Resources", "Exploration",
-                "X5", "2. Middle Value",
+                2025,
+                "P-3",
+                "Project Gamma",
+                "F-3",
+                "Field Gamma",
+                "WK-2",
+                "WK Beta",
+                "Prospective Resources",
+                "Exploration",
+                "X5",
+                "2. Middle Value",
                 "Prospek membutuhkan data tambahan untuk unlock resources.",
-                2027, "Op B", 350.0,
-                0.0, 0.0, 500.0, 250.0, 200.0, 100.0,
-                3000.0, 1500.0, 0.0, 0.0, 0.0, 0.0,
+                2027,
+                "Op B",
+                350.0,
+                0.0,
+                0.0,
+                500.0,
+                250.0,
+                200.0,
+                100.0,
+                3000.0,
+                1500.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
             ),
         ]
         conn.executemany(
@@ -514,7 +635,9 @@ def test_strategic_analysis_data_uses_cumulative_80_percent_contributors():
         assert field_development["priority_projects"][0]["project_level"] == (
             "E6. Further Development"
         )
-        assert field_development["priority_projects"][0]["project_name"] == "Big Resource"
+        assert (
+            field_development["priority_projects"][0]["project_name"] == "Big Resource"
+        )
 
         exploration = data["exploration_highlights"]
         assert exploration["total_projects_reviewed"] == 1
@@ -522,8 +645,7 @@ def test_strategic_analysis_data_uses_cumulative_80_percent_contributors():
             "X2. Exploration Prospect"
         )
         assert [
-            project["project_level"]
-            for project in exploration["outlook_top3_projects"]
+            project["project_level"] for project in exploration["outlook_top3_projects"]
         ] == ["X1. Discovery under Evaluation", "X3. Exploration Lead"]
     finally:
         conn.close()
@@ -552,7 +674,7 @@ def test_strategic_summary_prompt_matches_reference_contributor_rule():
                         "project_remarks": "Requires POD finalization.",
                     }
                 ],
-            }
+            },
         },
     )
 
@@ -694,9 +816,7 @@ def test_summarize_field_creates_one_field_summary(
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     assert "fields 1 created/0 skipped" in result.stdout
@@ -724,14 +844,10 @@ def test_summarize_stores_actual_llm_metadata(runner, isolated_config, monkeypat
     monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
-    assert _summary_metadata() == [
-        ("field", "F-1", "deepseek", "deepseek-v4-flash")
-    ]
+    assert _summary_metadata() == [("field", "F-1", "deepseek", "deepseek-v4-flash")]
 
 
 def test_summarize_stores_actual_token_usage(runner, isolated_config, monkeypatch):
@@ -750,9 +866,7 @@ def test_summarize_stores_actual_token_usage(runner, isolated_config, monkeypatc
     monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     assert "tokens 125 processed" in result.stdout
@@ -767,9 +881,7 @@ def test_summarize_estimates_token_usage_without_provider_usage(
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     token_rows = _summary_token_rows()
@@ -801,9 +913,7 @@ def test_summarize_falls_back_when_provider_returns_zero_usage(
     monkeypatch.setattr("esdc.providers.create_llm_from_config", lambda config: llm)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     token_rows = _summary_token_rows()
@@ -822,12 +932,8 @@ def test_summarize_field_skips_unchanged_hash_and_force_regenerates(
     llm = _patch_llm(monkeypatch)
     _create_minimal_project_resources()
 
-    first = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
-    second = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    first = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
+    second = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
     forced = runner.invoke(
         app,
         [
@@ -866,18 +972,14 @@ def test_summarize_field_with_empty_remarks_does_not_call_llm(
     finally:
         conn.close()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     assert "fields 1 created/0 skipped" in result.stdout
     assert llm.prompts == []
     rows = _summary_rows()
     summary = json.loads(rows[0][3])
-    assert _summary_token_rows() == [
-        ("field", "F-1", 0, 0, 0, None, None)
-    ]
+    assert _summary_token_rows() == [("field", "F-1", 0, 0, 0, None, None)]
     assert summary["headline"] == "Tidak ada remarks material untuk field Field Alpha."
     assert summary["data_quality_notes"] == [
         "Source tidak memiliki remarks yang cukup informatif untuk diringkas."
@@ -901,9 +1003,7 @@ def test_summarize_prompt_includes_low_quality_remark_context(
     finally:
         conn.close()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Field Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Field Alpha", "--year", "2025"])
 
     assert result.exit_code == 0
     assert len(llm.prompts) == 1
@@ -945,9 +1045,7 @@ def test_summary_hides_benign_data_quality_note(runner, isolated_config, monkeyp
     assert "Tidak ada isu kualitas data" not in result.output
 
 
-def test_summarize_field_ambiguous_fallback_fails(
-    runner, isolated_config, monkeypatch
-):
+def test_summarize_field_ambiguous_fallback_fails(runner, isolated_config, monkeypatch):
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
     conn = duckdb.connect(str(Config.get_db_file()))
@@ -973,9 +1071,7 @@ def test_summarize_field_ambiguous_fallback_fails(
     finally:
         conn.close()
 
-    result = runner.invoke(
-        app, ["summarize", "field", "Alpha", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "field", "Alpha", "--year", "2025"])
 
     assert result.exit_code == 1
     assert "Ambiguous field name 'Alpha'" in result.stdout
@@ -1179,18 +1275,14 @@ def test_summarize_working_areas_requires_project_timeseries(
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
 
-    result = runner.invoke(
-        app, ["summarize", "wk", "--year", "2025"]
-    )
+    result = runner.invoke(app, ["summarize", "wk", "--year", "2025"])
 
     assert result.exit_code == 1
     assert result.exception is not None
     assert "project_timeseries" in str(result.exception).lower()
 
 
-def test_summarize_default_runs_field_wk_and_nkri(
-    runner, isolated_config, monkeypatch
-):
+def test_summarize_default_runs_field_wk_and_nkri(runner, isolated_config, monkeypatch):
     _patch_llm(monkeypatch)
     _create_minimal_project_resources()
     _create_project_timeseries()
@@ -1217,9 +1309,7 @@ def test_summarize_skips_unchanged_hash_and_force_regenerates(
 
     first = runner.invoke(app, ["summarize", "field", "--year", "2025"])
     second = runner.invoke(app, ["summarize", "field", "--year", "2025"])
-    forced = runner.invoke(
-        app, ["summarize", "field", "--year", "2025", "--force"]
-    )
+    forced = runner.invoke(app, ["summarize", "field", "--year", "2025", "--force"])
 
     assert first.exit_code == 0
     assert second.exit_code == 0
@@ -1244,11 +1334,7 @@ def test_create_esdc_view_exposes_summary_columns(isolated_config):
             sql_script = _load_sql_script(script_name).replace(
                 "{table_name}", "project_resources"
             )
-            for statement in [
-                s.strip()
-                for s in sql_script.split(";")
-                if s.strip()
-            ]:
+            for statement in [s.strip() for s in sql_script.split(";") if s.strip()]:
                 conn.execute(statement)
         conn.execute(
             """
@@ -1286,21 +1372,24 @@ def test_create_esdc_view_exposes_summary_columns(isolated_config):
                  'wk_summary', 'test', 'model', 'now')
             """
         )
-        field_summary = conn.execute(
+        field_summary_row = conn.execute(
             "SELECT field_summary FROM field_resources WHERE field_id = 'F-1'"
-        ).fetchone()[0]
-        wk_summary = conn.execute(
+        ).fetchone()
+        wk_summary_row = conn.execute(
             "SELECT wk_summary FROM wa_resources WHERE wk_id = 'WK-1'"
-        ).fetchone()[0]
-        nkri_summary = conn.execute(
+        ).fetchone()
+        nkri_summary_row = conn.execute(
             "SELECT nkri_summary FROM nkri_resources WHERE report_year = 2025"
-        ).fetchone()[0]
+        ).fetchone()
     finally:
         conn.close()
 
-    assert field_summary == "Field summary"
-    assert wk_summary == "WK summary"
-    assert nkri_summary == "NKRI summary"
+    assert field_summary_row is not None
+    assert wk_summary_row is not None
+    assert nkri_summary_row is not None
+    assert field_summary_row[0] == "Field summary"
+    assert wk_summary_row[0] == "WK summary"
+    assert nkri_summary_row[0] == "NKRI summary"
 
 
 def test_ensure_summary_table_migrates_token_columns(isolated_config):

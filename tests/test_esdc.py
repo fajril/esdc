@@ -1,3 +1,5 @@
+"""Tests for the esdc CLI entrypoint."""
+
 from unittest.mock import MagicMock, patch
 
 from esdc.esdc import (

@@ -4,6 +4,24 @@
 # https://github.com/fajril/esdc
 
 # =============================================================================
+# Schema Contract & Versioning
+# =============================================================================
+# Scalars and lists are intentional: KSMIGraphBuilder skips non-dict top-level
+# metadata instead of materializing it as a domain entity.
+schema_version: "1"
+schema_status: working
+framework_reference: "KSMI source represented in this file"
+vocabulary_stability: "stable within the referenced KSMI version"
+ksmi_producing_license_types: [pod_1, pod, pofd, opl, opll, pop]
+ptk_pod_classifications:
+  - pod_selanjutnya
+  - pod_bertahap
+  - pod_waterflood
+  - pod_eor
+  - pod_enhanced_gas_recovery
+  - pod_ii_and_subsequent
+
+# =============================================================================
 # KSMI Framework Definition
 # =============================================================================
 KSMIFramework:
@@ -1601,6 +1619,7 @@ Project:
 
 ProducingLicense:
   name: Izin Berproduksi
+  classification_scheme: ksmi
   type:
     pod_1: 
       name: Plan of Development I (POD I)

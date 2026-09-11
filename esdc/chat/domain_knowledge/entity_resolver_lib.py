@@ -290,9 +290,7 @@ class EntityResolver:
 
         return results
 
-    def suggest_names(
-        self, name: str, entity_type: str, limit: int = 5
-    ) -> list[str]:
+    def suggest_names(self, name: str, entity_type: str, limit: int = 5) -> list[str]:
         """Closest canonical names for an unresolvable raw name (fuzzy, ranked).
 
         resolve_name's ILIKE lookup finds nothing for a typo ("Rokann"),
@@ -621,9 +619,7 @@ class EntityResolver:
         if parent_filter:
             for col, val in parent_filter.items():
                 if col in columns:
-                    parent_conditions += (
-                        f" AND lower(trim({col})) = lower(trim(?))"
-                    )
+                    parent_conditions += f" AND lower(trim({col})) = lower(trim(?))"
                     parent_params.append(val)
 
         id_expr = spec.id_column if spec.id_column in columns else "NULL"

@@ -150,7 +150,7 @@ class TestHybridSearchToolIntegration:
 
         from esdc.chat.tools import semantic_search
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_instance = MagicMock()
             mock_instance.hybrid_search.return_value = {
                 "status": "success",
@@ -158,7 +158,7 @@ class TestHybridSearchToolIntegration:
                 "results": [{"project_id": "P1", "similarity": 0.9}],
             }
             mock_instance.close = MagicMock()
-            MockResolver.return_value = mock_instance
+            resolver_cls.return_value = mock_instance
 
             with patch("esdc.chat.tools._get_tool_cache") as mock_cache:
                 cache = MagicMock()
@@ -177,12 +177,15 @@ class TestHybridSearchToolIntegration:
         # This is a minimal test - actual hybrid search requires DB
         resolver = SemanticResolver.__new__(SemanticResolver)
 
-        # Mock the embedding manager
-        resolver._embedding_manager = MagicMock()
-        resolver._embedding_manager.generate_embedding.return_value = [0.1] * 384
+        # Mock the embedder
+        resolver._embedder = MagicMock()
+        resolver._embedder.generate_embedding.return_value = [0.1] * 384
 
         # Mock search_by_embedding to return not_available (no embeddings)
-        with patch.object(resolver, "search_by_embedding") as mock_search:
+        with (
+            patch.object(resolver, "_ensure_semantic_meta", return_value=None),
+            patch.object(resolver, "search_by_embedding") as mock_search,
+        ):
             mock_search.return_value = {"status": "not_available"}
 
             result = resolver.hybrid_search("test query")
@@ -197,8 +200,7 @@ class TestKeywordSearch:
         from esdc.search.semantic_resolver import SemanticResolver
 
         resolver = SemanticResolver.__new__(SemanticResolver)
-        resolver._db_path = MagicMock()
-        resolver._conn = None
+        resolver._get_connection = MagicMock(return_value=MagicMock())
 
         # Minimal test - actual test requires database connection
         # The method should handle exceptions gracefully

@@ -56,7 +56,7 @@ class TestResolveSpatialCaching:
 
         with (
             patch("esdc.chat.tools._get_tool_cache") as mock_cache_fn,
-            patch("esdc.search.spatial_resolver.SpatialResolver") as MockResolver,
+            patch("esdc.search.spatial_resolver.SpatialResolver") as resolver_cls,
         ):
             mock_cache = MagicMock()
             mock_cache_fn.return_value = mock_cache
@@ -64,7 +64,7 @@ class TestResolveSpatialCaching:
             mock_cache.set = MagicMock()
 
             mock_resolver = MagicMock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
             mock_resolver.find_fields_near_field.return_value = {
                 "status": "success",
                 "nearby_fields": [

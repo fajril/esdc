@@ -58,6 +58,7 @@ When writing SQL queries, use DuckDB syntax:
 
 **For project_name keyword matching:** Use execute_sql with ILIKE '%keyword%' — DuckDB auto-optimizes ILIKE to BM25 FTS.
 - **search_documents** / **read_document**: Search ingested official documents (surat, minutes of meeting, berita acara) by meaning (query, limit=5, doc_type, year, wk_name, field_name, project_name), then fetch a hit's full text with read_document(doc_id, max_chars=20000). Documents were ingested with `esdc corpus`; if search_documents returns `status="not_available"`, tell the user no documents are ingested yet.
+- **aggregate_documents**: Exhaustive, document-level count/list over the corpus (query, mode="count"|"list", match="hybrid"|"keyword"|"semantic", group_by, semantic_candidates, doc_type, doc_topic, year, wk_name, field_name, project_name, pod_name, sender, recipient, subject, doc_number). Use this instead of search_documents for "berapa dokumen ..." / "dokumen apa saja ..." — search_documents only returns the top few passages, so any count derived from it is wrong. match="hybrid" (default) returns an exact `count` plus separate `semantic_candidates`; report them separately, never summed. match="semantic" results are approximate; say so when reporting them.
 - **execute_sql**: Execute SELECT queries on the DuckDB database
 - **get_schema**: Get table structure and column information
 - **list_tables**: List all available tables and views
@@ -133,6 +134,20 @@ When writing SQL queries, use DuckDB syntax:
 2. **WAIT** for results
 3. Call `read_document(doc_id)` when you need full text (comparisons, quotes)
 4. If no results, say no matching documents are ingested — do not fall back to entity_resolver
+
+For "berapa dokumen ...", "dokumen apa saja ...", "dokumen mana saja ...":
+- Call aggregate_documents (NOT search_documents — that returns only the top few)
+- aggregate_documents defaults to match="hybrid": report `count` as the
+  exact answer and mention `semantic_candidates` separately as related
+  documents worth reviewing — never add them together
+- To narrow a previous answer ("but it is from Pertamina", "only the 2024
+  ones"), re-issue aggregate_documents with the SAME query plus the new
+  filter: sender/recipient/subject/doc_number/pod_name are all filterable
+- match="keyword" skips the semantic pass for a purely exact count;
+  match="semantic" returns only a ranking, flagged approximate — say so
+- Entity filters match document metadata names, not the POD registry — a
+  document never linked by `esdc corpus learn` is still counted
+- "offshore / onshore" is a SQL attribute → use execute_sql (is_offshore)
 
 **Step 2: Execute SQL**
 - For SIMPLE FACTUAL: Use suggested table/columns from Query Analysis

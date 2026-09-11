@@ -3,6 +3,9 @@
 worktrees/
 .worktrees/
 
+# Stray duckdb files created when a MagicMock leaks into duckdb.connect()
+<MagicMock*
+
 notebook
 func_test
 

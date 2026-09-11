@@ -1,3 +1,5 @@
+"""Ollama provider implementation."""
+
 # Standard library
 import logging
 import time

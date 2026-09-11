@@ -19,7 +19,7 @@ def test_semantic_search_by_text(isolated_config):
     keeps that fan-out pointed at an empty tmp DuckDB instead of the real
     ~/.esdc store, so it deterministically returns documents=not_available.
     """
-    with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
         mock_resolver = Mock()
         mock_resolver.hybrid_search.return_value = {
             "status": "success",
@@ -30,7 +30,7 @@ def test_semantic_search_by_text(isolated_config):
             ],
         }
         mock_resolver.close = Mock()
-        MockResolver.return_value = mock_resolver
+        resolver_cls.return_value = mock_resolver
 
         with patch("esdc.chat.tools._get_tool_cache") as mock_cache:
             cache = Mock()
@@ -48,7 +48,7 @@ def test_semantic_search_by_text(isolated_config):
 
 def test_semantic_search_not_available(isolated_config):
     """Test fallback when embeddings not available."""
-    with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
         mock_resolver = Mock()
         mock_resolver.hybrid_search.return_value = {
             "status": "not_available",
@@ -56,7 +56,7 @@ def test_semantic_search_not_available(isolated_config):
             "results": [],
         }
         mock_resolver.close = Mock()
-        MockResolver.return_value = mock_resolver
+        resolver_cls.return_value = mock_resolver
 
         with patch("esdc.chat.tools._get_tool_cache") as mock_cache:
             cache = Mock()

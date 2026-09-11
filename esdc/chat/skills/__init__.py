@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,30 @@ class Skill:
     description: str
     triggers: list[str]
     instructions: str | None = None
+
+
+def _normalize_phrase(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def skill_matches_query(skill: Skill, query: str) -> bool:
+    normalized_query = _normalize_phrase(query)
+    if not normalized_query:
+        return False
+    for trigger in skill.triggers:
+        normalized_trigger = _normalize_phrase(trigger)
+        if not normalized_trigger:
+            continue
+        if re.search(
+            rf"(?<!\w){re.escape(normalized_trigger)}(?!\w)",
+            normalized_query,
+        ):
+            return True
+    return False
+
+
+def select_skills(query: str, skills: list[Skill]) -> list[Skill]:
+    return [skill for skill in skills if skill_matches_query(skill, query)]
 
 
 _SKILLS_DIR = Path(__file__).parent

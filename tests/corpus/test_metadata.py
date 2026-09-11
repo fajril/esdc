@@ -1,3 +1,4 @@
+"""Tests for corpus metadata extraction."""
 
 from esdc.chat.domain_knowledge import doc_schema
 from esdc.corpus import metadata
@@ -160,6 +161,45 @@ def test_llm_extract_uses_caller():
     assert result["doc_level"] == "unknown"  # normalized default
 
 
+def test_llm_extract_includes_filename_hint():
+    from esdc.corpus import metadata
+
+    seen = {}
+
+    def caller(prompt: str) -> str:
+        seen["prompt"] = prompt
+        return "{}"
+
+    metadata.llm_extract("body text", caller, filename="letter-2024.pdf")
+    assert (
+        "Filename (may hint doc_type/date/subject): letter-2024.pdf" in seen["prompt"]
+    )
+    assert "body text" in seen["prompt"]
+
+
+def test_llm_extract_no_filename_matches_base_prompt():
+    from esdc.corpus import metadata
+
+    seen = {}
+
+    def caller(prompt: str) -> str:
+        seen["prompt"] = prompt
+        return "{}"
+
+    metadata.llm_extract("body text", caller)
+    assert "Filename (may hint" not in seen["prompt"]
+
+
+def test_metadata_image_prompt_with_and_without_filename():
+    from esdc.corpus import metadata
+
+    base = metadata.metadata_image_prompt()
+    assert base == metadata.METADATA_PROMPT_IMAGE
+    hinted = metadata.metadata_image_prompt("scan.pdf")
+    assert hinted.startswith("Filename (may hint doc_type/date/subject): scan.pdf")
+    assert metadata.METADATA_PROMPT_IMAGE in hinted
+
+
 def test_metadata_prompt_image_excludes_markdown_section_includes_keys():
     assert "Document markdown:" not in METADATA_PROMPT_IMAGE
     assert "doc_type" in METADATA_PROMPT_IMAGE
@@ -287,3 +327,45 @@ def test_normalize_metadata_no_rule_types_and_topics_untouched():
     assert out["doc_type"] == "letter"
     assert out["doc_topic"] == ["gsa"]
     assert out["doc_level"] == "wk"
+
+
+# --------------------------------------------------------------------------
+# reasoning block handling (Qwen3, DeepSeek-R1)
+# --------------------------------------------------------------------------
+
+
+def test_parse_llm_json_strips_thinking_block_with_braces():
+    # Reasoning models include <thinking>…</thinking> blocks in content.
+    # The block contains braces that defeat the greedy \{.*\} regex if not
+    # stripped first: it matches from the first { in <thinking> to the last
+    # } in the JSON, consuming part of the reasoning, then fails to parse.
+    raw = """<thinking>
+    Let me analyze this document structure. I see { and } braces in the reasoning.
+    The actual JSON should come after.
+    </thinking>
+    {"doc_type": "letter"}"""
+    assert parse_llm_json(raw) == {"doc_type": "letter"}
+
+
+def test_parse_llm_json_no_tags_unchanged():
+    # Existing behavior: tag-free input is unaffected.
+    raw = '{"doc_type": "book"}'
+    assert parse_llm_json(raw) == {"doc_type": "book"}
+
+
+def test_parse_llm_json_mixed_close_spelling_keeps_json():
+    # Regression: a block closed with the other spelling (<thinking>…</think>)
+    # used to fall into the truncated-reasoning path, which dropped
+    # everything to end-of-string — the JSON payload included — and silently
+    # returned {}. The close spellings must be interchangeable.
+    raw = '<thinking>plan sections briefly</think>\n{"doc_type": "letter"}'
+    assert parse_llm_json(raw) == {"doc_type": "letter"}
+
+
+def test_parse_llm_json_thinking_with_invalid_json_still_returns_empty():
+    # Thinking block stripped, but resulting content is still unparseable.
+    raw = """<thinking>
+    Some reasoning with { and } inside.
+    </thinking>
+    not valid json at all"""
+    assert parse_llm_json(raw) == {}

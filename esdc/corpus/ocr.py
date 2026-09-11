@@ -10,9 +10,15 @@ because Ollama's OpenAI-compatible API is limited for vision requests.
 
 import logging
 
+import httpx
 import ollama
 
 logger = logging.getLogger(__name__)
+
+# ollama-python's own default is timeout=None (httpx timeouts disabled), which
+# hangs forever on an unreachable remote host. Always carry a bounded timeout:
+# short connect probe for health checks, generous read for slow OCR pages.
+DEFAULT_TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 
 OCR_PROMPT = (
     "Convert this scanned Indonesian official document page to clean markdown. "
@@ -31,9 +37,12 @@ class OllamaVisionOcr:
         client: ollama.Client | None = None,
         num_ctx: int = 16384,
         host: str | None = None,
+        timeout: httpx.Timeout | float | None = None,
     ) -> None:
         self.model = model
-        self._client = client or ollama.Client(host=host)
+        self._client = client or ollama.Client(
+            host=host, timeout=DEFAULT_TIMEOUT if timeout is None else timeout
+        )
         self._options = {"temperature": 0, "num_ctx": num_ctx}
 
     def query_image(self, png_bytes: bytes, prompt: str) -> str:

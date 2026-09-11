@@ -9,10 +9,14 @@ from pathlib import Path
 import openpyxl
 
 from esdc.pod_registry.publish import publish_pod_registry
-from esdc.pod_registry.store import get_sqlite_connection
+from esdc.pod_registry.store import get_sqlite_connection, validate_revision_effect
 
 _REQUIRED_SHEETS = (
-    "POD Record", "project_pod", "pod_revision", "institution", "pod_type",
+    "POD Record",
+    "project_pod",
+    "pod_revision",
+    "institution",
+    "pod_type",
 )
 
 
@@ -55,11 +59,46 @@ def _int_cell(
     traceback instead of surfacing as one more entry in the per-row error
     list that becomes PodRegistryImportError.
     """
+    if not isinstance(value, (str, int, float)):
+        errors.append(f"{sheet} row {row_idx}: invalid {column} '{value}'")
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
         errors.append(f"{sheet} row {row_idx}: invalid {column} '{value}'")
         return None
+
+
+def _bool_cell(
+    value: object, sheet: str, row_idx: int, column: str, errors: list[str]
+) -> int | None:
+    """Normalize a workbook boolean cell to 1, 0, or None (blank).
+
+    Excel booleans arrive as Python bool; 1/0 ints and common text spellings
+    ("yes"/"no"/"true"/"false"/"y"/"n") are also accepted. Anything else is a
+    row error, mirroring _int_cell.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("1", "true", "yes", "y"):
+            return 1
+        if text in ("0", "false", "no", "n"):
+            return 0
+    errors.append(f"{sheet} row {row_idx}: invalid {column} '{value}'")
+    return None
+
+
+def _revision_effect_cell(value: object) -> str:
+    """Normalize a workbook revision_effect cell to a canonical value."""
+    if not value:
+        return "unknown"
+    return str(value).strip().lower().replace(" ", "_")
 
 
 def import_pod_registry_workbook(
@@ -105,24 +144,26 @@ def import_pod_registry_workbook(
     seen_seqs: set[int] = set()
     seen_ids: set[int] = set()
     for i, r in enumerate(pods, start=2):
-        inst = inst_by_name.get(r.get("institution"))
-        ptype = type_by_name.get(r.get("pod_type"))
+        inst_name = r.get("institution")
+        pod_type_name = r.get("pod_type")
         pod_id = r.get("pod_id_skk")
         pid = r.get("pod_id_itb")
         seq = r.get("approval_seq")
+        inst = inst_by_name.get(inst_name) if isinstance(inst_name, str) else None
+        ptype = (
+            type_by_name.get(pod_type_name) if isinstance(pod_type_name, str) else None
+        )
         if inst is None:
             errors.append(
                 f"POD Record row {i}: unknown institution '{r.get('institution')}'"
             )
         if ptype is None:
-            errors.append(
-                f"POD Record row {i}: unknown pod_type '{r.get('pod_type')}'"
-            )
-        if pod_id in seen_pod_ids:
+            errors.append(f"POD Record row {i}: unknown pod_type '{r.get('pod_type')}'")
+        if pod_id is not None and pod_id in seen_pod_ids:
             errors.append(f"POD Record row {i}: duplicate pod_id_skk '{pod_id}'")
-        if seq in seen_seqs:
+        if seq is not None and seq in seen_seqs:
             errors.append(f"POD Record row {i}: duplicate approval_seq '{seq}'")
-        if pid in seen_ids:
+        if pid is not None and pid in seen_ids:
             errors.append(f"POD Record row {i}: duplicate pod_id_itb '{pid}'")
         if pid is None:
             errors.append(f"POD Record row {i}: missing pod_id_itb")
@@ -130,9 +171,12 @@ def import_pod_registry_workbook(
             errors.append(f"POD Record row {i}: missing approval_seq")
         if pod_id is None:
             errors.append(f"POD Record row {i}: missing pod_id_skk")
-        seen_pod_ids.add(pod_id)
-        seen_seqs.add(seq)
-        seen_ids.add(pid)
+        if pod_id is not None:
+            seen_pod_ids.add(pod_id)
+        if seq is not None:
+            seen_seqs.add(seq)
+        if pid is not None:
+            seen_ids.add(pid)
         if (
             inst is None
             or ptype is None
@@ -146,11 +190,19 @@ def import_pod_registry_workbook(
         int_rev = _int_cell(r.get("rev_num") or 0, "POD Record", i, "rev_num", errors)
         if int_pid is None or int_seq is None or int_rev is None:
             continue
-        m_pod_rows.append((
-            int_pid, str(pod_id), r.get("pod_name"), r.get("pod_letter_num"),
-            _iso(r.get("approval_date")), inst, ptype,
-            int_rev, int_seq,
-        ))
+        m_pod_rows.append(
+            (
+                int_pid,
+                str(pod_id),
+                r.get("pod_name"),
+                r.get("pod_letter_num"),
+                _iso(r.get("approval_date")),
+                inst,
+                ptype,
+                int_rev,
+                int_seq,
+            )
+        )
 
     valid_ids = {row[0] for row in m_pod_rows}
     valid_pod_ids = {row[1] for row in m_pod_rows}
@@ -180,7 +232,31 @@ def import_pod_registry_workbook(
             errors.append(f"pod_revision row {i}: duplicate pair ({succ}, {pred})")
             continue
         seen_rev_pairs.add((succ, pred))
-        revision_rows.append((succ, pred))
+        effect = _revision_effect_cell(r.get("revision_effect"))
+        remains_valid = _bool_cell(
+            r.get("previous_remains_valid"),
+            "pod_revision",
+            i,
+            "previous_remains_valid",
+            errors,
+        )
+        try:
+            validate_revision_effect(
+                effect, None if remains_valid is None else bool(remains_valid)
+            )
+        except ValueError as exc:
+            errors.append(f"pod_revision row {i}: {exc}")
+            continue
+        revision_rows.append(
+            (
+                succ,
+                pred,
+                effect,
+                _iso(r.get("effective_date")),
+                r.get("amended_scope"),
+                remains_valid,
+            )
+        )
 
     if errors:
         raise PodRegistryImportError(errors)
@@ -189,7 +265,11 @@ def import_pod_registry_workbook(
     try:
         with conn:  # one transaction
             for table in (
-                "pod_revision", "project_pod", "m_pod", "r_pod_type", "r_institution",
+                "pod_revision",
+                "project_pod",
+                "m_pod",
+                "r_pod_type",
+                "r_institution",
             ):
                 conn.execute(f"DELETE FROM {table}")
             conn.executemany(
@@ -213,7 +293,9 @@ def import_pod_registry_workbook(
                 project_rows,
             )
             conn.executemany(
-                "INSERT INTO pod_revision (successor_id, predecessor_id) VALUES (?,?)",
+                "INSERT INTO pod_revision (successor_id, predecessor_id,"
+                " revision_effect, effective_date, amended_scope,"
+                " previous_remains_valid) VALUES (?,?,?,?,?,?)",
                 revision_rows,
             )
         counts = {

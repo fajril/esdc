@@ -12,6 +12,7 @@ from esdc.chat.domain_knowledge.doc_schema import (
     legacy_topic_seed,
     render_prompt_definitions,
 )
+from esdc.llm_text import strip_thinking_tags
 
 DOC_TYPES = enum_values("doc_type")
 DOC_LEVELS = enum_values("doc_level")
@@ -40,9 +41,20 @@ METADATA_PROMPT_IMAGE = METADATA_PROMPT.split("Document markdown:")[0] + (
 )
 
 
+def metadata_image_prompt(filename: str | None = None) -> str:
+    """First-page-image metadata prompt, optionally prefixed with a filename hint."""
+    if filename:
+        return (
+            f"Filename (may hint doc_type/date/subject): {filename}\n\n"
+            f"{METADATA_PROMPT_IMAGE}"
+        )
+    return METADATA_PROMPT_IMAGE
+
+
 def parse_llm_json(raw: str) -> dict[str, Any]:
     """Parse LLM output into a dict; tolerate code fences and chatter."""
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    cleaned = strip_thinking_tags(raw)
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if not match:
         return {}
     try:
@@ -206,8 +218,17 @@ def normalize_entity_fields(meta: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def llm_extract(markdown: str, llm_caller: Callable[[str], str]) -> dict[str, Any]:
-    """Metadata candidates for the sidecar. llm_caller: prompt -> raw response."""
-    prompt = METADATA_PROMPT.format(markdown=markdown[:MAX_PROMPT_CHARS])
-    return normalize_metadata(parse_llm_json(llm_caller(prompt)))
+def llm_extract(
+    markdown: str,
+    llm_caller: Callable[[str], str],
+    filename: str | None = None,
+) -> dict[str, Any]:
+    """Metadata candidates for the sidecar. llm_caller: prompt -> raw response.
 
+    ``filename`` is an optional hint prepended to the prompt (used by
+    ``corpus rename``); the model still returns the full metadata dict.
+    """
+    prompt = METADATA_PROMPT.format(markdown=markdown[:MAX_PROMPT_CHARS])
+    if filename:
+        prompt = f"Filename (may hint doc_type/date/subject): {filename}\n\n{prompt}"
+    return normalize_metadata(parse_llm_json(llm_caller(prompt)))

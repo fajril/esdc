@@ -4,15 +4,11 @@ description: "Analisis strategis: potensi peningkatan produksi migas, pengembang
 triggers:
   - "analisis nkri"
   - "analisa nkri"
-  - "analisa nasional"
   - "analisis nasional"
+  - "analisa nasional"
   - "analisis strategis"
   - "analisa strategis"
-  - "analisa wilayah kerja"
   - "analisis wilayah kerja"
-  - "peningkatan produksi"
-  - "penambahan cadangan"
-  - "potensi lapangan"
+  - "analisa wilayah kerja"
   - "exploration highlight"
-  - "potensi pengembangan"
 instructions: instructions.md

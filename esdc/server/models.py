@@ -1,3 +1,5 @@
+"""Pydantic models for the web API."""
+
 # Standard library
 from typing import Literal
 

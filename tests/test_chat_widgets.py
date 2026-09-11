@@ -1,5 +1,7 @@
 """Widget-level tests for the overhauled TUI."""
 
+from typing import cast
+
 import pytest
 
 
@@ -111,7 +113,9 @@ class TestToolTimeline:
         tl = ToolTimeline()
         tl.start_tool("SQL Executor")
         calls = {"n": 0}
-        monkeypatch.setattr(tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1))
+        monkeypatch.setattr(
+            tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1)
+        )
         tl._tick()
         assert calls["n"] == 1
 
@@ -122,7 +126,9 @@ class TestToolTimeline:
         tl.start_tool("SQL Executor")
         tl.finish_tool("SQL Executor")
         calls = {"n": 0}
-        monkeypatch.setattr(tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1))
+        monkeypatch.setattr(
+            tl, "_render_entries", lambda: calls.__setitem__("n", calls["n"] + 1)
+        )
         tl._tick()
         assert calls["n"] == 0
 
@@ -157,6 +163,7 @@ class TestToolResultWiring:
         the real name.
         """
         from esdc.chat.app import ESDCChatApp
+        from esdc.chat.widgets import ContextPanel
 
         app = ESDCChatApp()
         calls = {}
@@ -177,7 +184,7 @@ class TestToolResultWiring:
                 def finish_tool(name):
                     pass
 
-        app._context_panel = _CP()
+        app._context_panel = cast(ContextPanel, _CP())
         app._handle_stream_chunk(
             {
                 "type": "tool_result",
@@ -197,6 +204,7 @@ class TestToolResultWiring:
         results panels.
         """
         from esdc.chat.app import ESDCChatApp
+        from esdc.chat.widgets import ContextPanel
 
         app = ESDCChatApp()
         calls = {}
@@ -217,7 +225,7 @@ class TestToolResultWiring:
                 def finish_tool(name):
                     pass
 
-        app._context_panel = _CP()
+        app._context_panel = cast(ContextPanel, _CP())
         app._handle_stream_chunk(
             {
                 "type": "tool_result",
@@ -233,6 +241,7 @@ class TestToolResultWiring:
 class TestToggleAllSections:
     def test_toggle_all_collapses_when_any_expanded(self):
         from esdc.chat.app import ESDCChatApp
+        from esdc.chat.widgets import ContextPanel
 
         app = ESDCChatApp()
 
@@ -243,11 +252,14 @@ class TestToggleAllSections:
             sql_panel = _Panel()
             results_panel = _Panel()
 
-        app._context_panel = _CP()
+        panel = cast(ContextPanel, _CP())
+        app._context_panel = panel
         app.action_toggle_all_sections()
+        assert app._context_panel is not None
         assert app._context_panel.sql_panel.collapsed is True
         assert app._context_panel.results_panel.collapsed is True
         app.action_toggle_all_sections()
+        assert app._context_panel is not None
         assert app._context_panel.sql_panel.collapsed is False
 
 
@@ -319,6 +331,7 @@ class TestStatusBarLiveness:
 
     def test_complete_clears_liveness_indicator(self):
         app = self._make_app()
+        assert app.status_bar is not None
         app._handle_stream_chunk(
             {"type": "tool_call", "tool": "SQL Executor", "args": {}}
         )
@@ -329,6 +342,7 @@ class TestStatusBarLiveness:
 
     def test_tool_result_shows_thinking_status(self):
         app = self._make_app()
+        assert app.status_bar is not None
         app._handle_stream_chunk(
             {
                 "type": "tool_result",
@@ -351,7 +365,9 @@ class TestContextHealth:
 
     def _captured_text(self, ch, monkeypatch):
         captured = {}
-        monkeypatch.setattr(ch, "update", lambda content: captured.__setitem__("v", content))
+        monkeypatch.setattr(
+            ch, "update", lambda content: captured.__setitem__("v", content)
+        )
         return captured
 
     def test_green_below_50(self, monkeypatch):

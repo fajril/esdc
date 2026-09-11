@@ -1,9 +1,10 @@
 """Tests for the iris chat tools `search_documents` and `read_document`.
 
-Monkeypatch choice: the tools construct ``CorpusStore()`` with defaults,
-which resolve ``db_path`` via ``Config.get_db_file()`` and the embedder via
-``esdc.search.embedding_manager.EmbeddingManager`` (lazily imported inside
-``CorpusStore.__init__``). We patch both module attributes so the real
+Monkeypatch choice: the tools construct ``CorpusStore()`` via
+``_get_corpus_embedder()``, which resolves ``db_path`` via
+``Config.get_db_file()`` and the embedder via
+``esdc.corpus.embedder.InternalEmbedder`` (lazily imported inside
+``_get_corpus_embedder``). We patch both module attributes so the real
 constructor path is exercised against a tmp DuckDB with a FakeEmbedder.
 The tool result cache is redirected to a tmp diskcache for isolation.
 """
@@ -12,6 +13,7 @@ import json
 from pathlib import Path
 
 import diskcache
+import duckdb
 import pytest
 
 from esdc.corpus.chunker import Chunk
@@ -47,13 +49,25 @@ class FakeEmbedder:
 
 
 DOC = {
-    "doc_id": "abc123", "file_name": "s.pdf", "file_path": "/x/s.pdf",
-    "file_hash": "ab" * 32, "doc_type": "surat",
-    "doc_number": "SRT-1", "doc_date": "2026-01-05", "subject": "Persetujuan",
-    "sender": "SKK", "recipient": "KKKS", "doc_level": "field",
-    "wk_name": "Rokan", "field_name": "Duri", "project_name": None,
-    "raw_entities": "{}", "metadata": "{}", "markdown": "# Surat\nisi",
-    "extraction_method": "native", "page_count": 1,
+    "doc_id": "abc123",
+    "file_name": "s.pdf",
+    "file_path": "/x/s.pdf",
+    "file_hash": "ab" * 32,
+    "doc_type": "surat",
+    "doc_number": "SRT-1",
+    "doc_date": "2026-01-05",
+    "subject": "Persetujuan",
+    "sender": "SKK",
+    "recipient": "KKKS",
+    "doc_level": "field",
+    "wk_name": "Rokan",
+    "field_name": "Duri",
+    "project_name": None,
+    "raw_entities": "{}",
+    "metadata": "{}",
+    "markdown": "# Surat\nisi",
+    "extraction_method": "native",
+    "page_count": 1,
 }
 
 LONG_DOC = {
@@ -80,11 +94,15 @@ def tool_env(tmp_path: Path, monkeypatch):
     from esdc.configs import Config
 
     tools_mod = importlib.import_module("esdc.chat.tools")
-    em = importlib.import_module("esdc.search.embedding_manager")
+    embedder_mod = importlib.import_module("esdc.corpus.embedder")
 
     db_path = tmp_path / "corpus.duckdb"
     monkeypatch.setattr(Config, "get_db_file", classmethod(lambda cls: db_path))
-    monkeypatch.setattr(em, "EmbeddingManager", FakeEmbedder)
+    monkeypatch.setattr(
+        Config, "get_cache_dir", classmethod(lambda cls: tmp_path / "cache")
+    )
+    monkeypatch.setattr(embedder_mod, "InternalEmbedder", FakeEmbedder)
+    monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
     cache = diskcache.Cache(str(tmp_path / "tool_cache"))
     monkeypatch.setattr(tools_mod, "_get_tool_cache", lambda: cache)
@@ -95,10 +113,11 @@ def tool_env(tmp_path: Path, monkeypatch):
 @pytest.fixture
 def populated(tool_env: Path) -> Path:
     """Build a tmp DuckDB with one short and one long document ingested."""
-    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder())
+    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder(), read_only=False)
     store.ensure_tables()
     store.insert_document(DOC, [Chunk(0, "Surat", "persetujuan POD lapangan Duri")])
     store.insert_document(LONG_DOC, [Chunk(0, None, "notulen rapat panjang")])
+    store.refresh_mirror()  # search() hydrates/joins off the mirror, not insert
     store.rebuild_indexes()
     store.close()
     return tool_env
@@ -129,11 +148,12 @@ def test_search_documents_filter_excludes(populated):
 def test_search_documents_doc_topic_filter(tool_env):
     from esdc.chat.tools import search_documents
 
-    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder())
+    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder(), read_only=False)
     store.ensure_tables()
     doc = dict(DOC)
     doc["doc_topic"] = ["wpnb"]
     store.insert_document(doc, [Chunk(0, None, "rencana kerja dan anggaran")])
+    store.refresh_mirror()  # search() hydrates/joins off the mirror, not insert
     store.rebuild_indexes()
     store.close()
 
@@ -156,6 +176,97 @@ def test_search_documents_empty_db_not_available(tool_env):
     assert result["status"] == "not_available"
     assert "esdc corpus extract" in result["message"]
     assert "esdc corpus commit" in result["message"]
+
+
+def test_aggregate_documents_counts_exhaustively(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"query": "persetujuan", "mode": "count"})
+    )
+    assert result["status"] in ("success", "no_results")
+    assert result["match"] == "hybrid"  # tool default flipped in Task 5
+    assert result["approximate"] is False
+    assert "count" in result
+
+
+def test_aggregate_documents_metadata_only_filter(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "list", "doc_type": "surat"})
+    )
+    assert result["count"] == 2  # both DOC and LONG_DOC are doc_type=surat
+    assert len(result["documents"]) == 2
+
+
+def test_aggregate_documents_list_mode_truncated_flags(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "list", "doc_type": "surat", "limit": 1})
+    )
+    assert result["count"] == 2  # both DOC and LONG_DOC are doc_type=surat
+    assert result["returned"] == 1
+    assert result["truncated"] is True
+    assert "note" in result
+
+
+def test_aggregate_documents_count_mode_doc_ids_bounded(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "count", "doc_type": "surat", "limit": 1})
+    )
+    assert result["count"] == 2
+    assert len(result["doc_ids"]) == 1
+    assert result["returned"] == 1
+    assert result["truncated"] is True
+    assert "note" in result
+
+
+def test_aggregate_documents_not_available_carries_ingest_hint(tool_env):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(aggregate_documents.invoke({"query": "apapun"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
+
+
+def test_search_documents_missing_embed_text_degrades_then_repairs(populated):
+    """An upgraded install missing embed_text degrades actionably, not silently.
+
+    A pre-branch DuckDB has document_chunks populated but lacks the
+    embed_text column that this branch's ``_vector_search`` selects. The
+    serving path must NOT self-heal mid-query: ``search_documents`` reports
+    ``not_available`` with the maintenance hint. A writable maintenance
+    pass (``ensure_tables``) then repairs the schema and search works.
+    """
+    from esdc.chat.tools import search_documents
+
+    conn = duckdb.connect(str(populated))
+    conn.execute("INSTALL vss")
+    conn.execute("LOAD vss")
+    conn.execute("SET hnsw_enable_experimental_persistence = true")
+    # The HNSW index blocks dropping any column positioned before it;
+    # drop it first (search() rebuilds via a sequential scan just fine).
+    conn.execute("DROP INDEX IF EXISTS idx_hnsw_chunks")
+    conn.execute("ALTER TABLE document_chunks DROP COLUMN embed_text")
+    conn.close()
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
+    assert result["status"] == "not_available"
+    assert "embed_text" in result["message"]
+    assert "esdc corpus extract" in result["message"]
+    assert "esdc corpus commit" in result["message"]
+
+    # Writable maintenance (esdc corpus commit / CLI open path) repairs.
+    store = CorpusStore(db_path=populated, embedder=FakeEmbedder(), read_only=False)
+    store.ensure_tables()
+    store.close()
+
+    repaired = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
+    assert repaired["status"] in ("success", "no_results")
 
 
 def test_read_document_returns_markdown_and_metadata(populated):
@@ -199,6 +310,43 @@ class ExplodingStore:
         raise RuntimeError("store exploded")
 
 
+class _ReadinessFailStore:
+    """Double: validates as a readiness failure before any query runs."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def validate_readiness(self, operation="search"):
+        from esdc.corpus.store import CorpusNotReadyError
+
+        raise CorpusNotReadyError(f"Corpus schema is out of date ({operation}).")
+
+    def close(self):
+        pass
+
+
+class _SqlFailStore:
+    """Double: readiness passes, then the query hits an unrelated SQL defect."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def validate_readiness(self, operation="search"):
+        pass
+
+    def search(self, *args, **kwargs):
+        raise RuntimeError("Binder Error: unrelated column does not exist")
+
+    def aggregate(self, *args, **kwargs):
+        raise RuntimeError("Binder Error: unrelated column does not exist")
+
+    def get_document(self, *args, **kwargs):
+        raise RuntimeError("Binder Error: unrelated column does not exist")
+
+    def close(self):
+        pass
+
+
 def test_tools_never_raise_on_store_explosion(tool_env, monkeypatch):
     import importlib
 
@@ -213,6 +361,158 @@ def test_tools_never_raise_on_store_explosion(tool_env, monkeypatch):
 
     result = json.loads(read_document.invoke({"doc_id": "abc123"}))
     assert result["status"] == "error"
+
+
+def test_search_documents_readiness_failure_is_not_available_with_hint(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import search_documents
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _ReadinessFailStore)
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
+    assert result["query"] == "persetujuan POD"
+
+
+def test_search_documents_unrelated_sql_error_is_error_envelope(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import search_documents
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SqlFailStore)
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD"}))
+    assert result["status"] == "error"
+    assert "Binder Error" in result["message"]
+    assert "esdc corpus extract" not in result["message"]
+    assert result["query"] == "persetujuan POD"
+
+
+def test_aggregate_documents_readiness_failure_is_not_available_with_hint(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import aggregate_documents
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _ReadinessFailStore)
+
+    result = json.loads(aggregate_documents.invoke({"query": "persetujuan"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
+    assert result["query"] == "persetujuan"
+
+
+def test_read_document_readiness_failure_is_not_available_with_hint(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import read_document
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _ReadinessFailStore)
+
+    result = json.loads(read_document.invoke({"doc_id": "abc123"}))
+    assert result["status"] == "not_available"
+    assert "esdc corpus extract" in result["message"]
+    assert result["doc_id"] == "abc123"
+
+
+def test_aggregate_documents_unrelated_sql_error_is_error_envelope(
+    tool_env, monkeypatch
+):
+    from esdc.chat.tools import aggregate_documents
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SqlFailStore)
+
+    result = json.loads(aggregate_documents.invoke({"query": "persetujuan"}))
+    assert result["status"] == "error"
+    assert "Binder Error" in result["message"]
+
+
+def test_read_document_unrelated_sql_error_is_error_envelope(tool_env, monkeypatch):
+    from esdc.chat.tools import read_document
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SqlFailStore)
+
+    result = json.loads(read_document.invoke({"doc_id": "abc123"}))
+    assert result["status"] == "error"
+    assert "Binder Error" in result["message"]
+
+
+def test_semantic_search_corpus_readiness_is_not_available_with_hint(
+    tool_env, monkeypatch
+):
+    """Expected readiness failure in the fan-out is not_available, remarks intact."""
+    from unittest.mock import Mock, patch
+
+    import esdc.chat.tools as tools_mod
+    from esdc.chat.tools import semantic_search
+
+    monkeypatch.setattr("esdc.corpus.store.CorpusStore", _ReadinessFailStore)
+    tools_mod.invalidate_tool_cache()
+
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
+        mock_resolver = Mock()
+        mock_resolver.hybrid_search.return_value = {
+            "status": "no_results",
+            "count": 0,
+            "results": [],
+        }
+        mock_resolver.close = Mock()
+        resolver_cls.return_value = mock_resolver
+
+        result = json.loads(semantic_search.invoke({"query": "kendala teknis"}))
+
+    assert result["remarks"]["status"] == "no_results"
+    assert result["documents"]["status"] == "not_available"
+    assert "esdc corpus extract" in result["documents"]["message"]
+
+
+def test_semantic_search_missing_db_reaches_fts_fallback(tool_env, monkeypatch):
+    """A missing remarks DB must degrade to not_available and reach FTS fallback.
+
+    tool_env points the resolver at a nonexistent tmp DuckDB (read-only, so
+    it cannot be created). hybrid_search must return not_available rather than
+    raising, which makes the tool's FTS-fallback branch reachable.
+    """
+    import esdc.chat.tools as tools_mod
+    from esdc.chat.tools import semantic_search
+
+    assert not tool_env.exists()
+
+    fallback_calls: list[tuple] = []
+
+    def _spy_fts(query, limit=10, table_name=None):
+        fallback_calls.append((query, limit, table_name))
+        return {
+            "status": "fallback_to_fts",
+            "message": "keyword fallback",
+            "count": 0,
+            "results": [],
+        }
+
+    monkeypatch.setattr(tools_mod, "_search_remarks_via_fts", _spy_fts)
+
+    result = json.loads(semantic_search.invoke({"query": "kendala teknis"}))
+
+    assert fallback_calls == [("kendala teknis", 10, "project_resources")]
+    assert result["remarks"]["status"] == "fallback_to_fts"
+    assert not tool_env.exists()
+
+
+def test_search_documents_fts_absent_vector_only_fallback(tool_env):
+    """No FTS index must not fail search: vector results stand alone."""
+    from esdc.chat.tools import search_documents
+
+    store = CorpusStore(db_path=tool_env, embedder=FakeEmbedder(), read_only=False)
+    store.ensure_tables()
+    store.insert_document(DOC, [Chunk(0, "Surat", "persetujuan POD lapangan Duri")])
+    store.refresh_mirror()
+    # Deliberately skip rebuild_indexes(): no FTS index exists.
+    store.close()
+
+    result = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
+    assert result["status"] == "success"
+    assert result["results"][0]["doc_id"] == "abc123"
 
 
 def test_tools_registered_in_agent():
@@ -293,9 +593,7 @@ def test_search_documents_reuses_embedder(tool_env, monkeypatch):
             return [[0.0] * 4 for _ in texts]
 
     monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
-    monkeypatch.setattr(
-        "esdc.search.embedding_manager.EmbeddingManager", _CountingEmbedder
-    )
+    monkeypatch.setattr("esdc.corpus.embedder.InternalEmbedder", _CountingEmbedder)
     # invalidate the tool cache so both calls hit the store
     tools_mod.invalidate_tool_cache()
 
@@ -327,7 +625,7 @@ class TestSemanticSearchCorpusFanOut:
         # (e.g. test_search_documents_reuses_embedder's _CountingEmbedder).
         monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -335,7 +633,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [{"project_id": "P1", "similarity": 0.9}],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             result = json.loads(
                 semantic_search.invoke({"query": "persetujuan POD Duri"})
@@ -356,7 +654,7 @@ class TestSemanticSearchCorpusFanOut:
         store_mod = importlib.import_module("esdc.corpus.store")
         monkeypatch.setattr(store_mod, "CorpusStore", ExplodingStore)
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -367,11 +665,9 @@ class TestSemanticSearchCorpusFanOut:
                 ],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
-            result = json.loads(
-                semantic_search.invoke({"query": "kendala teknis"})
-            )
+            result = json.loads(semantic_search.invoke({"query": "kendala teknis"}))
 
         assert result["remarks"]["status"] == "success"
         assert result["remarks"]["count"] == 2
@@ -384,7 +680,7 @@ class TestSemanticSearchCorpusFanOut:
 
         from esdc.chat.tools import semantic_search
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "no_results",
@@ -392,7 +688,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             result = json.loads(semantic_search.invoke({"query": "apa saja"}))
 
@@ -412,6 +708,9 @@ class TestSemanticSearchCorpusFanOut:
             def __init__(self, *args, **kwargs):
                 pass
 
+            def validate_readiness(self, operation="search"):
+                pass
+
             def search(self, query, limit, filters):
                 captured_filters.update(filters or {})
                 return {"status": "no_results", "count": 0, "results": []}
@@ -419,12 +718,10 @@ class TestSemanticSearchCorpusFanOut:
             def close(self):
                 pass
 
-        monkeypatch.setattr(
-            "esdc.corpus.store.CorpusStore", _SpyStore
-        )
+        monkeypatch.setattr("esdc.corpus.store.CorpusStore", _SpyStore)
         tools_mod.invalidate_tool_cache()
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -432,7 +729,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             semantic_search.invoke(
                 {
@@ -462,7 +759,7 @@ class TestSemanticSearchCorpusFanOut:
 
         from esdc.chat.tools import semantic_search
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -470,7 +767,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             first = json.loads(semantic_search.invoke({"query": "kendala unik"}))
             second = json.loads(semantic_search.invoke({"query": "kendala unik"}))
@@ -480,9 +777,7 @@ class TestSemanticSearchCorpusFanOut:
         # No cache hit: both calls reached the (mocked) remarks search.
         assert mock_resolver.hybrid_search.call_count == 2
 
-    def test_fanout_cached_when_both_sections_definitive(
-        self, populated, monkeypatch
-    ):
+    def test_fanout_cached_when_both_sections_definitive(self, populated, monkeypatch):
         """Both sections success/no_results -> second call is a cache hit."""
         from unittest.mock import Mock, patch
 
@@ -491,7 +786,7 @@ class TestSemanticSearchCorpusFanOut:
 
         monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
-        with patch("esdc.search.semantic_resolver.SemanticResolver") as MockResolver:
+        with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
             mock_resolver = Mock()
             mock_resolver.hybrid_search.return_value = {
                 "status": "success",
@@ -499,7 +794,7 @@ class TestSemanticSearchCorpusFanOut:
                 "results": [{"project_id": "P1", "similarity": 0.9}],
             }
             mock_resolver.close = Mock()
-            MockResolver.return_value = mock_resolver
+            resolver_cls.return_value = mock_resolver
 
             first = json.loads(
                 semantic_search.invoke({"query": "persetujuan POD Duri"})
@@ -512,3 +807,143 @@ class TestSemanticSearchCorpusFanOut:
         assert second == first
         # Cache hit: the second call never reached the remarks search.
         assert mock_resolver.hybrid_search.call_count == 1
+
+
+def test_semantic_search_reuses_cached_resolver():
+    """_get_semantic_resolver() builds one SemanticResolver per thread and reuses it.
+
+    Focused unit test on the cache getter itself -- no real DuckDB/network
+    path. Within a single thread (this test), the resolver is built once and
+    the same instance is returned on repeated calls. This is what makes the
+    semantic_meta pin memo (see
+    tests/search/test_semantic_resolver_embedder.py) actually pay off in
+    production: semantic_search used to build a fresh SemanticResolver()
+    per call, so the per-instance memo never fired.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import esdc.chat.tools as tools_mod
+
+    # conftest's reset_semantic_resolver_cache autouse fixture already clears
+    # the current thread's TLS slot before this test runs.
+    with patch("esdc.search.semantic_resolver.SemanticResolver") as resolver_cls:
+        instance = MagicMock()
+        resolver_cls.return_value = instance
+
+        first = tools_mod._get_semantic_resolver()
+        second = tools_mod._get_semantic_resolver()
+
+    resolver_cls.assert_called_once()
+    assert first is instance
+    assert second is instance
+
+
+def test_semantic_resolver_is_thread_local():
+    """Two different threads must get DISTINCT SemanticResolver instances.
+
+    Regression test for the concurrency race fixed alongside this test: a
+    module-global cached resolver was shared across all ThreadPoolExecutor
+    worker threads that LangChain uses to run the sync semantic_search tool,
+    so concurrent chat requests could share one DuckDBPyConnection (not
+    thread-safe) and race on resolver.close() nulling it mid-query. Caching
+    per-thread (via threading.local()) fixes this: each thread must observe
+    its own resolver instance.
+    """
+    import threading
+    from unittest.mock import MagicMock, patch
+
+    import esdc.chat.tools as tools_mod
+
+    results: dict[int, object] = {}
+
+    def _worker(idx: int) -> None:
+        # Each thread starts with a clean TLS slot (only ever set by this
+        # thread itself, since threading.local() is per-thread storage).
+        resolver = tools_mod._get_semantic_resolver()
+        results[idx] = resolver
+
+    with patch(
+        "esdc.search.semantic_resolver.SemanticResolver",
+        side_effect=lambda *a, **k: MagicMock(),
+    ):
+        threads = [threading.Thread(target=_worker, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert len(results) == 2
+    assert results[0] is not results[1]
+
+
+def test_aggregate_documents_filters_by_sender(populated):
+    """The 'but it is from X' follow-up: narrow a count by the sending party."""
+    from esdc.chat.tools import aggregate_documents
+
+    # DOC's sender is "SKK"; 'skk' proves the match is case-insensitive
+    # substring, which is the only usable form against the real corpus
+    # where senders read "PERTAMINA BADAN PEMBINAAN PENGUSAHAAN...".
+    hit = json.loads(aggregate_documents.invoke({"mode": "count", "sender": "skk"}))
+    miss = json.loads(
+        aggregate_documents.invoke({"mode": "count", "sender": "zzz-no-such-party"})
+    )
+
+    assert hit["count"] >= 1
+    assert miss["count"] == 0
+    assert miss["status"] == "no_results"
+
+
+def test_aggregate_documents_filters_by_pod_name(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"mode": "count", "pod_name": "zzz-no-such-pod"})
+    )
+
+    assert result["count"] == 0
+
+
+def test_aggregate_documents_defaults_to_hybrid_with_provenance(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(aggregate_documents.invoke({"query": "persetujuan"}))
+
+    assert result["match"] == "hybrid"
+    assert result["approximate"] is False
+    assert set(result["provenance"]) == {
+        "exact_total",
+        "semantic_extra",
+        "semantic_extra_is_a_ranking",
+    }
+    assert result["provenance"]["exact_total"] == result["count"]
+
+
+def test_aggregate_documents_semantic_candidates_carry_scores(populated):
+    from esdc.chat.tools import aggregate_documents
+
+    result = json.loads(
+        aggregate_documents.invoke({"query": "persetujuan", "semantic_candidates": 2})
+    )
+
+    for cand in result.get("semantic_candidates", []):
+        assert 0.0 <= cand["similarity"] <= 1.0
+        assert "matched_snippet" in cand
+
+
+def test_aggregate_documents_rejects_similarity_threshold(populated):
+    """The removed parameter must not silently succeed as a no-op.
+
+    LangChain's generated arg schema ignores unknown fields by default,
+    so deleting the parameter alone would have left a caller passing it
+    a silently unchanged result — the exact false-precision failure the
+    threshold was removed for. `extra="forbid"` on this tool's schema is
+    what turns it into a loud ValidationError instead.
+    """
+    from pydantic import ValidationError
+
+    from esdc.chat.tools import aggregate_documents
+
+    with pytest.raises(ValidationError, match="similarity_threshold"):
+        aggregate_documents.invoke(
+            {"query": "persetujuan", "similarity_threshold": 0.5}
+        )

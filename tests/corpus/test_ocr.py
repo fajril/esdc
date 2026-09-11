@@ -1,3 +1,9 @@
+"""Tests for OCR-based document ingestion."""
+
+from typing import cast
+
+import ollama
+
 from esdc.corpus.ocr import OCR_PROMPT, OllamaVisionOcr
 
 
@@ -16,7 +22,9 @@ class FakeOllamaClient:
 
 def test_ocr_page_returns_markdown():
     fake = FakeOllamaClient()
-    ocr = OllamaVisionOcr(model="glm-ocr", client=fake, num_ctx=16384)
+    ocr = OllamaVisionOcr(
+        model="glm-ocr", client=cast(ollama.Client, fake), num_ctx=16384
+    )
     result = ocr.ocr_page(b"\x89PNG")
     assert "SRT-001" in result
     model, messages, options = fake.calls[0]
@@ -28,14 +36,19 @@ def test_ocr_page_returns_markdown():
 
 def test_query_image_sends_custom_prompt():
     fake = FakeOllamaClient(content='{"doc_type": "surat"}')
-    ocr = OllamaVisionOcr(model="glm-ocr", client=fake)
+    ocr = OllamaVisionOcr(model="glm-ocr", client=cast(ollama.Client, fake))
     result = ocr.query_image(b"\x89PNG", "extract metadata as JSON")
     assert result == '{"doc_type": "surat"}'
     assert fake.calls[0][1][0]["content"] == "extract metadata as JSON"
 
 
 def test_health_check_true():
-    assert OllamaVisionOcr(model="m", client=FakeOllamaClient()).health_check() is True
+    assert (
+        OllamaVisionOcr(
+            model="m", client=cast(ollama.Client, FakeOllamaClient())
+        ).health_check()
+        is True
+    )
 
 
 def test_health_check_false():
@@ -43,29 +56,70 @@ def test_health_check_false():
         def show(self, model):
             raise ConnectionError("ollama down")
 
-    assert OllamaVisionOcr(model="m", client=Broken()).health_check() is False
+    assert (
+        OllamaVisionOcr(model="m", client=cast(ollama.Client, Broken())).health_check()
+        is False
+    )
+
+
+def test_client_gets_bounded_timeout(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, host=None, **kwargs):
+            captured["host"] = host
+            captured["kwargs"] = kwargs
+
+    import esdc.corpus.ocr as ocr_mod
+
+    monkeypatch.setattr(ocr_mod.ollama, "Client", FakeClient)
+    OllamaVisionOcr(model="glm-ocr")
+    timeout = captured["kwargs"]["timeout"]
+    # ollama's default timeout is None (no timeout -> hang forever on a
+    # remote host); the client must always carry a bounded one.
+    assert timeout is not None
+    assert timeout.connect < timeout.read
 
 
 def test_remote_host_passed_to_client(monkeypatch):
     captured = {}
 
     class FakeClient:
-        def __init__(self, host=None):
+        def __init__(self, host=None, **kwargs):
             captured["host"] = host
+            captured["kwargs"] = kwargs
 
     import esdc.corpus.ocr as ocr_mod
 
     monkeypatch.setattr(ocr_mod.ollama, "Client", FakeClient)
-    OllamaVisionOcr(model="glm-ocr", host="http://llm-engine.sardine-python.ts.net:11434")
+    OllamaVisionOcr(
+        model="glm-ocr", host="http://llm-engine.sardine-python.ts.net:11434"
+    )
     assert captured["host"] == "http://llm-engine.sardine-python.ts.net:11434"
+    assert captured["kwargs"]["timeout"] is not None
+
+
+def test_explicit_timeout_overrides_default(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, host=None, **kwargs):
+            captured["kwargs"] = kwargs
+
+    import esdc.corpus.ocr as ocr_mod
+
+    monkeypatch.setattr(ocr_mod.ollama, "Client", FakeClient)
+    OllamaVisionOcr(model="glm-ocr", timeout=5.0)
+    assert captured["kwargs"]["timeout"] == 5.0
 
 
 def test_no_host_uses_default_client(monkeypatch):
     captured = {}
 
     class FakeClient:
-        def __init__(self, host=None):
+        def __init__(self, host=None, **kwargs):
             captured["host"] = host
+            captured["kwargs"] = kwargs
 
     import esdc.corpus.ocr as ocr_mod
 

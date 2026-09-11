@@ -1,15 +1,18 @@
-table_name: pod_plan
-description: "POD planning and monitoring data, including approval metadata, production assumptions, price assumptions, cost components, and contractor/government economic indicators."
+schema_version: "2"
+source_of_truth: sqlite
+truth_table: pod_value_case
+table_name: pod_value_case
+description: "POD value-case truth (plan, actual, outlook): production assumptions, price assumptions, cost components, and contractor/government economic indicators. POD identity and approval date are canonical in m_pod; this payload carries report/as-of dates and metrics only."
 sheet_name: POD
 columns:
   - name: report_date
     type: date
-    description: "Date when this POD value case was reported, recorded, approved, or captured as a snapshot."
-    aliases: ["tanggal laporan", "tanggal persetujuan POD", "monitoring date", "snapshot date"]
+    description: "Date the value case was issued/submitted (report issue or submission date). Distinct from as_of_date (period represented by the values) and m_pod.approval_date."
+    aliases: ["tanggal laporan", "monitoring date", "snapshot date"]
     maps_to:
       - ProducingLicense
 
-  - name: effective_date
+  - name: as_of_date
     type: date
     description: "Date or period-end date represented by the POD values. Infer the period from this date: YYYY-12-31 means annual, YYYY-06-30 means semester, YYYY-03-31 or YYYY-09-30 means quarterly, and any other date means point/ad hoc."
     aliases: ["tanggal efektif", "as-of date", "value date", "period end date"]
@@ -27,20 +30,6 @@ columns:
     type: string
     description: "Unique POD identifier."
     aliases: ["ID POD", "POD ID"]
-    maps_to:
-      - ProducingLicense
-
-  - name: pod_letter_num
-    type: string
-    description: "POD approval letter number."
-    aliases: ["nomor surat POD", "POD letter number"]
-    maps_to:
-      - ProducingLicense
-
-  - name: pod_name
-    type: string
-    description: "Name of the POD document or producing-license document."
-    aliases: ["nama POD", "plan of development"]
     maps_to:
       - ProducingLicense
 
@@ -315,9 +304,7 @@ columns:
     maps_to:
       - ProducingLicense
 
-  - name: supercedes_by
-    type: string
-    description: "POD ID that supersedes this POD, indicating that this POD is obsolete."
-    aliases: ["superseded by", "digantikan oleh"]
-    maps_to:
-      - ProducingLicense
+conceptual_mappings:
+  pod_value_case.pod_id: ProducingLicense identity
+  pod_value_case.as_of_date: observation_time
+  pod_value_case.report_date: report issue or submission date
