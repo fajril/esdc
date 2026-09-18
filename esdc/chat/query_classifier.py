@@ -21,6 +21,25 @@ class QueryType(Enum):
     YEAR_TRANSITION = auto()
     AMBIGUOUS = auto()
     DOCUMENT = auto()
+    KSMI = auto()
+
+
+@dataclass(frozen=True)
+class KnowledgeRequest:
+    """A declarative request for a domain-knowledge lookup."""
+
+    topic: str
+    entity: str | None = None
+
+
+@dataclass(frozen=True)
+class RoutingDecision:
+    """Minimal capabilities and declarative context for one query."""
+
+    classification: QueryClassification
+    allowed_tools: tuple[str, ...]
+    skill_names: tuple[str, ...]
+    required_knowledge: tuple[KnowledgeRequest, ...]
 
 
 @dataclass
@@ -244,6 +263,20 @@ class QueryClassifier:
         query_lower = query.lower()
         detected_entities = self._extract_entities(query_lower)
 
+        # KSMI terminology is deliberately checked before generic conceptual,
+        # factual, and fallback classification.  A level is extracted only
+        # from an explicit token (for example, ``E3``), never inferred from
+        # surrounding prose.
+        if self._matches_ksmi(query_lower):
+            return QueryClassification(
+                query_type=QueryType.KSMI,
+                confidence=0.9,
+                detected_entities=detected_entities,
+                suggested_table=None,
+                suggested_columns=[],
+                reason="KSMI classification or domain-knowledge query detected",
+            )
+
         # Check for document queries first (highest priority) — surat/MoM/
         # berita acara wording (e.g. "persetujuan") could otherwise drift
         # into CONCEPTUAL, so document intent must be resolved explicitly.
@@ -408,62 +441,194 @@ class QueryClassifier:
                 return True
         return False
 
+    def _matches_ksmi(self, query: str) -> bool:
+        """Check for explicit KSMI vocabulary or level/classification intent."""
+        if re.search(r"\bksmi\b", query, re.IGNORECASE):
+            return True
+        if _KSMI_LEVEL_RE.search(query):
+            return True
+        return bool(
+            re.search(
+                r"\b(?:wap|groovy|pse|izin\s+berproduksi|transisi|transition)\b",
+                query,
+                re.IGNORECASE,
+            )
+            or re.search(
+                r"\b(?:formula|formulasi|rumus|hierarki|hierarchy|klasifikasi|classification)\b"
+                r".*\b(?:ksmi|level|proyek|project)\b",
+                query,
+                re.IGNORECASE,
+            )
+        )
 
-_SCHEMA_TOOLS = ["Schema Inspector", "Table Lister", "Table Selector"]
+
+_KSMI_LEVEL_RE = re.compile(r"\b(?:E[0-8]|X[0-6]|A[12])\b", re.IGNORECASE)
+_KSMI_RECORD_TERMS = re.compile(
+    r"\b(?:proyek|project|lapangan|field|wk|wilayah\s+kerja|\d{4})\b",
+    re.IGNORECASE,
+)
+
+
+def _explicit_ksmi_level(query: str) -> str | None:
+    """Return the first explicitly written KSMI level token, if any."""
+    match = _KSMI_LEVEL_RE.search(query)
+    return match.group(0).upper() if match else None
+
+
+def _ksmi_entity(query: str) -> str:
+    """Return the stable entity label used by declarative KSMI lookups."""
+    lowered = query.lower()
+    if "groovy" in lowered:
+        return "GROOVY"
+    if "pse" in lowered:
+        return "PSE"
+    return "izin berproduksi"
+
+
+def route_query(query: str, *, conversation_context: str = "") -> RoutingDecision:
+    """Classify *query* and select the smallest required capability set."""
+    normalized = re.sub(
+        r"\s+", " ", f"{conversation_context} {query}".strip().lower()
+    )
+    classification = QueryClassifier().classify(normalized)
+
+    if classification.query_type == QueryType.KSMI:
+        level = _explicit_ksmi_level(normalized)
+        is_transition = bool(
+            re.search(r"\b(?:transisi|transition|berpindah|pindah)\b", normalized)
+            or re.search(r"\bke\s+(?:e[0-8]|x[0-6]|a[12])\b", normalized)
+        )
+        if is_transition and level:
+            tools = ["Knowledge Traversal"]
+            if _KSMI_RECORD_TERMS.search(normalized):
+                tools.append("SQL Executor")
+            return RoutingDecision(
+                classification,
+                tuple(tools),
+                ("ksmi_reasoning",),
+                (KnowledgeRequest("transition", level),),
+            )
+
+        if re.search(r"\b(?:groovy|pse|izin\s+berproduksi)\b", normalized):
+            if "groovy" in normalized and re.search(
+                r"\b(?:isi|laporan|report|kendala|narasi|content)\b", normalized
+            ):
+                return RoutingDecision(
+                    classification,
+                    ("Semantic Search", "SQL Executor"),
+                    ("project_narrative_analysis",),
+                    (),
+                )
+            tools = ["Knowledge Traversal"]
+            if _KSMI_RECORD_TERMS.search(normalized):
+                tools.append("SQL Executor")
+            return RoutingDecision(
+                classification,
+                tuple(tools),
+                ("ksmi_reasoning",),
+                (KnowledgeRequest("document", _ksmi_entity(normalized)),),
+            )
+
+        if re.search(r"\b(?:formula|formulasi|rumus|perhitungan)\b", normalized):
+            topic = "formula"
+        elif re.search(
+            r"\b(?:hierarki|hierarchy|klasifikasi|classification)\b", normalized
+        ):
+            topic = "hierarchy"
+        else:
+            topic = "level" if level else "definition"
+        knowledge = (
+            [KnowledgeRequest(topic, level)]
+            if level
+            else [KnowledgeRequest(topic)]
+        )
+        tools = ["Knowledge Traversal"]
+        if _KSMI_RECORD_TERMS.search(normalized) and not is_transition:
+            tools.append("SQL Executor")
+        return RoutingDecision(
+            classification, tuple(tools), ("ksmi_reasoning",), tuple(knowledge)
+        )
+
+    if classification.query_type == QueryType.SIMPLE_FACTUAL:
+        return RoutingDecision(
+            classification, ("Simple Data Query",), ("resource_sql",), ()
+        )
+    if classification.query_type == QueryType.CONCEPTUAL:
+        return RoutingDecision(
+            classification,
+            ("Semantic Search", "SQL Executor"),
+            ("project_narrative_analysis",),
+            (),
+        )
+    if classification.query_type == QueryType.SPATIAL:
+        return RoutingDecision(
+            classification,
+            ("Spatial Resolver", "SQL Executor"),
+            ("spatial_analysis",),
+            (),
+        )
+    if classification.query_type == QueryType.DOCUMENT:
+        return RoutingDecision(
+            classification,
+            ("Document Search", "Document Reader", "Document Aggregator"),
+            ("document_evidence",),
+            (),
+        )
+    if classification.query_type == QueryType.YEAR_TRANSITION:
+        return RoutingDecision(
+            classification,
+            ("SQL Executor", "Resources Column Guide", "Uncertainty Resolver"),
+            ("resource_sql",),
+            (),
+        )
+    if classification.query_type == QueryType.COMPLEX_FACTUAL:
+        return RoutingDecision(
+            classification,
+            (
+                "SQL Executor",
+                "Entity Resolver",
+                "Schema Inspector",
+                "Resources Column Guide",
+                "Uncertainty Resolver",
+            ),
+            ("resource_sql",),
+            (),
+        )
+    return RoutingDecision(
+        classification,
+        ("Entity Resolver", "Schema Inspector", "Table Lister"),
+        (),
+        (),
+    )
 
 
 def get_tools_for_classification(classification: QueryClassification) -> list[str]:
-    """Get minimal tool set for query type.
-
-    Returns LangChain tool names (matching @tool decorator strings).
-    ALWAYS includes schema tools since these are lightweight and may be
-    needed for any query type.
-
-    Args:
-        classification: The query classification
-
-    Returns:
-        List of LangChain tool names to bind for this query
-    """
-    base_tools = [
-        "Entity Resolver",
-        "Knowledge Traversal",
-        "SQL Executor",
-        "Simple Data Query",
-        "Code Interpreter",
-        "Shell Executor",
-        "Resources Column Guide",
-        "Timeseries Column Guide",
-        "Document Search",
-        "Document Reader",
-        "Document Aggregator",
-    ] + _SCHEMA_TOOLS
-
-    if classification.query_type in (
-        QueryType.SIMPLE_FACTUAL,
-        QueryType.YEAR_TRANSITION,
-    ):
-        return base_tools
-
-    elif classification.query_type == QueryType.CONCEPTUAL:
-        return ["Semantic Search"] + base_tools
-
-    elif classification.query_type == QueryType.SPATIAL:
-        return ["Spatial Resolver"] + base_tools
-
-    elif classification.query_type == QueryType.COMPLEX_FACTUAL:
-        return ["Uncertainty Resolver", "Problem Cluster Search"] + base_tools
-
-    elif classification.query_type == QueryType.DOCUMENT:
-        return ["Semantic Search"] + base_tools  # doc tools already in base_tools
-
-    else:  # AMBIGUOUS
-        return [
-            "Semantic Search",
-            "Spatial Resolver",
+    """Return a static minimal route for legacy classification callers."""
+    routes: dict[QueryType, list[str]] = {
+        QueryType.SIMPLE_FACTUAL: ["Simple Data Query"],
+        QueryType.COMPLEX_FACTUAL: [
+            "SQL Executor",
+            "Entity Resolver",
+            "Schema Inspector",
+            "Resources Column Guide",
             "Uncertainty Resolver",
-            "Problem Cluster Search",
-        ] + base_tools
+        ],
+        QueryType.CONCEPTUAL: ["Semantic Search", "SQL Executor"],
+        QueryType.SPATIAL: ["Spatial Resolver", "SQL Executor"],
+        QueryType.YEAR_TRANSITION: [
+            "SQL Executor",
+            "Resources Column Guide",
+            "Uncertainty Resolver",
+        ],
+        QueryType.DOCUMENT: [
+            "Document Search",
+            "Document Reader",
+            "Document Aggregator",
+        ],
+        QueryType.KSMI: ["Knowledge Traversal"],
+        QueryType.AMBIGUOUS: ["Entity Resolver", "Schema Inspector", "Table Lister"],
+    }
+    return list(routes[classification.query_type])
 
 
 def format_classification_for_prompt(classification: QueryClassification) -> str:

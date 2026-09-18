@@ -6,6 +6,7 @@ from esdc.chat.query_classifier import (
     QueryType,
     format_classification_for_prompt,
     get_tools_for_classification,
+    route_query,
 )
 
 
@@ -27,6 +28,10 @@ class TestQueryClassifier:
         assert result.detected_entities.get("report_year") == "2024"
         assert result.suggested_table == "field_resources"
         assert "res_oc" in result.suggested_columns
+
+    def test_route_query_is_exposed_for_capability_selection(self):
+        decision = route_query("Berapa cadangan minyak Lapangan Duri tahun 2025?")
+        assert "Simple Data Query" in decision.allowed_tools
 
     def test_simple_reserves_wa_query(self):
         """Test classification of WA-level reserves query."""
@@ -279,12 +284,7 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "SQL Executor" in tools
-        assert "Schema Inspector" in tools
-        assert "Table Lister" in tools
-        assert "Table Selector" in tools
-        assert "Spatial Resolver" not in tools
-        assert "Semantic Search" not in tools
+        assert tools == ["Simple Data Query"]
 
     def test_conceptual_tools(self):
         """Test tools for conceptual queries."""
@@ -330,8 +330,7 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "Entity Resolver" in tools
-        assert "SQL Executor" in tools
+        assert tools == ["Entity Resolver", "Schema Inspector", "Table Lister"]
 
     def test_year_transition_tools(self):
         """Test minimal tools for year transition queries."""
@@ -345,13 +344,16 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "SQL Executor" in tools
-        assert "Entity Resolver" in tools
+        assert tools == [
+            "SQL Executor",
+            "Resources Column Guide",
+            "Uncertainty Resolver",
+        ]
         assert "Semantic Search" not in tools
         assert "Spatial Resolver" not in tools
 
     def test_document_tools(self):
-        """DOCUMENT queries get Semantic Search plus doc tools from base_tools."""
+        """DOCUMENT queries get the document tools only."""
         classification = QueryClassification(
             query_type=QueryType.DOCUMENT,
             confidence=0.9,
@@ -362,39 +364,11 @@ class TestToolSelection:
         )
 
         tools = get_tools_for_classification(classification)
-        assert "Document Search" in tools
-        assert "Document Reader" in tools
-        assert "Semantic Search" in tools
-        assert "SQL Executor" in tools
-
-    def test_document_tools_always_available(self):
-        """Document Search/Reader are in base_tools for every query type."""
-        for qtype in QueryType:
-            classification = QueryClassification(
-                query_type=qtype,
-                confidence=0.9,
-                detected_entities={},
-                suggested_table=None,
-                suggested_columns=[],
-                reason="Test",
-            )
-            tools = get_tools_for_classification(classification)
-            assert "Document Search" in tools, f"missing for {qtype.name}"
-            assert "Document Reader" in tools, f"missing for {qtype.name}"
-
-    def test_document_aggregator_is_bound_for_every_query_type(self):
-        """A tool the classifier does not bind is a tool the model cannot call."""
-        for qtype in QueryType:
-            classification = QueryClassification(
-                query_type=qtype,
-                confidence=0.9,
-                detected_entities={},
-                suggested_table=None,
-                suggested_columns=[],
-                reason="Test",
-            )
-            tools = get_tools_for_classification(classification)
-            assert "Document Aggregator" in tools, f"missing for {qtype.name}"
+        assert tools == [
+            "Document Search",
+            "Document Reader",
+            "Document Aggregator",
+        ]
 
 
 class TestPromptFormatting:
@@ -488,18 +462,7 @@ class TestPromptFormatting:
 
 
 class TestConditionalToolPreservation:
-    """Test conditionally-registered tools are preserved in allowed_tools.
-
-    The bug: query_classification_node overrides allowed_tools with only
-    classifier-selected tools, dropping conditionally-registered tools.
-    Fix: preserve tools that exist in all_tools but are missing from
-    classifier output.
-
-    Code Interpreter, Shell Executor, Resources Column Guide, and
-    Timeseries Column Guide are now in base_tools (not conditional).
-    CONDITIONAL_TOOLS is empty since File Processing and View File
-    have been removed from the codebase.
-    """
+    """Ensure route selection remains deliberately compact."""
 
     # Tools that the classifier never returns (conditionally registered)
     # Currently empty — all formerly-conditional tools are now in base_tools
@@ -550,7 +513,7 @@ class TestConditionalToolPreservation:
                 )
 
     def test_preservation_logic_simple_factual(self):
-        """Verify base_tools are always present in classifier output."""
+        """Simple factual routes expose only the direct query tool."""
         classification = QueryClassification(
             query_type=QueryType.SIMPLE_FACTUAL,
             confidence=0.9,
@@ -561,22 +524,10 @@ class TestConditionalToolPreservation:
         )
 
         classifier_tools = get_tools_for_classification(classification)
-        classifier_tool_set = set(classifier_tools)
-
-        # Base tools should always be present
-        base_tools = {
-            "Code Interpreter",
-            "Shell Executor",
-            "Resources Column Guide",
-            "Timeseries Column Guide",
-        }
-        for bt in base_tools:
-            assert bt in classifier_tool_set, (
-                f"Base tool {bt!r} should be in classifier output for ALL query types"
-            )
+        assert classifier_tools == ["Simple Data Query"]
 
     def test_preservation_logic_ambiguous(self):
-        """Verify base_tools present even for ambiguous query type."""
+        """Ambiguous routes expose discovery tools without universal base tools."""
         classification = QueryClassification(
             query_type=QueryType.AMBIGUOUS,
             confidence=0.5,
@@ -587,27 +538,10 @@ class TestConditionalToolPreservation:
         )
 
         classifier_tools = get_tools_for_classification(classification)
-        classifier_tool_set = set(classifier_tools)
-
-        # Base tools should always be present
-        base_tools = {
-            "Code Interpreter",
-            "Shell Executor",
-            "Resources Column Guide",
-            "Timeseries Column Guide",
-        }
-        for bt in base_tools:
-            assert bt in classifier_tool_set, (
-                f"Base tool {bt!r} should be in classifier output for AMBIGUOUS"
-            )
+        assert classifier_tools == ["Entity Resolver", "Schema Inspector", "Table Lister"]
 
     def test_preservation_logic_no_conditional_tools(self):
-        """Verify all base_tools are in classifier output without preservation.
-
-        Code Interpreter, Shell Executor, Resources Column Guide, and
-        Timeseries Column Guide are now in base_tools, so they appear
-        in classifier output directly — no preservation mechanism needed.
-        """
+        """No route receives unrelated tools through a hidden base set."""
         classification = QueryClassification(
             query_type=QueryType.SIMPLE_FACTUAL,
             confidence=0.9,
@@ -618,16 +552,4 @@ class TestConditionalToolPreservation:
         )
 
         classifier_tools = get_tools_for_classification(classification)
-        classifier_tool_set = set(classifier_tools)
-
-        # Base tools should always be present
-        base_tools = {
-            "Code Interpreter",
-            "Shell Executor",
-            "Resources Column Guide",
-            "Timeseries Column Guide",
-        }
-        for bt in base_tools:
-            assert bt in classifier_tool_set, (
-                f"Base tool {bt!r} should be in classifier output without preservation"
-            )
+        assert classifier_tools == ["Simple Data Query"]
