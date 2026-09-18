@@ -23,15 +23,23 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
 # Local
-from esdc.chat.context_manager import AgentState, manage_context_node
+from esdc.chat.context_manager import (
+    AgentState,
+    build_routing_context,
+    manage_context_node,
+)
 from esdc.chat.openterminal import get_openterminal_tools
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.query_classifier import (
-    QueryClassifier,
     format_classification_for_prompt,
-    get_tools_for_classification,
+    route_query,
 )
-from esdc.chat.skills import discover_skills, inject_skills_into_prompt, select_skills
+from esdc.chat.skills import (
+    discover_skills,
+    inject_skills_into_prompt,
+    select_skills_for_route,
+    skill_matches_query,
+)
 from esdc.chat.smart_query import simple_data_query
 from esdc.chat.tools import (
     aggregate_documents,
@@ -546,9 +554,30 @@ def create_agent(
     tools_by_name = dict(all_tools)
 
     def init_node(state: AgentState) -> dict[str, Any]:
-        """Initialize system prompt and defaults in state (runs once)."""
+        """Route this invocation and replace stale prompt/skill state."""
+        query_text = _latest_human_text(state["messages"])
+        routing_context = build_routing_context(state["messages"])
+        decision = route_query(query_text, conversation_context=routing_context)
         system_prompt = get_system_prompt()
-        selected_skills = select_skills(_latest_human_text(state["messages"]), skills)
+        selected_skills = select_skills_for_route(decision, skills)
+        # Strategic analysis is an additive modifier.  It can only be selected
+        # when its explicit trigger matches this turn and its route still
+        # permits every declared tool (the route selector enforces that).
+        strategic = next(
+            (skill for skill in skills if skill.name == "strategic_analysis"),
+            None,
+        )
+        if (
+            strategic is not None
+            and skill_matches_query(strategic, query_text)
+            and (
+                not strategic.query_types
+                or decision.classification.query_type.name in strategic.query_types
+                or decision.classification.query_type.name == "AMBIGUOUS"
+            )
+            and set(strategic.tools).issubset(set(decision.allowed_tools))
+        ):
+            selected_skills.append(strategic)
         if selected_skills:
             system_prompt = inject_skills_into_prompt(system_prompt, selected_skills)
         logger.debug(
@@ -558,7 +587,9 @@ def create_agent(
         )
         return {
             "system_prompt": system_prompt,
-            "allowed_tools": list(all_tools.keys()),
+            "allowed_tools": list(decision.allowed_tools),
+            "routing_decision": decision,
+            "selected_skill_names": tuple(skill.name for skill in selected_skills),
             "tool_call_count": 0,
         }
 
@@ -687,8 +718,6 @@ def create_agent(
         selected_tools = [
             all_tools[name] for name in allowed_tools if name in all_tools
         ]
-        if not selected_tools:
-            selected_tools = list(all_tools.values())
 
         llm_with_selected_tools = llm.bind_tools(selected_tools)
 
@@ -996,7 +1025,7 @@ def create_agent(
         """Classify query and inject strategy into system prompt."""
         messages = state["messages"]
         if not messages:
-            return {"messages": [], "allowed_tools": list(all_tools.keys())}
+            return {"messages": [], "allowed_tools": []}
 
         # Find last human message
         last_human: str | list[str | dict[str, Any]] | None = None
@@ -1006,32 +1035,26 @@ def create_agent(
                 break
 
         if not last_human:
-            return {"messages": [], "allowed_tools": list(all_tools.keys())}
+            return {"messages": [], "allowed_tools": state.get("allowed_tools", [])}
 
         query_text = str(last_human) if not isinstance(last_human, str) else last_human
 
         try:
-            classifier = QueryClassifier()
-            classification = classifier.classify(query_text)
-
+            decision = state.get("routing_decision")
+            if decision is None:
+                decision = route_query(query_text)
+            classification = decision.classification
+            allowed_tools = list(decision.allowed_tools)
             strategy_text = format_classification_for_prompt(classification)
-            allowed_tools = get_tools_for_classification(classification)
-
-            # Preserve conditionally-registered tools (e.g. OpenTerminal
-            # Shell Executor) that exist in
-            # all_tools but are not returned by the classifier. Without
-            # this, query_classification_node would override allowed_tools
-            # with only classifier-selected tools, dropping any tools that
-            # were added by create_agent conditionally (like sandbox tools),
-            # making the LLM unable to call them.
-            before = set(allowed_tools)
-            allowed_tools = _merge_allowed_tools(allowed_tools, conditional_tool_names)
-            added = set(allowed_tools) - before
-            if added:
-                logger.debug(
-                    "[CLASSIFICATION] Preserving conditionally-registered "
-                    "tools not in classifier output: %s",
-                    sorted(added),
+            if decision.required_knowledge:
+                requests = "; ".join(
+                    f"topic={request.topic}, entity={request.entity}"
+                    for request in decision.required_knowledge
+                )
+                strategy_text += (
+                    "\n\nMandatory first action: call Knowledge Traversal with "
+                    f"{requests}. Treat its result as authoritative before "
+                    "answering or querying records."
                 )
 
             strategy_msg = SystemMessage(content=strategy_text)
@@ -1045,11 +1068,12 @@ def create_agent(
             return {
                 "messages": [cast(AnyMessage, strategy_msg)],
                 "allowed_tools": allowed_tools,
+                "routing_decision": decision,
             }
 
         except Exception as e:
             logger.warning("query_classification: failed - %s", e)
-            return {"messages": [], "allowed_tools": list(all_tools.keys())}
+            return {"messages": [], "allowed_tools": state.get("allowed_tools", [])}
 
     def _validate_tool_name_mapping() -> None:
         """Warn if any tool name from classifier doesn't exist in all_tools."""

@@ -16,6 +16,9 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langgraph.graph.message import add_messages
+from typing_extensions import NotRequired
+
+from esdc.chat.query_classifier import RoutingDecision
 
 # Local
 from esdc.chat.token_counter import estimate_messages_tokens
@@ -35,6 +38,35 @@ class AgentState(TypedDict):
     context_metadata: dict
     allowed_tools: list[str]
     tool_call_count: int
+    routing_decision: NotRequired[RoutingDecision]
+    selected_skill_names: NotRequired[tuple[str, ...]]
+
+
+def build_routing_context(
+    messages: Sequence[AnyMessage], *, max_chars: int = 2000
+) -> str:
+    """Return bounded prior-human context for per-invocation routing.
+
+    The newest human request is intentionally excluded: callers pass it as the
+    primary query.  Only a small tail of prior human requests and compaction
+    summaries is retained, so a stale skill or old topic cannot dominate a
+    follow-up route.
+    """
+    parts: list[str] = []
+    skipped_newest_human = False
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            if not skipped_newest_human:
+                skipped_newest_human = True
+                continue
+            text = _get_content_str(message.content).strip()
+            if text:
+                parts.append(text)
+        elif isinstance(message, SystemMessage):
+            text = _get_content_str(message.content)
+            if "Context automatically compacted" in text:
+                parts.append(text)
+    return "\n".join(reversed(parts))[-max_chars:]
 
 
 def _get_content_str(content: str | list[str | dict[str, Any]] | None) -> str:

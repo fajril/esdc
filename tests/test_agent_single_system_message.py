@@ -25,8 +25,10 @@ class RecordingLLM:
     def __init__(self, response: AIMessage):
         self._response = response
         self.seen: list[list] = []
+        self.bound_tool_names: list[list[str]] = []
 
     def bind_tools(self, tools):
+        self.bound_tool_names.append([tool.name for tool in tools])
         return self
 
     async def ainvoke(self, messages, **kwargs):
@@ -134,7 +136,7 @@ async def test_ordinary_request_excludes_strategic_skill_in_system_prompt():
     )
 
     system_text = str(llm.seen[-1][0].content)
-    assert "# Strategic Analysis Skill" not in system_text
+    assert "# Strategic analysis playbook" not in system_text
 
     await agent.ainvoke(
         {"messages": [HumanMessage(content="berapa potensi lapangan Duri?")]},
@@ -142,7 +144,7 @@ async def test_ordinary_request_excludes_strategic_skill_in_system_prompt():
     )
 
     resource_system_text = str(llm.seen[-1][0].content)
-    assert "# Strategic Analysis Skill" not in resource_system_text
+    assert "# Strategic analysis playbook" not in resource_system_text
 
 
 @pytest.mark.asyncio
@@ -158,11 +160,11 @@ async def test_explicit_strategic_request_includes_strategic_skill_in_system_pro
     )
 
     system_text = str(llm.seen[-1][0].content)
-    assert "# Strategic Analysis Skill" in system_text
+    assert "# Strategic analysis playbook" in system_text
 
 
 @pytest.mark.asyncio
-async def test_strategic_prompt_is_much_larger_than_ordinary_prompt():
+async def test_strategic_skill_is_replaced_by_ksmi_skill_on_follow_up():
     ordinary_llm = RecordingLLM(AIMessage(content="jawaban"))
     ordinary_agent = create_agent(
         cast(BaseChatModel, ordinary_llm),
@@ -187,8 +189,81 @@ async def test_strategic_prompt_is_much_larger_than_ordinary_prompt():
         config={"recursion_limit": 10},
     )
 
-    ordinary_len = len(str(ordinary_llm.seen[-1][0].content))
-    strategic_len = len(str(strategic_llm.seen[-1][0].content))
+    strategic_text = str(strategic_llm.seen[-1][0].content)
+    assert "# Strategic analysis playbook" in strategic_text
 
-    assert strategic_len > ordinary_len
-    assert strategic_len - ordinary_len > 10_000
+    await strategic_agent.ainvoke(
+        {"messages": [HumanMessage(content="Bolehkah E3 ke E4?")]},
+        config={"recursion_limit": 10},
+    )
+    follow_up_text = str(strategic_llm.seen[-1][0].content)
+    assert "# Strategic analysis playbook" not in follow_up_text
+    assert "# KSMI reasoning playbook" in follow_up_text
+
+
+class NamedTool:
+    def __init__(self, name: str):
+        self.name = name
+
+
+def _route_tools() -> list[NamedTool]:
+    return [
+        NamedTool(name)
+        for name in (
+            "Simple Data Query",
+            "Knowledge Traversal",
+            "Semantic Search",
+            "SQL Executor",
+            "Document Search",
+            "Document Reader",
+            "Document Aggregator",
+            "Spatial Resolver",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_route_binds_ksmi_only_and_narrative_route_binds_semantic_sql():
+    llm = RecordingLLM(AIMessage(content="jawaban"))
+    agent = create_agent(
+        cast(BaseChatModel, llm),
+        tools=_route_tools(),
+        checkpointer=None,
+        context_length=8000,
+    )
+
+    await agent.ainvoke(
+        {"messages": [HumanMessage(content="buat analisis strategis nasional")]},
+        config={"recursion_limit": 10},
+    )
+    await agent.ainvoke(
+        {"messages": [HumanMessage(content="Bolehkah E3 ke E4?")]},
+        config={"recursion_limit": 10},
+    )
+    assert llm.bound_tool_names[-1] == ["Knowledge Traversal"]
+
+    await agent.ainvoke(
+        {
+            "messages": [
+                HumanMessage(content="Apa isi GROOVY dan kendala proyek di WK Rokan?")
+            ]
+        },
+        config={"recursion_limit": 10},
+    )
+    assert llm.bound_tool_names[-1] == ["Semantic Search", "SQL Executor"]
+
+
+@pytest.mark.asyncio
+async def test_simple_reserves_route_excludes_unrelated_tools():
+    llm = RecordingLLM(AIMessage(content="jawaban"))
+    agent = create_agent(
+        cast(BaseChatModel, llm),
+        tools=_route_tools(),
+        checkpointer=None,
+        context_length=8000,
+    )
+    await agent.ainvoke(
+        {"messages": [HumanMessage(content="Berapa cadangan minyak Lapangan Duri tahun 2025?")]},
+        config={"recursion_limit": 10},
+    )
+    assert llm.bound_tool_names[-1] == ["Simple Data Query"]
