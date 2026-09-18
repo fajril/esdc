@@ -830,6 +830,15 @@ class TestKsmiRetrieveEntityResolution:
         result = ksmi_retrieve("definition", "contingent")
         assert "not found" not in result.lower()
 
+    def test_groovy_definition_explains_report_content_column(self):
+        """Text-to-SQL guidance distinguishes GROOVY content from its status flag."""
+        from esdc.chat.domain_knowledge import ksmi_retrieve
+
+        result = ksmi_retrieve("definition", "GROOVY")
+
+        assert "groovy_report" in result
+        assert "groovy_isactive" in result
+
     def test_entity_not_found(self):
         """Test truly unknown entity returns not-found message."""
         from esdc.chat.domain_knowledge import ksmi_retrieve

@@ -240,6 +240,7 @@ class TestFTSIndexNoStopwordsNoStemmer:
             "basin128",
             "operator_name",
             "project_remarks",
+            "groovy_report",
             "vol_remarks",
             "basin86",
             "wk_id",
@@ -284,3 +285,4 @@ class TestFTSIndexNoStopwordsNoStemmer:
             assert "stopwords" not in call_str, (
                 f"Unexpected stopwords param in: {call_str}"
             )
+        assert any("'groovy_report'" in call_str for call_str in fts_calls)

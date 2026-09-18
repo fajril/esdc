@@ -402,6 +402,14 @@ async def execute_sql(
     to query data from the database.
     Only SELECT queries are allowed for safety.
 
+    Spatial vocabulary: ``field_geom`` is the raw WKT text from the source,
+    while ``field_geometry`` is the derived GEOMETRY column. For read-only
+    geometry output, use for example::
+
+        SELECT project_name, ST_AsText(field_geometry) AS field_wkt
+        FROM project_resources
+        WHERE ST_AsText(field_geometry) IS NOT NULL;
+
     For domain context about KSMI levels, entities, or transitions,
     call knowledge_traversal first.
 
@@ -1548,8 +1556,8 @@ def semantic_search(
     query: Annotated[
         str,
         "Bilingual Indonesian/English concept query (5+ words) describing issues, "
-        "problems, or characteristics in project_remarks. The database contains "
-        "bilingual remarks (Indonesian narrative + English technical terms). "
+        "problems, or characteristics in project_remarks or groovy_report. The "
+        "database contains bilingual narrative (Indonesian + English technical terms). "
         "Examples: 'proyek dengan masalah reservoir heterogen', "
         "'kendala teknis water injection'. "
         "DO NOT use for keyword matching on project_name (EOR, waterflood, water cut) "
@@ -1616,10 +1624,10 @@ def semantic_search(
         "Filter by SKK Migas region (ILIKE pattern, e.g., '%Duri%'). Optional.",
     ] = None,
 ) -> str:
-    """Search project remarks AND official documents by semantic similarity.
+    """Search project narrative and official documents by semantic similarity.
 
     Every call fans out to two sources and returns both:
-    - project_remarks (via hybrid semantic + FTS search)
+    - project_remarks and groovy_report (via hybrid semantic + FTS search)
     - the ingested document corpus (surat, MoM, berita acara)
 
     Use this tool when:
@@ -1681,11 +1689,10 @@ def semantic_search(
         filters["wk_area_perwakilan_skkmigas"] = wk_area_perwakilan_skkmigas
 
     cache = _get_tool_cache()
-    # v2 key: the return envelope changed from flat {status, ...} to
-    # {remarks, documents}. The tool cache is permanent on disk, so old
-    # flat-shape entries must never hit.
+    # v3 adds GROOVY narrative to project retrieval. The tool cache is permanent
+    # on disk, so v2 results that only searched project_remarks must not hit.
     cache_key = _tool_cache_key(
-        "semantic_search_v2", query=query, limit=limit, **filters
+        "semantic_search_v3", query=query, limit=limit, **filters
     )
     if cache_key in cache:
         logger.debug("[CACHE] hit | tool=semantic_search key=%s", cache_key[:16])
@@ -1768,9 +1775,9 @@ def _search_remarks_via_fts(
     limit: int = 10,
     table_name: str | None = None,
 ) -> dict:
-    """Fallback FTS search on project_remarks when embeddings unavailable.
+    """Fallback FTS search on project remarks and GROOVY narrative.
 
-    Searches project_remarks using FTS match_bm25 for keyword-based results.
+    Searches the project narrative FTS index using match_bm25.
     """
     from esdc.configs import Config
 
@@ -1786,14 +1793,15 @@ def _search_remarks_via_fts(
         }
 
     try:
-        # Use FTS to search project_remarks
+        # Use FTS to search project narrative.
         escaped_query = query.replace("'", "''")
         sql = f"""
             SELECT
                 pr.uuid,
                 pr.field_name,
                 pr.project_name,
-                SUBSTRING(pr.project_remarks, 1, 300) as source_text,
+                pr.project_remarks,
+                pr.groovy_report,
                 fts_main_{target_table}.match_bm25(
                     pr.uuid, '{escaped_query}'
                 ) as relevance_score
@@ -1830,9 +1838,9 @@ def _search_remarks_via_fts(
                     "uuid": row.get("uuid", ""),
                     "field_name": row.get("field_name", ""),
                     "project_name": row.get("project_name", ""),
-                    "source_text": row.get("source_text", "")[:200] + "..."
-                    if len(str(row.get("source_text", ""))) > 200
-                    else str(row.get("source_text", "")),
+                    "source_text": _compose_project_narrative(
+                        row.get("project_remarks"), row.get("groovy_report")
+                    ),
                     "similarity": round(float(row.get("relevance_score", 0)), 4),
                 }
             )
@@ -1860,6 +1868,20 @@ def _search_remarks_via_fts(
             "results": [],
             "count": 0,
         }
+
+
+def _compose_project_narrative(
+    project_remarks: str | None,
+    groovy_report: str | None,
+) -> str:
+    """Return a compact, labelled FTS result excerpt with source provenance."""
+    sections: list[str] = []
+    if project_remarks:
+        sections.append(f"Project remarks:\n{project_remarks}")
+    if groovy_report:
+        sections.append(f"GROOVY report:\n{groovy_report}")
+    source_text = "\n\n".join(sections)
+    return f"{source_text[:200]}..." if len(source_text) > 200 else source_text
 
 
 def _map_remarks_filters_to_corpus(filters: dict[str, Any]) -> dict[str, Any]:

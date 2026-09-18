@@ -1,6 +1,6 @@
 """Semantic search resolver for ESDC using DuckDB VSS extension.
 
-Provides semantic search capabilities for project_remarks
+Provides semantic search capabilities for project remarks and GROOVY narrative
 using vector embeddings and HNSW index for fast similarity search.
 """
 
@@ -34,9 +34,11 @@ class SemanticResolver:
 
     EMBEDDING_TABLE = "project_embeddings"
     SEMANTIC_META = "semantic_meta"
+    NARRATIVE_CONTENT_VERSION = 2
     SEMANTIC_META_DDL = (
         f"CREATE TABLE IF NOT EXISTS {SEMANTIC_META} "
-        "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+        "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON, "
+        "content_version INTEGER)"
     )
     DEFAULT_LIMIT = 10
 
@@ -134,25 +136,31 @@ class SemanticResolver:
                 "WHERE table_name = ?",
                 [self.SEMANTIC_META],
             ).fetchall()
-            required = {"embedding_model", "dim", "probe_vec"}
+            required = {"embedding_model", "dim", "probe_vec", "content_version"}
             if not required.issubset({row[0] for row in columns}):
                 return self._not_available(
                     "Embedding metadata is unavailable or legacy. Run "
                     "'esdc reload --embeddings-only' to rebuild it."
                 )
             row = conn.execute(
-                f"SELECT dim, probe_vec FROM {self.SEMANTIC_META} LIMIT 1"
+                f"SELECT dim, probe_vec, content_version "
+                f"FROM {self.SEMANTIC_META} LIMIT 1"
             ).fetchone()
             if row is None:
                 return self._not_available(
                     "Embedding metadata is empty. Run "
                     "'esdc reload --embeddings-only' to rebuild it."
                 )
-            dim, probe = row
+            dim, probe, content_version = row
             if not isinstance(dim, int) or dim <= 0 or probe is None:
                 return self._not_available(
                     "Embedding metadata has no usable dimension or probe. Run "
                     "'esdc reload --embeddings-only' to rebuild it."
+                )
+            if content_version != self.NARRATIVE_CONTENT_VERSION:
+                return self._not_available(
+                    "Stored embeddings do not include the current project narrative "
+                    "fields. Run 'esdc reload --embeddings-only' to rebuild them."
                 )
             try:
                 stored = json.loads(probe) if isinstance(probe, str) else list(probe)
@@ -189,7 +197,7 @@ class SemanticResolver:
         """Create embeddings table and HNSW index.
 
         Creates table to store pre-computed embeddings for
-        project_remarks with contextual columns for filtering.
+        project_remarks and groovy_report with contextual columns for filtering.
         Detects embedding dimension dynamically from the model.
 
         Returns:
@@ -250,10 +258,15 @@ class SemanticResolver:
                     wk_regionisasi_ngi VARCHAR,
                     wk_area_perwakilan_skkmigas VARCHAR,
                     project_remarks TEXT,
+                    groovy_report TEXT,
                     embedding FLOAT[{embedding_dim}],
                     PRIMARY KEY (project_id, report_year)
                 )
             """)
+            conn.execute(
+                f"ALTER TABLE {self.EMBEDDING_TABLE} "
+                "ADD COLUMN IF NOT EXISTS groovy_report TEXT"
+            )
 
             # Create B-tree indexes on embedding contextual columns for fast filtering
             self._create_embedding_indexes()
@@ -269,12 +282,22 @@ class SemanticResolver:
                 f"ALTER TABLE {self.SEMANTIC_META} "
                 "ADD COLUMN IF NOT EXISTS probe_vec JSON"
             )
+            conn.execute(
+                f"ALTER TABLE {self.SEMANTIC_META} "
+                "ADD COLUMN IF NOT EXISTS content_version INTEGER"
+            )
             probe = self._embedder.generate_embedding(PROBE_TEXT)
             conn.execute(f"DELETE FROM {self.SEMANTIC_META}")
             conn.execute(
                 f"INSERT INTO {self.SEMANTIC_META} "
-                "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
-                [self._embedder.model, embedding_dim, json.dumps(probe)],
+                "(embedding_model, dim, probe_vec, content_version) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    self._embedder.model,
+                    embedding_dim,
+                    json.dumps(probe),
+                    self.NARRATIVE_CONTENT_VERSION,
+                ],
             )
 
             logger.info(
@@ -290,7 +313,7 @@ class SemanticResolver:
         self,
         table_name: str = "project_resources",
     ) -> int:
-        """Count distinct documents with non-empty project_remarks.
+        """Count distinct documents with project remarks or GROOVY narrative.
 
         Uses DISTINCT to match what generate_and_store_embeddings will actually
         process (one embedding per project per year, deduplicated across uncert_levels).
@@ -305,10 +328,20 @@ class SemanticResolver:
         result = conn.execute(f"""
             SELECT COUNT(DISTINCT project_id || '-' || CAST(report_year AS VARCHAR))
             FROM {table_name}
-            WHERE project_remarks IS NOT NULL
-                AND LENGTH(project_remarks) > 0
+            WHERE NULLIF(TRIM(COALESCE(project_remarks, '')), '') IS NOT NULL
+               OR NULLIF(TRIM(COALESCE(groovy_report, '')), '') IS NOT NULL
         """).fetchone()
         return result[0] if result else 0
+
+    @staticmethod
+    def _compose_search_text(project_remarks: str, groovy_report: str) -> str:
+        """Combine available project narratives with stable source labels."""
+        sections: list[str] = []
+        if project_remarks.strip():
+            sections.append(f"Project remarks:\n{project_remarks}")
+        if groovy_report.strip():
+            sections.append(f"GROOVY report:\n{groovy_report}")
+        return "\n\n".join(sections)
 
     def generate_and_store_embeddings(
         self,
@@ -330,7 +363,7 @@ class SemanticResolver:
         conn = self._get_connection()
 
         try:
-            # Fetch documents with remarks and contextual data
+            # Fetch documents with project remarks or GROOVY narrative.
             # DISTINCT to handle cases where same project appears in multiple rows (e.g., different uncert_levels)  # noqa: E501
             result = conn.execute(f"""
                 SELECT DISTINCT
@@ -350,15 +383,16 @@ class SemanticResolver:
                     wk_subgroup,
                     wk_regionisasi_ngi,
                     wk_area_perwakilan_skkmigas,
-                    COALESCE(project_remarks, '') as project_remarks
+                    COALESCE(project_remarks, '') as project_remarks,
+                    COALESCE(groovy_report, '') as groovy_report
                 FROM {table_name}
-                WHERE project_remarks IS NOT NULL
-                    AND LENGTH(project_remarks) > 0
+                WHERE NULLIF(TRIM(COALESCE(project_remarks, '')), '') IS NOT NULL
+                   OR NULLIF(TRIM(COALESCE(groovy_report, '')), '') IS NOT NULL
             """).fetchall()
 
             total = len(result)
             if total == 0:
-                logger.info("[Semantic] no documents with project_remarks found")
+                logger.info("[Semantic] no project narratives found")
                 return {"status": "success", "count": 0, "table": table_name}
 
             logger.info("[Semantic] generating embeddings | count=%d", total)
@@ -366,8 +400,7 @@ class SemanticResolver:
             # Process in batches
             for i in range(0, total, batch_size):
                 batch = result[i : i + batch_size]
-                # row[16] is project_remarks (the text to embed)
-                texts = [row[16] for row in batch]
+                texts = [self._compose_search_text(row[16], row[17]) for row in batch]
 
                 # Generate embeddings
                 embeddings = self._embedder.generate_embeddings_batch(texts)
@@ -395,6 +428,7 @@ class SemanticResolver:
                             row[14],  # wk_regionisasi_ngi
                             row[15],  # wk_area_perwakilan_skkmigas
                             row[16],  # project_remarks
+                            row[17],  # groovy_report
                             embedding,
                         ]
                     )
@@ -405,8 +439,9 @@ class SemanticResolver:
                      pod_name, wk_name, province, basin128, project_class,
                      project_stage, project_level, operator_name, operator_group,
                      wk_subgroup, wk_regionisasi_ngi,
-                     wk_area_perwakilan_skkmigas, project_remarks, embedding)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     wk_area_perwakilan_skkmigas, project_remarks, groovy_report,
+                     embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     data_to_insert,
                 )
@@ -671,6 +706,7 @@ class SemanticResolver:
                     wk_regionisasi_ngi,
                     wk_area_perwakilan_skkmigas,
                     project_remarks,
+                    groovy_report,
                     list_dot_product(embedding, ?::FLOAT[]) /
                     (sqrt(list_dot_product(embedding,
                     embedding))
@@ -716,10 +752,13 @@ class SemanticResolver:
                     "wk_subgroup": row[13],
                     "wk_regionisasi_ngi": row[14],
                     "wk_area_perwakilan_skkmigas": row[15],
-                    "project_remarks": row[16][:200] + "..."
-                    if len(row[16]) > 200
-                    else row[16],
-                    "similarity": round(row[17], 4),
+                    "project_remarks": (row[16] or "")[:200] + "..."
+                    if len(row[16] or "") > 200
+                    else (row[16] or ""),
+                    "groovy_report": (row[17] or "")[:200] + "..."
+                    if len(row[17] or "") > 200
+                    else (row[17] or ""),
+                    "similarity": round(row[18], 4),
                 }
                 for row in result
             ]
@@ -754,7 +793,7 @@ class SemanticResolver:
         limit: int = 10,
         filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """BM25/FTS keyword search on project_remarks.
+        """BM25/FTS keyword search on project narrative.
 
         Uses DuckDB FTS index for keyword-based relevance scoring.
 
@@ -807,6 +846,7 @@ class SemanticResolver:
                     pe.operator_name,
                     pe.operator_group,
                     pe.project_remarks,
+                    pe.groovy_report,
                     fts_main_project_resources.match_bm25(
                         pe.project_id || '-' || CAST(pe.report_year AS VARCHAR),
                         '{escaped_query}'
@@ -844,10 +884,13 @@ class SemanticResolver:
                         "project_level": row[10],
                         "operator_name": row[11],
                         "operator_group": row[12],
-                        "project_remarks": row[13][:200] + "..."
-                        if len(row[13]) > 200
-                        else row[13],
-                        "bm25_score": round(float(row[14] or 0), 4),
+                        "project_remarks": (row[13] or "")[:200] + "..."
+                        if len(row[13] or "") > 200
+                        else (row[13] or ""),
+                        "groovy_report": (row[14] or "")[:200] + "..."
+                        if len(row[14] or "") > 200
+                        else (row[14] or ""),
+                        "bm25_score": round(float(row[15] or 0), 4),
                     }
                 )
 

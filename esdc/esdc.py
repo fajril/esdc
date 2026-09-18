@@ -38,9 +38,9 @@ import logging
 import os
 import time
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -62,6 +62,17 @@ from rich.progress import (
 )
 from tabulate import tabulate
 
+from esdc.api_project_resources import normalize_project_resources
+from esdc.api_projection import (
+    ProjectPublication,
+    publish_project_resources,
+)
+from esdc.api_snapshot import (
+    ApiSnapshot,
+    JSONScalar,
+    get_project_resources_snapshot,
+    replace_project_resources_snapshot,
+)
 from esdc.commands.configs import configs_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
 from esdc.console import console  # noqa: E402
@@ -85,6 +96,10 @@ from esdc.loaders import (  # noqa: E402
 from esdc.pod_registry.importer import (  # noqa: E402
     PodRegistryImportError,
     import_pod_registry_workbook,
+)
+from esdc.pod_registry.store import (
+    get_esdc_sqlite_path,
+    get_sqlite_connection,
 )
 from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
 from esdc.summarizer import (  # noqa: E402
@@ -565,28 +580,50 @@ def fetch(
     should_reload = not no_reload
     should_reindex = not no_reindex
 
-    if filetype == "csv":
-        load_esdc_data(
-            filetype=FileType.CSV,
-            to_file=should_save,
-            reload=should_reload,
-            username=username,
-            password=password,
-            years=year,
-            reindex=should_reindex,
+    try:
+        if filetype == "csv":
+            load_esdc_data(
+                filetype=FileType.CSV,
+                to_file=should_save,
+                reload=should_reload,
+                username=username,
+                password=password,
+                years=year,
+                reindex=should_reindex,
+            )
+        elif filetype == "json":
+            load_esdc_data(
+                filetype=FileType.JSON,
+                to_file=should_save,
+                reload=should_reload,
+                username=username,
+                password=password,
+                years=year,
+                reindex=should_reindex,
+            )
+            if should_reload:
+                try:
+                    snapshot_conn = get_sqlite_connection(get_esdc_sqlite_path())
+                    try:
+                        snapshot = get_project_resources_snapshot(snapshot_conn)
+                    finally:
+                        snapshot_conn.close()
+                except Exception:
+                    snapshot = None
+                if snapshot is not None:
+                    typer.echo(
+                        "Project resources: "
+                        f"{snapshot.publication_state}; "
+                        f"invalid geometry: {snapshot.invalid_geometry_count}"
+                    )
+        else:
+            logging.warning("File type %s is not available.", filetype)
+    except Exception as exc:
+        typer.echo(
+            "Project resources are analytics_stale; run "
+            f"'esdc rebuild-project-resources': {exc}"
         )
-    elif filetype == "json":
-        load_esdc_data(
-            filetype=FileType.JSON,
-            to_file=should_save,
-            reload=should_reload,
-            username=username,
-            password=password,
-            years=year,
-            reindex=should_reindex,
-        )
-    else:
-        logging.warning("File type %s is not available.", filetype)
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -998,7 +1035,7 @@ def _fetch_and_parse_table(
     username: str,
     password: str,
     report_year: int | None = None,
-) -> tuple[list[list[str]], list[str]] | None:
+) -> tuple[list[list[str]], list[str]] | list[Mapping[str, object]] | None:
     """Download and parse a single table."""
     url = esdc_url_builder(
         table_name=table, file_type=filetype, report_year=report_year
@@ -1025,10 +1062,105 @@ def _fetch_and_parse_table(
         parsed_json = json.loads(data)
         if not parsed_json:
             return None
+        if table == TableName.PROJECT_RESOURCES:
+            if not isinstance(parsed_json, list) or not all(
+                isinstance(item, dict) for item in parsed_json
+            ):
+                raise ValueError("project_resources JSON must be a list of objects")
+            return parsed_json
         header = list(parsed_json[0].keys())
         content = [list(item.values()) for item in parsed_json]
         return content, header
     return None
+
+
+def _commit_and_publish_project_resources(
+    payload: Sequence[Mapping[str, object]],
+) -> ProjectPublication:
+    scalar_payload: list[Mapping[str, JSONScalar]] = []
+    for index, row in enumerate(payload):
+        scalar_row: dict[str, JSONScalar] = {}
+        for key, value in row.items():
+            if value is not None and not isinstance(value, (str, int, float, bool)):
+                raise ValueError(f"record {index} field {key!r} must be a JSON scalar")
+            scalar_row[key] = value
+        scalar_payload.append(scalar_row)
+    normalized = normalize_project_resources(scalar_payload)
+    sqlite_path = get_esdc_sqlite_path()
+    conn = get_sqlite_connection(sqlite_path)
+    try:
+        replace_project_resources_snapshot(
+            conn,
+            normalized.rows,
+            ApiSnapshot(
+                "project_resources",
+                "incoming",
+                len(normalized.rows),
+                normalized.source_sha256,
+                datetime.now(timezone.utc).isoformat(),
+                "committed",
+            ),
+        )
+        snapshot = get_project_resources_snapshot(conn)
+    finally:
+        conn.close()
+    if snapshot is None:
+        raise RuntimeError("project resources snapshot was not committed")
+    return publish_project_resources(
+        Config.get_db_file(), sqlite_path, snapshot.revision
+    )
+
+
+def refresh_project_resources_from_api(
+    *, username: str, password: str, report_year: int | None
+) -> ProjectPublication:
+    """Fetch, normalize, commit, and publish project resources from the API."""
+    payload = _fetch_and_parse_table(
+        TableName.PROJECT_RESOURCES,
+        FileType.JSON,
+        False,
+        username,
+        password,
+        report_year=report_year,
+    )
+    if payload is None or not isinstance(payload, list):
+        raise RuntimeError("project resources API returned no JSON rows")
+    return _commit_and_publish_project_resources(payload)
+
+
+def rebuild_project_resources_projection() -> ProjectPublication:
+    """Retry publication of the latest committed or stale SQLite revision."""
+    sqlite_path = get_esdc_sqlite_path()
+    conn = get_sqlite_connection(sqlite_path)
+    try:
+        snapshot = get_project_resources_snapshot(conn)
+    finally:
+        conn.close()
+    if snapshot is None:
+        raise RuntimeError("no project resources snapshot is available")
+    if snapshot.publication_state not in ("committed", "analytics_stale"):
+        raise RuntimeError(
+            "project resources revision "
+            f"{snapshot.revision} is already {snapshot.publication_state}"
+        )
+    return publish_project_resources(
+        Config.get_db_file(), sqlite_path, snapshot.revision
+    )
+
+
+@app.command(name="rebuild-project-resources")
+def rebuild_project_resources_cmd() -> None:
+    """Rebuild DuckDB project-resource analytics from SQLite without refetching."""
+    try:
+        publication = rebuild_project_resources_projection()
+    except Exception as exc:
+        typer.echo(f"Unable to rebuild project resources: {exc}")
+        raise typer.Exit(1) from None
+    typer.echo(
+        f"Published project resources revision {publication.revision} "
+        f"({publication.row_count:,} rows; "
+        f"invalid geometry: {publication.invalid_geometry_count})."
+    )
 
 
 def load_esdc_data(
@@ -1077,11 +1209,21 @@ def load_esdc_data(
             password,
         )
         if resources_result is not None and reload:
-            load_data_to_db(
-                resources_result[0],
-                resources_result[1],
-                TableName.PROJECT_RESOURCES.value,
-            )
+            if filetype == FileType.JSON:
+                if not isinstance(resources_result, list) or (
+                    resources_result
+                    and not isinstance(resources_result[0], Mapping)
+                ):
+                    raise ValueError("project_resources JSON must be a list of objects")
+                _commit_and_publish_project_resources(resources_result)
+            else:
+                if not isinstance(resources_result, tuple):
+                    raise ValueError("project_resources CSV must use tabular rows")
+                load_data_to_db(
+                    resources_result[0],
+                    resources_result[1],
+                    TableName.PROJECT_RESOURCES.value,
+                )
 
         # Detect years from DB after resources loaded
         timeseries_years = _detect_report_years(Config.get_db_file(), min_year=2020)
@@ -1102,6 +1244,8 @@ def load_esdc_data(
                 report_year=year,
             )
             if result is not None:
+                if not isinstance(result, tuple):
+                    raise ValueError("project_timeseries JSON must use tabular rows")
                 all_timeseries_content.extend(result[0])
                 timeseries_header = result[1]
 
@@ -1142,6 +1286,11 @@ def load_esdc_data(
             )
             if result is None or not reload:
                 continue
+            if not isinstance(result, tuple):
+                if table == TableName.PROJECT_RESOURCES and filetype == FileType.JSON:
+                    _commit_and_publish_project_resources(result)
+                    continue
+                raise ValueError("project_timeseries JSON must use tabular rows")
             _append_to_table(table.value, result[1], result[0], [year])
 
     if reload and reindex:
@@ -1216,6 +1365,9 @@ def _load_file_as_json(file: str, table_name):
         data = f.read()
     parsed_json = json.loads(data)
     if not parsed_json:
+        return
+    if table_name in (TableName.PROJECT_RESOURCES, TableName.PROJECT_RESOURCES.value):
+        _commit_and_publish_project_resources(parsed_json)
         return
     header = parsed_json[0].keys()
     content = [list(item.values()) for item in parsed_json]
@@ -1477,6 +1629,26 @@ def _status_fetch_report() -> bool:
         rich.print(f"  {icon} {ts['table']} ({ts['total']:,} rows):")
         for year, count in ts["years"]:
             rich.print(f"      {year}: {count:,} rows")
+
+    sqlite_path = get_esdc_sqlite_path()
+    if sqlite_path.exists():
+        try:
+            sqlite_conn = get_sqlite_connection(sqlite_path)
+            try:
+                snapshot = get_project_resources_snapshot(sqlite_conn)
+            finally:
+                sqlite_conn.close()
+            if snapshot is not None:
+                rich.print()
+                rich.print("[bold]Project resources snapshot:[/bold]")
+                rich.print(f"  Revision: {snapshot.revision}")
+                rich.print(f"  Rows: {snapshot.row_count:,}")
+                rich.print(f"  Source hash: {snapshot.source_sha256}")
+                rich.print(f"  Fetched: {snapshot.fetched_at}")
+                rich.print(f"  State: {snapshot.publication_state}")
+                rich.print(f"  Invalid geometry: {snapshot.invalid_geometry_count}")
+        except Exception as exc:
+            rich.print(f"[yellow]Could not check project snapshot: {exc}[/yellow]")
 
     return True
 

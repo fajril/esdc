@@ -94,6 +94,34 @@ class TestStatusCommand:
         assert result.exit_code == 0
         assert "Last updated" in result.stdout
 
+    def test_status_reports_invalid_geometry_count(self, isolated_config):
+        from esdc.api_snapshot import (
+            ApiProjectResourceRow,
+            ApiSnapshot,
+            replace_project_resources_snapshot,
+        )
+        from esdc.configs import Config
+        from esdc.pod_registry.store import get_sqlite_connection
+
+        Config.init_config()
+        sqlite_path = Config.get_db_dir() / "esdc.sqlite"
+        conn = get_sqlite_connection(sqlite_path)
+        replace_project_resources_snapshot(
+            conn,
+            [ApiProjectResourceRow(project_id="P-1")],
+            ApiSnapshot("project_resources", "incoming", 1, "hash", "now", "published", 2),
+        )
+        conn.close()
+        db_file = Config.get_db_file()
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        import duckdb
+
+        duckdb.connect(str(db_file)).close()
+
+        result = runner.invoke(app, ["status", "fetch"])
+        assert result.exit_code == 0
+        assert "Invalid geometry: 2" in result.stdout
+
 
 class TestStatusSubcommands:
     """Tests for `esdc status` sub-app routing and the compact summary."""

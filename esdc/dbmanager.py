@@ -19,7 +19,7 @@ from esdc.selection import TableName
 def get_duckdb_connection(
     db_path: str | Path, read_only: bool = True
 ) -> duckdb.DuckDBPyConnection:
-    """Open a DuckDB connection with the VSS extension loaded.
+    """Open a DuckDB connection with VSS and Spatial extensions loaded.
 
     Read-only by default: DuckDB allows many concurrent read-only
     processes but a read-write connection demands an exclusive lock on
@@ -34,13 +34,24 @@ def get_duckdb_connection(
     Failing to load VSS before checkpointing causes:
     ``Missing Extension Error: Cannot bind index, unknown index type 'HNSW'``.
 
-    INSTALL is idempotent (no-op if already installed).
-    LOAD is idempotent (no-op if already loaded).
+    INSTALL is best effort for Spatial because offline callers may already have
+    the extension installed locally.  LOAD is required: callers that query
+    geometry must observe a clear error instead of silently falling back to
+    the raw ``field_geom`` WKT column.
     """
     conn = duckdb.connect(str(db_path), read_only=read_only)
     with contextlib.suppress(Exception):
         conn.execute("INSTALL vss")
     conn.execute("LOAD vss")
+    try:
+        conn.execute("INSTALL spatial")
+    except duckdb.Error as exc:
+        logging.debug("Spatial extension install skipped: %s", exc)
+    try:
+        conn.execute("LOAD spatial")
+    except duckdb.Error as exc:
+        conn.close()
+        raise duckdb.Error(f"Unable to load Spatial extension: {exc}") from exc
     return conn
 
 
@@ -104,6 +115,7 @@ def _create_fts_indexes(
                 "basin128",
                 "operator_name",
                 "project_remarks",
+                "groovy_report",
                 "vol_remarks",
                 "basin86",
                 "wk_id",

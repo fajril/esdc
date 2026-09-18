@@ -32,11 +32,11 @@ def test_search_by_text():
     mock_cursor1.fetchone.return_value = [1]  # Count > 0
 
     mock_cursor2 = MagicMock()
-    # Result needs 18 columns matching semantic_resolver.py implementation:
+    # Result needs 19 columns matching semantic_resolver.py implementation:
     # project_id, report_year, field_name, project_name, pod_name, wk_name,
     # province, basin128, project_class, project_stage, project_level,
     # operator_name, operator_group, wk_subgroup, wk_regionisasi_ngi,
-    # wk_area_perwakilan_skkmigas, project_remarks, similarity
+    # wk_area_perwakilan_skkmigas, project_remarks, groovy_report, similarity
     mock_cursor2.fetchall.return_value = [
         (
             "uuid-1",  # project_id
@@ -56,6 +56,7 @@ def test_search_by_text():
             "Region",  # wk_regionisasi_ngi
             "Area",  # wk_area_perwakilan_skkmigas
             "Project remarks text",  # project_remarks
+            "GROOVY narrative",  # groovy_report
             0.95,  # similarity
         ),
     ]
@@ -107,6 +108,55 @@ def test_build_embeddings_table():
     result = resolver.build_embeddings_table()
 
     assert result is True
+
+
+def test_generate_embeddings_includes_labeled_groovy_report():
+    """GROOVY narrative must be embedded with project remarks when present."""
+    mock_emb = MagicMock()
+    mock_emb.model = "test-embedder"
+    mock_emb.generate_embedding.return_value = [0.1, 0.2]
+    mock_emb.generate_embeddings_batch.return_value = [[0.1, 0.2]]
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE project_resources (
+            project_id VARCHAR, report_year INTEGER, field_name VARCHAR,
+            project_name VARCHAR, pod_name VARCHAR, wk_name VARCHAR,
+            province VARCHAR, basin128 VARCHAR, project_class VARCHAR,
+            project_stage VARCHAR, project_level VARCHAR, operator_name VARCHAR,
+            operator_group VARCHAR, wk_subgroup VARCHAR,
+            wk_regionisasi_ngi VARCHAR, wk_area_perwakilan_skkmigas VARCHAR,
+            project_remarks VARCHAR, groovy_report VARCHAR
+        )
+    """)
+    conn.execute(
+        "INSERT INTO project_resources VALUES "
+        "('P-1', 2025, 'Field', 'Project', NULL, NULL, NULL, NULL, NULL, NULL, "
+        "NULL, NULL, NULL, NULL, NULL, NULL, 'Operational constraint', "
+        "'Current situation:\nGROOVY long-term strategy')"
+    )
+
+    resolver = SemanticResolver(embedder=mock_emb, read_only=False)
+    resolver._get_connection = MagicMock(return_value=conn)
+
+    assert resolver.build_embeddings_table()
+    result = resolver.generate_and_store_embeddings()
+
+    assert result == {"status": "success", "count": 1, "table": "project_resources"}
+    mock_emb.generate_embeddings_batch.assert_called_once_with(
+        [
+            "Project remarks:\nOperational constraint\n\n"
+            "GROOVY report:\nCurrent situation:\nGROOVY long-term strategy"
+        ]
+    )
+    stored = conn.execute(
+        "SELECT project_remarks, groovy_report FROM project_embeddings"
+    ).fetchone()
+    assert stored == (
+        "Operational constraint",
+        "Current situation:\nGROOVY long-term strategy",
+    )
+    conn.close()
 
 
 def test_search_not_available():

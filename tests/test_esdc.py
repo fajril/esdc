@@ -140,6 +140,27 @@ class TestLoadFileAsJson:
             _load_file_as_json(str(json_file), "test_table")
             mock_load.assert_not_called()  # Should not call load_data_to_db
 
+    def test_load_project_resources_json_preserves_mapping_fields(
+        self, tmp_path, mocker
+    ):
+        json_file = tmp_path / "project_resources.json"
+        json_file.write_text(
+            '[{"project_id": "P-1", "project_name": "One"}, '
+            '{"project_name": "Two", "project_id": "P-2"}]'
+        )
+
+        commit = mocker.patch("esdc.esdc._commit_and_publish_project_resources")
+        direct_load = mocker.patch("esdc.esdc.load_data_to_db")
+
+        _load_file_as_json(str(json_file), TableName.PROJECT_RESOURCES)
+
+        commit.assert_called_once()
+        payload = commit.call_args.args[0]
+        assert payload[0]["project_id"] == "P-1"
+        assert payload[1]["project_id"] == "P-2"
+        assert payload[1]["project_name"] == "Two"
+        direct_load.assert_not_called()
+
 
 class TestEsdcDownloader:
     """Tests for esdc_downloader (mocked)."""

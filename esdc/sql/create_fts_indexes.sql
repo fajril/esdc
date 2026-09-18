@@ -19,7 +19,8 @@ PRAGMA create_fts_index(
     'basin128',
     'operator_name',
     'project_remarks',
-    'vol_remarks',
+	'vol_remarks',
+	'groovy_report',
     lower=1,
     strip_accents=1,
     overwrite=1

@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS project_resources (
 	field_lat REAL,
 	field_long REAL,
 	field_area REAL,
+	field_geom TEXT,
+	field_geometry GEOMETRY,
 	-- is_unitisasi INTEGER,
 	pod_letter_num TEXT,
 	pod_name TEXT,
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS project_resources (
 	onstream_year INTEGER,
 	onstream_actual TEXT,
 	project_remarks TEXT,
+	groovy_report TEXT,
 	project_class TEXT,
 	project_level TEXT,
 	project_level_previous TEXT, --new column added

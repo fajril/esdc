@@ -1690,6 +1690,13 @@ GROOVY:
     - "E3 dengan GROOVY: tanpa batas WAP (tanpa GROOVY: maks 3 WAP)"
     - "E4 dengan GROOVY: tanpa batas WAP (tanpa GROOVY: maks 3 WAP)"
     - E6, X1 tidak memiliki dispensasi GROOVY
+  description: >-
+    Kontrak data API: `groovy_isactive` adalah flag status apakah GROOVY aktif,
+    sedangkan `groovy_report` adalah narasi konten GROOVY per proyek. Nilai
+    `groovy_report` dapat null dan, ketika tersedia, berisi bagian berlabel
+    Current situation, Executive summary, Key challenges, dan Solution proposal.
+    Gunakan `groovy_report` untuk mencari, merangkum, atau menjawab isi strategi;
+    jangan menafsirkan flag `groovy_isactive` sebagai isi dokumen.
   db_column: groovy_isactive
 
 # =============================================================================
