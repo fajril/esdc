@@ -529,31 +529,41 @@ def test_tools_registered_in_agent():
 
 
 def test_classifier_sets_include_document_tools():
-    """Classifier tool-sets with semantic search also offer document tools."""
+    """Document tools are limited to DOCUMENT routes in the compact matrix."""
     from esdc.chat.query_classifier import (
         QueryClassification,
         QueryType,
         get_tools_for_classification,
     )
-    from esdc.chat.tools import read_document, search_documents, semantic_search
+    from esdc.chat.tools import aggregate_documents, read_document, search_documents
 
-    seen_semantic = False
-    for qtype in QueryType:
-        classification = QueryClassification(
-            query_type=qtype,
-            confidence=0.9,
-            detected_entities={},
-            suggested_table=None,
-            suggested_columns=[],
-            reason="test",
-        )
-        tools = get_tools_for_classification(classification)
-        if semantic_search.name in tools:
-            seen_semantic = True
-            assert search_documents.name in tools
-            assert read_document.name in tools
+    conceptual = QueryClassification(
+        query_type=QueryType.CONCEPTUAL,
+        confidence=0.9,
+        detected_entities={},
+        suggested_table=None,
+        suggested_columns=[],
+        reason="test",
+    )
+    conceptual_tools = get_tools_for_classification(conceptual)
+    assert "Semantic Search" in conceptual_tools
+    assert "Document Search" not in conceptual_tools
+    assert "Document Reader" not in conceptual_tools
 
-    assert seen_semantic, "no classification exposes semantic_search at all"
+    document = QueryClassification(
+        query_type=QueryType.DOCUMENT,
+        confidence=0.9,
+        detected_entities={},
+        suggested_table=None,
+        suggested_columns=[],
+        reason="test",
+    )
+    document_tools = get_tools_for_classification(document)
+    assert {
+        search_documents.name,
+        read_document.name,
+        aggregate_documents.name,
+    } == set(document_tools)
 
 
 def test_search_documents_description_carries_schema_context():
