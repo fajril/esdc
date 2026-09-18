@@ -1,6 +1,11 @@
 name: strategic_analysis
 version: 1
-description: "Analisis strategis: potensi peningkatan produksi migas, pengembangan lapangan, dan eksplorasi"
+description: "Prosedur analisis strategis berbasis bukti untuk data sumber daya."
+query_types:
+  - SIMPLE_FACTUAL
+  - COMPLEX_FACTUAL
+  - CONCEPTUAL
+tools: []
 triggers:
   - "analisis nkri"
   - "analisa nkri"

@@ -1,0 +1,9 @@
+name: ksmi_reasoning
+version: 1
+description: "Procedurally retrieve and explain KSMI definitions and transitions."
+query_types:
+  - KSMI
+tools:
+  - Knowledge Traversal
+triggers: []
+instructions: instructions.md

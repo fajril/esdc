@@ -1,0 +1,10 @@
+name: spatial_analysis
+version: 1
+description: "Spatial resolver and SQL workflow for geometry-aware questions."
+query_types:
+  - SPATIAL
+tools:
+  - Spatial Resolver
+  - SQL Executor
+triggers: []
+instructions: instructions.md

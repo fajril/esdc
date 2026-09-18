@@ -1,0 +1,11 @@
+name: project_narrative_analysis
+version: 1
+description: "Semantic and SQL workflow for project remarks and GROOVY narrative."
+query_types:
+  - CONCEPTUAL
+  - KSMI
+tools:
+  - Semantic Search
+  - SQL Executor
+triggers: []
+instructions: instructions.md

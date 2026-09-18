@@ -1,0 +1,10 @@
+name: resource_sql
+version: 1
+description: "Safe SQL workflow for resource and reserve tables."
+query_types:
+  - SIMPLE_FACTUAL
+  - YEAR_TRANSITION
+  - COMPLEX_FACTUAL
+tools: []
+triggers: []
+instructions: instructions.md

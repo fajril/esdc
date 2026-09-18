@@ -1,0 +1,11 @@
+name: document_evidence
+version: 1
+description: "Search, read, and aggregate document evidence without conflation."
+query_types:
+  - DOCUMENT
+tools:
+  - Document Search
+  - Document Reader
+  - Document Aggregator
+triggers: []
+instructions: instructions.md
