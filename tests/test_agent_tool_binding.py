@@ -20,13 +20,7 @@ class TestDynamicToolBinding:
             reason="Matched reserves pattern",
         )
         tools = get_tools_for_classification(classification)
-        assert "SQL Executor" in tools
-        assert "Schema Inspector" in tools
-        assert "Table Lister" in tools
-        assert "Table Selector" in tools
-        assert "Spatial Resolver" not in tools
-        assert "Semantic Search" not in tools
-        assert "Entity Resolver" in tools
+        assert tools == ["Simple Data Query"]
 
     def test_spatial_gets_spatial_plus_sql(self):
         classification = QueryClassification(
@@ -41,7 +35,7 @@ class TestDynamicToolBinding:
         assert "Spatial Resolver" in tools
         assert "SQL Executor" in tools
         assert "Semantic Search" not in tools
-        assert "Entity Resolver" in tools
+        assert tools == ["Spatial Resolver", "SQL Executor"]
 
     def test_conceptual_gets_semantic_plus_sql(self):
         classification = QueryClassification(
@@ -53,9 +47,7 @@ class TestDynamicToolBinding:
             reason="Economic issues",
         )
         tools = get_tools_for_classification(classification)
-        assert "Semantic Search" in tools
-        assert "SQL Executor" in tools
-        assert "Spatial Resolver" not in tools
+        assert tools == ["Semantic Search", "SQL Executor"]
 
     def test_ambiguous_gets_full_tool_set(self):
         classification = QueryClassification(
@@ -67,10 +59,7 @@ class TestDynamicToolBinding:
             reason="No clear pattern match",
         )
         tools = get_tools_for_classification(classification)
-        assert "Entity Resolver" in tools
-        assert "SQL Executor" in tools
-        assert "Spatial Resolver" in tools
-        assert "Semantic Search" in tools
+        assert tools == ["Entity Resolver", "Schema Inspector", "Table Lister"]
 
     def test_complex_factual_gets_targeted_tools(self):
         classification = QueryClassification(
@@ -82,13 +71,39 @@ class TestDynamicToolBinding:
             reason="Entities detected but no simple pattern match",
         )
         tools = get_tools_for_classification(classification)
-        assert "SQL Executor" in tools
-        assert "Uncertainty Resolver" in tools
-        assert "Problem Cluster Search" in tools
-        assert "Spatial Resolver" not in tools
-        assert "Semantic Search" not in tools
+        assert tools == [
+            "SQL Executor",
+            "Entity Resolver",
+            "Schema Inspector",
+            "Resources Column Guide",
+            "Uncertainty Resolver",
+        ]
 
-    def test_always_includes_schema_tools(self):
+    def test_routes_include_only_their_declared_tools(self):
+        expected = {
+            QueryType.SIMPLE_FACTUAL: ["Simple Data Query"],
+            QueryType.COMPLEX_FACTUAL: [
+                "SQL Executor",
+                "Entity Resolver",
+                "Schema Inspector",
+                "Resources Column Guide",
+                "Uncertainty Resolver",
+            ],
+            QueryType.CONCEPTUAL: ["Semantic Search", "SQL Executor"],
+            QueryType.SPATIAL: ["Spatial Resolver", "SQL Executor"],
+            QueryType.YEAR_TRANSITION: [
+                "SQL Executor",
+                "Resources Column Guide",
+                "Uncertainty Resolver",
+            ],
+            QueryType.DOCUMENT: [
+                "Document Search",
+                "Document Reader",
+                "Document Aggregator",
+            ],
+            QueryType.KSMI: ["Knowledge Traversal"],
+            QueryType.AMBIGUOUS: ["Entity Resolver", "Schema Inspector", "Table Lister"],
+        }
         for qtype in QueryType:
             classification = QueryClassification(
                 query_type=qtype,
@@ -99,10 +114,7 @@ class TestDynamicToolBinding:
                 reason="Test",
             )
             tools = get_tools_for_classification(classification)
-            for schema_tool in ("Schema Inspector", "Table Lister", "Table Selector"):
-                assert schema_tool in tools, (
-                    f"Schema tool {schema_tool} missing for {qtype}"
-                )
+            assert tools == expected[qtype]
 
     def test_tool_names_are_langchain_decorator_names(self):
         """Verify tool names match @tool() decorator strings, not Python names."""

@@ -128,16 +128,29 @@ class TestLoadDataToDb:
 class TestInvalidateSqlCache:
     """Tests for invalidate_sql_cache()."""
 
-    def test_invalidate_cache_removes_dir(self, tmp_path, mocker):
-        """Test that invalidate_sql_cache removes the cache directory."""
+    def test_invalidate_cache_clears_entries_in_place(self, tmp_path, mocker, monkeypatch):
+        """invalidate_sql_cache clears real entries but retains the directory.
+
+        An independently held handle must observe the cleared entries; the
+        directory itself is kept so concurrent readers are not left pointing at
+        a deleted path.
+        """
+        import diskcache
+
         cache_dir = tmp_path / "sql_results"
-        cache_dir.mkdir()
-        (cache_dir / "test.cache").write_text("test")
+        observer = diskcache.Cache(str(cache_dir))
+        monkeypatch.setattr("esdc.chat.tools._sql_cache", None)
+        try:
+            observer["query"] = "stale"
+            assert observer["query"] == "stale"
 
-        mocker.patch("esdc.dbmanager.Config.get_cache_dir", return_value=tmp_path)
-        invalidate_sql_cache()
+            mocker.patch("esdc.dbmanager.Config.get_cache_dir", return_value=tmp_path)
+            invalidate_sql_cache()
 
-        assert not cache_dir.exists()
+            assert cache_dir.exists()
+            assert "query" not in observer
+        finally:
+            observer.close()
 
     def test_invalidate_cache_no_dir(self, tmp_path, mocker):
         """Test invalidate_sql_cache handles missing cache dir gracefully."""

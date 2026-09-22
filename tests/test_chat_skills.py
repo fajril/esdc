@@ -1,5 +1,7 @@
 """Unit tests for deterministic chat-skill selection."""
 
+from pathlib import Path
+
 from esdc.chat.query_classifier import route_query
 from esdc.chat.skills import (
     Skill,
@@ -101,3 +103,50 @@ def test_missing_yaml_lists_are_empty_tuples() -> None:
     assert skill.query_types == ()
     assert skill.tools == ()
     assert skill.triggers == ()
+
+
+def test_spatial_skill_requires_catalog_first_attribution_and_geometry_rules() -> None:
+    instructions = (
+        Path(__file__).parents[1]
+        / "esdc"
+        / "chat"
+        / "skills"
+        / "spatial_analysis"
+        / "instructions.md"
+    ).read_text(encoding="utf-8")
+    required = (
+        "spatial_layer_catalog",
+        "existing `DB_PATH`",
+        "authoritative geometry",
+        "Reproject geometries",
+        "layer name, version",
+        "CRS, and attribution",
+        "omit that overlay",
+        "geopandas",
+        "shapely",
+        "pyproj",
+    )
+    for phrase in required:
+        assert phrase in instructions
+
+
+def test_spatial_skill_forbids_host_paths_and_runtime_downloads() -> None:
+    instructions = " ".join(
+        (
+            Path(__file__).parents[1]
+            / "esdc"
+            / "chat"
+            / "skills"
+            / "spatial_analysis"
+            / "instructions.md"
+        )
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    forbidden = (
+        "download runtime tiles",
+        "add host paths or mount variables",
+        "model-controlled package installation path",
+    )
+    for phrase in forbidden:
+        assert phrase in instructions

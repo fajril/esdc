@@ -32,6 +32,7 @@ Run the module from the command line to access the available commands and option
 
 import csv
 import gzip
+import hashlib
 import io
 import json
 import logging
@@ -40,6 +41,7 @@ import time
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -62,18 +64,24 @@ from rich.progress import (
 )
 from tabulate import tabulate
 
-from esdc.api_project_resources import normalize_project_resources
+from esdc.api_project_resources import (
+    _ALLOWED_SOURCE_FIELDS,
+    normalize_project_resources,
+)
 from esdc.api_projection import (
     ProjectPublication,
     publish_project_resources,
 )
 from esdc.api_snapshot import (
+    ApiProjectResourceRow,
     ApiSnapshot,
     JSONScalar,
     get_project_resources_snapshot,
     replace_project_resources_snapshot,
+    replace_project_resources_years,
 )
 from esdc.commands.configs import configs_app  # noqa: E402
+from esdc.commands.spatial import spatial_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
 from esdc.console import console  # noqa: E402
 from esdc.dbmanager import (  # noqa: E402
@@ -120,6 +128,7 @@ app = typer.Typer(no_args_is_help=False)
 schema_app = typer.Typer(invoke_without_command=True, no_args_is_help=True)
 corpus_app = typer.Typer(no_args_is_help=True)
 app.add_typer(configs_app, name="configs")
+app.add_typer(spatial_app, name="spatial")
 app.add_typer(schema_app, name="schema")
 app.add_typer(
     corpus_app,
@@ -1041,9 +1050,13 @@ def _fetch_and_parse_table(
         table_name=table, file_type=filetype, report_year=report_year
     )
     logging.info("downloading from %s", url)
+    scope = f" (report year {report_year})" if report_year is not None else ""
+    console.print(f"Fetching {table.value}{scope}...")
     data = esdc_downloader(url, username, password)
     if data is None:
         logging.warning("Failed to download %s data.", table.value)
+        if table == TableName.PROJECT_RESOURCES:
+            raise RuntimeError(f"project resources download failed{scope}")
         return None
 
     if to_file:
@@ -1056,18 +1069,23 @@ def _fetch_and_parse_table(
             _ = f.write(data)
 
     if filetype == FileType.CSV:
-        decoded_data = data.decode("utf-8").splitlines()
-        return _read_csv(decoded_data)
+        return _read_csv(io.StringIO(data.decode("utf-8")))
     elif filetype == FileType.JSON:
         parsed_json = json.loads(data)
-        if not parsed_json:
-            return None
         if table == TableName.PROJECT_RESOURCES:
-            if not isinstance(parsed_json, list) or not all(
-                isinstance(item, dict) for item in parsed_json
-            ):
-                raise ValueError("project_resources JSON must be a list of objects")
+            _normalize_project_resources_json(parsed_json)
+            if parsed_json == []:
+                console.print(
+                    f"[yellow]API returned no rows for {table.value}{scope}; "
+                    "no data loaded from this response.[/yellow]"
+                )
             return parsed_json
+        if not parsed_json:
+            console.print(
+                f"[yellow]API returned no rows for {table.value}{scope}; "
+                "no data loaded from this response.[/yellow]"
+            )
+            return None
         header = list(parsed_json[0].keys())
         content = [list(item.values()) for item in parsed_json]
         return content, header
@@ -1076,31 +1094,47 @@ def _fetch_and_parse_table(
 
 def _commit_and_publish_project_resources(
     payload: Sequence[Mapping[str, object]],
+    *,
+    years: Sequence[int] | None = None,
 ) -> ProjectPublication:
-    scalar_payload: list[Mapping[str, JSONScalar]] = []
-    for index, row in enumerate(payload):
-        scalar_row: dict[str, JSONScalar] = {}
-        for key, value in row.items():
-            if value is not None and not isinstance(value, (str, int, float, bool)):
-                raise ValueError(f"record {index} field {key!r} must be a JSON scalar")
-            scalar_row[key] = value
-        scalar_payload.append(scalar_row)
-    normalized = normalize_project_resources(scalar_payload)
+    incoming = _normalize_project_resources_json(list(payload))
+    return _commit_normalized_project_resources(incoming, years=years)
+
+
+def _commit_normalized_project_resources(
+    rows: Sequence[ApiProjectResourceRow], *, years: Sequence[int] | None = None
+) -> ProjectPublication:
+    """Persist one already-normalized project-resource batch and publish once."""
+    if not rows:
+        raise ValueError("project resources response contains no rows")
+    selected_years = tuple(dict.fromkeys(years or ()))
+    incoming = tuple(rows)
+    if years is not None:
+        if not selected_years:
+            raise ValueError("at least one report year is required")
+        incoming = tuple(row for row in incoming if row.report_year in selected_years)
+        if not incoming:
+            raise ValueError(
+                "project resources response contains no selected-year rows"
+            )
+    source_sha256 = _hash_normalized_rows(incoming)
     sqlite_path = get_esdc_sqlite_path()
     conn = get_sqlite_connection(sqlite_path)
     try:
-        replace_project_resources_snapshot(
-            conn,
-            normalized.rows,
-            ApiSnapshot(
-                "project_resources",
-                "incoming",
-                len(normalized.rows),
-                normalized.source_sha256,
-                datetime.now(timezone.utc).isoformat(),
-                "committed",
-            ),
+        snapshot_input = ApiSnapshot(
+            "project_resources",
+            "incoming",
+            len(incoming),
+            source_sha256,
+            datetime.now(timezone.utc).isoformat(),
+            "committed",
         )
+        if years is None:
+            replace_project_resources_snapshot(conn, incoming, snapshot_input)
+        else:
+            replace_project_resources_years(
+                conn, incoming, snapshot_input, selected_years
+            )
         snapshot = get_project_resources_snapshot(conn)
     finally:
         conn.close()
@@ -1109,6 +1143,42 @@ def _commit_and_publish_project_resources(
     return publish_project_resources(
         Config.get_db_file(), sqlite_path, snapshot.revision
     )
+
+
+def _normalize_project_resources_json(
+    payload: object,
+) -> tuple[ApiProjectResourceRow, ...]:
+    """Validate a raw JSON response before normalizing it."""
+    if not isinstance(payload, list):
+        raise ValueError("project_resources JSON must be a list of objects")
+    scalar_rows: list[Mapping[str, JSONScalar]] = []
+    for index, item in enumerate(payload):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"record {index} must be an object")
+        scalar_row: dict[str, JSONScalar] = {}
+        for key, value in item.items():
+            if not isinstance(key, str):
+                raise ValueError(f"record {index} keys must be strings")
+            if value is not None and not isinstance(value, (str, int, float, bool)):
+                raise ValueError(f"record {index} field {key!r} must be a JSON scalar")
+            scalar_row[key] = value
+        scalar_rows.append(scalar_row)
+    return normalize_project_resources(scalar_rows).rows
+
+
+def _hash_normalized_rows(rows: Sequence[ApiProjectResourceRow]) -> str:
+    encoded = sorted(
+        json.dumps(
+            tuple(
+                getattr(row, field)
+                for field in ApiProjectResourceRow.__dataclass_fields__
+            ),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        for row in rows
+    )
+    return hashlib.sha256(b"[" + b",".join(encoded) + b"]").hexdigest()
 
 
 def refresh_project_resources_from_api(
@@ -1125,7 +1195,9 @@ def refresh_project_resources_from_api(
     )
     if payload is None or not isinstance(payload, list):
         raise RuntimeError("project resources API returned no JSON rows")
-    return _commit_and_publish_project_resources(payload)
+    return _commit_and_publish_project_resources(
+        payload, years=None if report_year is None else [report_year]
+    )
 
 
 def rebuild_project_resources_projection() -> ProjectPublication:
@@ -1138,7 +1210,7 @@ def rebuild_project_resources_projection() -> ProjectPublication:
         conn.close()
     if snapshot is None:
         raise RuntimeError("no project resources snapshot is available")
-    if snapshot.publication_state not in ("committed", "analytics_stale"):
+    if snapshot.publication_state not in ("committed", "analytics_stale", "published"):
         raise RuntimeError(
             "project resources revision "
             f"{snapshot.revision} is already {snapshot.publication_state}"
@@ -1210,20 +1282,25 @@ def load_esdc_data(
         )
         if resources_result is not None and reload:
             if filetype == FileType.JSON:
-                if not isinstance(resources_result, list) or (
-                    resources_result
-                    and not isinstance(resources_result[0], Mapping)
-                ):
-                    raise ValueError("project_resources JSON must be a list of objects")
-                _commit_and_publish_project_resources(resources_result)
+                normalized_rows = _normalize_project_resources_json(resources_result)
+                if normalized_rows:
+                    _commit_normalized_project_resources(normalized_rows)
+                else:
+                    console.print(
+                        "[yellow]No project-resource rows; no data loaded.[/yellow]"
+                    )
             else:
                 if not isinstance(resources_result, tuple):
                     raise ValueError("project_resources CSV must use tabular rows")
-                load_data_to_db(
-                    resources_result[0],
-                    resources_result[1],
-                    TableName.PROJECT_RESOURCES.value,
+                normalized_rows = _csv_rows_to_normalized_project_resources(
+                    resources_result[0], resources_result[1]
                 )
+                if normalized_rows:
+                    _commit_normalized_project_resources(normalized_rows)
+                else:
+                    console.print(
+                        "[yellow]No project-resource rows; no data loaded.[/yellow]"
+                    )
 
         # Detect years from DB after resources loaded
         timeseries_years = _detect_report_years(Config.get_db_file(), min_year=2020)
@@ -1274,24 +1351,71 @@ def load_esdc_data(
             f"project_timeseries for years {years}[/dim]"
         )
 
-    for year in sorted(set(years)):
-        for table in TABLES:
-            result = _fetch_and_parse_table(
-                table,
-                filetype,
-                to_file,
-                username,
-                password,
-                report_year=year,
-            )
-            if result is None or not reload:
-                continue
+    selected_years = sorted(set(years))
+    resource_rows: list[ApiProjectResourceRow] = []
+    resource_years: list[int] = []
+    for year in selected_years:
+        result = _fetch_and_parse_table(
+            TableName.PROJECT_RESOURCES,
+            filetype,
+            to_file,
+            username,
+            password,
+            report_year=year,
+        )
+        if result is None or not reload:
+            continue
+        if filetype == FileType.JSON:
+            if not isinstance(result, list):
+                raise ValueError("project_resources JSON must be a list of objects")
+            normalized_rows = _normalize_project_resources_json(result)
+            scoped = tuple(row for row in normalized_rows if row.report_year == year)
+            resource_rows.extend(scoped)
+            if scoped:
+                resource_years.append(year)
+            elif reload:
+                console.print(
+                    f"[yellow]No project-resource rows for report year {year}; "
+                    "no data loaded.[/yellow]"
+                )
+        else:
             if not isinstance(result, tuple):
-                if table == TableName.PROJECT_RESOURCES and filetype == FileType.JSON:
-                    _commit_and_publish_project_resources(result)
-                    continue
-                raise ValueError("project_timeseries JSON must use tabular rows")
-            _append_to_table(table.value, result[1], result[0], [year])
+                raise ValueError("project_resources CSV must use tabular rows")
+            normalized_rows = _csv_rows_to_normalized_project_resources(
+                result[0], result[1]
+            )
+            scoped = tuple(row for row in normalized_rows if row.report_year == year)
+            resource_rows.extend(scoped)
+            if scoped:
+                resource_years.append(year)
+            elif reload:
+                console.print(
+                    f"[yellow]No project-resource rows for report year {year}; "
+                    "no data loaded.[/yellow]"
+                )
+    if reload and resource_rows:
+        _commit_normalized_project_resources(resource_rows, years=resource_years)
+    elif reload and resource_years:
+        console.print(
+            "[yellow]No matching project-resource rows; no data loaded.[/yellow]"
+        )
+
+    for year in selected_years:
+        result = _fetch_and_parse_table(
+            TableName.PROJECT_TIMESERIES,
+            filetype,
+            to_file,
+            username,
+            password,
+            report_year=year,
+        )
+        if result is None or not reload:
+            continue
+        if not isinstance(result, tuple):
+            raise ValueError("project_timeseries JSON must use tabular rows")
+        _append_to_table(
+            TableName.PROJECT_TIMESERIES.value, result[1], result[0], [year]
+        )
 
     if reload and reindex:
         from esdc.dbmanager import reindex_fts
@@ -1355,19 +1479,93 @@ def esdc_url_builder(
 def _load_file_as_csv(file: str, table_name):
     with open(file, "rb") as f:
         data = f.read()
-    decoded_data = data.decode("utf-8").splitlines()
-    content, header = _read_csv(decoded_data)
+    content, header = _read_csv(io.StringIO(data.decode("utf-8")))
+    if table_name in (TableName.PROJECT_RESOURCES, TableName.PROJECT_RESOURCES.value):
+        rows = _csv_rows_to_normalized_project_resources(content, header)
+        if rows:
+            _commit_normalized_project_resources(rows)
+        else:
+            console.print("[yellow]No project-resource rows; no data loaded.[/yellow]")
+        return
     load_data_to_db(content, header, table_name)
+
+
+def _csv_rows_to_normalized_project_resources(
+    content: Sequence[Sequence[str]], header: Sequence[str]
+) -> tuple[ApiProjectResourceRow, ...]:
+    names = list(header)
+    if len(names) != len(set(names)):
+        raise ValueError("project_resources CSV contains duplicate headers")
+    fields = set(ApiProjectResourceRow.__dataclass_fields__)
+    unknown = sorted(set(names) - _ALLOWED_SOURCE_FIELDS - fields)
+    if unknown:
+        raise ValueError(
+            "project_resources CSV contains unknown headers: " + ", ".join(unknown)
+        )
+    raw_grov = [name for name in names if name.startswith("grov_")]
+    if "groovy_report" in names and raw_grov:
+        raise ValueError(
+            "project_resources CSV cannot combine raw GROV fields with groovy_report"
+        )
+    rows: list[ApiProjectResourceRow] = []
+    for index, values in enumerate(content):
+        if len(values) != len(names):
+            raise ValueError(f"project_resources CSV row {index} has wrong width")
+        data: dict[str, JSONScalar] = {
+            name: (value if value != "" else None)
+            for name, value in zip(names, values, strict=True)
+        }
+        report_year = data.get("report_year")
+        if isinstance(report_year, str) and report_year.isdigit():
+            data["report_year"] = int(report_year)
+        if raw_grov:
+            raw = {
+                key: value
+                for key, value in data.items()
+                if key in _ALLOWED_SOURCE_FIELDS
+                and key not in {"basin86", "basin86_id"}
+            }
+            normalized = normalize_project_resources([raw]).rows[0]
+            overlays = {
+                key: value
+                for key, value in data.items()
+                if key in fields and key not in raw_grov
+            }
+            rows.append(replace(normalized, **overlays) if overlays else normalized)
+            continue
+        project_id = data.pop("project_id", None)
+        if project_id is not None and not isinstance(project_id, str):
+            raise ValueError("project_id must be a string or null")
+        rows.append(ApiProjectResourceRow(project_id=project_id, **data))
+    return tuple(rows)
+
+
+def _csv_rows_to_project_resources(
+    content: Sequence[Sequence[str]], header: Sequence[str]
+) -> list[dict[str, JSONScalar]]:
+    """Compatibility adapter returning raw mappings for existing callers."""
+    rows = _csv_rows_to_normalized_project_resources(content, header)
+    return [
+        {
+            field: getattr(row, field)
+            for field in ApiProjectResourceRow.__dataclass_fields__
+        }
+        for row in rows
+    ]
 
 
 def _load_file_as_json(file: str, table_name):
     with open(file, "rb") as f:
         data = f.read()
     parsed_json = json.loads(data)
-    if not parsed_json:
-        return
     if table_name in (TableName.PROJECT_RESOURCES, TableName.PROJECT_RESOURCES.value):
-        _commit_and_publish_project_resources(parsed_json)
+        _normalize_project_resources_json(parsed_json)
+        if parsed_json:
+            _commit_and_publish_project_resources(parsed_json)
+        else:
+            console.print("[yellow]No project-resource rows; no data loaded.[/yellow]")
+        return
+    if not parsed_json:
         return
     header = parsed_json[0].keys()
     content = [list(item.values()) for item in parsed_json]

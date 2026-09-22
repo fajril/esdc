@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 import uuid
 from collections.abc import Sequence
@@ -203,6 +205,19 @@ _ROW_INSERT_SQL = (
 )
 
 
+def _persisted_hash(conn: sqlite3.Connection) -> tuple[int, str]:
+    rows = conn.execute(
+        "SELECT " + ", ".join(_ROW_COLUMNS) + " FROM api_project_resources"
+    ).fetchall()
+    encoded = sorted(
+        json.dumps(tuple(row), ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        for row in rows
+    )
+    return len(rows), hashlib.sha256(b"[" + b",".join(encoded) + b"]").hexdigest()
+
+
 def replace_project_resources_snapshot(
     conn: sqlite3.Connection,
     rows: Sequence[ApiProjectResourceRow],
@@ -215,6 +230,34 @@ def replace_project_resources_snapshot(
         raise ValueError(
             f"snapshot row_count {snapshot.row_count} does not match {len(rows)} rows"
         )
+    _replace_project_resources(conn, rows, snapshot, None)
+
+
+def replace_project_resources_years(
+    conn: sqlite3.Connection,
+    rows: Sequence[ApiProjectResourceRow],
+    snapshot: ApiSnapshot,
+    years: Sequence[int],
+) -> None:
+    """Replace selected report-year slices while retaining all other rows."""
+    if snapshot.source_table != "project_resources":
+        raise ValueError("snapshot source_table must be 'project_resources'")
+    selected = tuple(dict.fromkeys(years))
+    if not selected:
+        raise ValueError("at least one report year is required")
+    if snapshot.row_count < 0:
+        raise ValueError("snapshot row_count must be non-negative")
+    if any(row.report_year not in selected for row in rows):
+        raise ValueError("incoming project-resource row is outside selected years")
+    _replace_project_resources(conn, rows, snapshot, selected)
+
+
+def _replace_project_resources(
+    conn: sqlite3.Connection,
+    rows: Sequence[ApiProjectResourceRow],
+    snapshot: ApiSnapshot,
+    years: Sequence[int] | None,
+) -> None:
     revision = str(uuid.uuid4())
     committed = ApiSnapshot(
         source_table=snapshot.source_table,
@@ -227,19 +270,27 @@ def replace_project_resources_snapshot(
     )
     try:
         conn.execute("BEGIN")
-        conn.execute("DELETE FROM api_project_resources")
+        if years is None:
+            conn.execute("DELETE FROM api_project_resources")
+        else:
+            placeholders = ", ".join("?" for _ in years)
+            conn.execute(
+                "DELETE FROM api_project_resources "
+                f"WHERE report_year IN ({placeholders})",
+                tuple(years),
+            )
         conn.executemany(
             _ROW_INSERT_SQL,
             [tuple(getattr(row, column) for column in _ROW_COLUMNS) for row in rows],
         )
+        row_count, source_sha256 = _persisted_hash(conn)
         conn.execute(
             """INSERT INTO api_snapshot
                (source_table, revision, row_count, source_sha256,
                 fetched_at, publication_state, invalid_geometry_count)
                VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(source_table) DO UPDATE SET
-                   revision = excluded.revision,
-                   row_count = excluded.row_count,
+                   revision = excluded.revision, row_count = excluded.row_count,
                    source_sha256 = excluded.source_sha256,
                    fetched_at = excluded.fetched_at,
                    publication_state = excluded.publication_state,
@@ -247,8 +298,8 @@ def replace_project_resources_snapshot(
             (
                 committed.source_table,
                 committed.revision,
-                committed.row_count,
-                committed.source_sha256,
+                row_count,
+                source_sha256,
                 committed.fetched_at,
                 committed.publication_state,
                 committed.invalid_geometry_count,

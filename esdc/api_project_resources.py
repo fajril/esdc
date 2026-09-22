@@ -240,9 +240,11 @@ def normalize_project_resources(
             names = ", ".join(unknown)
             raise ValueError(f"record {index} contains unknown keys: {names}")
 
-    canonical = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    canonical_rows = sorted(
+        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for row in payload
+    )
+    canonical = ("[" + ",".join(canonical_rows) + "]").encode("utf-8")
     source_sha256 = hashlib.sha256(canonical).hexdigest()
     rows = tuple(
         _row_from_source(row, _groovy_report(row, index))

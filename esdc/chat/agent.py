@@ -31,6 +31,7 @@ from esdc.chat.context_manager import (
 from esdc.chat.openterminal import get_openterminal_tools
 from esdc.chat.prompts import get_system_prompt
 from esdc.chat.query_classifier import (
+    RoutingDecision,
     format_classification_for_prompt,
     route_query,
 )
@@ -546,6 +547,20 @@ def create_agent(
     if openterminal_tools:
         conditional_tool_names |= {t.name for t in openterminal_tools}
 
+    # Explicit visualization requests add the configured OpenTerminal rendering
+    # tools to the current route. They are never added otherwise, and arbitrary
+    # external tools are never added at all.
+    visualization_tool_names: tuple[str, ...] = tuple(
+        tool.name for tool in (openterminal_tools or [])
+    )
+
+    def _apply_visualization(
+        decision: RoutingDecision, allowed_tools: list[str]
+    ) -> list[str]:
+        if not decision.visualization or not visualization_tool_names:
+            return allowed_tools
+        return list(dict.fromkeys([*allowed_tools, *visualization_tool_names]))
+
     all_tools: dict[str, Any] = {tool.name: tool for tool in tools}
 
     # Discover skills and inject their instructions into the system prompt
@@ -580,6 +595,7 @@ def create_agent(
             selected_skills.append(strategic)
         if selected_skills:
             system_prompt = inject_skills_into_prompt(system_prompt, selected_skills)
+        allowed_tools = _apply_visualization(decision, list(decision.allowed_tools))
         logger.debug(
             "[INIT] system_prompt_set | len=%d | selected_skills=%s",
             len(system_prompt),
@@ -587,7 +603,7 @@ def create_agent(
         )
         return {
             "system_prompt": system_prompt,
-            "allowed_tools": list(decision.allowed_tools),
+            "allowed_tools": allowed_tools,
             "routing_decision": decision,
             "selected_skill_names": tuple(skill.name for skill in selected_skills),
             "tool_call_count": 0,
@@ -1044,7 +1060,9 @@ def create_agent(
             if decision is None:
                 decision = route_query(query_text)
             classification = decision.classification
-            allowed_tools = list(decision.allowed_tools)
+            allowed_tools = _apply_visualization(
+                decision, list(decision.allowed_tools)
+            )
             strategy_text = format_classification_for_prompt(classification)
             if decision.required_knowledge:
                 requests = "; ".join(
@@ -1057,7 +1075,10 @@ def create_agent(
                     "answering or querying records."
                 )
 
-            strategy_msg = SystemMessage(content=strategy_text)
+            strategy_msg = SystemMessage(
+                content=strategy_text,
+                id="esdc-routing-strategy",
+            )
             logger.info(
                 "query_classification: type=%s confidence=%.2f tools=%s query='%s...'",
                 classification.query_type.name,

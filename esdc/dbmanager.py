@@ -3,10 +3,10 @@
 import contextlib
 import datetime
 import logging
-import shutil
 import time
 from pathlib import Path
 
+import diskcache
 import duckdb
 import pandas as pd
 
@@ -266,8 +266,7 @@ def reindex_fts() -> None:
 
     Drops the HNSW embedding index before checkpointing to avoid
     DuckDB internal errors with duplicate keys in HNSW wrappers.
-    Users must run ``esdc reload --embeddings-only`` afterward to
-    regenerate embeddings.
+    If an HNSW index was present, report the command to regenerate it.
     """
     db_path = Config.get_db_file()
     if not db_path.exists():
@@ -283,9 +282,19 @@ def reindex_fts() -> None:
     console.print("[bold]Rebuilding search indexes...[/bold]")
     logging.info("Rebuilding FTS indexes on %s", db_path)
     conn = get_duckdb_connection(db_path, read_only=False)
+    hnsw_dropped = False
     try:
-        with console.status(_step("dropping HNSW index")):
-            conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
+        hnsw_exists = (
+            conn.execute(
+                "SELECT 1 FROM duckdb_indexes() "
+                "WHERE schema_name = 'main' AND index_name = 'idx_hnsw_embeddings'"
+            ).fetchone()
+            is not None
+        )
+        if hnsw_exists:
+            with console.status(_step("dropping HNSW index")):
+                conn.execute("DROP INDEX main.idx_hnsw_embeddings")
+                hnsw_dropped = True
 
         with console.status(_step("building FTS indexes")):
             fts_results = _create_fts_indexes(conn)
@@ -300,7 +309,13 @@ def reindex_fts() -> None:
         logging.info("FTS indexes rebuilt successfully.")
 
         fts_ok = [t for t, r in fts_results.items() if r == "ok"]
-        fts_failed = [t for t, r in fts_results.items() if r != "ok"]
+        skip_reasons = {"table not loaded", "skipped (0 rows)"}
+        fts_failed = [
+            t for t, r in fts_results.items() if r != "ok" and r not in skip_reasons
+        ]
+        for table, result in fts_results.items():
+            if result in skip_reasons:
+                console.print(f"[dim]FTS index skipped: {table} — {result}[/dim]")
 
         if fts_ok and not fts_failed:
             console.print(
@@ -310,24 +325,21 @@ def reindex_fts() -> None:
         elif fts_ok and fts_failed:
             for t in fts_failed:
                 console.print(f"[red]✗[/red] FTS index: {t} — {fts_results[t]}")
-            console.print(
-                "[yellow]:warning:  HNSW embedding index dropped "
-                "(required for checkpoint). "
-                "Run `[dim]esdc reload --embeddings-only[/dim]` "
-                "to regenerate.[/yellow]"
-            )
-        else:
+        elif fts_failed:
             console.print(f"[red]✗[/red] FTS indexes failed in {elapsed:.1f}s")
-            console.print(
-                "[yellow]:warning:  HNSW embedding index dropped "
-                "(required for checkpoint). "
-                "Run `[dim]esdc reload --embeddings-only[/dim]` "
-                "to regenerate.[/yellow]"
-            )
+        else:
+            console.print("[dim]No populated tables available for FTS indexing.[/dim]")
     except duckdb.Error as e:
         logging.error("Failed to rebuild FTS indexes: %s", e)
         console.print(f"[red]✗[/red] Failed to rebuild indexes: {e}")
     finally:
+        if hnsw_dropped:
+            console.print(
+                "[yellow]:warning:  HNSW embedding index dropped "
+                "(required for checkpoint). "
+                "Run `[dim]esdc reload --embeddings-only[/dim]` "
+                "to regenerate.[/yellow]"
+            )
         conn.close()
 
 
@@ -776,11 +788,15 @@ def verify_indexes(conn: duckdb.DuckDBPyConnection) -> dict:
 
 
 def invalidate_sql_cache() -> None:
-    """Clear the SQL results cache directory and record invalidation timestamp."""
+    """Clear SQL results in place so independent handles observe invalidation."""
+    from esdc.chat.tools import reset_sql_cache
+
     cache_dir = Config.get_cache_dir() / "sql_results"
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
-        logging.info("SQL cache invalidated: %s", cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    reset_sql_cache()
+    with diskcache.Cache(str(cache_dir)) as cache:
+        cache.clear()
+    logging.info("SQL cache invalidated: %s", cache_dir)
     # Record invalidation timestamp
     _record_cache_invalidation(cache_dir)
 

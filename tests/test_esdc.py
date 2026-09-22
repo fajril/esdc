@@ -2,7 +2,10 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from esdc.esdc import (
+    _csv_rows_to_project_resources,
     _load_file_as_csv,
     _load_file_as_json,
     _read_csv,
@@ -99,6 +102,44 @@ class TestReadCsv:
         result_data, result_header = _read_csv(csv_data.splitlines())
         assert result_header == ["a", "b", "c"]
         assert result_data == []
+
+    def test_project_resource_csv_rejects_duplicate_unknown_and_width(self):
+        with pytest.raises(ValueError, match="duplicate"):
+            _csv_rows_to_project_resources([["P", "P"]], ["project_id", "project_id"])
+        with pytest.raises(ValueError, match="unknown"):
+            _csv_rows_to_project_resources([["P"]], ["unknown"])
+        with pytest.raises(ValueError, match="width"):
+            _csv_rows_to_project_resources([["P"]], ["project_id", "report_year"])
+
+    def test_project_resource_csv_rejects_ambiguous_derived_report(self):
+        with pytest.raises(ValueError, match="raw GROV"):
+            _csv_rows_to_project_resources(
+                [["P", "report", "Current"]],
+                ["project_id", "groovy_report", "grov_current_situation"],
+            )
+
+    def test_project_resource_normalized_csv_accepts_derived_columns(self):
+        rows = _csv_rows_to_project_resources(
+            [
+                [
+                    "P",
+                    "2025",
+                    "POINT (1 2)",
+                    "Current situation:\nStable",
+                    "B-86",
+                    "Basin",
+                ]
+            ],
+            [
+                "project_id",
+                "report_year",
+                "field_geom",
+                "groovy_report",
+                "basin86_id",
+                "basin86",
+            ],
+        )
+        assert rows[0]["project_id"] == "P"
 
 
 class TestLoadFileAsCsv:

@@ -3,8 +3,15 @@
 from pathlib import Path
 
 import duckdb
+from diskcache import Cache
 
-from esdc.chat.tools import _execute_sql_sync, execute_sql, reset_sql_cache
+from esdc.chat.tools import (
+    _execute_sql_sync,
+    execute_sql,
+    invalidate_tool_cache,
+    reset_sql_cache,
+)
+from esdc.dbmanager import invalidate_sql_cache
 
 
 def _build_projection_fixture(path: Path) -> None:
@@ -98,3 +105,45 @@ def test_execute_sql_reports_missing_spatial_extension(
     )
 
     assert result == "SQL Error: Spatial extension unavailable"
+
+
+def test_independent_sql_cache_handle_observes_invalidation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from esdc.configs import Config
+
+    monkeypatch.setenv("ESDC_CONFIG_DIR", str(tmp_path / "config"))
+    cache_dir = Config.get_cache_dir() / "sql_results"
+    first = Cache(str(cache_dir))
+    second = Cache(str(cache_dir))
+    try:
+        first["query"] = "Before"
+        assert second["query"] == "Before"
+
+        invalidate_sql_cache()
+
+        assert "query" not in second
+    finally:
+        first.close()
+        second.close()
+
+
+def test_independent_tool_cache_handle_observes_invalidation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from esdc.configs import Config
+
+    monkeypatch.setenv("ESDC_CONFIG_DIR", str(tmp_path / "config"))
+    cache_dir = Config.get_cache_dir() / "tool_results"
+    first = Cache(str(cache_dir))
+    second = Cache(str(cache_dir))
+    try:
+        first["tool"] = "Before"
+        assert second["tool"] == "Before"
+
+        invalidate_tool_cache()
+
+        assert "tool" not in second
+    finally:
+        first.close()
+        second.close()

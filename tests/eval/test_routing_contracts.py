@@ -118,3 +118,19 @@ def test_simple_factual_route_schema_baseline(capsys: pytest.CaptureFixture[str]
     )
     captured = capsys.readouterr()
     assert "simple factual route schema chars:" in captured.out
+
+
+def test_visualization_is_additive_to_the_spatial_route() -> None:
+    ordinary = route_query("Which fields are within a 10 km radius of Duri?")
+    visualization = route_query(
+        "Show a map overlay of fields within a 10 km radius of Duri."
+    )
+
+    assert ordinary.visualization is False
+    assert visualization.visualization is True
+    # The visualization flag is additive: the route keeps its spatial/data
+    # capability set; configured rendering tools are added at binding time
+    # (covered by tests/test_agent_single_system_message.py).
+    assert set(visualization.allowed_tools) == set(ordinary.allowed_tools)
+    assert {"Spatial Resolver", "SQL Executor"} <= set(visualization.allowed_tools)
+    assert visualization.skill_names == ordinary.skill_names == ("spatial_analysis",)

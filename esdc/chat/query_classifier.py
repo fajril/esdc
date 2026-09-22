@@ -40,6 +40,7 @@ class RoutingDecision:
     allowed_tools: tuple[str, ...]
     skill_names: tuple[str, ...]
     required_knowledge: tuple[KnowledgeRequest, ...]
+    visualization: bool = False
 
 
 @dataclass
@@ -160,7 +161,7 @@ class QueryClassifier:
         "report_year": [
             r"tahun\s+(\d{4})",
             r"year\s+(\d{4})",
-            r"(?:\s)(\d{4})(?:\s|$)",  # Standalone year
+            r"(?:\s)(\d{4})(?:\s|$|[?.!,;:])",  # Standalone year
         ],
         "province": [
             r"provinsi\s+(\w+)",
@@ -366,18 +367,30 @@ class QueryClassifier:
         )
 
     def _extract_entities(self, query: str) -> dict[str, str]:
-        """Extract entities from query."""
+        """Extract entities from query.
+
+        Report years prefer the earliest match across all patterns so that a
+        year in the current request wins over a later year carried in from
+        conversation context; other entity types keep pattern priority.
+        """
         entities = {}
         for entity_type, patterns in self.ENTITY_PATTERNS.items():
+            match = None
             for pattern in patterns:
-                match = re.search(pattern, query, re.IGNORECASE)
-                if match:
-                    value = match.group(1)
-                    if entity_type != "report_year":
-                        value = self._clean_entity_value(value)
-                    if value:
-                        entities[entity_type] = value
+                candidate = re.search(pattern, query, re.IGNORECASE)
+                if candidate is None:
+                    continue
+                if entity_type != "report_year":
+                    match = candidate
                     break
+                if match is None or candidate.start() < match.start():
+                    match = candidate
+            if match:
+                value = match.group(1)
+                if entity_type != "report_year":
+                    value = self._clean_entity_value(value)
+                if value:
+                    entities[entity_type] = value
         return entities
 
     def _clean_entity_value(self, value: str) -> str:
@@ -468,6 +481,90 @@ _KSMI_RECORD_TERMS = re.compile(
     re.IGNORECASE,
 )
 
+_VISUALIZATION_NOUN = (
+    r"(?:peta|pemetaan|petakan|map|mapping|plot|plotting|grafik|chart|"
+    r"visualisasi|visualisasikan|visuali[sz]e|visualization|overlay|gambar)"
+)
+_VISUALIZATION_MENTION_RE = re.compile(rf"\b{_VISUALIZATION_NOUN}\b", re.IGNORECASE)
+# Contrast boundaries reset negation scope; coordination ("atau"/"dan"/"or"/
+# "and") deliberately does not, so "jangan peta atau grafik" stays negated.
+# A comma only resets scope when the following text starts an independent
+# affirmative command. This keeps noun lists ("peta, grafik, atau gambar")
+# under the same negator while allowing "jangan peta, tampilkan grafik".
+_VISUALIZATION_CLAUSE_RE = re.compile(
+    r"[;.]|,\s*(?=(?:(?:tolong|please)\s+)?(?:tampilkan|"
+    r"tampilkanlah|buat|buatkan|bikin|show|display|create|make|"
+    r"visualisasikan|visuali[sz]e|generate)\b)|"
+    r"\b(?:tapi|tetapi|namun|melainkan|but|however|yet)\b",
+    re.IGNORECASE,
+)
+_VIZ_NEGATOR_RE = re.compile(
+    r"\b(?:jangan(?!\s+lupa\b)|tanpa|bukan|no|not|don't|do\s+not|"
+    r"without|tidak(?!\s+hanya))\b",
+    re.IGNORECASE,
+)
+
+# Only explicit deictic/anaphoric markers or a year-only elliptical reference
+# count as an incomplete request. A complete but unrecognized question
+# ("berapa produksi sumur tahun 2025?") must not inherit an older subject.
+_ANAPHORA_RE = re.compile(
+    r"\b(?:tersebut|tadi|sebelumnya|itu|this|that|those|these|them|its)\b"
+    r"|^\s*(?:dan|lalu|kemudian|kalau|jika|bagaimana\s+dengan|"
+    r"what\s+about|how\s+about)\b",
+    re.IGNORECASE,
+)
+_DEFINITION_RE = re.compile(
+    r"^\s*(?:apa\s+itu|apa\s+yang\s+dimaksud|what\s+is|jelaskan|explain|"
+    r"definisi|definition)\b",
+    re.IGNORECASE,
+)
+_YEAR_ONLY_STRIP_RE = re.compile(
+    r"\b(?:bagaimana|berapa|apakah|apa|what|how|about|kalau|jika|dan|lalu|"
+    r"kemudian|tahun|year|nya|di|pada|untuk|dong|ya|kah|sih)\b"
+    r"|\b\d{4}\b",
+    re.IGNORECASE,
+)
+
+
+def _is_elliptical_year_follow_up(query: str) -> bool:
+    """True when a query is only a year reference plus filler question words."""
+    stripped = _YEAR_ONLY_STRIP_RE.sub(" ", query)
+    stripped = re.sub(r"[^\w\s]", " ", stripped)
+    return not re.sub(r"\s+", " ", stripped).strip()
+
+
+def _needs_conversation_context(
+    query: str, classification: QueryClassification
+) -> bool:
+    """Return True only for a genuinely incomplete or anaphoric request."""
+    if classification.query_type == QueryType.COMPLEX_FACTUAL:
+        return _is_elliptical_year_follow_up(query)
+    if classification.query_type != QueryType.AMBIGUOUS:
+        return False
+    if _DEFINITION_RE.search(query):
+        return False
+    return bool(_ANAPHORA_RE.search(query))
+
+
+def _visualization_requested(query: str) -> bool:
+    """True when any visualization mention survives its local negation scope.
+
+    Each mention is evaluated inside its own contrast clause, so a negated map
+    does not suppress an explicitly requested chart, while a negation scoped
+    over coordination ("jangan peta atau grafik") still disables all mentions.
+    """
+    for clause in _VISUALIZATION_CLAUSE_RE.split(query):
+        for mention in _VISUALIZATION_MENTION_RE.finditer(clause):
+            prefix = clause[: mention.start()]
+            negators = list(_VIZ_NEGATOR_RE.finditer(prefix))
+            if not negators:
+                return True
+            # Once a negator appears in this clause, keep its scope through
+            # arbitrary verbs, articles, coordinators, and named subjects.
+            # Unknown words are not affirmative evidence; only an explicit
+            # clause boundary (contrast or independent command) can reset it.
+    return False
+
 
 def _explicit_ksmi_level(query: str) -> str | None:
     """Return the first explicitly written KSMI level token, if any."""
@@ -486,11 +583,35 @@ def _ksmi_entity(query: str) -> str:
 
 
 def route_query(query: str, *, conversation_context: str = "") -> RoutingDecision:
-    """Classify *query* and select the smallest required capability set."""
-    normalized = re.sub(
-        r"\s+", " ", f"{conversation_context} {query}".strip().lower()
-    )
+    """Classify *query* and select the smallest required capability set.
+
+    The current query is classified first. Prior conversation context is used
+    only to resolve a genuinely incomplete or anaphoric request (no subject and
+    no explicit capability pattern); it is never concatenated into an otherwise
+    complete route, so a stale KSMI/document topic cannot override an explicit
+    new request.
+    """
+    normalized = re.sub(r"\s+", " ", query.strip().lower())
     classification = QueryClassifier().classify(normalized)
+    if _needs_conversation_context(normalized, classification) and (
+        conversation_context.strip()
+    ):
+        # Current query first so its explicit entities/years win the
+        # classifier's first-match extraction; context only supplies the
+        # missing subject.
+        combined = re.sub(
+            r"\s+", " ", f"{query} {conversation_context}".strip().lower()
+        )
+        combined_classification = QueryClassifier().classify(combined)
+        # Context may supply a missing subject but must not import mandatory
+        # domain knowledge (KSMI) the current query never asked for.
+        if not (
+            combined_classification.query_type == QueryType.KSMI
+            and classification.query_type != QueryType.KSMI
+        ):
+            normalized = combined
+            classification = combined_classification
+    visualization = _visualization_requested(query)
 
     if classification.query_type == QueryType.KSMI:
         level = _explicit_ksmi_level(normalized)
@@ -507,6 +628,7 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
                 tuple(tools),
                 ("ksmi_reasoning",),
                 (KnowledgeRequest("transition", level),),
+                visualization=visualization,
             )
 
         if re.search(r"\b(?:groovy|pse|izin\s+berproduksi)\b", normalized):
@@ -518,6 +640,7 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
                     ("Semantic Search", "SQL Executor"),
                     ("project_narrative_analysis",),
                     (),
+                    visualization=visualization,
                 )
             tools = ["Knowledge Traversal"]
             if _KSMI_RECORD_TERMS.search(normalized):
@@ -527,6 +650,7 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
                 tuple(tools),
                 ("ksmi_reasoning",),
                 (KnowledgeRequest("document", _ksmi_entity(normalized)),),
+                visualization=visualization,
             )
 
         if re.search(r"\b(?:formula|formulasi|rumus|perhitungan)\b", normalized):
@@ -546,12 +670,20 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
         if _KSMI_RECORD_TERMS.search(normalized) and not is_transition:
             tools.append("SQL Executor")
         return RoutingDecision(
-            classification, tuple(tools), ("ksmi_reasoning",), tuple(knowledge)
+            classification,
+            tuple(tools),
+            ("ksmi_reasoning",),
+            tuple(knowledge),
+            visualization=visualization,
         )
 
     if classification.query_type == QueryType.SIMPLE_FACTUAL:
         return RoutingDecision(
-            classification, ("Simple Data Query",), ("resource_sql",), ()
+            classification,
+            ("Simple Data Query",),
+            ("resource_sql",),
+            (),
+            visualization=visualization,
         )
     if classification.query_type == QueryType.CONCEPTUAL:
         return RoutingDecision(
@@ -559,6 +691,7 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
             ("Semantic Search", "SQL Executor"),
             ("project_narrative_analysis",),
             (),
+            visualization=visualization,
         )
     if classification.query_type == QueryType.SPATIAL:
         return RoutingDecision(
@@ -566,6 +699,7 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
             ("Spatial Resolver", "SQL Executor"),
             ("spatial_analysis",),
             (),
+            visualization=visualization,
         )
     if classification.query_type == QueryType.DOCUMENT:
         return RoutingDecision(
@@ -573,6 +707,7 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
             ("Document Search", "Document Reader", "Document Aggregator"),
             ("document_evidence",),
             (),
+            visualization=visualization,
         )
     if classification.query_type == QueryType.YEAR_TRANSITION:
         return RoutingDecision(
@@ -580,6 +715,7 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
             ("SQL Executor", "Resources Column Guide", "Uncertainty Resolver"),
             ("resource_sql",),
             (),
+            visualization=visualization,
         )
     if classification.query_type == QueryType.COMPLEX_FACTUAL:
         return RoutingDecision(
@@ -593,12 +729,14 @@ def route_query(query: str, *, conversation_context: str = "") -> RoutingDecisio
             ),
             ("resource_sql",),
             (),
+            visualization=visualization,
         )
     return RoutingDecision(
         classification,
         ("Entity Resolver", "Schema Inspector", "Table Lister"),
         (),
         (),
+        visualization=visualization,
     )
 
 

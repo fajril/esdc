@@ -1,5 +1,7 @@
 """Tests for query classifier."""
 
+import pytest
+
 from esdc.chat.query_classifier import (
     QueryClassification,
     QueryClassifier,
@@ -459,6 +461,225 @@ class TestPromptFormatting:
         assert "CASE WHEN" in formatted
         assert "ONE SQL query" in formatted
         assert "project_resources" in formatted
+
+
+class TestCurrentIntentAndVisualization:
+    """Current-turn intent must win over history; visualization is explicit."""
+
+    def test_current_factual_intent_overrides_prior_ksmi(self) -> None:
+        decision = route_query(
+            "Berapa cadangan minyak Lapangan Duri tahun 2025?",
+            conversation_context="Bolehkah E3 ke E4?",
+        )
+        assert decision.allowed_tools == ("Simple Data Query",)
+        assert decision.required_knowledge == ()
+
+    def test_anaphoric_follow_up_uses_nearest_prior_subject(self) -> None:
+        decision = route_query(
+            "bagaimana tahun 2024?",
+            conversation_context="berapa cadangan minyak Lapangan Duri tahun 2023?",
+        )
+        assert decision.allowed_tools == ("Simple Data Query",)
+        assert (
+            decision.classification.detected_entities.get("field_name", "").lower()
+            == "duri"
+        )
+
+    def test_explicit_new_year_overrides_prior_context_year(self) -> None:
+        decision = route_query(
+            "bagaimana tahun 2024?",
+            conversation_context="berapa cadangan minyak Lapangan Duri tahun 2023?",
+        )
+        assert decision.classification.detected_entities.get("report_year") == "2024"
+        assert (
+            decision.classification.detected_entities.get("field_name", "").lower()
+            == "duri"
+        )
+
+    def test_ambiguous_standalone_question_does_not_inherit_history(self) -> None:
+        decision = route_query(
+            "jelaskan produksi sumur",
+            conversation_context="Bolehkah E3 ke E4?",
+        )
+        assert decision.classification.query_type == QueryType.AMBIGUOUS
+        assert decision.allowed_tools == (
+            "Entity Resolver",
+            "Schema Inspector",
+            "Table Lister",
+        )
+
+    def test_definitional_question_does_not_inherit_ksmi_history(self) -> None:
+        decision = route_query(
+            "apa itu migas?", conversation_context="Bolehkah E3 ke E4?"
+        )
+        assert decision.classification.query_type == QueryType.AMBIGUOUS
+
+    def test_explicit_new_entity_overrides_prior_context(self) -> None:
+        decision = route_query(
+            "berapa cadangan minyak Lapangan Rokan tahun 2025?",
+            conversation_context="berapa cadangan minyak Lapangan Duri tahun 2023?",
+        )
+        assert decision.allowed_tools == ("Simple Data Query",)
+        assert (
+            decision.classification.detected_entities.get("field_name", "").lower()
+            == "rokan"
+        )
+
+    def test_ksmi_context_does_not_leak_into_current_factual_route(self) -> None:
+        decision = route_query(
+            "Berapa cadangan minyak Lapangan Duri tahun 2025?",
+            conversation_context="Apa formula GROOVY untuk level E3?",
+        )
+        assert decision.allowed_tools == ("Simple Data Query",)
+        assert decision.required_knowledge == ()
+
+    def test_ordinary_query_has_no_visualization_flag(self) -> None:
+        decision = route_query("Berapa cadangan minyak Lapangan Duri tahun 2025?")
+        assert decision.visualization is False
+
+    def test_explicit_visualization_request_sets_flag(self) -> None:
+        decision = route_query("Buat peta sebaran lapangan Duri")
+        assert decision.visualization is True
+        assert "SQL Executor" in decision.allowed_tools
+
+    def test_negated_visualization_request_clears_flag(self) -> None:
+        decision = route_query(
+            "Berapa cadangan lapangan Duri tahun 2025? Jangan buat peta."
+        )
+        assert decision.visualization is False
+
+    def test_negation_filler_verb_does_not_hide_a_map_request(self) -> None:
+        decision = route_query("Tolong jangan lupa buat peta sebaran lapangan Duri")
+        assert decision.visualization is True
+
+    def test_contrastive_negation_does_not_hide_a_map_request(self) -> None:
+        decision = route_query(
+            "Tidak hanya peta, tapi juga grafik lapangan Duri tahun 2025"
+        )
+        assert decision.visualization is True
+
+    def test_morphological_map_request_sets_flag(self) -> None:
+        decision = route_query("Buatkan pemetaan sebaran lapangan Duri")
+        assert decision.visualization is True
+
+    def test_visualization_flag_is_backward_compatible_default(self) -> None:
+        decision = route_query("halo")
+        assert decision.visualization is False
+
+    def test_complete_production_question_ignores_old_ksmi(self) -> None:
+        query = "Berapa produksi sumur tahun 2025?"
+        alone = route_query(query)
+        with_history = route_query(query, conversation_context="Bolehkah E3 ke E4?")
+        assert with_history == alone
+        assert with_history.classification.query_type == QueryType.COMPLEX_FACTUAL
+        assert with_history.required_knowledge == ()
+        assert "SQL Executor" in with_history.allowed_tools
+        assert "Knowledge Traversal" not in with_history.allowed_tools
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Berapa hasil produksi tahun 2025?",
+            "Tampilkan data tahun 2025?",
+            "Berapa total cadangan minyak nasional tahun 2025?",
+        ],
+    )
+    def test_complete_requests_are_independent_of_unrelated_history(
+        self, query: str
+    ) -> None:
+        alone = route_query(query)
+        with_ksmi = route_query(query, conversation_context="Bolehkah E3 ke E4?")
+        with_document = route_query(
+            query, conversation_context="surat persetujuan POD Duri revisi 1"
+        )
+        assert with_ksmi == alone
+        assert with_document == alone
+
+    @pytest.mark.parametrize("query", ["bagaimana tahun 2024?", "what about 2024?"])
+    def test_year_only_follow_up_retains_prior_subject_and_current_year(
+        self, query: str
+    ) -> None:
+        decision = route_query(
+            query,
+            conversation_context="berapa cadangan minyak Lapangan Duri tahun 2023?",
+        )
+        assert decision.classification.detected_entities.get("report_year") == "2024"
+        assert (
+            decision.classification.detected_entities.get("field_name", "").lower()
+            == "duri"
+        )
+
+    def test_year_only_follow_up_with_unrelated_ksmi_keeps_discovery_route(self) -> None:
+        decision = route_query(
+            "bagaimana tahun 2024?", conversation_context="Bolehkah E3 ke E4?"
+        )
+        assert decision.classification.query_type != QueryType.KSMI
+        assert decision.required_knowledge == ()
+        assert "Knowledge Traversal" not in decision.allowed_tools
+
+    def test_positive_chart_survives_negated_map(self) -> None:
+        decision = route_query(
+            "Jangan buat peta, tapi tampilkan grafik lapangan Duri"
+        )
+        assert decision.visualization is True
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "No map, but show chart of Duri",
+            "Jangan buat gambar, tapi tampilkan peta Duri",
+            "Tampilkan grafik Duri, tanpa peta",
+            "Tidak hanya peta, tapi juga grafik Duri",
+            "Tolong jangan lupa buat peta Duri",
+        ],
+    )
+    def test_affirmative_visualization_survives_local_negation(
+        self, query: str
+    ) -> None:
+        assert route_query(query).visualization is True
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Jangan buat peta Duri",
+            "Don't plot Duri",
+            "Jangan buat peta atau grafik Duri",
+            "Berapa cadangan lapangan Duri?",
+        ],
+    )
+    def test_fully_negated_or_absent_visualization_is_false(self, query: str) -> None:
+        assert route_query(query).visualization is False
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Jangan buat peta Duri atau grafik produksi",
+            "Jangan buat peta, grafik, atau gambar Duri",
+            "Do not show a map or chart of Duri",
+            "Jangan buat peta Rokan atau grafik produksi",
+            "Jangan buat peta, grafik, atau gambar Abadi LNG",
+            "Do not show a map or chart of Rokan",
+            "Jangan buat peta, gambar, atau grafik Duri",
+            "No chart, plot, or map Rokan",
+        ],
+    )
+    def test_negation_scope_covers_unknown_subjects_and_comma_lists(
+        self, query: str
+    ) -> None:
+        assert route_query(query).visualization is False
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Jangan buat peta, visualisasikan produksi Duri",
+            "Jangan buat peta, tolong tampilkan grafik Duri",
+            "No map, please show a chart of Duri",
+        ],
+    )
+    def test_affirmative_command_after_comma_resets_negation(
+        self, query: str
+    ) -> None:
+        assert route_query(query).visualization is True
 
 
 class TestConditionalToolPreservation:

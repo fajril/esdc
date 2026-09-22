@@ -45,14 +45,13 @@ class AgentState(TypedDict):
 def build_routing_context(
     messages: Sequence[AnyMessage], *, max_chars: int = 2000
 ) -> str:
-    """Return bounded prior-human context for per-invocation routing.
+    """Return the nearest bounded prior-human context for per-invocation routing.
 
     The newest human request is intentionally excluded: callers pass it as the
-    primary query.  Only a small tail of prior human requests and compaction
-    summaries is retained, so a stale skill or old topic cannot dominate a
-    follow-up route.
+    primary query. Only the single most recent prior human request is returned
+    (falling back to the most recent compaction summary when no prior human
+    request survives), so an older topic cannot dominate a follow-up route.
     """
-    parts: list[str] = []
     skipped_newest_human = False
     for message in reversed(messages):
         if isinstance(message, HumanMessage):
@@ -61,12 +60,12 @@ def build_routing_context(
                 continue
             text = _get_content_str(message.content).strip()
             if text:
-                parts.append(text)
+                return text[-max_chars:]
         elif isinstance(message, SystemMessage):
             text = _get_content_str(message.content)
             if "Context automatically compacted" in text:
-                parts.append(text)
-    return "\n".join(reversed(parts))[-max_chars:]
+                return text[-max_chars:]
+    return ""
 
 
 def _get_content_str(content: str | list[str | dict[str, Any]] | None) -> str:

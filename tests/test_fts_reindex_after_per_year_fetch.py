@@ -10,6 +10,8 @@ These tests verify that:
 
 from unittest.mock import MagicMock, patch
 
+import duckdb
+import pytest
 from typer.testing import CliRunner
 
 from esdc.configs import Config
@@ -73,8 +75,13 @@ class TestLoadEsdcDataReindex:
         """Full-replace mode with reindex=True (default) triggers reindex_fts."""
         monkeypatch.setattr(Config, "get_db_file", lambda: tmp_path / "test.duckdb")
         monkeypatch.setattr(Config, "get_db_dir", lambda: tmp_path)
+        # CSV now normalizes through the shared project-resource flow; stub the
+        # commit so these tests stay focused on reindex behavior.
+        monkeypatch.setattr(
+            "esdc.esdc._commit_normalized_project_resources", lambda *_, **__: None
+        )
 
-        mock_fetch.return_value = ([["a", "b"]], ["col1", "col2"])
+        mock_fetch.return_value = ([["P-1", "2025"]], ["project_id", "report_year"])
         mock_detect.return_value = [2025]
 
         load_esdc_data(
@@ -104,8 +111,13 @@ class TestLoadEsdcDataReindex:
         """Full-replace mode with reindex=False does NOT trigger reindex_fts."""
         monkeypatch.setattr(Config, "get_db_file", lambda: tmp_path / "test.duckdb")
         monkeypatch.setattr(Config, "get_db_dir", lambda: tmp_path)
+        # CSV now normalizes through the shared project-resource flow; stub the
+        # commit so these tests stay focused on reindex behavior.
+        monkeypatch.setattr(
+            "esdc.esdc._commit_normalized_project_resources", lambda *_, **__: None
+        )
 
-        mock_fetch.return_value = ([["a", "b"]], ["col1", "col2"])
+        mock_fetch.return_value = ([["P-1", "2025"]], ["project_id", "report_year"])
         mock_detect.return_value = [2025]
 
         load_esdc_data(
@@ -134,8 +146,13 @@ class TestLoadEsdcDataReindex:
         """Per-year mode with reindex=True (default) triggers reindex_fts."""
         monkeypatch.setattr(Config, "get_db_file", lambda: tmp_path / "test.duckdb")
         monkeypatch.setattr(Config, "get_db_dir", lambda: tmp_path)
+        # CSV now normalizes through the shared project-resource flow; stub the
+        # commit so these tests stay focused on reindex behavior.
+        monkeypatch.setattr(
+            "esdc.esdc._commit_normalized_project_resources", lambda *_, **__: None
+        )
 
-        mock_fetch.return_value = ([["a", "b"]], ["col1", "col2"])
+        mock_fetch.return_value = ([["P-1", "2025"]], ["project_id", "report_year"])
 
         load_esdc_data(
             filetype=FileType.CSV,
@@ -162,8 +179,13 @@ class TestLoadEsdcDataReindex:
         """Per-year mode with reindex=False does NOT trigger reindex_fts."""
         monkeypatch.setattr(Config, "get_db_file", lambda: tmp_path / "test.duckdb")
         monkeypatch.setattr(Config, "get_db_dir", lambda: tmp_path)
+        # CSV now normalizes through the shared project-resource flow; stub the
+        # commit so these tests stay focused on reindex behavior.
+        monkeypatch.setattr(
+            "esdc.esdc._commit_normalized_project_resources", lambda *_, **__: None
+        )
 
-        mock_fetch.return_value = ([["a", "b"]], ["col1", "col2"])
+        mock_fetch.return_value = ([["P-1", "2025"]], ["project_id", "report_year"])
 
         load_esdc_data(
             filetype=FileType.CSV,
@@ -180,6 +202,47 @@ class TestLoadEsdcDataReindex:
 
 class TestReindexFtsUnit:
     """Direct test for reindex_fts rebuilding FTS indexes."""
+
+    @pytest.mark.parametrize("has_hnsw", [False, True])
+    @pytest.mark.parametrize(
+        "timeseries_result", ["ok", "table not loaded", "skipped (0 rows)", "FTS error"]
+    )
+    def test_reindex_reports_actual_index_state(
+        self, tmp_path, monkeypatch, capsys, has_hnsw, timeseries_result
+    ):
+        from esdc.dbmanager import reindex_fts
+
+        db_path = tmp_path / "indexes.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("CREATE TABLE embeddings (id INTEGER)")
+        if has_hnsw:
+            # A named index exercises catalog detection without requiring VSS.
+            conn.execute("CREATE INDEX idx_hnsw_embeddings ON embeddings(id)")
+        conn.close()
+        monkeypatch.setattr(Config, "get_db_file", lambda: db_path)
+        monkeypatch.setattr("esdc.dbmanager.get_duckdb_connection", duckdb.connect)
+        monkeypatch.setattr(
+            "esdc.dbmanager._create_fts_indexes",
+            lambda _: {
+                "project_resources": "ok",
+                "project_timeseries": timeseries_result,
+            },
+        )
+
+        reindex_fts()
+
+        output = capsys.readouterr().err
+        assert ("HNSW embedding index dropped" in output) is has_hnsw
+        assert ("✗" in output) is (timeseries_result == "FTS error")
+        assert ("Search indexes rebuilt" in output) is (
+            timeseries_result != "FTS error"
+        )
+        if timeseries_result in {"table not loaded", "skipped (0 rows)"}:
+            assert "FTS index skipped: project_timeseries" in output
+        with duckdb.connect(str(db_path), read_only=True) as check:
+            assert check.execute(
+                "SELECT COUNT(*) FROM duckdb_indexes()"
+            ).fetchone() == (0,)
 
     @patch("esdc.dbmanager._create_fts_indexes")
     @patch("esdc.dbmanager.get_duckdb_connection")

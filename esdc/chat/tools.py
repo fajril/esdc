@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import re
-import shutil
 import threading
 from typing import Annotated, Any
 
@@ -314,18 +313,24 @@ def _tool_cache_key(tool_name: str, **kwargs: Any) -> str:
 
 
 def invalidate_tool_cache() -> None:
-    """Clear the tool results cache directory."""
+    """Clear tool results in place so independent handles observe invalidation.
+
+    Cache clear/close errors propagate: a caller that reports the cache as
+    invalidated must not hide a failure that would leave stale rows visible.
+    """
     global _tool_cache
     if _tool_cache is not None:
         _tool_cache.clear()
+        _tool_cache.close()
         _tool_cache = None
     from esdc.configs import Config
     from esdc.dbmanager import _record_cache_invalidation
 
     cache_dir = Config.get_cache_dir() / "tool_results"
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
-        logger.info("Tool cache invalidated: %s", cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with diskcache.Cache(str(cache_dir)) as cache:
+        cache.clear()
+    logger.info("Tool cache invalidated: %s", cache_dir)
     _record_cache_invalidation(cache_dir)
 
 
@@ -333,11 +338,13 @@ def reset_sql_cache() -> None:
     """Reset the SQL results cache (in-memory + on-disk).
 
     Called by dbmanager after reload to ensure the stale diskcache.Cache
-    object doesn't serve outdated results.
+    object doesn't serve outdated results. Clear/close errors propagate so a
+    failed reset cannot be reported as a successful invalidation.
     """
     global _sql_cache
     if _sql_cache is not None:
         _sql_cache.clear()
+        _sql_cache.close()
         _sql_cache = None
     logger.info("SQL cache reset (in-memory handle cleared)")
 

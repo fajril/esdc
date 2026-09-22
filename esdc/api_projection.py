@@ -144,6 +144,15 @@ def _checkpoint(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _invalidate_analytical_caches() -> None:
+    """Invalidate all analytical result caches after DuckDB changes."""
+    from esdc.chat.tools import invalidate_tool_cache
+    from esdc.dbmanager import invalidate_sql_cache
+
+    invalidate_sql_cache()
+    invalidate_tool_cache()
+
+
 def publish_project_resources(
     duckdb_path: Path, sqlite_path: Path, revision: str
 ) -> ProjectPublication:
@@ -155,13 +164,14 @@ def publish_project_resources(
         sqlite_conn.close()
     if snapshot is None or snapshot.revision != revision:
         raise ValueError(f"no committed project_resources revision {revision!r}")
-    if snapshot.publication_state not in ("committed", "analytics_stale"):
+    if snapshot.publication_state not in ("committed", "analytics_stale", "published"):
         raise ValueError(f"revision {revision!r} is not publishable")
 
-    conn = get_duckdb_connection(duckdb_path, read_only=False)
+    conn: duckdb.DuckDBPyConnection | None = None
     stage = f"project_resources_stage_{uuid.uuid4().hex}"
     committed = False
     try:
+        conn = get_duckdb_connection(duckdb_path, read_only=False)
         conn.execute("INSTALL spatial")
         conn.execute("LOAD spatial")
         conn.execute("BEGIN")
@@ -192,6 +202,13 @@ def publish_project_resources(
         conn.execute("COMMIT")
         committed = True
         try:
+            _invalidate_analytical_caches()
+        except Exception as exc:
+            _mark_stale(sqlite_path, revision)
+            raise RuntimeError(
+                "analytical state requires rebuild after cache invalidation failure"
+            ) from exc
+        try:
             _checkpoint(conn)
         except Exception as exc:
             _mark_stale(sqlite_path, revision)
@@ -201,23 +218,29 @@ def publish_project_resources(
     except Exception:
         if not committed:
             with contextlib.suppress(duckdb.Error):
-                conn.execute("ROLLBACK")
+                if conn is not None:
+                    conn.execute("ROLLBACK")
             _mark_stale(sqlite_path, revision)
         raise
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
-    sqlite_conn = get_sqlite_connection(sqlite_path)
     try:
-        sqlite_conn.execute(
-            "UPDATE api_snapshot SET publication_state = 'published', "
-            "invalid_geometry_count = ? "
-            "WHERE source_table = ? AND revision = ?",
-            (invalid_geometry_count, "project_resources", revision),
-        )
-        sqlite_conn.commit()
-    finally:
-        sqlite_conn.close()
+        sqlite_conn = get_sqlite_connection(sqlite_path)
+        try:
+            sqlite_conn.execute(
+                "UPDATE api_snapshot SET publication_state = 'published', "
+                "invalid_geometry_count = ? "
+                "WHERE source_table = ? AND revision = ?",
+                (invalid_geometry_count, "project_resources", revision),
+            )
+            sqlite_conn.commit()
+        finally:
+            sqlite_conn.close()
+    except Exception:
+        _mark_stale(sqlite_path, revision)
+        raise
     return ProjectPublication(
         revision, snapshot.row_count, snapshot.source_sha256, invalid_geometry_count
     )
