@@ -121,8 +121,34 @@ class TestLoadDataToDb:
         )
         mocker.patch("pathlib.Path.mkdir", return_value=None)
 
-        with pytest.raises(duckdb.Error):
+        with pytest.raises(
+            ValueError,
+            match="^project_resources must be ingested through the canonical SQLite resource ingestion path$",
+        ):
             load_data_to_db([], [], "project_resources")
+
+    def test_timeseries_rows_delegate_to_canonical_ingestion(
+        self, tmp_path, mocker, monkeypatch
+    ):
+        config_dir = tmp_path / "config"
+        monkeypatch.setenv("ESDC_CONFIG_DIR", str(config_dir))
+        monkeypatch.setenv("ESDC_DB_DIR", str(config_dir))
+        monkeypatch.setenv("ESDC_DB_FILE", str(config_dir / "esdc.duckdb"))
+        from esdc.configs import Config
+
+        Config._config_cache = None
+        ingest = mocker.patch("esdc.fetch_publication.ingest_timeseries_rows")
+
+        load_data_to_db(
+            [["2025", "P-1"]], ["report_year", "project_id"], "project_timeseries"
+        )
+
+        ingest.assert_called_once_with(
+            [["2025", "P-1"]],
+            ["report_year", "project_id"],
+            duckdb_path=config_dir / "esdc.duckdb",
+            sqlite_path=config_dir / "esdc.sqlite",
+        )
 
 
 class TestInvalidateSqlCache:
@@ -156,6 +182,33 @@ class TestInvalidateSqlCache:
         """Test invalidate_sql_cache handles missing cache dir gracefully."""
         mocker.patch("esdc.dbmanager.Config.get_cache_dir", return_value=tmp_path)
         invalidate_sql_cache()
+
+    def test_disk_cache_clear_is_attempted_when_handle_reset_fails(
+        self, tmp_path, mocker
+    ):
+        calls = []
+
+        class Cache:
+            def __init__(self, _path):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def clear(self):
+                calls.append("disk")
+
+        mocker.patch("esdc.dbmanager.Config.get_cache_dir", return_value=tmp_path)
+        mocker.patch("esdc.chat.tools.reset_sql_cache", side_effect=OSError("handle"))
+        mocker.patch("esdc.dbmanager.diskcache.Cache", Cache)
+
+        with pytest.raises(RuntimeError, match="handle"):
+            invalidate_sql_cache()
+
+        assert calls == ["disk"]
 
 
 class TestCheckIndexes:

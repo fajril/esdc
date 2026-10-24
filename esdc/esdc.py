@@ -37,14 +37,14 @@ import io
 import json
 import logging
 import os
-import time
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from tempfile import TemporaryDirectory
+from typing import Annotated, Any, cast
 
 import pandas as pd
 import requests
@@ -74,22 +74,34 @@ from esdc.api_projection import (
 )
 from esdc.api_snapshot import (
     ApiProjectResourceRow,
-    ApiSnapshot,
     JSONScalar,
     get_project_resources_snapshot,
-    replace_project_resources_snapshot,
-    replace_project_resources_years,
+)
+from esdc.commands.analytics import (  # noqa: E402
+    bootstrap_timeseries_source_command,
+    rebuild_api_analytics_command,
+    verify_analytics_migration_command,
 )
 from esdc.commands.configs import configs_app  # noqa: E402
 from esdc.commands.spatial import spatial_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
 from esdc.console import console  # noqa: E402
 from esdc.dbmanager import (  # noqa: E402
-    _ensure_duckdb_database,
-    _execute_sql_script,
     get_duckdb_connection,
     load_data_to_db,
     run_query,
+)
+from esdc.fetch_publication import publish_prepared_fetch
+from esdc.fetching import (
+    FetchFailure,
+    FetchOutcome,
+    FetchPhase,
+    PreparedFetch,
+    PreparedTimeseriesSlice,
+    parse_report_year,
+    save_payload_atomically,
+    spool_timeseries,
+    validate_timeseries_header,
 )
 from esdc.loaders import (  # noqa: E402
     LoadSchemaError,
@@ -127,6 +139,9 @@ TABLES: tuple[TableName, TableName] = (
 app = typer.Typer(no_args_is_help=False)
 schema_app = typer.Typer(invoke_without_command=True, no_args_is_help=True)
 corpus_app = typer.Typer(no_args_is_help=True)
+app.command(name="bootstrap-timeseries-source")(bootstrap_timeseries_source_command)
+app.command(name="rebuild-api-analytics")(rebuild_api_analytics_command)
+app.command(name="verify-analytics-migration")(verify_analytics_migration_command)
 app.add_typer(configs_app, name="configs")
 app.add_typer(spatial_app, name="spatial")
 app.add_typer(schema_app, name="schema")
@@ -591,7 +606,7 @@ def fetch(
 
     try:
         if filetype == "csv":
-            load_esdc_data(
+            _ = load_esdc_data(
                 filetype=FileType.CSV,
                 to_file=should_save,
                 reload=should_reload,
@@ -601,7 +616,7 @@ def fetch(
                 reindex=should_reindex,
             )
         elif filetype == "json":
-            load_esdc_data(
+            _ = load_esdc_data(
                 filetype=FileType.JSON,
                 to_file=should_save,
                 reload=should_reload,
@@ -610,28 +625,18 @@ def fetch(
                 years=year,
                 reindex=should_reindex,
             )
-            if should_reload:
-                try:
-                    snapshot_conn = get_sqlite_connection(get_esdc_sqlite_path())
-                    try:
-                        snapshot = get_project_resources_snapshot(snapshot_conn)
-                    finally:
-                        snapshot_conn.close()
-                except Exception:
-                    snapshot = None
-                if snapshot is not None:
-                    typer.echo(
-                        "Project resources: "
-                        f"{snapshot.publication_state}; "
-                        f"invalid geometry: {snapshot.invalid_geometry_count}"
-                    )
         else:
             logging.warning("File type %s is not available.", filetype)
     except Exception as exc:
-        typer.echo(
-            "Project resources are analytics_stale; run "
-            f"'esdc rebuild-project-resources': {exc}"
-        )
+        context = ""
+        if isinstance(exc, FetchFailure):
+            context_parts = [f"phase={exc.phase}"]
+            if exc.table is not None:
+                context_parts.append(f"table={exc.table}")
+            if exc.report_year is not None:
+                context_parts.append(f"year={exc.report_year}")
+            context = " (" + ", ".join(context_parts) + ")"
+        typer.echo(f"Fetch failed{context}: {exc}")
         raise typer.Exit(1) from None
 
 
@@ -699,25 +704,97 @@ def reload(
         reindex_fts()
         return
 
-    # Normal reload
-    db_dir = Config.get_db_dir()
-    for table in TABLES:
-        filename = db_dir / f"{table.value}.{filetype}"
-        if filename.exists():
-            if filetype == "csv":
-                _load_file_as_csv(str(filename), table.value)
-            elif filetype == "json":
-                _load_file_as_json(str(filename), table.value)
-            else:
-                logging.debug(
-                    "failed to load %s. Unknown %s format", filename, filetype
-                )
-        else:
-            logging.warning("File %s is not found.", filename)
+    _reload_files(filetype)
 
     # Generate embeddings after reload (unless disabled)
     if not no_embeddings:
         _generate_embeddings(embed_backend=embed_backend)
+
+
+def _reload_files(filetype: str | None) -> None:
+    """Validate all available API files before one joint publication."""
+    if filetype not in (FileType.CSV.value, FileType.JSON.value):
+        logging.debug("Unknown reload format %s", filetype)
+        return
+
+    db_dir = Config.get_db_dir()
+    resource_rows: tuple[ApiProjectResourceRow, ...] = ()
+    timeseries_slices: list[PreparedTimeseriesSlice] = []
+    origin = "api_csv" if filetype == FileType.CSV.value else "api_json"
+
+    with TemporaryDirectory(prefix="esdc-reload-") as temporary_directory:
+        for table in TABLES:
+            filename = db_dir / f"{table.value}.{filetype}"
+            if not filename.exists():
+                logging.warning("File %s is not found.", filename)
+                continue
+            payload = filename.read_bytes()
+            if table == TableName.PROJECT_RESOURCES:
+                if filetype == FileType.CSV.value:
+                    rows, header = _read_csv(io.StringIO(payload.decode("utf-8")))
+                    resource_rows = _csv_rows_to_normalized_project_resources(
+                        rows, header
+                    )
+                else:
+                    parsed = json.loads(
+                        payload, object_pairs_hook=_json_object_without_duplicate_keys
+                    )
+                    resource_rows = _normalize_project_resources_json(parsed)
+                continue
+
+            if filetype == FileType.CSV.value:
+                rows, header = _parse_table_payload(payload, table, FileType.CSV, None)
+            else:
+                rows, header = _parse_timeseries_json(payload, None)
+            if not rows:
+                continue
+            if not isinstance(header, (list, tuple)) or any(
+                not isinstance(column, str) for column in header
+            ):
+                raise ValueError("project_timeseries header must contain column names")
+            names = validate_timeseries_header(header)
+            year_index = names.index("report_year")
+            by_year: dict[int, list[Sequence[JSONScalar]]] = {}
+            for index, raw in enumerate(rows):
+                if len(raw) != len(names):
+                    raise ValueError(
+                        f"project_timeseries record {index} has wrong width"
+                    )
+                try:
+                    year = parse_report_year(raw[year_index])
+                except ValueError as exc:
+                    raise ValueError(
+                        f"project_timeseries record {index} column report_year: {exc}"
+                    ) from exc
+                values = list(raw)
+                values[year_index] = year
+                by_year.setdefault(year, []).append(values)
+            for year, year_rows in sorted(by_year.items()):
+                prepared_slice = spool_timeseries(
+                    names,
+                    year_rows,
+                    report_year=year,
+                    directory=Path(temporary_directory),
+                    origin=origin,
+                )
+                if prepared_slice is not None:
+                    timeseries_slices.append(prepared_slice)
+
+        prepared = PreparedFetch(
+            resource_rows,
+            None,
+            tuple(timeseries_slices),
+            (),
+            (),
+            timeseries_mode=("replace_all" if timeseries_slices else "replace_years"),
+        )
+        if prepared.resource_rows or prepared.timeseries:
+            publish_prepared_fetch(
+                prepared,
+                duckdb_path=Config.get_db_file(),
+                sqlite_path=get_esdc_sqlite_path(),
+                reindex=True,
+            )
 
 
 def _generate_embeddings(embed_backend: str | None = None) -> None:
@@ -959,82 +1036,47 @@ def _append_to_table(
     content: list[list[str]],
     append_years: list[int],
 ) -> None:
-    """Append data: delete existing rows for given years, then insert new rows."""
-    start_time = time.monotonic()
-    db_path = Config.get_db_file()
-    _ensure_duckdb_database(db_path)
-    if not Config.get_db_dir().exists():
-        Config.get_db_dir().mkdir(parents=True, exist_ok=True)
-
-    year_label = ", ".join(str(y) for y in append_years)
-
-    def _status(step: str) -> str:
-        elapsed = time.monotonic() - start_time
-        return (
-            f"[dim]{table_name} ({year_label}): {step} [elapsed {elapsed:.1f}s][/dim]"
+    """Replace selected timeseries years through canonical ingestion."""
+    if table_name == "project_resources":
+        raise ValueError(
+            "project_resources must be ingested through the canonical SQLite "
+            "resource ingestion path"
         )
+    if table_name != "project_timeseries":
+        raise ValueError(f"Unsupported append table: {table_name}")
+    if not content or not append_years:
+        return
+    if any(
+        isinstance(year, bool) or not isinstance(year, int) for year in append_years
+    ):
+        raise ValueError("append_years must contain integers")
 
-    with console.status(_status("preparing")) as status:
-        conn = get_duckdb_connection(db_path, read_only=False)
-        try:
-            # Ensure table exists; only create if missing
-            status.update(_status("creating schema"))
-            schema_stmt = (
-                "SELECT 1 FROM information_schema.tables "
-                f"WHERE table_name = '{table_name}'"
-            )
-            table_exists = conn.execute(schema_stmt).fetchone()
+    from esdc.fetch_publication import _ingest_timeseries_rows
+    from esdc.pod_registry.store import get_esdc_sqlite_path
 
-            if not table_exists:
-                status.update(_status("creating table"))
-                from esdc.db_security import _load_sql_script
-
-                script_name = _CREATE_TABLE_SCRIPTS.get(table_name)
-                if script_name is None:
-                    raise ValueError(
-                        f"No create script mapped for table '{table_name}'"
-                    )
-                create_sql = _load_sql_script(script_name)
-                statements = [s.strip() for s in create_sql.split(";") if s.strip()]
-                for stmt in statements:
-                    conn.execute(stmt)
-
-            # Delete existing rows for the specified years
-            status.update(_status("deleting old rows"))
-            delete_stmt = (
-                f"DELETE FROM {table_name} WHERE report_year IN ({year_label})"
-            )
-            conn.execute(delete_stmt)
-
-            # Insert new rows
-            status.update(_status(f"inserting {len(content):,} rows"))
-            placeholders = ", ".join(["?" for _ in header])
-            insert_stmt = (
-                f"INSERT INTO {table_name} ({', '.join(header)}) "
-                f"VALUES ({placeholders})"
-            )
-            conn.executemany(insert_stmt, content)
-
-            status.update(_status("recording metadata"))
-            _execute_sql_script(conn, "create_table_metadata.sql")
-
-            # ------------------------------------------------------------------
-            # Work around DuckDB HNSW checkpoint crash: drop the index before
-            # CHECKPOINT.  The index will be rebuilt by
-            # `esdc reload --embeddings-only` when embeddings are regenerated
-            # for the updated data.
-            # ------------------------------------------------------------------
-            status.update(_status("checkpointing"))
-            conn.execute("DROP INDEX IF EXISTS idx_hnsw_embeddings")
-            conn.execute("CHECKPOINT")
-
-            elapsed = time.monotonic() - start_time
-            console.print(
-                f"[green]✓[/green] {table_name} ({year_label}): "
-                f"{len(content):,} rows updated in {elapsed:.1f}s"
-            )
-        finally:
-            conn.close()
+    names = validate_timeseries_header(header)
+    year_index = names.index("report_year")
+    selected = set(append_years)
+    rows = []
+    for index, raw in enumerate(content):
+        if len(raw) != len(names):
+            raise ValueError(f"project_timeseries record {index} has wrong width")
+        year = parse_report_year(raw[year_index])
+        if year in selected:
+            values = cast(list[JSONScalar], list(raw))
+            values[year_index] = year
+            rows.append(values)
+    if not rows:
+        return
+    _ingest_timeseries_rows(
+        rows,
+        names,
+        duckdb_path=Config.get_db_file(),
+        sqlite_path=get_esdc_sqlite_path(),
+        replace_all=False,
+        reindex=True,
+        origin="api_json",
+    )
 
 
 def _fetch_and_parse_table(
@@ -1044,8 +1086,67 @@ def _fetch_and_parse_table(
     username: str,
     password: str,
     report_year: int | None = None,
-) -> tuple[list[list[str]], list[str]] | list[Mapping[str, object]] | None:
-    """Download and parse a single table."""
+) -> (
+    tuple[list[list[str]], list[str]]
+    | tuple[list[list[JSONScalar]], list[str]]
+    | list[Mapping[str, JSONScalar]]
+    | None
+):
+    """Download and validate one table using the shared fetch parsers."""
+    data, url = _download_table_bytes(table, filetype, username, password, report_year)
+    try:
+        result = _parse_table_payload(data, table, filetype, report_year)
+    except FetchFailure:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _fetch_failure(
+            f"Unable to parse {table.value} response: {exc}",
+            table,
+            report_year,
+            phase="parse",
+        ) from exc
+    except (ValueError, csv.Error, StopIteration) as exc:
+        raise _fetch_failure(
+            f"Invalid {table.value} response: {exc}",
+            table,
+            report_year,
+            phase="validation",
+        ) from exc
+
+    if to_file:
+        _save_download(table, filetype, data, report_year)
+    if (
+        table == TableName.PROJECT_TIMESERIES
+        and isinstance(result, tuple)
+        and not result[0]
+    ):
+        return None
+    return result
+
+
+def _fetch_failure(
+    message: str,
+    table: TableName,
+    report_year: int | None,
+    *,
+    phase: FetchPhase,
+) -> FetchFailure:
+    scope = f" report year {report_year}" if report_year is not None else ""
+    return FetchFailure(
+        f"{table.value}{scope}: {message}",
+        phase=phase,
+        table=table.value,
+        report_year=report_year,
+    )
+
+
+def _download_table_bytes(
+    table: TableName,
+    filetype: FileType,
+    username: str,
+    password: str,
+    report_year: int | None,
+) -> tuple[bytes, str]:
     url = esdc_url_builder(
         table_name=table, file_type=filetype, report_year=report_year
     )
@@ -1055,41 +1156,296 @@ def _fetch_and_parse_table(
     data = esdc_downloader(url, username, password)
     if data is None:
         logging.warning("Failed to download %s data.", table.value)
-        if table == TableName.PROJECT_RESOURCES:
-            raise RuntimeError(f"project resources download failed{scope}")
-        return None
+        raise _fetch_failure(
+            "download failed (no response payload)",
+            table,
+            report_year,
+            phase="download",
+        )
+    return data, url
 
-    if to_file:
-        filename = table.value
-        if report_year is not None:
-            filename = f"{table.value}_{report_year}"
-        save_path = Config.get_db_dir() / f"{filename}.{filetype.value}"
-        logging.debug("Save data as %s", save_path)
-        with open(save_path, "wb") as f:
-            _ = f.write(data)
 
-    if filetype == FileType.CSV:
-        return _read_csv(io.StringIO(data.decode("utf-8")))
-    elif filetype == FileType.JSON:
-        parsed_json = json.loads(data)
-        if table == TableName.PROJECT_RESOURCES:
-            _normalize_project_resources_json(parsed_json)
-            if parsed_json == []:
-                console.print(
-                    f"[yellow]API returned no rows for {table.value}{scope}; "
-                    "no data loaded from this response.[/yellow]"
+def _save_download(
+    table: TableName,
+    filetype: FileType,
+    data: bytes,
+    report_year: int | None,
+) -> None:
+    filename = table.value
+    if report_year is not None:
+        filename = f"{table.value}_{report_year}"
+    save_path = Config.get_db_dir() / f"{filename}.{filetype.value}"
+    logging.debug("Save data as %s", save_path)
+    save_payload_atomically(save_path, data)
+
+
+def _json_object_without_duplicate_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _parse_timeseries_json(
+    data: bytes, report_year: int | None
+) -> tuple[list[list[JSONScalar]], list[str]]:
+    parsed = json.loads(data, object_pairs_hook=_json_object_without_duplicate_keys)
+    if not isinstance(parsed, list):
+        raise ValueError("project_timeseries JSON must be an array of objects")
+    if not parsed:
+        return [], []
+    first = parsed[0]
+    if not isinstance(first, dict) or any(not isinstance(key, str) for key in first):
+        raise ValueError(
+            "project_timeseries record 0 must be an object with string keys"
+        )
+    header = validate_timeseries_header(tuple(first))
+    expected_keys = set(header)
+    content: list[list[JSONScalar]] = []
+    for index, item in enumerate(parsed):
+        if not isinstance(item, dict) or any(not isinstance(key, str) for key in item):
+            raise ValueError(f"project_timeseries record {index} must be an object")
+        if set(item) != expected_keys:
+            missing = sorted(expected_keys - set(item))
+            extra = sorted(set(item) - expected_keys)
+            raise ValueError(
+                f"project_timeseries record {index} keys differ from header; "
+                f"missing={missing}, extra={extra}"
+            )
+        row: list[JSONScalar] = []
+        for name in header:
+            value = item[name]
+            if value is not None and not isinstance(value, (str, int, float, bool)):
+                raise ValueError(
+                    f"project_timeseries record {index} column {name} must be scalar"
                 )
-            return parsed_json
-        if not parsed_json:
+            row.append(value)
+        try:
+            year = parse_report_year(row[header.index("report_year")])
+        except ValueError as exc:
+            raise ValueError(
+                f"project_timeseries record {index} column report_year: {exc}"
+            ) from exc
+        row[header.index("report_year")] = year
+        content.append(row)
+    return content, list(header)
+
+
+def _parse_table_payload(
+    data: bytes,
+    table: TableName,
+    filetype: FileType,
+    report_year: int | None,
+    *,
+    validate_resources: bool = True,
+) -> (
+    tuple[list[list[str]], list[str]]
+    | tuple[list[list[JSONScalar]], list[str]]
+    | list[Mapping[str, JSONScalar]]
+):
+    if filetype == FileType.CSV:
+        content, header = _read_csv(io.StringIO(data.decode("utf-8"), newline=""))
+        if table == TableName.PROJECT_TIMESERIES:
+            names = validate_timeseries_header(header)
+            for index, row in enumerate(content):
+                if len(row) != len(names):
+                    raise ValueError(
+                        f"project_timeseries CSV record {index} has wrong width"
+                    )
+            year_index = names.index("report_year")
+            for index, row in enumerate(content):
+                try:
+                    row[year_index] = str(parse_report_year(row[year_index]))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"project_timeseries record {index} column report_year: {exc}"
+                    ) from exc
+            return content, list(names)
+        if table == TableName.PROJECT_RESOURCES and validate_resources:
+            _csv_rows_to_normalized_project_resources(content, header)
+        return content, header
+
+    if table == TableName.PROJECT_TIMESERIES:
+        content, header = _parse_timeseries_json(data, report_year)
+        if not content:
             console.print(
-                f"[yellow]API returned no rows for {table.value}{scope}; "
+                f"[yellow]API returned no rows for {table.value}"
+                f"{f' (report year {report_year})' if report_year is not None else ''}"
+                "; "
                 "no data loaded from this response.[/yellow]"
             )
-            return None
-        header = list(parsed_json[0].keys())
-        content = [list(item.values()) for item in parsed_json]
         return content, header
-    return None
+
+    parsed = json.loads(data, object_pairs_hook=_json_object_without_duplicate_keys)
+    if table == TableName.PROJECT_RESOURCES:
+        if validate_resources:
+            _normalize_project_resources_json(parsed)
+        if parsed == []:
+            console.print(
+                f"[yellow]API returned no rows for {table.value}; "
+                "no data loaded from this response.[/yellow]"
+            )
+        return parsed
+    raise ValueError(f"unsupported ESDC table {table.value}")
+
+
+def prepare_fetch(
+    *,
+    filetype: FileType,
+    to_file: bool,
+    username: str,
+    password: str,
+    years: Sequence[int] | None,
+    directory: Path,
+) -> PreparedFetch:
+    """Download and validate all fetch inputs without touching either database."""
+    selected_years = None if years is None else tuple(sorted(set(years)))
+    resource_rows: list[ApiProjectResourceRow] = []
+    resource_years: list[int] = []
+    skipped_resource_years: list[int] = []
+
+    requests: tuple[int | None, ...] = (
+        (None,) if selected_years is None else selected_years
+    )
+    for year in requests:
+        payload, _ = _download_table_bytes(
+            TableName.PROJECT_RESOURCES, filetype, username, password, year
+        )
+        try:
+            parsed = _parse_table_payload(
+                payload,
+                TableName.PROJECT_RESOURCES,
+                filetype,
+                year,
+                validate_resources=False,
+            )
+            if filetype == FileType.JSON:
+                if not isinstance(parsed, list):
+                    raise ValueError("project_resources JSON must be an array")
+                normalized = _normalize_project_resources_json(parsed)
+            else:
+                if not isinstance(parsed, tuple):
+                    raise ValueError("project_resources CSV must be tabular")
+                if not all(
+                    isinstance(value, str) for row in parsed[0] for value in row
+                ):
+                    raise ValueError("project_resources CSV must contain text values")
+                normalized = _csv_rows_to_normalized_project_resources(
+                    cast(Sequence[Sequence[str]], parsed[0]), parsed[1]
+                )
+            if year is None:
+                resource_rows.extend(normalized)
+            else:
+                scoped = [row for row in normalized if row.report_year == year]
+                resource_rows.extend(scoped)
+                if scoped:
+                    resource_years.append(year)
+                else:
+                    skipped_resource_years.append(year)
+            if to_file:
+                _save_download(TableName.PROJECT_RESOURCES, filetype, payload, year)
+        except FetchFailure:
+            raise
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _fetch_failure(
+                f"Unable to parse response: {exc}",
+                TableName.PROJECT_RESOURCES,
+                year,
+                phase="parse",
+            ) from exc
+        except (ValueError, csv.Error, StopIteration) as exc:
+            raise _fetch_failure(
+                f"Invalid response: {exc}",
+                TableName.PROJECT_RESOURCES,
+                year,
+                phase="validation",
+            ) from exc
+
+    if selected_years is None and not resource_rows:
+        return PreparedFetch((), None, (), (), ())
+
+    timeseries_years = selected_years
+    if timeseries_years is None:
+        timeseries_years = tuple(
+            sorted(
+                {
+                    row.report_year
+                    for row in resource_rows
+                    if isinstance(row.report_year, int)
+                    and not isinstance(row.report_year, bool)
+                    and row.report_year >= 2020
+                }
+            )
+        )
+
+    timeseries: list[PreparedTimeseriesSlice] = []
+    skipped_timeseries_years: list[int] = []
+    for year in timeseries_years:
+        payload, _ = _download_table_bytes(
+            TableName.PROJECT_TIMESERIES, filetype, username, password, year
+        )
+        try:
+            parsed = _parse_table_payload(
+                payload, TableName.PROJECT_TIMESERIES, filetype, year
+            )
+            if not isinstance(parsed, tuple):
+                raise ValueError("project_timeseries response must be tabular")
+            rows, header = parsed
+            if filetype == FileType.JSON and not rows:
+                prepared = None
+            else:
+                prepared = spool_timeseries(
+                    header,
+                    rows,
+                    report_year=year,
+                    directory=directory,
+                    origin="api_csv" if filetype == FileType.CSV else "api_json",
+                )
+            if prepared is None:
+                skipped_timeseries_years.append(year)
+            else:
+                timeseries.append(prepared)
+            if to_file:
+                _save_download(TableName.PROJECT_TIMESERIES, filetype, payload, year)
+            del parsed, rows, header
+        except FetchFailure:
+            raise
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _fetch_failure(
+                f"Unable to parse response: {exc}",
+                TableName.PROJECT_TIMESERIES,
+                year,
+                phase="parse",
+            ) from exc
+        except (ValueError, csv.Error, StopIteration) as exc:
+            raise _fetch_failure(
+                f"Invalid response: {exc}",
+                TableName.PROJECT_TIMESERIES,
+                year,
+                phase="validation",
+            ) from exc
+        finally:
+            del payload
+
+    return PreparedFetch(
+        tuple(resource_rows),
+        None if selected_years is None else tuple(resource_years),
+        tuple(timeseries),
+        tuple(skipped_resource_years),
+        tuple(skipped_timeseries_years),
+        timeseries_observed_years=(
+            tuple(timeseries_years)
+            if selected_years is None and timeseries_years
+            else ()
+        ),
+        timeseries_complete_observation=(
+            selected_years is None and bool(timeseries_years)
+        ),
+    )
 
 
 def _commit_and_publish_project_resources(
@@ -1117,31 +1473,30 @@ def _commit_normalized_project_resources(
             raise ValueError(
                 "project resources response contains no selected-year rows"
             )
-    source_sha256 = _hash_normalized_rows(incoming)
     sqlite_path = get_esdc_sqlite_path()
-    conn = get_sqlite_connection(sqlite_path)
-    try:
-        snapshot_input = ApiSnapshot(
-            "project_resources",
-            "incoming",
-            len(incoming),
-            source_sha256,
-            datetime.now(timezone.utc).isoformat(),
-            "committed",
-        )
-        if years is None:
-            replace_project_resources_snapshot(conn, incoming, snapshot_input)
-        else:
-            replace_project_resources_years(
-                conn, incoming, snapshot_input, selected_years
-            )
-        snapshot = get_project_resources_snapshot(conn)
-    finally:
-        conn.close()
-    if snapshot is None:
-        raise RuntimeError("project resources snapshot was not committed")
-    return publish_project_resources(
-        Config.get_db_file(), sqlite_path, snapshot.revision
+    outcome = publish_prepared_fetch(
+        PreparedFetch(
+            incoming,
+            None if years is None else selected_years,
+            (),
+            (),
+            (),
+        ),
+        duckdb_path=Config.get_db_file(),
+        sqlite_path=sqlite_path,
+        reindex=True,
+    )
+    if (
+        outcome.resource_revision is None
+        or outcome.resource_source_sha256 is None
+        or outcome.resource_invalid_geometry_count is None
+    ):
+        raise RuntimeError("project resources publication returned no revision")
+    return ProjectPublication(
+        outcome.resource_revision,
+        outcome.resource_row_count,
+        outcome.resource_source_sha256,
+        outcome.resource_invalid_geometry_count,
     )
 
 
@@ -1162,6 +1517,12 @@ def _normalize_project_resources_json(
             if value is not None and not isinstance(value, (str, int, float, bool)):
                 raise ValueError(f"record {index} field {key!r} must be a JSON scalar")
             scalar_row[key] = value
+        if "report_year" not in scalar_row:
+            raise ValueError(f"record {index} column report_year is required")
+        try:
+            scalar_row["report_year"] = parse_report_year(scalar_row["report_year"])
+        except ValueError as exc:
+            raise ValueError(f"record {index} column report_year: {exc}") from exc
         scalar_rows.append(scalar_row)
     return normalize_project_resources(scalar_rows).rows
 
@@ -1185,19 +1546,41 @@ def refresh_project_resources_from_api(
     *, username: str, password: str, report_year: int | None
 ) -> ProjectPublication:
     """Fetch, normalize, commit, and publish project resources from the API."""
-    payload = _fetch_and_parse_table(
+    payload, _ = _download_table_bytes(
         TableName.PROJECT_RESOURCES,
         FileType.JSON,
-        False,
         username,
         password,
-        report_year=report_year,
+        report_year,
     )
-    if payload is None or not isinstance(payload, list):
+    try:
+        parsed = _parse_table_payload(
+            payload,
+            TableName.PROJECT_RESOURCES,
+            FileType.JSON,
+            report_year,
+            validate_resources=False,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _fetch_failure(
+            f"Unable to parse response: {exc}",
+            TableName.PROJECT_RESOURCES,
+            report_year,
+            phase="parse",
+        ) from exc
+    if not isinstance(parsed, list):
         raise RuntimeError("project resources API returned no JSON rows")
-    return _commit_and_publish_project_resources(
-        payload, years=None if report_year is None else [report_year]
-    )
+    rows = _normalize_project_resources_json(parsed)
+    if not rows:
+        raise RuntimeError("project resources API returned no JSON rows")
+    selected = None if report_year is None else (report_year,)
+    if selected is not None:
+        rows = tuple(row for row in rows if row.report_year == report_year)
+        if not rows:
+            raise RuntimeError(
+                "project resources response contains no selected-year rows"
+            )
+    return _commit_normalized_project_resources(rows, years=selected)
 
 
 def rebuild_project_resources_projection() -> ProjectPublication:
@@ -1215,8 +1598,18 @@ def rebuild_project_resources_projection() -> ProjectPublication:
             "project resources revision "
             f"{snapshot.revision} is already {snapshot.publication_state}"
         )
+    duckdb_path = Config.get_db_file()
+    from esdc.fetch_publication import ensure_timeseries_baseline
+
+    try:
+        ensure_timeseries_baseline(duckdb_path, sqlite_path, allow_install=False)
+    except ValueError as exc:
+        raise ValueError(
+            f"project_timeseries is pending or differs from SQLite; "
+            f"run 'esdc rebuild-api-analytics' before resources-only recovery: {exc}"
+        ) from exc
     return publish_project_resources(
-        Config.get_db_file(), sqlite_path, snapshot.revision
+        duckdb_path, sqlite_path, snapshot.revision, allow_install=False
     )
 
 
@@ -1243,7 +1636,7 @@ def load_esdc_data(
     password: str = "",
     years: list[int] | None = None,
     reindex: bool = True,
-) -> None:
+) -> FetchOutcome:
     """Download data from the ESDC API and optionally load into the database.
 
     Parameters
@@ -1268,159 +1661,85 @@ def load_esdc_data(
         This ensures ILIKE text searches work correctly for the newly-fetched data.
         Set to False to skip reindexing (e.g. via --no-reindex).
     """
-    # ------------------------------------------------------------------
-    # 1) Full-replace mode (default)
-    # ------------------------------------------------------------------
-    if years is None:
-        # Resources: full replace
-        resources_result = _fetch_and_parse_table(
-            TableName.PROJECT_RESOURCES,
-            filetype,
-            to_file,
-            username,
-            password,
+    selected_years = None if years is None else tuple(sorted(set(years)))
+    with TemporaryDirectory(prefix="esdc-fetch-") as temporary_directory:
+        prepared = prepare_fetch(
+            filetype=filetype,
+            to_file=to_file,
+            username=username,
+            password=password,
+            years=selected_years,
+            directory=Path(temporary_directory),
         )
-        if resources_result is not None and reload:
-            if filetype == FileType.JSON:
-                normalized_rows = _normalize_project_resources_json(resources_result)
-                if normalized_rows:
-                    _commit_normalized_project_resources(normalized_rows)
-                else:
-                    console.print(
-                        "[yellow]No project-resource rows; no data loaded.[/yellow]"
-                    )
-            else:
-                if not isinstance(resources_result, tuple):
-                    raise ValueError("project_resources CSV must use tabular rows")
-                normalized_rows = _csv_rows_to_normalized_project_resources(
-                    resources_result[0], resources_result[1]
-                )
-                if normalized_rows:
-                    _commit_normalized_project_resources(normalized_rows)
-                else:
-                    console.print(
-                        "[yellow]No project-resource rows; no data loaded.[/yellow]"
-                    )
-
-        # Detect years from DB after resources loaded
-        timeseries_years = _detect_report_years(Config.get_db_file(), min_year=2020)
-        if not timeseries_years:
-            logging.warning("No report years found for timeseries. Skipping.")
-            return
-
-        # Timeseries: full replace, fetching per year
-        all_timeseries_content: list[list[str]] = []
-        timeseries_header: list[str] = []
-        for year in timeseries_years:
-            result = _fetch_and_parse_table(
-                TableName.PROJECT_TIMESERIES,
-                filetype,
-                to_file,
-                username,
-                password,
-                report_year=year,
+        if not reload:
+            console.print(
+                "[green]Fetch payloads validated; no database changes.[/green]"
             )
-            if result is not None:
-                if not isinstance(result, tuple):
-                    raise ValueError("project_timeseries JSON must use tabular rows")
-                all_timeseries_content.extend(result[0])
-                timeseries_header = result[1]
-
-        if all_timeseries_content and reload:
-            load_data_to_db(
-                all_timeseries_content,
-                timeseries_header,
-                TableName.PROJECT_TIMESERIES.value,
+            return FetchOutcome(
+                None,
+                None,
+                0,
+                None,
+                (),
+                0,
+                (),
+                prepared.skipped_resource_years,
+                prepared.skipped_timeseries_years,
             )
-
-        # Full-replace mode: load_data_to_db already calls _create_fts_indexes,
-        # but we still reindex here as a safety pass when flag is set.
-        if reload and reindex:
-            from esdc.dbmanager import reindex_fts
-
-            reindex_fts()
-
-        return
-
-    # ------------------------------------------------------------------
-    # 2) Per-year append mode (--year)
-    # ------------------------------------------------------------------
-    if reload:
-        console.print(
-            "[dim]Per-year mode: updating project_resources and "
-            f"project_timeseries for years {years}[/dim]"
+        outcome = publish_prepared_fetch(
+            prepared,
+            duckdb_path=Config.get_db_file(),
+            sqlite_path=get_esdc_sqlite_path(),
+            reindex=reindex,
         )
-
-    selected_years = sorted(set(years))
-    resource_rows: list[ApiProjectResourceRow] = []
-    resource_years: list[int] = []
-    for year in selected_years:
-        result = _fetch_and_parse_table(
-            TableName.PROJECT_RESOURCES,
-            filetype,
-            to_file,
-            username,
-            password,
-            report_year=year,
-        )
-        if result is None or not reload:
-            continue
-        if filetype == FileType.JSON:
-            if not isinstance(result, list):
-                raise ValueError("project_resources JSON must be a list of objects")
-            normalized_rows = _normalize_project_resources_json(result)
-            scoped = tuple(row for row in normalized_rows if row.report_year == year)
-            resource_rows.extend(scoped)
-            if scoped:
-                resource_years.append(year)
-            elif reload:
-                console.print(
-                    f"[yellow]No project-resource rows for report year {year}; "
-                    "no data loaded.[/yellow]"
-                )
+    if (
+        outcome.resource_revision is None
+        and not outcome.updated_timeseries_years
+        and not outcome.updated_resource_years
+    ):
+        if outcome.skipped_resource_years:
+            skipped = ", ".join(map(str, outcome.skipped_resource_years))
+            console.print(
+                "[yellow]No data changes; No project-resource rows for report year "
+                f"{skipped}; existing data was retained.[/yellow]"
+            )
         else:
-            if not isinstance(result, tuple):
-                raise ValueError("project_resources CSV must use tabular rows")
-            normalized_rows = _csv_rows_to_normalized_project_resources(
-                result[0], result[1]
+            console.print(
+                "[yellow]No data changes; existing data was retained.[/yellow]"
             )
-            scoped = tuple(row for row in normalized_rows if row.report_year == year)
-            resource_rows.extend(scoped)
-            if scoped:
-                resource_years.append(year)
-            elif reload:
-                console.print(
-                    f"[yellow]No project-resource rows for report year {year}; "
-                    "no data loaded.[/yellow]"
-                )
-    if reload and resource_rows:
-        _commit_normalized_project_resources(resource_rows, years=resource_years)
-    elif reload and resource_years:
-        console.print(
-            "[yellow]No matching project-resource rows; no data loaded.[/yellow]"
-        )
-
-    for year in selected_years:
-        result = _fetch_and_parse_table(
-            TableName.PROJECT_TIMESERIES,
-            filetype,
-            to_file,
-            username,
-            password,
-            report_year=year,
-        )
-        if result is None or not reload:
-            continue
-        if not isinstance(result, tuple):
-            raise ValueError("project_timeseries JSON must use tabular rows")
-        _append_to_table(
-            TableName.PROJECT_TIMESERIES.value, result[1], result[0], [year]
-        )
-
-    if reload and reindex:
-        from esdc.dbmanager import reindex_fts
-
-        reindex_fts()
+        return outcome
+    if outcome.updated_resource_years:
+        resource_year_label = ", ".join(map(str, outcome.updated_resource_years))
+    elif outcome.resource_revision is None:
+        resource_year_label = "unchanged"
+    else:
+        resource_year_label = "full snapshot"
+    invalid_geometry_label = (
+        outcome.resource_invalid_geometry_count
+        if outcome.resource_invalid_geometry_count is not None
+        else "unchanged"
+    )
+    console.print(
+        "[green]Fetch published successfully.[/green] "
+        f"Resources: {resource_year_label}; "
+        f"revision={outcome.resource_revision or 'unchanged'}; "
+        f"DuckDB publication revision={outcome.resource_revision or 'unchanged'}; "
+        f"rows={outcome.resource_row_count}; "
+        f"sha256={outcome.resource_source_sha256 or 'unchanged'}; "
+        "invalid_geometry="
+        f"{invalid_geometry_label}."
+    )
+    console.print(
+        "Timeseries: updated years "
+        f"{', '.join(map(str, outcome.updated_timeseries_years)) or 'none'}; "
+        f"rows={outcome.timeseries_rows_written}; skipped years "
+        f"{', '.join(map(str, outcome.skipped_timeseries_years)) or 'none'}."
+    )
+    console.print(
+        "Resources: skipped years "
+        f"{', '.join(map(str, outcome.skipped_resource_years)) or 'none'}."
+    )
+    return outcome
 
 
 def esdc_url_builder(
@@ -1487,7 +1806,23 @@ def _load_file_as_csv(file: str, table_name):
         else:
             console.print("[yellow]No project-resource rows; no data loaded.[/yellow]")
         return
-    load_data_to_db(content, header, table_name)
+    if table_name in (TableName.PROJECT_TIMESERIES, TableName.PROJECT_TIMESERIES.value):
+        if not content:
+            return
+        from esdc.fetch_publication import _ingest_timeseries_rows
+        from esdc.pod_registry.store import get_esdc_sqlite_path
+
+        _ingest_timeseries_rows(
+            content,
+            header,
+            duckdb_path=Config.get_db_file(),
+            sqlite_path=get_esdc_sqlite_path(),
+            replace_all=True,
+            reindex=True,
+            origin="api_csv",
+        )
+        return
+    load_data_to_db(content, list(header), table_name)
 
 
 def _csv_rows_to_normalized_project_resources(
@@ -1516,8 +1851,16 @@ def _csv_rows_to_normalized_project_resources(
             for name, value in zip(names, values, strict=True)
         }
         report_year = data.get("report_year")
-        if isinstance(report_year, str) and report_year.isdigit():
-            data["report_year"] = int(report_year)
+        if report_year is None:
+            raise ValueError(
+                f"project_resources CSV row {index} column report_year is required"
+            )
+        try:
+            data["report_year"] = parse_report_year(report_year)
+        except ValueError as exc:
+            raise ValueError(
+                f"project_resources CSV row {index} column report_year: {exc}"
+            ) from exc
         if raw_grov:
             raw = {
                 key: value
@@ -1557,7 +1900,9 @@ def _csv_rows_to_project_resources(
 def _load_file_as_json(file: str, table_name):
     with open(file, "rb") as f:
         data = f.read()
-    parsed_json = json.loads(data)
+    parsed_json = json.loads(
+        data, object_pairs_hook=_json_object_without_duplicate_keys
+    )
     if table_name in (TableName.PROJECT_RESOURCES, TableName.PROJECT_RESOURCES.value):
         _normalize_project_resources_json(parsed_json)
         if parsed_json:
@@ -1565,11 +1910,27 @@ def _load_file_as_json(file: str, table_name):
         else:
             console.print("[yellow]No project-resource rows; no data loaded.[/yellow]")
         return
+    if table_name in (TableName.PROJECT_TIMESERIES, TableName.PROJECT_TIMESERIES.value):
+        content, header = _parse_timeseries_json(data, None)
+        if not content:
+            return
+        from esdc.fetch_publication import ingest_timeseries_rows
+        from esdc.pod_registry.store import get_esdc_sqlite_path
+
+        ingest_timeseries_rows(
+            content,
+            header,
+            duckdb_path=Config.get_db_file(),
+            sqlite_path=get_esdc_sqlite_path(),
+        )
+        return
     if not parsed_json:
         return
-    header = parsed_json[0].keys()
-    content = [list(item.values()) for item in parsed_json]
-    load_data_to_db(content, header, table_name)
+    header = tuple(parsed_json[0].keys())
+    if any(set(item) != set(header) for item in parsed_json):
+        raise ValueError("project_timeseries JSON records must have identical keys")
+    content = [[item[key] for key in header] for item in parsed_json]
+    load_data_to_db(content, list(header), table_name)
 
 
 def esdc_downloader(url: str, username: str = "", password: str = "") -> bytes | None:
@@ -1783,6 +2144,7 @@ def _status_fetch_report() -> bool:
         rich.print("  (from [cyan]ESDC_DB_FILE[/cyan] environment variable)")
 
     if not db_file.exists():
+        _print_api_source_status(db_file, get_esdc_sqlite_path())
         rich.print(
             "[yellow]Database exists: No[/yellow] "
             "(run '[cyan]esdc fetch --save[/cyan]' to create)"
@@ -1798,13 +2160,14 @@ def _status_fetch_report() -> bool:
             get_last_updated,
         )
 
-        conn = get_duckdb_connection(db_file)
+        conn = get_duckdb_connection(db_file, allow_install=False)
         try:
             table_stats = check_table_stats(conn)
             last_updated = get_last_updated(conn)
         finally:
             conn.close()
     except Exception as e:
+        _print_api_source_status(db_file, get_esdc_sqlite_path())
         rich.print(f"[yellow]Could not check indexes: {e}[/yellow]")
         return False
 
@@ -1816,39 +2179,79 @@ def _status_fetch_report() -> bool:
         mtime = datetime.fromtimestamp(db_file.stat().st_mtime)
         rich.print(f"[bold]Last updated:[/bold] {mtime:%Y-%m-%d %H:%M:%S} (file mtime)")
 
+    api_status = _print_api_source_status(db_file, get_esdc_sqlite_path())
+
     rich.print()
     rich.print("[bold]Tables:[/bold]")
     for ts in table_stats:
-        if not ts["years"]:
+        if not ts.get("exists", bool(ts["years"])):
             icon = "[red]❌[/red]"
             rich.print(f"  {icon} {ts['table']}: not loaded")
+            continue
+        if ts["table"] == "project_timeseries" and ts["total"] == 0:
+            state = api_status.get("project_timeseries", {}).get("status", "unverified")
+            icon = "[green]✅[/green]" if state == "published" else "[yellow]⚠[/yellow]"
+            label = (
+                "observed empty; published"
+                if state == "published"
+                else f"0 rows; {state}"
+            )
+            rich.print(f"  {icon} {ts['table']}: {label}")
+            continue
+        if not ts["years"]:
+            rich.print(f"  [yellow]⚠[/yellow] {ts['table']}: 0 rows")
             continue
         icon = "[green]✅[/green]"
         rich.print(f"  {icon} {ts['table']} ({ts['total']:,} rows):")
         for year, count in ts["years"]:
             rich.print(f"      {year}: {count:,} rows")
 
-    sqlite_path = get_esdc_sqlite_path()
-    if sqlite_path.exists():
-        try:
-            sqlite_conn = get_sqlite_connection(sqlite_path)
-            try:
-                snapshot = get_project_resources_snapshot(sqlite_conn)
-            finally:
-                sqlite_conn.close()
-            if snapshot is not None:
-                rich.print()
-                rich.print("[bold]Project resources snapshot:[/bold]")
-                rich.print(f"  Revision: {snapshot.revision}")
-                rich.print(f"  Rows: {snapshot.row_count:,}")
-                rich.print(f"  Source hash: {snapshot.source_sha256}")
-                rich.print(f"  Fetched: {snapshot.fetched_at}")
-                rich.print(f"  State: {snapshot.publication_state}")
-                rich.print(f"  Invalid geometry: {snapshot.invalid_geometry_count}")
-        except Exception as exc:
-            rich.print(f"[yellow]Could not check project snapshot: {exc}[/yellow]")
-
     return True
+
+
+def _print_api_source_status(
+    db_file: Path, sqlite_path: Path
+):
+    """Report both API snapshots and DuckDB markers using read-only connections."""
+    from esdc.analytics_rebuild import ApiSourceStatus, get_api_analytics_status
+
+    try:
+        sources: dict[str, ApiSourceStatus] = get_api_analytics_status(
+            duckdb_path=db_file, sqlite_path=sqlite_path
+        )
+    except Exception as exc:
+        rich.print(f"[red]Could not check API source status: {exc}[/red]")
+        return {}
+    rich.print()
+    rich.print("[bold]API source and analytical lineage:[/bold]")
+    for table, report in sources.items():
+        snapshot = report["snapshot"]
+        lineage = report["lineage"]
+        rich.print(f"  {table}: {report['status']} — {report['detail']}")
+        if snapshot is None:
+            rich.print("    SQLite: snapshot absent")
+        else:
+            rich.print(
+                "    SQLite: "
+                f"revision={snapshot['revision']}, rows={snapshot['row_count']}, "
+                f"sha256={snapshot['source_sha256']}, "
+                f"state={snapshot['publication_state']}"
+            )
+        if lineage is None:
+            rich.print("    DuckDB: lineage absent")
+        else:
+            rich.print(
+                "    DuckDB: "
+                f"revision={lineage['revision']}, "
+                f"rows={lineage['source_row_count']}, "
+                f"sha256={lineage['source_sha256']}"
+            )
+            if table == "project_resources":
+                rich.print(
+                    "    Invalid geometry: "
+                    f"{lineage['invalid_geometry_count']}"
+                )
+    return sources
 
 
 def _status_index_report(verify: bool) -> None:
@@ -1870,7 +2273,7 @@ def _status_index_report(verify: bool) -> None:
         return
 
     try:
-        conn = get_duckdb_connection(db_file)
+        conn = get_duckdb_connection(db_file, allow_install=False)
         try:
             status = check_indexes(conn)
         finally:
@@ -1915,7 +2318,7 @@ def _status_index_report(verify: bool) -> None:
     try:
         from esdc.dbmanager import verify_indexes
 
-        conn = get_duckdb_connection(db_file)
+        conn = get_duckdb_connection(db_file, allow_install=False)
         try:
             vf = verify_indexes(conn)
         finally:
@@ -2019,7 +2422,7 @@ def _status_corpus_report() -> None:
         return
 
     try:
-        conn = get_duckdb_connection(db_file)
+        conn = get_duckdb_connection(db_file, allow_install=False)
         try:
             existing_tables = {
                 row[0]
@@ -2207,7 +2610,7 @@ def status_main(ctx: typer.Context) -> None:
     from esdc.dbmanager import get_duckdb_connection
 
     try:
-        conn = get_duckdb_connection(db_file)
+        conn = get_duckdb_connection(db_file, allow_install=False)
     except Exception as e:
         rich.print(f"[yellow]Could not open database: {e}[/yellow]")
         return
@@ -2586,8 +2989,6 @@ def _print_full_detail(results: list[ValidationResult]) -> None:
 
 def _save_violations(results: list[ValidationResult], fmt: str) -> None:
     """Collect all violations into a DataFrame and save to file."""
-    from datetime import datetime
-
     import pandas as pd
 
     fmt = (fmt or "xlsx").strip().lower()

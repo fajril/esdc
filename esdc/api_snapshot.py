@@ -6,8 +6,9 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Literal
 
 JSONScalar = str | int | float | bool | None
@@ -270,45 +271,62 @@ def _replace_project_resources(
     )
     try:
         conn.execute("BEGIN")
-        if years is None:
-            conn.execute("DELETE FROM api_project_resources")
-        else:
-            placeholders = ", ".join("?" for _ in years)
-            conn.execute(
-                "DELETE FROM api_project_resources "
-                f"WHERE report_year IN ({placeholders})",
-                tuple(years),
-            )
-        conn.executemany(
-            _ROW_INSERT_SQL,
-            [tuple(getattr(row, column) for column in _ROW_COLUMNS) for row in rows],
-        )
-        row_count, source_sha256 = _persisted_hash(conn)
-        conn.execute(
-            """INSERT INTO api_snapshot
-               (source_table, revision, row_count, source_sha256,
-                fetched_at, publication_state, invalid_geometry_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(source_table) DO UPDATE SET
-                   revision = excluded.revision, row_count = excluded.row_count,
-                   source_sha256 = excluded.source_sha256,
-                   fetched_at = excluded.fetched_at,
-                   publication_state = excluded.publication_state,
-                   invalid_geometry_count = excluded.invalid_geometry_count""",
-            (
-                committed.source_table,
-                committed.revision,
-                row_count,
-                source_sha256,
-                committed.fetched_at,
-                committed.publication_state,
-                committed.invalid_geometry_count,
-            ),
-        )
+        _replace_project_resources_in_transaction(conn, rows, committed, years)
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
+
+
+def _replace_project_resources_in_transaction(
+    conn: sqlite3.Connection,
+    rows: Sequence[ApiProjectResourceRow],
+    committed: ApiSnapshot,
+    years: Sequence[int] | None,
+) -> ApiSnapshot:
+    if years is None:
+        conn.execute("DELETE FROM api_project_resources")
+    else:
+        placeholders = ", ".join("?" for _ in years)
+        conn.execute(
+            f"DELETE FROM api_project_resources WHERE report_year IN ({placeholders})",
+            tuple(years),
+        )
+    conn.executemany(
+        _ROW_INSERT_SQL,
+        [tuple(getattr(row, column) for column in _ROW_COLUMNS) for row in rows],
+    )
+    row_count, source_sha256 = _persisted_hash(conn)
+    conn.execute(
+        """INSERT INTO api_snapshot
+           (source_table, revision, row_count, source_sha256,
+            fetched_at, publication_state, invalid_geometry_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(source_table) DO UPDATE SET
+               revision = excluded.revision, row_count = excluded.row_count,
+               source_sha256 = excluded.source_sha256,
+               fetched_at = excluded.fetched_at,
+               publication_state = excluded.publication_state,
+               invalid_geometry_count = excluded.invalid_geometry_count""",
+        (
+            committed.source_table,
+            committed.revision,
+            row_count,
+            source_sha256,
+            committed.fetched_at,
+            committed.publication_state,
+            committed.invalid_geometry_count,
+        ),
+    )
+    return ApiSnapshot(
+        committed.source_table,
+        committed.revision,
+        row_count,
+        source_sha256,
+        committed.fetched_at,
+        committed.publication_state,
+        committed.invalid_geometry_count,
+    )
 
 
 def get_project_resources_snapshot(conn: sqlite3.Connection) -> ApiSnapshot | None:
@@ -331,13 +349,105 @@ def get_project_resources_snapshot(conn: sqlite3.Connection) -> ApiSnapshot | No
     )
 
 
-def mark_project_resources_published(conn: sqlite3.Connection, revision: str) -> None:
+def iter_project_resources_rows(
+    conn: sqlite3.Connection,
+) -> Iterator[ApiProjectResourceRow]:
+    """Yield canonical resource rows in their stored column order."""
     cursor = conn.execute(
-        """UPDATE api_snapshot SET publication_state = 'published'
-           WHERE source_table = ? AND revision = ?""",
-        ("project_resources", revision),
+        "SELECT " + ", ".join(_ROW_COLUMNS) + " FROM api_project_resources"
     )
-    if cursor.rowcount != 1:
+    for values in cursor:
+        yield ApiProjectResourceRow(**dict(zip(_ROW_COLUMNS, values, strict=True)))
+
+
+def commit_project_resources_update(
+    conn: sqlite3.Connection,
+    rows: Sequence[ApiProjectResourceRow],
+    *,
+    years: Sequence[int] | None,
+    expected_snapshot: ApiSnapshot | None,
+) -> ApiSnapshot:
+    """Commit a full or selected-year update against an optimistic baseline."""
+    if years is not None:
+        years = tuple(dict.fromkeys(years))
+    revision = str(uuid.uuid4())
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        validate_resource_update(
+            conn, rows, years=years, expected_snapshot=expected_snapshot
+        )
+        committed = ApiSnapshot(
+            "project_resources",
+            revision,
+            0,
+            "",
+            datetime.now(timezone.utc).isoformat(),
+            "committed",
+        )
+        result = _replace_project_resources_in_transaction(conn, rows, committed, years)
+        conn.commit()
+        return result
+    except BaseException:
         conn.rollback()
-        raise ValueError(f"no project_resources snapshot matches revision {revision!r}")
-    conn.commit()
+        raise
+
+
+def validate_resource_update(
+    conn: sqlite3.Connection,
+    rows: Sequence[ApiProjectResourceRow],
+    *,
+    years: Sequence[int] | None,
+    expected_snapshot: ApiSnapshot | None,
+) -> None:
+    """Validate a resource update inside the caller's active transaction."""
+    if not conn.in_transaction:
+        raise RuntimeError("resource validation requires an active transaction")
+    if (
+        expected_snapshot is not None
+        and expected_snapshot.source_table != "project_resources"
+    ):
+        raise ValueError("expected snapshot source_table must be 'project_resources'")
+    if years is not None:
+        selected = tuple(dict.fromkeys(years))
+        if not selected:
+            raise ValueError("at least one report year is required")
+        if any(row.report_year not in selected for row in rows):
+            raise ValueError("incoming project-resource row is outside selected years")
+        years = selected
+    current = get_project_resources_snapshot(conn)
+    if current != expected_snapshot:
+        raise ValueError("project_resources snapshot changed during preparation")
+    if (
+        years is not None
+        and current is None
+        and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'api_project_resources'"
+        ).fetchone()
+        is not None
+        and conn.execute("SELECT 1 FROM api_project_resources LIMIT 1").fetchone()
+    ):
+        raise ValueError("project_resources rows exist without a snapshot")
+
+
+def mark_project_resources_published(
+    conn: sqlite3.Connection,
+    revision: str,
+    *,
+    invalid_geometry_count: int | None = None,
+) -> None:
+    try:
+        cursor = conn.execute(
+            """UPDATE api_snapshot SET publication_state = 'published',
+                   invalid_geometry_count = COALESCE(?, invalid_geometry_count)
+               WHERE source_table = ? AND revision = ?""",
+            (invalid_geometry_count, "project_resources", revision),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(
+                f"no project_resources snapshot matches revision {revision!r}"
+            )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise

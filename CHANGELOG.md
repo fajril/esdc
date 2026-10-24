@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- ESDC fetch validates complete response batches, commits canonical API
+  snapshots to SQLite before publishing analytics, and tracks revision, row
+  count, and source hash. Valid nonempty selected slices replace their selected
+  years; empty slices preserve them. Failed publication retains the SQLite
+  revision and marks it stale for repair.
+
+### Added
+
+- Explicit `esdc bootstrap-timeseries-source` dry-run/apply workflow for
+  preserving legacy DuckDB timeseries before the first full baseline fetch,
+  joint offline `esdc rebuild-api-analytics` recovery, and
+  `esdc verify-analytics-migration` closed-clone rehearsal with a machine-
+  readable report. The legacy resource rehearsal remains supported.
+- Typed API parity/audit checks and independent maintenance safety for the
+  resource/timeseries projections. Evidence includes focused gates and an
+  eight-stage synthetic million-row SQL exercise; it does not establish
+  upstream million-response parsing, real database migration, live API
+  behavior, full-suite success, or production readiness.
+
+### Fixed
+
+- Chat log files now use the configured ESDC directory, preserving the default
+  `~/.esdc/logs` location while allowing isolated runs to keep logs under
+  `ESDC_CONFIG_DIR`.
+
 ## [0.9.0] - 2026-09-11
 
 ### Added

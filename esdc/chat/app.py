@@ -11,15 +11,14 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+# Config does not import chat; use its configured directory for logs too.
+from esdc.configs import Config
+
 # Configure logging FIRST - before any other imports that might use logging
-# Log location: ~/.esdc/logs/
-log_dir = Path.home() / ".esdc" / "logs"
+# Default location is ~/.esdc/logs; ESDC_CONFIG_DIR isolates alternate runs.
+log_dir = Config.get_config_dir() / "logs"
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "esdc_chat.log"
-
-# Import Config for logging configuration
-# Note: This is safe because configs.py doesn't import from chat/
-from esdc.configs import Config  # noqa: E402
 
 # Get logging configuration
 log_config = Config.get_logging_config()
@@ -918,8 +917,6 @@ class ESDCChatApp(App):
             filename: Optional filename for the screenshot.
             Defaults to timestamped filename.
         """
-        from pathlib import Path
-
         if filename is None:
             timestamp = datetime.now().strftime("%Y-%m-%d at %H.%M.%S")
             filename = f"esdc-chat-{timestamp}.png"

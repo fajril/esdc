@@ -95,6 +95,7 @@ class TestStatusCommand:
         assert "Last updated" in result.stdout
 
     def test_status_reports_invalid_geometry_count(self, isolated_config):
+        from esdc.analytics_rebuild import rebuild_api_analytics
         from esdc.api_snapshot import (
             ApiProjectResourceRow,
             ApiSnapshot,
@@ -102,25 +103,55 @@ class TestStatusCommand:
         )
         from esdc.configs import Config
         from esdc.pod_registry.store import get_sqlite_connection
+        from esdc.timeseries_snapshot import record_observed_empty_timeseries
 
         Config.init_config()
         sqlite_path = Config.get_db_dir() / "esdc.sqlite"
         conn = get_sqlite_connection(sqlite_path)
         replace_project_resources_snapshot(
             conn,
-            [ApiProjectResourceRow(project_id="P-1")],
-            ApiSnapshot("project_resources", "incoming", 1, "hash", "now", "published", 2),
+            [
+                ApiProjectResourceRow(project_id="P-1", field_geom="NOT WKT"),
+                ApiProjectResourceRow(project_id="P-2", field_geom="ALSO NOT WKT"),
+            ],
+            ApiSnapshot("project_resources", "incoming", 2, "", "now", "committed"),
         )
+        conn.execute("BEGIN")
+        record_observed_empty_timeseries(
+            conn,
+            revision="empty-timeseries",
+            fetched_at="now",
+            origin="api_json",
+        )
+        conn.commit()
         conn.close()
         db_file = Config.get_db_file()
         db_file.parent.mkdir(parents=True, exist_ok=True)
-        import duckdb
-
-        duckdb.connect(str(db_file)).close()
+        rebuild_api_analytics(
+            duckdb_path=db_file, sqlite_path=sqlite_path, reindex=False
+        )
 
         result = runner.invoke(app, ["status", "fetch"])
         assert result.exit_code == 0
         assert "Invalid geometry: 2" in result.stdout
+
+    def test_api_analytics_rebuild_cli_reports_failure_without_refusal_claim(
+        self, isolated_config, monkeypatch
+    ):
+        def committed_failure(**_: object) -> None:
+            raise RuntimeError(
+                "DuckDB API analytics committed; newer canonical revision remains "
+                "pending. Run 'esdc rebuild-api-analytics'."
+            )
+
+        monkeypatch.setattr(
+            "esdc.commands.analytics.rebuild_api_analytics", committed_failure
+        )
+        result = runner.invoke(app, ["rebuild-api-analytics"])
+        assert result.exit_code == 1
+        assert "API analytics recovery failed" in result.stderr
+        assert "refused" not in result.stderr
+        assert "committed" in result.stderr
 
 
 class TestStatusSubcommands:

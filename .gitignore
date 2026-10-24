@@ -403,3 +403,6 @@ references/
 <MagicMock*
 
 # End of https://www.toptal.com/developers/gitignore/api/data,venv,macos,python,windows,database,virtualenv,pycharm+all,visualstudiocode,jupyternotebooks
+
+# Local Understand Anything analysis artifacts
+.ua/

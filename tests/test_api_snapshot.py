@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,9 @@ import pytest
 from esdc.api_snapshot import (
     ApiProjectResourceRow,
     ApiSnapshot,
+    commit_project_resources_update,
     get_project_resources_snapshot,
+    iter_project_resources_rows,
     mark_project_resources_published,
     replace_project_resources_snapshot,
     replace_project_resources_years,
@@ -167,6 +170,112 @@ def test_mark_published_requires_matching_revision(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         mark_project_resources_published(conn, "missing")
+
+
+def test_mark_published_rolls_back_when_commit_fails(tmp_path: Path) -> None:
+    path = tmp_path / "esdc.sqlite"
+    conn = get_sqlite_connection(path)
+    replace_project_resources_snapshot(conn, [_row()], _snapshot())
+    stored = get_project_resources_snapshot(conn)
+    assert stored is not None
+    conn.close()
+
+    class CommitFailingConnection(sqlite3.Connection):
+        def commit(self) -> None:
+            raise sqlite3.OperationalError("injected commit failure")
+
+    failing = sqlite3.connect(path, factory=CommitFailingConnection)
+    with pytest.raises(sqlite3.OperationalError, match="injected commit failure"):
+        mark_project_resources_published(failing, stored.revision)
+    assert not failing.in_transaction
+    assert get_project_resources_snapshot(failing) == stored
+
+
+def test_guarded_update_checks_snapshot_and_returns_complete_hash(
+    tmp_path: Path,
+) -> None:
+    conn = get_sqlite_connection(tmp_path / "esdc.sqlite")
+    rows = [
+        ApiProjectResourceRow(project_id="P-null"),
+        ApiProjectResourceRow(project_id="P-24", report_year=2024),
+        ApiProjectResourceRow(project_id="P-25", report_year=2025),
+    ]
+    replace_project_resources_snapshot(
+        conn, rows, ApiSnapshot("project_resources", "x", 3, "x", "now", "committed")
+    )
+    before = get_project_resources_snapshot(conn)
+    assert before is not None
+    updated = commit_project_resources_update(
+        conn,
+        [ApiProjectResourceRow(project_id="P-new", report_year=2025)],
+        years=[2025],
+        expected_snapshot=before,
+    )
+    assert updated.row_count == 3
+    assert [row.project_id for row in iter_project_resources_rows(conn)] == [
+        "P-null",
+        "P-24",
+        "P-new",
+    ]
+    assert len(updated.source_sha256) == 64
+    assert updated.source_sha256 != before.source_sha256
+    assert datetime.fromisoformat(updated.fetched_at)
+
+
+def test_guarded_update_rejects_changed_expected_snapshot_before_delete(
+    tmp_path: Path,
+) -> None:
+    conn = get_sqlite_connection(tmp_path / "esdc.sqlite")
+    replace_project_resources_snapshot(conn, [_row()], _snapshot())
+    expected = get_project_resources_snapshot(conn)
+    assert expected is not None
+    replace_project_resources_snapshot(
+        conn,
+        [_row("P-new")],
+        ApiSnapshot("project_resources", "x", 1, "x", "now", "committed"),
+    )
+    current = get_project_resources_snapshot(conn)
+    with pytest.raises(ValueError, match="snapshot changed"):
+        commit_project_resources_update(
+            conn, [_row("P-delete")], years=None, expected_snapshot=expected
+        )
+    assert _project_ids(conn) == ["P-new"]
+    assert get_project_resources_snapshot(conn) == current
+
+
+def test_guarded_update_rolls_back_rows_and_snapshot_on_insert_failure(
+    tmp_path: Path,
+) -> None:
+    conn = get_sqlite_connection(tmp_path / "esdc.sqlite")
+    replace_project_resources_snapshot(conn, [_row()], _snapshot())
+    before = get_project_resources_snapshot(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        commit_project_resources_update(
+            conn,
+            [_row("P-new"), _row("")],
+            years=None,
+            expected_snapshot=before,
+        )
+    assert _project_ids(conn) == ["P-1"]
+    assert get_project_resources_snapshot(conn) == before
+
+
+def test_full_guarded_refresh_can_recover_orphaned_canonical_rows(
+    tmp_path: Path,
+) -> None:
+    conn = get_sqlite_connection(tmp_path / "esdc.sqlite")
+    conn.execute("INSERT INTO api_project_resources (project_id) VALUES ('orphaned')")
+    conn.commit()
+
+    snapshot = commit_project_resources_update(
+        conn,
+        [_row("P-refresh")],
+        years=None,
+        expected_snapshot=None,
+    )
+
+    assert snapshot.row_count == 1
+    assert _project_ids(conn) == ["P-refresh"]
 
 
 def test_rows_are_unique_by_project_year_and_uncertainty(tmp_path: Path) -> None:

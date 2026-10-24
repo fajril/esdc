@@ -31,6 +31,65 @@ Fetch and manage ESDC data from the command line.
 - **Load Data**: Import into DuckDB database
 - **Query Data**: Display with filters
 
+#### Fetch and publish
+
+`esdc fetch` prepares and validates the complete response set before changing
+the databases. Resource and timeseries rows are committed to their canonical
+SQLite source snapshots first. DuckDB then publishes both analytical
+projections and their exact revisions, row counts, and source hashes together
+in one transaction. If DuckDB publication fails after SQLite commits, the new
+SQLite revisions remain available for recovery and are marked stale; the
+previous analytical resource/timeseries pair and lineage remain intact. Cache
+clearing, checkpointing, and index rebuilding run after publication. A
+maintenance failure is reported as a failed command even though the committed
+data is retained.
+
+For selected resource or timeseries years, a valid nonempty response replaces
+the rows for each selected year; an empty or nonmatching slice preserves that
+year's existing rows. An entirely empty full resource response is a no-op.
+Selective updates require a published, matching
+SQLite/DuckDB baseline. A first unfiltered fetch publishes a new baseline
+rather than importing legacy DuckDB timeseries implicitly. If a legacy
+`project_timeseries` table must be preserved, inspect it first with the
+default-dry-run command, then explicitly apply the bootstrap:
+
+```bash
+esdc bootstrap-timeseries-source
+esdc bootstrap-timeseries-source --apply
+esdc fetch
+```
+
+The first preserving full fetch after a verified bootstrap establishes the
+current API baseline. `--no-reload` validates and saves downloads without
+database, cache, or index mutation. `--no-reindex` skips the extra final
+reindex pass; indexes required during publication are still maintained. Use
+`esdc fetch --help` for the supported year, file type, and reload options.
+
+`esdc rebuild-api-analytics` repairs the resource and timeseries analytical
+projections together, offline, from canonical SQLite snapshots using installed
+extensions only. It
+requires a verified baseline and refuses incomplete or inconsistent source
+state. The older `esdc rebuild-project-resources` command repairs only the
+resource projection and refuses when timeseries state is pending or
+inconsistent. Neither command rebuilds unrelated database tables.
+
+For an offline closed-clone rehearsal, prepare a baseline directory containing
+`esdc.sqlite` and `esdc.duckdb`, plus a complete fixture manifest, then run:
+
+```bash
+esdc verify-analytics-migration \
+  --baseline-dir /path/to/closed-clone \
+  --fixture-manifest /path/to/fixture-manifest.json \
+  --output-dir /path/to/new-rehearsal-output
+```
+
+This writes a machine-readable `report.json` under the new output directory;
+it does not perform a live cutover. The legacy
+`scripts/verify_api_resource_migration.py` resource rehearsal remains
+available for existing integrations. A passing small-fixture rehearsal does
+not establish representative full-size rehearsal, real database migration,
+live API behavior, or production readiness.
+
 ## Installation
 
 ```bash

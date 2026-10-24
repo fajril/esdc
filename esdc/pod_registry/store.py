@@ -276,6 +276,9 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
             "ALTER TABLE api_snapshot ADD COLUMN invalid_geometry_count "
             "INTEGER NOT NULL DEFAULT 0"
         )
+    from esdc.timeseries_snapshot import ensure_timeseries_tables
+
+    ensure_timeseries_tables(conn)
 
 
 def validate_revision_effect(

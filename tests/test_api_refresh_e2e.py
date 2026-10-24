@@ -10,6 +10,7 @@ import duckdb
 import pytest
 
 import esdc.api_projection
+import esdc.fetch_publication
 from esdc.esdc import (
     rebuild_project_resources_projection,
     refresh_project_resources_from_api,
@@ -64,9 +65,9 @@ def test_refresh_and_rebuild_recover_without_refetch(
     def fail_checkpoint(_: object) -> None:
         raise RuntimeError("post-commit failure")
 
-    original_checkpoint = esdc.api_projection._checkpoint
-    monkeypatch.setattr("esdc.api_projection._checkpoint", fail_checkpoint)
-    with pytest.raises(RuntimeError, match="analytical state requires rebuild"):
+    original_checkpoint = esdc.fetch_publication._checkpoint
+    monkeypatch.setattr("esdc.fetch_publication._checkpoint", fail_checkpoint)
+    with pytest.raises(RuntimeError, match="rebuild-project-resources"):
         refresh_project_resources_from_api(
             username="user", password="password", report_year=None
         )
@@ -78,7 +79,7 @@ def test_refresh_and_rebuild_recover_without_refetch(
     assert state == "analytics_stale"
     assert calls == ["download"]
 
-    monkeypatch.setattr("esdc.api_projection._checkpoint", original_checkpoint)
+    monkeypatch.setattr("esdc.fetch_publication._checkpoint", original_checkpoint)
 
     def fail_download(*_: object) -> bytes:
         raise AssertionError("rebuild must not fetch")

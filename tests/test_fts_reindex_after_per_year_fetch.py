@@ -57,147 +57,49 @@ class TestFetchNoReindexFlag:
 
 
 class TestLoadEsdcDataReindex:
-    """Test that load_esdc_data calls reindex_fts when reindex=True (default)."""
+    """The loader passes the final reindex choice to the coordinator."""
 
-    @patch("esdc.dbmanager.reindex_fts")
-    @patch("esdc.esdc._detect_report_years")
-    @patch("esdc.esdc.load_data_to_db")
-    @patch("esdc.esdc._fetch_and_parse_table")
-    def test_full_replace_calls_reindex_fts_by_default(
-        self,
-        mock_fetch,
-        mock_load_db,
-        mock_detect,
-        mock_reindex,
-        tmp_path,
-        monkeypatch,
+    @pytest.mark.parametrize(
+        ("years", "reindex", "expected"),
+        [(None, True, True), (None, False, False), ([2025], True, True), ([2025], False, False)],
+    )
+    def test_passes_reindex_choice_to_coordinator(
+        self, years, reindex, expected, tmp_path, monkeypatch
     ):
-        """Full-replace mode with reindex=True (default) triggers reindex_fts."""
+        from esdc.api_snapshot import ApiProjectResourceRow
+        from esdc.fetching import FetchOutcome, PreparedFetch
+
         monkeypatch.setattr(Config, "get_db_file", lambda: tmp_path / "test.duckdb")
         monkeypatch.setattr(Config, "get_db_dir", lambda: tmp_path)
-        # CSV now normalizes through the shared project-resource flow; stub the
-        # commit so these tests stay focused on reindex behavior.
+        observed: list[bool] = []
         monkeypatch.setattr(
-            "esdc.esdc._commit_normalized_project_resources", lambda *_, **__: None
+            "esdc.esdc.prepare_fetch",
+            lambda **_: PreparedFetch(
+                (ApiProjectResourceRow(project_id="P-1", report_year=2025),),
+                None if years is None else (2025,),
+                (),
+                (),
+                (),
+            ),
         )
 
-        mock_fetch.return_value = ([["P-1", "2025"]], ["project_id", "report_year"])
-        mock_detect.return_value = [2025]
+        def publish(prepared, *, duckdb_path, sqlite_path, reindex):
+            observed.append(reindex)
+            return FetchOutcome(
+                "revision", "sha", 1, 0, (2025,), 0, (), (), ()
+            )
 
+        monkeypatch.setattr("esdc.esdc.publish_prepared_fetch", publish)
         load_esdc_data(
             filetype=FileType.CSV,
             to_file=False,
             reload=True,
             username="u",
             password="p",
-            years=None,
+            years=years,
+            reindex=reindex,
         )
-
-        mock_reindex.assert_called_once()
-
-    @patch("esdc.dbmanager.reindex_fts")
-    @patch("esdc.esdc._detect_report_years")
-    @patch("esdc.esdc.load_data_to_db")
-    @patch("esdc.esdc._fetch_and_parse_table")
-    def test_full_replace_skips_reindex_when_false(
-        self,
-        mock_fetch,
-        mock_load_db,
-        mock_detect,
-        mock_reindex,
-        tmp_path,
-        monkeypatch,
-    ):
-        """Full-replace mode with reindex=False does NOT trigger reindex_fts."""
-        monkeypatch.setattr(Config, "get_db_file", lambda: tmp_path / "test.duckdb")
-        monkeypatch.setattr(Config, "get_db_dir", lambda: tmp_path)
-        # CSV now normalizes through the shared project-resource flow; stub the
-        # commit so these tests stay focused on reindex behavior.
-        monkeypatch.setattr(
-            "esdc.esdc._commit_normalized_project_resources", lambda *_, **__: None
-        )
-
-        mock_fetch.return_value = ([["P-1", "2025"]], ["project_id", "report_year"])
-        mock_detect.return_value = [2025]
-
-        load_esdc_data(
-            filetype=FileType.CSV,
-            to_file=False,
-            reload=True,
-            username="u",
-            password="p",
-            years=None,
-            reindex=False,
-        )
-
-        mock_reindex.assert_not_called()
-
-    @patch("esdc.dbmanager.reindex_fts")
-    @patch("esdc.esdc._append_to_table")
-    @patch("esdc.esdc._fetch_and_parse_table")
-    def test_per_year_calls_reindex_fts_by_default(
-        self,
-        mock_fetch,
-        mock_append,
-        mock_reindex,
-        tmp_path,
-        monkeypatch,
-    ):
-        """Per-year mode with reindex=True (default) triggers reindex_fts."""
-        monkeypatch.setattr(Config, "get_db_file", lambda: tmp_path / "test.duckdb")
-        monkeypatch.setattr(Config, "get_db_dir", lambda: tmp_path)
-        # CSV now normalizes through the shared project-resource flow; stub the
-        # commit so these tests stay focused on reindex behavior.
-        monkeypatch.setattr(
-            "esdc.esdc._commit_normalized_project_resources", lambda *_, **__: None
-        )
-
-        mock_fetch.return_value = ([["P-1", "2025"]], ["project_id", "report_year"])
-
-        load_esdc_data(
-            filetype=FileType.CSV,
-            to_file=False,
-            reload=True,
-            username="u",
-            password="p",
-            years=[2025],
-        )
-
-        mock_reindex.assert_called_once()
-
-    @patch("esdc.dbmanager.reindex_fts")
-    @patch("esdc.esdc._append_to_table")
-    @patch("esdc.esdc._fetch_and_parse_table")
-    def test_per_year_skips_reindex_when_false(
-        self,
-        mock_fetch,
-        mock_append,
-        mock_reindex,
-        tmp_path,
-        monkeypatch,
-    ):
-        """Per-year mode with reindex=False does NOT trigger reindex_fts."""
-        monkeypatch.setattr(Config, "get_db_file", lambda: tmp_path / "test.duckdb")
-        monkeypatch.setattr(Config, "get_db_dir", lambda: tmp_path)
-        # CSV now normalizes through the shared project-resource flow; stub the
-        # commit so these tests stay focused on reindex behavior.
-        monkeypatch.setattr(
-            "esdc.esdc._commit_normalized_project_resources", lambda *_, **__: None
-        )
-
-        mock_fetch.return_value = ([["P-1", "2025"]], ["project_id", "report_year"])
-
-        load_esdc_data(
-            filetype=FileType.CSV,
-            to_file=False,
-            reload=True,
-            username="u",
-            password="p",
-            years=[2025],
-            reindex=False,
-        )
-
-        mock_reindex.assert_not_called()
+        assert observed == [expected]
 
 
 class TestReindexFtsUnit:
@@ -252,6 +154,20 @@ class TestReindexFtsUnit:
 
         mock_cursor = MagicMock()
         mock_conn.return_value = mock_cursor
+        mock_fts.return_value = {
+            "project_resources": "table not loaded",
+            "project_timeseries": "skipped (0 rows)",
+        }
+
+        def respond_to_reindex_queries(sql, *args, **kwargs):
+            result = MagicMock()
+            if "duckdb_indexes()" in sql:
+                result.fetchone.return_value = None
+            elif "information_schema.tables" in sql:
+                result.fetchall.return_value = []
+            return result
+
+        mock_cursor.execute.side_effect = respond_to_reindex_queries
 
         db_path_mock = MagicMock()
         db_path_mock.exists.return_value = True
@@ -262,6 +178,28 @@ class TestReindexFtsUnit:
 
         mock_fts.assert_called_once_with(mock_cursor)
         mock_cursor.execute.assert_any_call("CHECKPOINT")
+
+    @patch("esdc.dbmanager._create_fts_indexes")
+    def test_path_specific_strict_reindex_rejects_populated_failure(
+        self, mock_fts, tmp_path, monkeypatch
+    ):
+        from esdc.dbmanager import _reindex_fts_for_path
+
+        explicit_path = tmp_path / "explicit.duckdb"
+        config_path = tmp_path / "different-config.duckdb"
+        monkeypatch.setattr("esdc.dbmanager.Config.get_db_file", lambda: config_path)
+        conn = duckdb.connect(str(explicit_path))
+        conn.execute("CREATE TABLE project_resources (project_name VARCHAR)")
+        conn.execute("INSERT INTO project_resources VALUES ('present')")
+        conn.close()
+        mock_fts.return_value = {"project_resources": "index failed"}
+
+        with pytest.raises(RuntimeError, match="project_resources"):
+            _reindex_fts_for_path(explicit_path, strict=True)
+
+        mock_fts.assert_called_once()
+        assert explicit_path.exists()
+        assert not config_path.exists()
 
 
 class TestFTSZeroRowFallback:

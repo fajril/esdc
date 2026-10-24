@@ -9,8 +9,10 @@ from esdc.esdc import (
     _load_file_as_csv,
     _load_file_as_json,
     _read_csv,
+    app,
     esdc_downloader,
     esdc_url_builder,
+    load_esdc_data,
 )
 from esdc.selection import FileType, TableName
 
@@ -186,8 +188,8 @@ class TestLoadFileAsJson:
     ):
         json_file = tmp_path / "project_resources.json"
         json_file.write_text(
-            '[{"project_id": "P-1", "project_name": "One"}, '
-            '{"project_name": "Two", "project_id": "P-2"}]'
+            '[{"project_id": "P-1", "project_name": "One", "report_year": 2024}, '
+            '{"project_name": "Two", "project_id": "P-2", "report_year": 2025}]'
         )
 
         commit = mocker.patch("esdc.esdc._commit_and_publish_project_resources")
@@ -201,6 +203,104 @@ class TestLoadFileAsJson:
         assert payload[1]["project_id"] == "P-2"
         assert payload[1]["project_name"] == "Two"
         direct_load.assert_not_called()
+
+    def test_load_timeseries_json_aligns_reordered_record_keys(
+        self, tmp_path, mocker, monkeypatch
+    ):
+        json_file = tmp_path / "project_timeseries.json"
+        json_file.write_text(
+            '[{"report_year": 2024, "project_id": "P-1"}, '
+            '{"project_id": "P-2", "report_year": 2025}]'
+        )
+        config_dir = tmp_path / "config"
+        monkeypatch.setenv("ESDC_CONFIG_DIR", str(config_dir))
+        monkeypatch.setenv("ESDC_DB_DIR", str(config_dir))
+        monkeypatch.setenv("ESDC_DB_FILE", str(config_dir / "esdc.duckdb"))
+        from esdc.configs import Config
+
+        Config._config_cache = None
+        ingest = mocker.patch("esdc.fetch_publication.ingest_timeseries_rows")
+
+        _load_file_as_json(str(json_file), TableName.PROJECT_TIMESERIES)
+        ingest.assert_called_once_with(
+            [[2024, "P-1"], [2025, "P-2"]],
+            ["report_year", "project_id"],
+            duckdb_path=config_dir / "esdc.duckdb",
+            sqlite_path=config_dir / "esdc.sqlite",
+        )
+
+
+def test_reload_validates_both_files_before_publication(
+    isolated_config, monkeypatch, runner
+):
+    db_dir = isolated_config / ".esdc"
+    db_dir.mkdir(parents=True)
+    (db_dir / "project_resources.json").write_text(
+        '[{"project_id":"P1","report_year":2025}]'
+    )
+    (db_dir / "project_timeseries.json").write_text("[{bad json]")
+    monkeypatch.setattr(
+        "esdc.esdc.publish_prepared_fetch",
+        lambda *args, **kwargs: pytest.fail("invalid file reached C1"),
+    )
+
+    result = runner.invoke(app, ["reload", "--filetype", "json", "--no-embeddings"])
+
+    assert result.exit_code != 0
+    assert "Expecting property name" in str(result.exception)
+
+
+def test_empty_timeseries_reload_is_noop(isolated_config, monkeypatch, runner):
+    db_dir = isolated_config / ".esdc"
+    db_dir.mkdir(parents=True)
+    (db_dir / "project_timeseries.json").write_text("[]")
+    monkeypatch.setattr(
+        "esdc.esdc.publish_prepared_fetch",
+        lambda *args, **kwargs: pytest.fail("empty reload reached the writer"),
+    )
+
+    result = runner.invoke(app, ["reload", "--filetype", "json", "--no-embeddings"])
+
+    assert result.exit_code == 0, result.output
+    assert not (db_dir / "esdc.sqlite").exists()
+
+
+def test_no_reload_prepares_downloads_without_opening_database(
+    monkeypatch, tmp_path
+):
+    from esdc.fetching import PreparedFetch
+
+    calls = []
+
+    def prepare(**kwargs):
+        calls.append(kwargs)
+        return PreparedFetch((), (2025,), (), (), (2025,))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("download-only mode must not touch a database")
+
+    monkeypatch.setattr("esdc.esdc.prepare_fetch", prepare)
+    monkeypatch.setattr("esdc.fetch_publication.publish_prepared_fetch", forbidden)
+    monkeypatch.setattr("esdc.esdc.get_sqlite_connection", forbidden)
+    monkeypatch.setattr("esdc.esdc.get_duckdb_connection", forbidden)
+    monkeypatch.setattr("esdc.dbmanager._ensure_duckdb_database", forbidden)
+    monkeypatch.setattr("esdc.fetch_publication.get_sqlite_connection", forbidden)
+    monkeypatch.setattr("esdc.fetch_publication.get_duckdb_connection", forbidden)
+
+    outcome = load_esdc_data(
+        filetype=FileType.JSON,
+        to_file=True,
+        reload=False,
+        username="user",
+        password="password",
+        years=[2025],
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["years"] == (2025,)
+    assert calls[0]["directory"].parent == tmp_path or calls[0]["directory"].exists() is False
+    assert outcome.resource_revision is None
+    assert outcome.skipped_timeseries_years == (2025,)
 
 
 class TestEsdcDownloader:
