@@ -4,10 +4,13 @@ import json
 from pathlib import Path
 
 import duckdb
+import pytest
 
 from esdc.corpus.store import _SQLITE_DOC_DDL, CorpusStore
 from esdc.pod_registry.store import get_sqlite_connection
 from esdc.portal.document_entities import ENTITY_FIELDS, apply_document_entity_changeset
+
+pytestmark = pytest.mark.usefixtures("offline_corpus_embedder")
 
 
 class FakeResolver:
@@ -345,6 +348,51 @@ def test_entity_save_reembeds_edited_documents(monkeypatch, tmp_path):
     # not None would also pass for a default-constructed CorpusStore, which
     # is exactly the bug this guards: that one targets the user's real
     # ~/.esdc databases and would re-embed the live corpus during tests.
+    store = seen["store"]
+    assert store is not None
+    assert isinstance(store, CorpusStore)
+    assert store._db_path == duckdb_path
+    assert store._sqlite_path == sqlite_path
+
+
+def test_entity_save_warns_on_reembed_error_after_commit(monkeypatch, tmp_path):
+    """A re-embed failure warns while the committed SQLite and mirror stay saved."""
+    seen: dict[str, object] = {}
+    failure = "offline re-embed failed"
+
+    def _fail(doc_ids, store=None):
+        seen["doc_ids"] = list(doc_ids)
+        seen["store"] = store
+        raise RuntimeError(failure)
+
+    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fail)
+
+    sqlite_path = _seed_sqlite(tmp_path)
+    duckdb_path = _make_duckdb_mirror(tmp_path)
+    resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
+
+    result = apply_document_entity_changeset(
+        {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
+        sqlite_path=sqlite_path,
+        db_path=duckdb_path,
+        resolver=resolver,
+    )
+
+    assert result.ok is True
+    assert result.warnings
+    assert failure in result.warnings[0]
+    assert "reembed --stale" in result.warnings[0]
+    assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
+
+    mirror = duckdb.connect(str(duckdb_path))
+    mirrored_row = mirror.execute(
+        "SELECT wk_name FROM documents WHERE doc_id = 'D1'"
+    ).fetchone()
+    mirror.close()
+    assert mirrored_row is not None
+    assert mirrored_row[0] == json.dumps(["Rokan"])
+
+    assert seen["doc_ids"] == ["D1"]
     store = seen["store"]
     assert store is not None
     assert isinstance(store, CorpusStore)

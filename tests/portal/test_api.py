@@ -1,12 +1,15 @@
 """Tests for the portal API."""
 
 import duckdb
+import pytest
 from fastapi.testclient import TestClient
 
 import esdc.configs as configs
 from esdc.corpus.store import _SQLITE_DOC_DDL
 from esdc.pod_registry.store import get_sqlite_connection
 from esdc.portal.app import create_portal_app
+
+pytestmark = pytest.mark.usefixtures("offline_corpus_embedder")
 
 
 def _patch_dirs(monkeypatch, tmp_path):
