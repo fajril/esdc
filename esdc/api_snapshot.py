@@ -22,6 +22,7 @@ class ApiProjectResourceRow:
     report_year: JSONScalar = None
     project_name: JSONScalar = None
     report_date: JSONScalar = None
+    # Legacy source WKT remains canonical for replay and snapshot hashes.
     field_geom: JSONScalar = None
     groovy_report: JSONScalar = None
     field_id: JSONScalar = None

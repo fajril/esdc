@@ -224,6 +224,7 @@ def _row_from_source(
     values: dict[str, JSONScalar] = {
         field: row.get(field) for field in _SOURCE_FIELDS if field != "project_id"
     }
+    # Preserve optional legacy WKT in SQLite compatibility storage only.
     values["field_geom"] = row.get("field_geom")
     values["groovy_report"] = report
     return ApiProjectResourceRow(

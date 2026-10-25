@@ -4,8 +4,8 @@
 
 1. Resolve the named field, WK, or coordinate with Spatial Resolver before SQL.
 2. Preserve the requested radius, distance unit, geometry type, and WK scope.
-3. Use returned entity IDs or geometry constraints in SQL; report the source
-   geometry and the rows actually returned.
+3. Use returned entity IDs or geometry constraints in SQL; report the geometry
+   source and the rows actually returned.
 4. Explain when geometry is missing, approximate, or derived, and distinguish
    a spatial candidate set from an exhaustive inventory.
 
@@ -18,8 +18,10 @@ metadata are published there (including `user_spatial_<id>` tables). Do not
 invent table names or read an unpublished table.
 
 Use authoritative geometry resolved by Spatial Resolver before any overlay
-geometry. Treat an overlay as contextual evidence, not as a replacement for
-the resolved resource geometry. Reproject geometries to the plotting CRS
+geometry. Project-resource rows provide coordinates when present but do not
+contain geometry columns. Catalogued overlays provide geometry when available;
+treat an overlay as contextual evidence, not as a replacement for resolved
+resource geometry. Reproject geometries to the plotting CRS
 before plotting, and label every rendered layer with its layer name, version,
 CRS, and attribution. Report the catalog source and the rows returned.
 
@@ -35,9 +37,10 @@ installation path.
 
 ## Evidence boundary
 
-`field_geom` and other geometry values are spatial evidence, not narrative
-labels. Keep geometry-derived results separate from authoritative resource
-metrics and disclose coordinate or distance assumptions.
+Geometry and coordinates are spatial evidence, not narrative labels. Use
+Spatial Resolver and catalogued layers for geometry; keep geometry-derived
+results separate from authoritative resource metrics and disclose coordinate
+or distance assumptions.
 
 ## Forbidden shortcuts
 

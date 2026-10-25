@@ -73,6 +73,13 @@ state. The older `esdc rebuild-project-resources` command repairs only the
 resource projection and refuses when timeseries state is pending or
 inconsistent. Neither command rebuilds unrelated database tables.
 
+The analytical `project_resources` projection has no geometry columns. Optional
+legacy `field_geom` WKT remains unchanged in canonical SQLite for history,
+replay, and source-hash compatibility; it is validated separately for the
+`invalid_geometry_count` metadata. Use Spatial Resolver and published spatial
+catalogs for geometry when available. Rebuild analytics to replace an existing
+projection with the current schema.
+
 For an offline closed-clone rehearsal, prepare a baseline directory containing
 `esdc.sqlite` and `esdc.duckdb`, plus a complete fixture manifest, then run:
 

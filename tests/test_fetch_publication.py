@@ -769,20 +769,20 @@ def _assert_resource_geometry_count(
     with duckdb.connect(str(duck_path), read_only=True) as target:
         publication = get_resource_publication(target)
         audit = compare_resource_projection(target, sqlite_path)
-        derived_rows = target.execute(
-            "SELECT project_id, field_geom, ST_AsText(field_geometry) "
-            "FROM project_resources ORDER BY project_id"
-        ).fetchall()
+        projection_columns = {
+            row[0]
+            for row in target.execute(
+                "SELECT column_name FROM duckdb_columns() "
+                "WHERE table_name='project_resources'"
+            ).fetchall()
+        }
     assert publication is not None
     assert publication.revision == snapshot.revision
     assert publication.invalid_geometry_count == expected_count
     assert audit.ok
     assert audit.invalid_geometry_count == expected_count
     assert audit.source_multiset_difference_count == 0
-    assert any(
-        project_id == "bad-wkt" and raw_wkt == "NOT WKT" and geometry is None
-        for project_id, raw_wkt, geometry in derived_rows
-    ) == (expected_count > 0)
+    assert not {"field_geom", "field_geometry"} & projection_columns
     if expected_count > 0:
         assert ("bad-wkt", "NOT WKT") in raw_rows
 

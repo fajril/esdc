@@ -207,15 +207,24 @@ def test_small_fixture_rehearsal_writes_a_complete_report(tmp_path: Path) -> Non
     assert stage_map["typed_parity_views_spatial_search_and_protected_rows"]["observations"]["fts_search"]["hits"] > 0
     with duckdb.connect(str(Path(report["run_dir"]) / "db" / "esdc.duckdb"), read_only=True) as conn:
         conn.execute("LOAD spatial")
-        derived = conn.execute(
-            "SELECT project_id, is_discovered, project_stage, field_geom, "
-            "typeof(rec_oil), rec_oil, ST_GeometryType(field_geometry), "
-            "ST_AsText(field_geometry) FROM project_resources ORDER BY project_id"
+        resource_columns = {
+            row[0]
+            for row in conn.execute(
+                "SELECT column_name FROM duckdb_columns() "
+                "WHERE table_name='project_resources'"
+            ).fetchall()
+        }
+        assert not {"field_geom", "field_geometry"} & resource_columns
+        typed = conn.execute(
+            "SELECT project_id, is_discovered, project_stage, "
+            "typeof(rec_oil), rec_oil FROM project_resources ORDER BY project_id"
         ).fetchall()
-        assert derived == [
-            ("001", 1, "1. Exploitation", "POINT (106  -6)", "FLOAT", 0.0, "POINT", "POINT (106 -6)"),
-            ("002", 0, "3. Abandoned", "NOT WKT", "FLOAT", None, None, None),
+        assert typed == [
+            ("001", 1, "1. Exploitation", "FLOAT", 0.0),
+            ("002", 0, "3. Abandoned", "FLOAT", None),
         ]
+        spatial = stage_map["typed_parity_views_spatial_search_and_protected_rows"]["observations"]["spatial_query"]
+        assert spatial["resource_geometry_columns_present"] is False
         assert conn.execute(
             "SELECT report_year, project_id FROM project_timeseries WHERE project_id LIKE '%timeseries-sentinel' ORDER BY project_id"
         ).fetchall() == [

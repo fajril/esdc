@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Rebuilt API `project_resources` analytics no longer include legacy geometry
+  columns. Optional source WKT remains unchanged in canonical SQLite for replay
+  and hash compatibility; use Spatial Resolver and published spatial catalogs
+  for geometry when available. Run `esdc rebuild-api-analytics` to replace an
+  existing analytical projection.
 - ESDC fetch validates complete response batches, commits canonical API
   snapshots to SQLite before publishing analytics, and tracks revision, row
   count, and source hash. Valid nonempty selected slices replace their selected

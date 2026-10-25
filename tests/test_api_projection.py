@@ -19,6 +19,7 @@ from esdc.api_projection import (
 from esdc.api_snapshot import (
     ApiProjectResourceRow,
     ApiSnapshot,
+    _persisted_hash,
     get_project_resources_snapshot,
     iter_project_resources_rows,
     replace_project_resources_snapshot,
@@ -29,6 +30,7 @@ from esdc.chat.tools import (
     reset_sql_cache,
 )
 from esdc.pod_registry.store import get_sqlite_connection
+from esdc.resource_audit import compare_resource_projection
 
 
 @pytest.fixture(autouse=True)
@@ -123,10 +125,15 @@ class _FailingSqlCache:
         pass
 
 
-def test_publish_preserves_wkt_and_builds_analytics(tmp_path: Path) -> None:
+def test_publish_omits_geometry_columns_and_builds_analytics(tmp_path: Path) -> None:
     sqlite_path = tmp_path / "esdc.sqlite"
     duckdb_path = tmp_path / "esdc.duckdb"
-    revision = _seed(sqlite_path)
+    revision = _seed(sqlite_path, field_geom=None)
+    source = get_sqlite_connection(sqlite_path)
+    try:
+        source_hash_before = _persisted_hash(source)
+    finally:
+        source.close()
 
     result = publish_project_resources(duckdb_path, sqlite_path, revision)
 
@@ -134,10 +141,17 @@ def test_publish_preserves_wkt_and_builds_analytics(tmp_path: Path) -> None:
     assert result.row_count == 1
     conn = duckdb.connect(str(duckdb_path), read_only=True)
     try:
-        row = conn.execute(
-            "SELECT field_geom, ST_AsText(field_geometry) FROM project_resources"
-        ).fetchone()
-        assert row == ("POINT (1 2)", "POINT (1 2)")
+        columns = {
+            row[0]
+            for row in conn.execute(
+                "SELECT column_name FROM duckdb_columns() "
+                "WHERE table_name='project_resources'"
+            ).fetchall()
+        }
+        assert not {"field_geom", "field_geometry"} & columns
+        assert conn.execute(
+            "SELECT field_lat, field_long FROM project_resources"
+        ).fetchone() == (None, None)
         row = conn.execute(
             "SELECT COUNT(*) FROM project_resources "
             "WHERE fts_main_project_resources.match_bm25(uuid, ?) IS NOT NULL",
@@ -154,6 +168,50 @@ def test_publish_preserves_wkt_and_builds_analytics(tmp_path: Path) -> None:
         assert record.source_sha256 == result.source_sha256
     finally:
         conn.close()
+
+    # Model an older analytics table, then prove normal publication replaces it.
+    legacy = duckdb.connect(str(duckdb_path))
+    try:
+        legacy.execute("LOAD spatial")
+        legacy.execute("ALTER TABLE project_resources ADD COLUMN field_geom TEXT")
+        legacy.execute(
+            "ALTER TABLE project_resources ADD COLUMN field_geometry GEOMETRY"
+        )
+        legacy.execute(
+            "UPDATE project_resources SET field_geom='POINT (9 9)', "
+            "field_geometry=ST_GeomFromText('POINT (9 9)')"
+        )
+    finally:
+        legacy.close()
+
+    republished = publish_project_resources(duckdb_path, sqlite_path, revision)
+    assert republished.revision == revision
+    legacy = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        columns = {
+            row[0]
+            for row in legacy.execute(
+                "SELECT column_name FROM duckdb_columns() "
+                "WHERE table_name='project_resources'"
+            ).fetchall()
+        }
+        assert not {"field_geom", "field_geometry"} & columns
+        assert legacy.execute(
+            "SELECT project_id, project_name FROM project_resources"
+        ).fetchall() == [("P-1", "Project")]
+        assert compare_resource_projection(legacy, sqlite_path).ok
+    finally:
+        legacy.close()
+    source = get_sqlite_connection(sqlite_path)
+    try:
+        assert _persisted_hash(source) == source_hash_before
+        raw_geometry = source.execute(
+            "SELECT field_geom FROM api_project_resources WHERE project_id='P-1'"
+        ).fetchone()
+        assert raw_geometry is not None
+        assert raw_geometry[0] is None
+    finally:
+        source.close()
 
 
 def test_resource_publication_record_rolls_back_with_c2(tmp_path: Path) -> None:
@@ -350,7 +408,7 @@ def test_sql_cache_interrupt_still_attempts_disk_cache(tmp_path, monkeypatch):
     assert attempted == ["disk"]
 
 
-def test_mixed_wkt_publishes_raw_invalid_geometry_and_records_count(
+def test_mixed_legacy_wkt_stays_in_sqlite_and_records_count_without_projection(
     tmp_path: Path,
 ) -> None:
     sqlite_path = tmp_path / "esdc.sqlite"
@@ -362,17 +420,45 @@ def test_mixed_wkt_publishes_raw_invalid_geometry_and_records_count(
             ApiProjectResourceRow(project_id="P-2", field_geom="NOT WKT"),
         ],
     )
+    source = get_sqlite_connection(sqlite_path)
+    try:
+        from esdc.api_snapshot import _persisted_hash
+
+        source_hash_before = _persisted_hash(source)
+    finally:
+        source.close()
 
     result = publish_project_resources(duckdb_path, sqlite_path, revision)
 
     assert result.invalid_geometry_count == 1
+    source = get_sqlite_connection(sqlite_path)
+    try:
+        raw_rows = source.execute(
+            "SELECT project_id, field_geom FROM api_project_resources "
+            "ORDER BY project_id"
+        ).fetchall()
+        assert [(row[0], row[1]) for row in raw_rows] == [
+            ("P-1", "POINT (1 2)"),
+            ("P-2", "NOT WKT"),
+        ]
+        from esdc.api_snapshot import _persisted_hash
+
+        assert _persisted_hash(source) == source_hash_before
+    finally:
+        source.close()
     conn = duckdb.connect(str(duckdb_path), read_only=True)
     try:
-        rows = conn.execute(
-            "SELECT project_id, field_geom, ST_AsText(field_geometry) "
-            "FROM project_resources ORDER BY project_id"
-        ).fetchall()
-        assert rows == [("P-1", "POINT (1 2)", "POINT (1 2)"), ("P-2", "NOT WKT", None)]
+        columns = {
+            row[0]
+            for row in conn.execute(
+                "SELECT column_name FROM duckdb_columns() "
+                "WHERE table_name='project_resources'"
+            ).fetchall()
+        }
+        assert not {"field_geom", "field_geometry"} & columns
+        assert conn.execute(
+            "SELECT project_id FROM project_resources ORDER BY project_id"
+        ).fetchall() == [("P-1",), ("P-2",)]
     finally:
         conn.close()
     conn = sqlite3.connect(sqlite_path)

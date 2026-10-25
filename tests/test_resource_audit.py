@@ -85,14 +85,18 @@ def test_resource_parity_compares_canonical_typed_rows_and_metadata(
         assert report.metadata_matches
         assert report.invalid_geometry_count == 1
         rows = conn.execute(
-            "SELECT project_id, is_discovered, project_stage, field_geom, "
-            "ST_GeometryType(field_geometry), ST_AsText(field_geometry) "
+            "SELECT project_id, is_discovered, project_stage "
             "FROM project_resources ORDER BY project_id"
         ).fetchall()
-        assert rows == [
-            ("00017", 1, "2. Exploration", "POINT (106 2)", "POINT", "POINT (106 2)"),
-            ("bad-wkt", None, None, "NOT WKT", None, None),
-        ]
+        assert rows == [("00017", 1, "2. Exploration"), ("bad-wkt", None, None)]
+        columns = {
+            row[0]
+            for row in conn.execute(
+                "SELECT column_name FROM duckdb_columns() "
+                "WHERE table_name='project_resources'"
+            ).fetchall()
+        }
+        assert not {"field_geom", "field_geometry"} & columns
         assert conn.execute(
             "SELECT typeof(rec_oil) FROM project_resources WHERE project_id='00017'"
         ).fetchone() == ("FLOAT",)
@@ -104,11 +108,11 @@ def test_resource_parity_compares_canonical_typed_rows_and_metadata(
         ).fetchone() == ("VARCHAR",)
         assert hashlib.sha256(sqlite_path.read_bytes()).hexdigest() == before_hash
         conn.execute(
-            "UPDATE project_resources SET field_geometry=NULL WHERE project_id='00017'"
+            "UPDATE project_resources SET project_name='Wrong' WHERE project_id='00017'"
         )
-        geometry_report = compare_resource_projection(conn, sqlite_path)
-        assert not geometry_report.ok
-        assert any("Valid raw WKT" in issue for issue in geometry_report.issues)
+        altered_report = compare_resource_projection(conn, sqlite_path)
+        assert not altered_report.ok
+        assert altered_report.source_multiset_difference_count > 0
     finally:
         conn.close()
 
@@ -186,6 +190,26 @@ def test_resource_parity_rejects_wrong_target_types_and_missing_columns(
         malformed.close()
 
 
+def test_resource_audit_rejects_obsolete_geometry_projection_columns(
+    tmp_path: Path,
+) -> None:
+    sqlite_path, conn = _published(tmp_path)
+    try:
+        conn.execute("ALTER TABLE project_resources ADD COLUMN field_geom VARCHAR")
+        conn.execute(
+            "ALTER TABLE project_resources ADD COLUMN field_geometry VARCHAR"
+        )
+        report = compare_resource_projection(conn, sqlite_path)
+        assert not report.ok
+        assert any(
+            "obsolete" in issue.lower() and "field_geom" in issue
+            for issue in report.issues
+        )
+        assert any("rebuild" in issue.lower() for issue in report.issues)
+    finally:
+        conn.close()
+
+
 def test_audit_is_read_only_when_sqlite_lineage_is_missing(tmp_path: Path) -> None:
     sqlite_path = tmp_path / "unpublished.sqlite"
     conn_sql = sqlite3.connect(sqlite_path)
@@ -247,7 +271,7 @@ def test_resource_parity_preserves_duplicate_identity_multiplicity(
         conn.close()
 
 
-def test_audit_rejects_derived_geometry_for_missing_or_blank_raw_wkt_read_only(
+def test_audit_counts_legacy_wkt_without_geometry_projection_read_only(
     tmp_path: Path,
 ) -> None:
     sqlite_path = tmp_path / "empty-wkt.sqlite"
@@ -260,22 +284,21 @@ def test_audit_rejects_derived_geometry_for_missing_or_blank_raw_wkt_read_only(
         ],
     )
     publish_project_resources(duckdb_path, sqlite_path, revision)
-    writable = duckdb.connect(str(duckdb_path))
-    try:
-        writable.execute("LOAD spatial")
-        writable.execute(
-            "UPDATE project_resources SET field_geometry=ST_GeomFromText('POINT (1 2)')"
-        )
-    finally:
-        writable.close()
-
     source_hash_before = hashlib.sha256(sqlite_path.read_bytes()).hexdigest()
     mirror_hash_before = hashlib.sha256(duckdb_path.read_bytes()).hexdigest()
     readonly = duckdb.connect(str(duckdb_path), read_only=True)
     try:
         report = compare_resource_projection(readonly, sqlite_path)
-        assert not report.ok
-        assert any("empty raw wkt" in issue.lower() for issue in report.issues)
+        assert report.ok
+        assert report.invalid_geometry_count == 0
+        columns = {
+            row[0]
+            for row in readonly.execute(
+                "SELECT column_name FROM duckdb_columns() "
+                "WHERE table_name='project_resources'"
+            ).fetchall()
+        }
+        assert not {"field_geom", "field_geometry"} & columns
     finally:
         readonly.close()
     assert hashlib.sha256(sqlite_path.read_bytes()).hexdigest() == source_hash_before

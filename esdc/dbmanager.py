@@ -42,9 +42,9 @@ def get_duckdb_connection(
     ``Missing Extension Error: Cannot bind index, unknown index type 'HNSW'``.
 
     INSTALL is best effort for Spatial because offline callers may already have
-    the extension installed locally.  LOAD is required: callers that query
-    geometry must observe a clear error instead of silently falling back to
-    the raw ``field_geom`` WKT column.
+    the extension installed locally. LOAD is required: callers that query
+    spatial functions must observe a clear error. Project-resource rows do not
+    expose geometry columns; use Spatial Resolver or catalogued spatial layers.
     """
     if allow_install:
         conn = duckdb.connect(str(db_path), read_only=read_only)

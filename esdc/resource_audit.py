@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from esdc.api_snapshot import (
 )
 from esdc.db_security import _load_sql_script
 
-_EXCLUDED_COLUMNS = {"id", "uuid", "field_geometry"}
+_EXCLUDED_COLUMNS = {"id", "uuid", "field_geom", "field_geometry"}
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ def _canonical_types() -> dict[str, str]:
     ddl = ", ".join(
         f'"{name}" {data_type}'
         for name, data_type in declarations.items()
-        if data_type != "GEOMETRY"
+        if name not in _EXCLUDED_COLUMNS and data_type != "GEOMETRY"
     )
     scratch = duckdb.connect()
     try:
@@ -69,7 +70,6 @@ def _canonical_types() -> dict[str, str]:
             row[0]: row[1].upper()
             for row in scratch.execute("DESCRIBE canonical_source_types").fetchall()
         }
-        result["field_geometry"] = "GEOMETRY"
         return result
     finally:
         scratch.close()
@@ -113,11 +113,44 @@ def _difference_count(conn: duckdb.DuckDBPyConnection, columns: tuple[str, ...])
     return int(row[0])
 
 
-def _count(conn: duckdb.DuckDBPyConnection, query: str) -> int:
-    row = conn.execute(query).fetchone()
+def _count(
+    conn: duckdb.DuckDBPyConnection,
+    query: str,
+    parameters: Sequence[object] | None = None,
+) -> int:
+    values = list(parameters) if parameters is not None else []
+    row = conn.execute(query, values).fetchone()
     if row is None:
         raise RuntimeError("count query returned no row")
     return int(row[0])
+
+
+def _count_invalid_legacy_geometry(rows: list[ApiProjectResourceRow]) -> int:
+    wkts = [
+        str(row.field_geom)
+        for row in rows
+        if row.field_geom is not None and str(row.field_geom).strip()
+    ]
+    if not wkts:
+        return 0
+    scratch = duckdb.connect()
+    try:
+        scratch.execute("LOAD spatial")
+        invalid_count = 0
+        for offset in range(0, len(wkts), 1000):
+            batch = wkts[offset : offset + 1000]
+            placeholders = ", ".join("(?)" for _ in batch)
+            invalid_count += _count(
+                scratch,
+                "SELECT COUNT(*) FROM (VALUES "
+                + placeholders
+                + ") AS legacy_wkt(value) WHERE NOT coalesce("
+                "ST_IsValid(TRY(ST_GeomFromText(value))), false)",
+                batch,
+            )
+        return invalid_count
+    finally:
+        scratch.close()
 
 
 def compare_resource_projection(
@@ -205,10 +238,17 @@ def compare_resource_projection(
         issues.append("DuckDB project_resources projection is missing")
     else:
         projected_rows = _count(conn, "SELECT COUNT(*) FROM project_resources")
-    for name in (*columns, "id", "uuid", "field_geometry"):
-        expected_type = (
-            "GEOMETRY" if name == "field_geometry" else canonical_schema.get(name)
+    obsolete_columns = {"field_geom", "field_geometry"} & set(target_columns)
+    if obsolete_columns:
+        issues.append(
+            "DuckDB project_resources has obsolete geometry columns: "
+            + ", ".join(sorted(obsolete_columns))
+            + "; rebuild the analytical database to replace the old projection"
         )
+    for name in (*columns, "id", "uuid"):
+        expected_type = canonical_schema.get(name)
+        if name == "id":
+            expected_type = "INTEGER"
         if name == "uuid":
             expected_type = "VARCHAR"
         if expected_type and name not in target_columns:
@@ -289,50 +329,9 @@ def compare_resource_projection(
             issues.append(f"Typed source comparison could not be completed: {exc}")
 
     try:
-        conn.execute("LOAD spatial")
-        invalid_geometry_count = _count(
-            conn,
-            "SELECT COUNT(*) FROM project_resources WHERE field_geom IS NOT NULL "
-            "AND length(trim(field_geom)) > 0 AND NOT coalesce("
-            "ST_IsValid(TRY(ST_GeomFromText(field_geom))), false)",
-        )
-        geometry_type = conn.execute(
-            "SELECT data_type FROM duckdb_columns() "
-            "WHERE table_name='project_resources' "
-            "AND database_name=current_database() AND column_name='field_geometry'"
-        ).fetchone()
-        if geometry_type is not None and geometry_type[0].upper() == "GEOMETRY":
-            nonempty_geometry = _count(
-                conn,
-                "SELECT COUNT(*) FROM project_resources WHERE "
-                "(field_geom IS NULL OR length(trim(field_geom)) = 0) "
-                "AND ST_AsText(field_geometry) IS NOT NULL",
-            )
-            if nonempty_geometry:
-                issues.append("Empty raw WKT has a non-NULL derived geometry")
-            malformed_with_geometry = _count(
-                conn,
-                "SELECT COUNT(*) FROM project_resources WHERE field_geom IS NOT NULL "
-                "AND length(trim(field_geom)) > 0 AND NOT coalesce("
-                "ST_IsValid(TRY(ST_GeomFromText(field_geom))), false) "
-                "AND ST_AsText(field_geometry) IS NOT NULL",
-            )
-            if malformed_with_geometry:
-                issues.append("Malformed raw WKT has a non-NULL derived geometry")
-            wrong_valid_geometry = _count(
-                conn,
-                "SELECT COUNT(*) FROM project_resources WHERE field_geom IS NOT NULL "
-                "AND length(trim(field_geom)) > 0 AND coalesce("
-                "ST_IsValid(TRY(ST_GeomFromText(field_geom))), false) AND "
-                "(field_geometry IS NULL OR NOT coalesce(ST_Equals("
-                "TRY(ST_GeomFromText(field_geom)), field_geometry), false))",
-            )
-            if wrong_valid_geometry:
-                issues.append(
-                    "Valid raw WKT has a missing or different derived geometry"
-                )
+        invalid_geometry_count = _count_invalid_legacy_geometry(rows)
     except duckdb.Error as exc:
-        issues.append(f"Geometry behavior could not be checked: {exc}")
+        issues.append(f"Legacy source geometry could not be checked: {exc}")
 
     if snapshot is not None and publication is not None:
         if snapshot.invalid_geometry_count != invalid_geometry_count:

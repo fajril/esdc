@@ -409,13 +409,17 @@ async def execute_sql(
     to query data from the database.
     Only SELECT queries are allowed for safety.
 
-    Spatial vocabulary: ``field_geom`` is the raw WKT text from the source,
-    while ``field_geometry`` is the derived GEOMETRY column. For read-only
-    geometry output, use for example::
+    For spatial questions, resolve entities with Spatial Resolver first and
+    inspect ``spatial_layer_catalog`` for published overlay tables. The
+    ``project_resources`` projection has no geometry columns; coordinates or
+    catalogued spatial layers provide geometry when available. Discover the
+    actual published table before querying it::
 
-        SELECT project_name, ST_AsText(field_geometry) AS field_wkt
-        FROM project_resources
-        WHERE ST_AsText(field_geometry) IS NOT NULL;
+        SELECT layer_id, name, source_crs, table_name
+        FROM spatial_layer_catalog;
+
+    Inspect the returned table schema to identify its geometry column before
+    using spatial SQL functions.
 
     For domain context about KSMI levels, entities, or transitions,
     call knowledge_traversal first.

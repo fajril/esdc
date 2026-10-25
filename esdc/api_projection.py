@@ -82,7 +82,7 @@ def get_api_publication(
 
 
 _SOURCE_COLUMNS = (
-    "project_id, report_year, project_name, report_date, field_geom, groovy_report, "
+    "project_id, report_year, project_name, report_date, groovy_report, "
     "field_id, field_name, wk_id, wk_name, operator_name, province, project_stage, "
     "project_class, project_level, uncert_level, project_remarks, is_discovered, "
     "is_ltp, is_pse_approved, is_pod_approved, is_report_accepted, is_unitization, "
@@ -153,25 +153,23 @@ def _mark_stale(sqlite_path: Path, revision: str) -> None:
         conn.close()
 
 
-def _validate_geometry(conn: duckdb.DuckDBPyConnection, table: str) -> int:
-    rows = conn.execute(
-        f"SELECT project_id, field_geom FROM {table} "
-        "WHERE field_geom IS NOT NULL AND length(trim(field_geom)) > 0"
-    ).fetchall()
-    invalid_count = 0
-    for project_id, wkt in rows:
-        valid = conn.execute(
-            "SELECT ST_IsValid(TRY(ST_GeomFromText(?)))", [wkt]
-        ).fetchone()
-        if valid is None or not valid[0]:
-            invalid_count += 1
-            continue
-        conn.execute(
-            f"UPDATE {table} SET field_geometry = ST_GeomFromText(?) "
-            "WHERE project_id = ? AND field_geom = ?",
-            [wkt, project_id, wkt],
-        )
-    return invalid_count
+def _count_invalid_legacy_geometry(
+    conn: duckdb.DuckDBPyConnection, values: Iterable[object]
+) -> int:
+    wkts = [str(value) for value in values if value is not None and str(value).strip()]
+    if not wkts:
+        return 0
+    placeholders = ", ".join("(?)" for _ in wkts)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM (VALUES "
+        + placeholders
+        + ") AS legacy_wkt(value) WHERE NOT coalesce("
+        "ST_IsValid(TRY(ST_GeomFromText(value))), false)",
+        wkts,
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("legacy WKT validation returned no count")
+    return int(row[0])
 
 
 def _rebuild_project_resources(
@@ -249,12 +247,15 @@ def _stage_project_resources(
         f"({', '.join('?' for _ in columns)})"
     )
     row_count = 0
+    invalid_count = 0
     iterator = iter(rows)
     while batch := list(itertools.islice(iterator, 1000)):
         values = [tuple(getattr(row, column) for column in columns) for row in batch]
         conn.executemany(insert_sql, values)
         row_count += len(values)
-    invalid_count = _validate_geometry(conn, table)
+        invalid_count += _count_invalid_legacy_geometry(
+            conn, (row.field_geom for row in batch)
+        )
     _execute_script(conn, "create_column_uuid.sql", {"{table_name}": table})
     _execute_script(
         conn, "create_project_resources_uuid.sql", {"project_resources": table}

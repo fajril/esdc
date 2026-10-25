@@ -38,8 +38,6 @@ CREATE TABLE IF NOT EXISTS project_resources (
 	field_lat REAL,
 	field_long REAL,
 	field_area REAL,
-	field_geom TEXT,
-	field_geometry GEOMETRY,
 	-- is_unitisasi INTEGER,
 	pod_letter_num TEXT,
 	pod_name TEXT,

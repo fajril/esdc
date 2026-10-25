@@ -1202,17 +1202,21 @@ def run_rehearsal(
                             "representative_resource_view_results",
                             view_hashes,
                         )
-                        geometry = conn.execute(
-                            "SELECT ST_GeometryType(field_geometry), "
-                            "ST_AsText(field_geometry) FROM project_resources "
-                            "WHERE field_geometry IS NOT NULL LIMIT 1"
-                        ).fetchone()
+                        resource_columns = {
+                            row[0]
+                            for row in conn.execute(
+                                "SELECT column_name FROM duckdb_columns() "
+                                "WHERE table_name='project_resources'"
+                            ).fetchall()
+                        }
                         _set_stage(
                             observations,
                             "spatial_query",
                             {
-                                "geometry_type": geometry[0] if geometry else None,
-                                "geometry_present": bool(geometry and geometry[1]),
+                                "resource_geometry_columns_present": bool(
+                                    {"field_geom", "field_geometry"}
+                                    & resource_columns
+                                ),
                             },
                         )
                         hits_row = conn.execute(
