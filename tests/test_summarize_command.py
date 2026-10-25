@@ -3,6 +3,7 @@
 import json
 
 import duckdb
+import pytest
 from langchain_core.messages import AIMessage
 
 from esdc.chat.token_counter import TokenUsage
@@ -19,6 +20,8 @@ from esdc.summarizer import (
     build_summary_prompt,
     ensure_summary_table,
 )
+
+pytestmark = pytest.mark.usefixtures("offline_tiktoken")
 
 
 def _default_summary_payload() -> str:

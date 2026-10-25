@@ -1,8 +1,11 @@
 """Shared pytest fixtures for the esdc test suite."""
 
 import re
+from collections.abc import Iterator
 
 import pytest
+import tiktoken
+from tiktoken import load as tiktoken_load
 from typer.testing import CliRunner
 
 # SGR escape sequences (color/bold). On CI, Typer's Rich help renders in
@@ -40,6 +43,48 @@ CliRunner.invoke = _invoke_strip_ansi
 def runner():
     """Create a fresh CliRunner for each test."""
     return CliRunner()
+
+
+@pytest.fixture
+def offline_tiktoken(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[tiktoken.Encoding, list[str], list[str]]]:
+    """Use a real local encoder while preventing vocabulary asset reads."""
+    encoding = tiktoken.Encoding(
+        name="esdc_test_bytes",
+        pat_str=r"(?s:.)",
+        mergeable_ranks={bytes([i]): i for i in range(256)},
+        special_tokens={},
+    )
+    model_lookups: list[str] = []
+    base_lookups: list[str] = []
+
+    def encoding_for_model(model: str) -> tiktoken.Encoding:
+        model_lookups.append(model)
+        if model == "gpt-4o":
+            return encoding
+        raise KeyError(model)
+
+    def get_encoding(name: str) -> tiktoken.Encoding:
+        base_lookups.append(name)
+        if name in {"o200k_base", "cl100k_base"}:
+            return encoding
+        raise KeyError(name)
+
+    def reject_asset_read(*args, **kwargs):
+        pytest.fail("tiktoken unexpectedly requested a vocabulary asset")
+
+    monkeypatch.setattr(tiktoken, "encoding_for_model", encoding_for_model)
+    monkeypatch.setattr(tiktoken, "get_encoding", get_encoding)
+    monkeypatch.setattr(tiktoken_load, "read_file_cached", reject_asset_read)
+
+    from esdc.chat.token_counter import _get_tiktoken_encoding
+
+    _get_tiktoken_encoding.cache_clear()
+    try:
+        yield encoding, model_lookups, base_lookups
+    finally:
+        _get_tiktoken_encoding.cache_clear()
 
 
 @pytest.fixture(autouse=True)

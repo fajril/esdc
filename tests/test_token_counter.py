@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+import tiktoken
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from esdc.chat.token_counter import (
@@ -10,21 +12,54 @@ from esdc.chat.token_counter import (
     extract_usage_from_message,
 )
 
+pytestmark = pytest.mark.usefixtures("offline_tiktoken")
 
-def test_openai_text_uses_tiktoken_when_available():
+
+def test_openai_text_uses_tiktoken_when_available(offline_tiktoken):
+    encoding, model_lookups, base_lookups = offline_tiktoken
     text = "2 + 2 = 4. " * 50
 
     count = estimate_text_tokens(text, provider_type="openai", model="gpt-4o")
 
     assert count > len(text) // 4
+    assert count == len(encoding.encode(text))
+    assert model_lookups == ["gpt-4o"]
+    assert base_lookups == []
 
 
-def test_openai_unknown_model_falls_back_to_base_encoding():
+def test_openai_unknown_model_falls_back_to_base_encoding(offline_tiktoken):
+    _, model_lookups, base_lookups = offline_tiktoken
     text = "hello world"
 
     count = estimate_text_tokens(text, provider_type="openai", model="future-gpt-model")
 
     assert count > 0
+    assert model_lookups == ["future-gpt-model"]
+    assert base_lookups[0] == "o200k_base"
+
+
+def test_openai_unknown_model_uses_cl100k_after_o200k_failure(
+    offline_tiktoken, monkeypatch
+):
+    encoding, _, base_lookups = offline_tiktoken
+    text = "fallback remains an actual encoded count"
+
+    def get_encoding(name):
+        base_lookups.append(name)
+        if name == "o200k_base":
+            raise LookupError(name)
+        if name == "cl100k_base":
+            return encoding
+        raise KeyError(name)
+
+    monkeypatch.setattr(tiktoken, "get_encoding", get_encoding)
+
+    count = estimate_text_tokens(
+        text, provider_type="openai", model="future-gpt-model"
+    )
+
+    assert count == len(encoding.encode(text))
+    assert base_lookups == ["o200k_base", "cl100k_base"]
 
 
 def test_non_openai_provider_uses_heuristic():

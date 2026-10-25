@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import os
 from typing import cast
 
 import duckdb
+import pytest
 
 from esdc.embedders import InternalEmbedder
 from esdc.search.semantic_resolver import SemanticResolver
@@ -70,11 +72,17 @@ def _seeded(tmp_path, vec, dim=None):
     conn = r._get_connection()
     conn.execute(
         "CREATE TABLE IF NOT EXISTS semantic_meta "
-        "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+        "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON, "
+        "content_version INTEGER)"
     )
     conn.execute(
-        "INSERT INTO semantic_meta VALUES (?, ?, ?)",
-        ["qwen3-embedding-0.6b-q8_0", dim, json.dumps(list(vec))],
+        "INSERT INTO semantic_meta VALUES (?, ?, ?, ?)",
+        [
+            "qwen3-embedding-0.6b-q8_0",
+            dim,
+            json.dumps(list(vec)),
+            SemanticResolver.NARRATIVE_CONTENT_VERSION,
+        ],
     )
     return r
 
@@ -178,6 +186,56 @@ def test_legacy_meta_missing_probe_column_repairable_by_reload(tmp_path):
     reader = SemanticResolver(db_path=db_path, embedder=_FixedEmbedder([1.0, 0.0]))
     assert reader._ensure_semantic_meta() is None
     reader.close()
+
+
+@pytest.mark.parametrize("version_state", ["missing", "stale"])
+def test_unavailable_content_version_preserves_read_only_database(
+    tmp_path, version_state
+):
+    """Legacy or stale narrative metadata degrades without reader writes."""
+    db_path = tmp_path / "s.duckdb"
+    writer = SemanticResolver(
+        db_path=db_path, embedder=_FixedEmbedder([1.0, 0.0]), read_only=False
+    )
+    conn = writer._get_connection()
+    if version_state == "missing":
+        conn.execute(
+            "CREATE TABLE semantic_meta "
+            "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+        )
+        conn.execute(
+            "INSERT INTO semantic_meta VALUES (?, ?, ?)",
+            ["qwen3-embedding-0.6b-q8_0", 2, json.dumps([1.0, 0.0])],
+        )
+    else:
+        conn.execute(
+            "CREATE TABLE semantic_meta "
+            "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON, "
+            "content_version INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO semantic_meta VALUES (?, ?, ?, ?)",
+            [
+                "qwen3-embedding-0.6b-q8_0",
+                2,
+                json.dumps([1.0, 0.0]),
+                SemanticResolver.NARRATIVE_CONTENT_VERSION - 1,
+            ],
+        )
+    writer.close()
+
+    before = hashlib.sha256(db_path.read_bytes()).hexdigest()
+    embedder = _FixedEmbedder([1.0, 0.0])
+    reader = SemanticResolver(db_path=db_path, embedder=embedder, read_only=True)
+    out = reader._ensure_semantic_meta()
+    reader.close()
+    after = hashlib.sha256(db_path.read_bytes()).hexdigest()
+
+    assert out is not None
+    assert out["status"] == "not_available"
+    assert "esdc reload --embeddings-only" in out["message"]
+    assert embedder.calls == 0
+    assert after == before
 
 
 def test_pin_check_embeds_probe_only_once(tmp_path):
