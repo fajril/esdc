@@ -406,3 +406,6 @@ references/
 
 # Local Understand Anything analysis artifacts
 .ua/
+
+# Local Pi assistant settings
+.pi/
