@@ -156,6 +156,20 @@ Konteks KSMI ringkas:
   fasilitas, data, atau ketidakpastian subsurface.
 """.strip()
 
+# The strategic summary command has a narrower output contract than the
+# interactive strategic-analysis skill. Keep this local to summary generation
+# so the general chat system prompt does not grow with report-specific rules.
+STRATEGIC_SUMMARY_CONTRACT = """
+Kontrak ringkasan strategis:
+- Pilih proyek sampai mencakup 80% kontribusi terbesar dengan denominator yang
+  jelas; sertakan juga top 3 proyek untuk konteks materialitas.
+- Gunakan nilai `analysis_year` dan `outlook_year` dari metadata yang diberikan
+  pada DATA ANALISIS STRATEGIS.
+- Report final hanya memiliki 4 sub-header default dan jangan menggunakan
+  Markdown table.
+- Jangan keluarkan daftar proyek atau menyalin ulang blok data analisis.
+""".strip()
+
 _SKILL_DIR = Path(__file__).parent / "chat" / "skills" / "strategic_analysis"
 
 
@@ -1112,6 +1126,7 @@ def build_summary_prompt(
 
     if strategic_data:
         skill_instructions = _load_skill_instructions() or KSMI_PROMPT_CONTEXT
+        skill_instructions = f"{skill_instructions}\n\n{STRATEGIC_SUMMARY_CONTRACT}"
         prompt_data = _strategic_prompt_data(strategic_data)
         data_json = json.dumps(prompt_data, ensure_ascii=False, indent=2)
         return f"""

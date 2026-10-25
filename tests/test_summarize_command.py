@@ -679,7 +679,8 @@ def test_strategic_summary_prompt_matches_reference_contributor_rule():
     )
 
     assert "80% kontribusi" in prompt
-    assert "{report_year} + 1" in prompt
+    assert "nilai `analysis_year` dan `outlook_year` dari metadata" in prompt
+    assert "{report_year} + 1" not in prompt
     assert "top 3 proyek" in prompt
     assert "Jangan menggunakan Markdown table" in prompt
     assert "hanya memiliki 4 sub-header" in prompt
