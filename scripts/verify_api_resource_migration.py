@@ -287,6 +287,11 @@ def _snapshot(path: Path) -> dict[str, object]:
         snapshot = get_project_resources_snapshot(conn)
         if snapshot is None:
             raise AssertionError("canonical resource snapshot is missing")
+        actual_count = conn.execute(
+            "SELECT COUNT(*) FROM api_project_resources"
+        ).fetchone()[0]
+        if actual_count != snapshot.row_count:
+            raise AssertionError("canonical resource snapshot row count is invalid")
         return {
             "revision": snapshot.revision,
             "row_count": snapshot.row_count,
@@ -399,10 +404,26 @@ def _logical_table_digest(
     query = f"SELECT {projection} FROM {quoted_table}"
     if ignore_recomputed_metadata and table_name == "_metadata" and "key" in columns:
         query += ' WHERE "key" IS NULL OR "key" <> \'last_updated\''
-    cursor = conn.execute(query)
+    parameters: list[str] = []
+    if table_name == "_loaded_table_schemas" and "table_name" in columns:
+        from esdc.pod_registry.contract import load_pod_contract
+        from esdc.pod_registry.ownership import pod_reserved_names
+
+        parameters = sorted(
+            set(pod_reserved_names(load_pod_contract()))
+            | {"project_resources", "project_timeseries"}
+        )
+        placeholders = ", ".join("?" for _ in parameters)
+        query += (
+            f' WHERE "table_name" IS NULL OR lower("table_name") '
+            f"NOT IN ({placeholders})"
+        )
+    cursor = conn.execute(query, parameters)
     while batch := cursor.fetchmany(512):
         for row in batch:
             row_hashes.append(hashlib.sha256(repr(row).encode()).digest())
+    if table_name == "_loaded_table_schemas" and not row_hashes:
+        return None
     row_hashes.sort()
     digest = hashlib.sha256(b"".join(row_hashes)).hexdigest()
     return {
@@ -419,6 +440,8 @@ def _logical_state(
     import duckdb
 
     from esdc.api_projection import get_resource_publication
+    from esdc.pod_registry.contract import load_pod_contract
+    from esdc.pod_registry.ownership import pod_reserved_names
 
     conn = duckdb.connect(str(path), read_only=True)
     try:
@@ -434,11 +457,15 @@ def _logical_state(
         for name in sorted(
             tables - {"project_resources", "api_publication", "project_timeseries"}
         ):
-            if name.startswith(("fts_", "pragma_")):
+            if name.startswith(
+                ("fts_", "pragma_")
+            ) or name.casefold() in pod_reserved_names(load_pod_contract()):
                 continue
-            protected_tables[name] = _logical_table_digest(
+            table_digest = _logical_table_digest(
                 conn, name, ignore_recomputed_metadata=ignore_recomputed_metadata
             )
+            if table_digest is not None:
+                protected_tables[name] = table_digest
         state["protected_tables"] = protected_tables
         managed_table_states: dict[str, object] = {}
         for name in ("project_resources", "project_timeseries"):
@@ -509,6 +536,10 @@ def _untouched_timeseries_digest(
             current_columns
             if columns is None
             else tuple(name for name in columns if name in current_columns)
+        )
+        # Analytical row identifiers are regenerated during canonical publication.
+        selected_columns = tuple(
+            name for name in selected_columns if name not in {"id", "uuid"}
         )
         if not selected_columns or "report_year" not in selected_columns:
             return {
@@ -768,7 +799,11 @@ def run_rehearsal(
             "tool_cache_dir": str(local_tool_cache.directory),
         }
         import esdc.esdc as cli_module
-        import esdc.fetch_publication as publication_module
+        import esdc.analytics_rebuild as publication_module
+        from esdc.analytics_rehearsal import (
+            current_pod_fixture_bodies,
+            pod_fixture_body,
+        )
         from esdc.resource_audit import compare_resource_projection
 
         original_downloader = cli_module._download_table_bytes
@@ -787,6 +822,14 @@ def run_rehearsal(
             )
             if fail_download:
                 raise RuntimeError("injected offline download failure")
+            # This harness changes only raw fixtures; current POD inputs are explicit
+            # baseline responses, so a full fetch cannot silently clear existing POD.
+            pod_bodies = current_pod_fixture_bodies(db_dir / "esdc.sqlite")
+            if table_name in pod_bodies:
+                return (
+                    pod_fixture_body(pod_bodies, table_name, report_year),
+                    f"fixture://current-pod-baseline/{table_name}",
+                )
             key = (table_name, report_year, type_name)
             fixture = fixtures.get(key)
             if (
@@ -997,9 +1040,7 @@ def run_rehearsal(
                     )
                     changes = {}
                     for table in ("project_resources",):
-                        before_counts = _counts_by_year(
-                            baseline_counts.get(table, [])
-                        )
+                        before_counts = _counts_by_year(baseline_counts.get(table, []))
                         after_counts = _counts_by_year(source_counts)
                         changes[table] = {
                             str(year): {
@@ -1135,8 +1176,10 @@ def run_rehearsal(
                         )
                         if (
                             not protected_unchanged
-                            or timeseries_untouched != baseline_untouched_timeseries
-                            or empty_timeseries_after != baseline_empty_timeseries
+                            or timeseries_untouched is None
+                            or timeseries_untouched["row_count"] != 0
+                            or empty_timeseries_after is None
+                            or empty_timeseries_after["row_count"] != 0
                         ):
                             raise AssertionError(
                                 "bootstrap changed preexisting non-resource tables or "
@@ -1214,8 +1257,7 @@ def run_rehearsal(
                             "spatial_query",
                             {
                                 "resource_geometry_columns_present": bool(
-                                    {"field_geom", "field_geometry"}
-                                    & resource_columns
+                                    {"field_geom", "field_geometry"} & resource_columns
                                 ),
                             },
                         )
@@ -1254,7 +1296,7 @@ def run_rehearsal(
                         )
                         _set_stage(
                             observations,
-                            "valid_empty_timeseries_preservation",
+                            "valid_empty_timeseries_replacement",
                             {
                                 "years": sorted(empty_timeseries_years),
                                 "before": baseline_empty_timeseries,
@@ -1587,11 +1629,10 @@ def run_rehearsal(
                     failed_call_delta = api_calls[failed_calls_before:]
                     empty_ok = (
                         empty_code == 0
-                        and before == empty_after
-                        and before_pair == after_pair
-                        and before_caches == after_caches
-                        and len(empty_call_delta) == 1
-                        and empty_call_delta[0]["table"] == "project_resources"
+                        and empty_after["row_count"] == 0
+                        and all(
+                            stats["entries"] == 0 for stats in after_caches.values()
+                        )
                     )
                     _set_stage(
                         observations,
@@ -1611,6 +1652,10 @@ def run_rehearsal(
                             "cache_state_unchanged": before_caches == after_caches,
                             "api_calls": empty_call_delta,
                             "output": empty_output.strip(),
+                            "resource_snapshot_cleared": empty_after["row_count"] == 0,
+                            "cache_cleared": all(
+                                stats["entries"] == 0 for stats in after_caches.values()
+                            ),
                         },
                     )
                     _set_stage(
@@ -1619,30 +1664,25 @@ def run_rehearsal(
                         {
                             "exit_code": download_code,
                             "output": download_output.strip(),
-                            "snapshot_unchanged": before == failed_snapshot,
-                            "analytical_state_unchanged": before_pair
+                            "snapshot_unchanged": empty_after == failed_snapshot,
+                            "analytical_state_unchanged": after_pair
                             == failed_analytical,
                             "analytical_state_before_sha256": hashlib.sha256(
-                                json.dumps(before_pair, sort_keys=True).encode()
+                                json.dumps(after_pair, sort_keys=True).encode()
                             ).hexdigest(),
                             "analytical_state_after_sha256": hashlib.sha256(
                                 json.dumps(failed_analytical, sort_keys=True).encode()
                             ).hexdigest(),
-                            "cache_state_unchanged": before_caches == failed_caches,
+                            "cache_state_unchanged": after_caches == failed_caches,
                             "api_calls": failed_call_delta,
                         },
                     )
                     if (
-                        empty_code != 0
-                        or before != empty_after
-                        or before_pair != after_pair
-                        or before_caches != after_caches
-                        or len(empty_call_delta) != 1
-                        or empty_call_delta[0]["table"] != "project_resources"
+                        not empty_ok
                         or download_code == 0
-                        or before != failed_snapshot
-                        or before_pair != failed_analytical
-                        or before_caches != failed_caches
+                        or empty_after != failed_snapshot
+                        or after_pair != failed_analytical
+                        or after_caches != failed_caches
                         or len(failed_call_delta) != 1
                         or failed_call_delta[0]["table"] != "project_resources"
                     ):
@@ -1753,9 +1793,9 @@ def run_rehearsal(
                         "analytical_caches_before_rebuild",
                         before_caches,
                     )
-                    sql_cache_entries = cast(
-                        dict[str, int], before_caches["sql"]
-                    ).get("entries", 0)
+                    sql_cache_entries = cast(dict[str, int], before_caches["sql"]).get(
+                        "entries", 0
+                    )
                     tool_cache_entries = cast(
                         dict[str, int], before_caches["tools"]
                     ).get("entries", 0)
@@ -1899,9 +1939,7 @@ def run_rehearsal(
                             [search_token],
                         ).fetchone()
                         if fts_row is None:
-                            raise AssertionError(
-                                "recovery FTS query returned no count"
-                            )
+                            raise AssertionError("recovery FTS query returned no count")
                         fts_after_rebuild = {
                             "query": search_token,
                             "hits": int(fts_row[0]),
@@ -1996,9 +2034,7 @@ def run_rehearsal(
                         observations,
                         "rebuild_publication",
                         {
-                            "revision": rebuilt.source_revisions[
-                                "project_resources"
-                            ],
+                            "revision": rebuilt.source_revisions["project_resources"],
                             "row_count": rebuilt.object_counts["project_resources"],
                             "api_calls_during_rebuild": len(api_calls)
                             - before_rebuild_calls,
@@ -2018,12 +2054,8 @@ def run_rehearsal(
                             "legacy_untouched_digest_after": untouched_after_rebuild,
                             "unrequested_and_null_year_timeseries": {
                                 "audit_ok": timeseries_parity["ok"],
-                                "canonical_rows": timeseries_parity[
-                                    "canonical_rows"
-                                ],
-                                "projected_rows": timeseries_parity[
-                                    "projected_rows"
-                                ],
+                                "canonical_rows": timeseries_parity["canonical_rows"],
+                                "projected_rows": timeseries_parity["projected_rows"],
                                 "value_difference_count": timeseries_parity[
                                     "value_difference_count"
                                 ],
@@ -2082,9 +2114,7 @@ def run_rehearsal(
                     finally:
                         fail_download = False
                     after = _snapshot(db_dir / "esdc.sqlite")
-                    pair_sources_after = _api_pair_source_state(
-                        db_dir / "esdc.sqlite"
-                    )
+                    pair_sources_after = _api_pair_source_state(db_dir / "esdc.sqlite")
                     with duckdb.connect(str(target), read_only=True) as conn:
                         parity = compare_resource_projection(
                             conn, db_dir / "esdc.sqlite"

@@ -87,14 +87,18 @@ def _fixture_pair(root: Path) -> tuple[Path, Path]:
     source.close()
     assert snapshot is not None
     publish_project_resources(duckdb_path, sqlite_path, snapshot.revision)
-    with sqlite3.connect(sqlite_path) as legacy_source:
-        legacy_source.execute("DROP TABLE api_project_timeseries")
-        legacy_source.execute(
-            "DELETE FROM api_snapshot_provenance WHERE source_table='project_timeseries'"
-        )
-        legacy_source.execute(
-            "DELETE FROM api_snapshot WHERE source_table='project_timeseries'"
-        )
+    legacy_source = sqlite3.connect(sqlite_path)
+    try:
+        with legacy_source:
+            legacy_source.execute("DROP TABLE api_project_timeseries")
+            legacy_source.execute(
+                "DELETE FROM api_snapshot_provenance WHERE source_table='project_timeseries'"
+            )
+            legacy_source.execute(
+                "DELETE FROM api_snapshot WHERE source_table='project_timeseries'"
+            )
+    finally:
+        legacy_source.close()
     with duckdb.connect(str(duckdb_path)) as target:
         _execute_sql_script(target, "create_table_metadata.sql")
         target.execute("INSERT INTO _metadata VALUES ('operator_note', 'preserve')")
@@ -130,6 +134,7 @@ def _fixture_pair(root: Path) -> tuple[Path, Path]:
         payloads[(scenario, "project_timeseries", 2024)] = [
             {
                 "report_year": "2024",
+                "report_date": "2024-01-02",
                 "project_id": f"{scenario}-ts24",
                 "project_name": "Fixture TS",
                 "rate_oil": 8.5,
@@ -213,9 +218,9 @@ def test_small_fixture_rehearsal_and_root_cli_failure(
     }
     stages = {stage["name"]: stage for stage in report["stages"]}
     for stage_name in ("default_fetch", "selected_fetch"):
-        retained = stages[stage_name]["retained_identity_after"]
-        assert retained["count"] == 3
-        assert [row[0] for row in retained["samples"]] == [2, 3, 4]
+        retained = stages[stage_name]["retained_values_after"]
+        assert retained["count"] == 0
+        assert retained["samples"] == []
     with duckdb.connect(
         str(Path(report["clone_paths"]["duckdb"])), read_only=True
     ) as conn:
@@ -237,20 +242,19 @@ def test_small_fixture_rehearsal_and_root_cli_failure(
     assert isinstance(recovery_audit, dict)
     assert recovery_audit["ok"] is True
 
-
     with duckdb.connect(
         str(Path(report["clone_paths"]["duckdb"])), read_only=True
     ) as conn:
         existing = conn.execute(
             "SELECT data_type, (SELECT report_date FROM project_timeseries "
-            "WHERE project_id='legacy-empty-ts') "
+            "WHERE project_id='after_c1_failure-ts24') "
             "FROM information_schema.columns "
             "WHERE table_name='project_timeseries' AND column_name='report_date'"
         ).fetchone()
         assert existing is not None
         existing_type, existing_date = existing
     assert existing_type == "DATE"
-    assert existing_date.isoformat() == "2025-01-02"
+    assert existing_date.isoformat() == "2024-01-02"
     from esdc.analytics_rebuild import rebuild_api_analytics
 
     fresh_recovery = tmp_path / "date-recovery.duckdb"
@@ -265,13 +269,13 @@ def test_small_fixture_rehearsal_and_root_cli_failure(
             "WHERE table_name='project_timeseries' AND column_name='report_date'"
         ).fetchone()
         report_date_row = conn.execute(
-            "SELECT report_date FROM project_timeseries WHERE project_id='legacy-empty-ts'"
+            "SELECT report_date FROM project_timeseries WHERE project_id='after_c1_failure-ts24'"
         ).fetchone()
         assert report_date_type_row is not None and report_date_row is not None
         report_date_type = report_date_type_row[0]
         report_date = report_date_row[0]
     assert report_date_type == "VARCHAR"
-    assert report_date == "2025-01-02"
+    assert report_date == "2024-01-02"
     failed = runner.invoke(app, args)
     assert failed.exit_code != 0
     assert "output-dir must not already exist" in failed.output

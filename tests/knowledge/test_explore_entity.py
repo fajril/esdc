@@ -8,6 +8,8 @@ from unittest.mock import patch
 import pytest
 from langchain_core.tools import StructuredTool
 
+from tests.knowledge.conftest import PROJECT_DURI
+
 
 @pytest.fixture(autouse=True)
 def _clear_tool_cache(monkeypatch):
@@ -141,6 +143,11 @@ def test_project_entity_type_resolves_via_real_graph(sqlite_conn, duck_conn, tmp
     sqlite/duckdb fixtures as tests/knowledge/test_instance_graph.py) and
     only mocks the dossier lookup (`_get_knowledge_context`), which is
     unrelated to the bug being fixed here.
+
+    The project name comes from the current `m_project` master row, and the
+    entity id is the canonical issued project id, not the old synthetic
+    `PRJ-001`. The graph no longer reads Duck, so the Duck handle is closed
+    only to release the fixture's write connection.
     """
     from esdc.chat.domain_knowledge.instance_graph import InstanceGraphManager
     from esdc.knowledge.linker import run_deterministic_linking
@@ -150,11 +157,6 @@ def test_project_entity_type_resolves_via_real_graph(sqlite_conn, duck_conn, tmp
     store.ensure_tables()
     run_deterministic_linking(sqlite_conn, duck_conn, store)
     sqlite_conn.commit()
-    # duck_conn holds the only read-write connection to the tmp duckdb
-    # file; InstanceGraphManager opens its own read-only connection to
-    # the same file, which duckdb refuses while a different-config
-    # connection is still open (see test_instance_graph.py for the same
-    # pattern).
     duck_conn.close()
 
     real_graph = InstanceGraphManager(
@@ -170,7 +172,7 @@ def test_project_entity_type_resolves_via_real_graph(sqlite_conn, duck_conn, tmp
 
     assert out["status"] == "success"
     assert out["entity"]["entity_type"] == "project"
-    assert out["entity"]["entity_id"] == "PRJ-001"
+    assert out["entity"]["entity_id"] == PROJECT_DURI
     assert out["entity"]["name"] == "Duri Steamflood"
 
 

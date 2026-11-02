@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+import sqlite3
 import threading
 from typing import Annotated, Any
 
@@ -2590,24 +2591,36 @@ def _get_knowledge_context(
     """Fetch dossier (duckdb) and claims (sqlite) for one resolved entity."""
     from esdc.knowledge.dossier import get_dossier
     from esdc.knowledge.store import KnowledgeStore
-    from esdc.pod_registry.store import get_sqlite_connection
+    from esdc.pod_registry.store import (
+        get_sqlite_readonly_connection,
+        is_missing_table_error,
+    )
 
     dossier = None
-    conn = None
-    try:
-        conn = get_db_connection()
-        dossier = get_dossier(conn, entity_type, entity_id)
-    except Exception as e:  # table may not exist before first learn
-        logger.debug("[ExploreEntity] no dossier | %s", e)
-    finally:
-        if conn:
-            conn.close()
-
     claims: list[dict[str, Any]] = []
-    sconn = get_sqlite_connection()
+    sconn = get_sqlite_readonly_connection()
+    if sconn is None:
+        return None, []
     try:
+        conn = None
+        try:
+            conn = get_db_connection()
+            dossier = get_dossier(
+                conn, entity_type, entity_id, sqlite_conn=sconn
+            )
+        except Exception as e:  # table may not exist before first learn
+            logger.debug("[ExploreEntity] no dossier | %s", e)
+        finally:
+            if conn:
+                conn.close()
+
         store = KnowledgeStore(sconn)
-        store.ensure_tables()
+        try:
+            claim_rows = store.claims_for(entity_type, entity_id)
+        except sqlite3.OperationalError as exc:
+            if not is_missing_table_error(exc):
+                raise
+            claim_rows = []
         claims = [
             {
                 "doc_id": c.doc_id,
@@ -2616,11 +2629,32 @@ def _get_knowledge_context(
                 "value": c.value,
                 "evidence": c.evidence,
             }
-            for c in store.claims_for(entity_type, entity_id)
+            for c in claim_rows
         ]
     finally:
         sconn.close()
     return dossier, claims
+
+
+def _knowledge_is_current() -> bool:
+    """Fail closed for stale v2 knowledge so cached graph output is hidden."""
+    from esdc.knowledge.freshness import knowledge_freshness
+    from esdc.pod_registry.store import get_sqlite_readonly_connection
+
+    sconn = get_sqlite_readonly_connection()
+    if sconn is None:
+        return True
+    try:
+        is_v2 = sconn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='pod_registry_state'"
+        ).fetchone() is not None
+        return not is_v2 or knowledge_freshness(sconn).fresh
+    except Exception as exc:  # noqa: BLE001 - a freshness read failure must hide stale KG
+        logger.warning("[ExploreEntity] freshness check failed | %s", exc)
+        return False
+    finally:
+        sconn.close()
 
 
 @tool("Entity Knowledge Explorer")
@@ -2675,6 +2709,17 @@ def explore_entity(
                     ),
                 }
             )
+
+    if not _knowledge_is_current():
+        return json.dumps(
+            {
+                "status": "stale",
+                "message": (
+                    "Knowledge is out of date for the current POD and corpus "
+                    "sources. Run `esdc corpus learn` to rebuild it."
+                ),
+            }
+        )
 
     cache = _get_tool_cache()
     cache_key = _tool_cache_key(

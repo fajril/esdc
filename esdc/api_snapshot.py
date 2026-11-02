@@ -284,6 +284,8 @@ def _replace_project_resources_in_transaction(
     rows: Sequence[ApiProjectResourceRow],
     committed: ApiSnapshot,
     years: Sequence[int] | None,
+    *,
+    refresh_read_models: bool = True,
 ) -> ApiSnapshot:
     if years is None:
         conn.execute("DELETE FROM api_project_resources")
@@ -319,7 +321,7 @@ def _replace_project_resources_in_transaction(
             committed.invalid_geometry_count,
         ),
     )
-    return ApiSnapshot(
+    result = ApiSnapshot(
         committed.source_table,
         committed.revision,
         row_count,
@@ -328,6 +330,11 @@ def _replace_project_resources_in_transaction(
         committed.publication_state,
         committed.invalid_geometry_count,
     )
+    if refresh_read_models:
+        from esdc.pod_registry.read_models import refresh_pod_after_source_change
+
+        refresh_pod_after_source_change(conn, actor="FA:project_resources_snapshot")
+    return result
 
 
 def get_project_resources_snapshot(conn: sqlite3.Connection) -> ApiSnapshot | None:

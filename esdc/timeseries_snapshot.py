@@ -386,6 +386,7 @@ def record_observed_empty_timeseries(
     revision: str,
     fetched_at: str,
     origin: Literal["api_json", "api_csv"],
+    refresh_read_models: bool = True,
 ) -> ApiSnapshot:
     """Record an explicit upstream empty observation and its empty fingerprint."""
     if not conn.in_transaction:
@@ -429,6 +430,10 @@ def record_observed_empty_timeseries(
         origin=origin,
         details={"observed_empty": True, "input_origins": [origin]},
     )
+    if refresh_read_models:
+        from esdc.pod_registry.read_models import refresh_pod_after_source_change
+
+        refresh_pod_after_source_change(conn, actor="FA:project_timeseries_snapshot")
     return snapshot
 
 
@@ -439,6 +444,7 @@ def replace_timeseries_in_transaction(
     years: Sequence[int] | None,
     revision: str,
     fetched_at: str,
+    refresh_read_models: bool = True,
 ) -> ApiSnapshot:
     """Replace all or selected year slices without taking transaction ownership."""
     if not conn.in_transaction:
@@ -521,4 +527,8 @@ def replace_timeseries_in_transaction(
             "years": selected_years,
         },
     )
+    if refresh_read_models:
+        from esdc.pod_registry.read_models import refresh_pod_after_source_change
+
+        refresh_pod_after_source_change(conn, actor="FA:project_timeseries_snapshot")
     return snapshot

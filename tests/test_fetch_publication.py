@@ -604,6 +604,160 @@ def _slice(
     return prepared
 
 
+def _initialize_v2_fetch_store(path: Path) -> None:
+    from esdc.pod_registry.migrations import initialize_registry_v2
+
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    initialize_registry_v2(conn)
+    conn.commit()
+    conn.close()
+
+
+def test_v2_public_fetch_refreshes_both_snapshots_in_one_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sqlite_path = tmp_path / "v2.sqlite"
+    duck_path = tmp_path / "v2.duckdb"
+    _initialize_v2_fetch_store(sqlite_path)
+    monkeypatch.setattr(
+        "esdc.api_projection._invalidate_analytical_caches", lambda: None
+    )
+    monkeypatch.setattr("esdc.api_projection._checkpoint", lambda conn: None)
+
+    outcome = publish_prepared_fetch(
+        PreparedFetch(
+            (ApiProjectResourceRow(project_id="P-1", report_year=2025),),
+            None,
+            (_slice(tmp_path / "v2-timeseries", "P-1", 2025, 20),),
+            (),
+            (),
+        ),
+        duckdb_path=duck_path,
+        sqlite_path=sqlite_path,
+        reindex=False,
+    )
+
+    assert outcome.resource_revision is not None
+    assert outcome.timeseries_rows_written == 1
+    with sqlite3.connect(sqlite_path) as conn:
+        assert conn.execute(
+            "SELECT source_generation, knowledge_generation FROM pod_registry_state"
+        ).fetchone() == (1, None)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM api_project_resources"
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM api_project_timeseries"
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM pod_monitoring_api"
+        ).fetchone() == (0,)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM pod_forecast_api"
+        ).fetchone() == (0,)
+
+
+def test_v2_public_fetch_refuses_unsupported_registry_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sqlite_path = tmp_path / "unsupported-v2.sqlite"
+    duck_path = tmp_path / "unsupported-v2.duckdb"
+    _initialize_v2_fetch_store(sqlite_path)
+    with sqlite3.connect(sqlite_path) as conn:
+        conn.execute(
+            "UPDATE pod_registry_state SET dictionary_version='0.3.9' WHERE singleton_id=1"
+        )
+    monkeypatch.setattr(
+        "esdc.api_projection._invalidate_analytical_caches", lambda: None
+    )
+    monkeypatch.setattr("esdc.api_projection._checkpoint", lambda conn: None)
+
+    with pytest.raises(FetchFailure, match="unsupported registry metadata"):
+        publish_prepared_fetch(
+            PreparedFetch(
+                (ApiProjectResourceRow(project_id="P-1", report_year=2025),),
+                None,
+                (_slice(tmp_path / "unsupported-timeseries", "P-1", 2025, 20),),
+                (),
+                (),
+            ),
+            duckdb_path=duck_path,
+            sqlite_path=sqlite_path,
+            reindex=False,
+        )
+
+    with sqlite3.connect(sqlite_path) as conn:
+        assert conn.execute(
+            "SELECT source_generation FROM pod_registry_state"
+        ).fetchone() == (0,)
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+            "('api_project_resources', 'api_project_timeseries', 'api_snapshot')"
+        ).fetchall() == []
+
+
+def test_v2_fetch_refuses_resource_metadata_without_resource_table(
+    tmp_path: Path,
+) -> None:
+    sqlite_path = tmp_path / "inconsistent-v2.sqlite"
+    _initialize_v2_fetch_store(sqlite_path)
+    with sqlite3.connect(sqlite_path) as conn:
+        conn.execute(
+            "CREATE TABLE api_snapshot (source_table TEXT PRIMARY KEY, "
+            "revision TEXT NOT NULL, row_count INTEGER NOT NULL, "
+            "source_sha256 TEXT NOT NULL, fetched_at TEXT NOT NULL, "
+            "publication_state TEXT NOT NULL, invalid_geometry_count INTEGER NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO api_snapshot VALUES "
+            "('project_resources', 'old-revision', 1, 'hash', 'then', 'committed', 0)"
+        )
+
+    with pytest.raises(FetchFailure, match="inconsistent resource snapshot metadata"):
+        publish_prepared_fetch(
+            PreparedFetch(
+                (ApiProjectResourceRow(project_id="P-1", report_year=2025),),
+                None,
+                (),
+                (),
+                (),
+            ),
+            duckdb_path=tmp_path / "inconsistent-v2.duckdb",
+            sqlite_path=sqlite_path,
+            reindex=False,
+        )
+
+    with sqlite3.connect(sqlite_path) as conn:
+        assert conn.execute(
+            "SELECT source_generation FROM pod_registry_state"
+        ).fetchone() == (0,)
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('api_project_resources', 'api_project_timeseries')"
+        ).fetchall() == []
+
+
+def test_v2_fetch_refuses_malformed_existing_resource_table_before_writes(
+    tmp_path: Path,
+) -> None:
+    sqlite_path = tmp_path / "malformed-v2.sqlite"
+    _initialize_v2_fetch_store(sqlite_path)
+    with sqlite3.connect(sqlite_path) as conn:
+        conn.execute("CREATE TABLE api_project_resources (project_id TEXT)")
+
+    from esdc.fetch_publication import _fetch_sqlite_connection
+
+    with pytest.raises(RuntimeError, match="unsupported resource snapshot"):
+        _fetch_sqlite_connection(sqlite_path)
+
+    with sqlite3.connect(sqlite_path) as conn:
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('api_project_timeseries', 'api_snapshot')"
+        ).fetchall() == []
+
+
 def _seed_coherent_pair(sqlite_path: Path, duck_path: Path, tmp_path: Path) -> str:
     result = publish_prepared_fetch(
         PreparedFetch(

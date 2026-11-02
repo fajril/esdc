@@ -5,12 +5,38 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
+from uuid import uuid4
 
 import duckdb
 import pytest
 
+from esdc.knowledge.freshness import compute_knowledge_basis, mark_knowledge_current
+from esdc.pod_registry.identity import ApprovalKey, issue_identity
 from esdc.pod_registry.store import get_sqlite_connection
+
+ACTOR = "FA:test-knowledge"
+INSTITUTION_ID = 4
+POD_TYPE_ID = 1
+
+PROJECT_DURI = "P-TEST001-01"
+PROJECT_KAMPUNG = "P-TEST002-01"
+
+POD_DURI = "PL-2019-0001-4-1-0"
+POD_DURI_REV1 = "PL-2022-0002-4-1-1"
+POD_KAMPUNG = "PL-2020-0003-4-1-0"
+
+_DOCUMENTS_DDL = """
+CREATE TABLE IF NOT EXISTS documents (
+    doc_id TEXT PRIMARY KEY,
+    file_name TEXT, file_hash TEXT, doc_type TEXT, doc_topic TEXT,
+    doc_number TEXT, doc_date TEXT, subject TEXT,
+    wk_name TEXT, field_name TEXT, project_name TEXT,
+    pod_name TEXT, suggested_pod_ids TEXT, markdown TEXT,
+    raw_entities TEXT, metadata TEXT, ingested_at TEXT
+)
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -31,12 +57,12 @@ def _isolate_tool_cache_dir(tmp_path_factory, monkeypatch):
     """Point Config.get_cache_dir at a tmp dir for every knowledge test.
 
     Without this, code that resolves Config.get_cache_dir() at call time
-    (e.g. invalidate_tool_cache(), which shutil.rmtree()s the cache dir and
-    rewrites .last_invalidated) would operate on the developer's real
-    ~/.esdc/cache. This fixture must stay generic to tests/knowledge/ as a
-    whole -- it is the single source of truth for cache-dir isolation, so
-    individual test modules (test_learn.py, test_explore_entity.py, etc.)
-    do not need to patch Config.get_cache_dir themselves.
+    (e.g. invalidate_tool_cache(), which shutil.rmtree()s the cache dir)
+    would delete the developer's real ~/.esdc/cache. This fixture must stay
+    generic to tests/knowledge/ as a whole -- it is the single source of truth
+    for cache-dir isolation, so individual test modules (test_learn.py,
+    test_explore_entity.py, etc.) do not need to patch Config.get_cache_dir
+    themselves.
     """
     from esdc.configs import Config
 
@@ -48,19 +74,15 @@ def _isolate_tool_cache_dir(tmp_path_factory, monkeypatch):
 def _isolate_instance_graph_duckdb(tmp_path_factory, monkeypatch):
     """Point Config.get_db_file at a tmp path that does NOT exist.
 
-    InstanceGraphManager.__init__ defaults duckdb_path to Config.get_db_file()
-    when the caller omits it (e.g. every pre-existing test in
-    test_instance_graph.py that only passes sqlite_path=..., plus the no-arg
-    singleton InstanceGraphManager() built by test_end_to_end.py). Without
-    this fixture those tests would silently open the developer's real,
-    ~1GB ~/.esdc/esdc.duckdb read-only -- a test-isolation violation.
-    InstanceGraphManager degrades gracefully when the duckdb file is absent
-    (falls back to project_id as the project name, is_available() stays
-    True), so pointing at a path that does not exist is safe and requires no
-    other test changes. This fixture must stay generic to tests/knowledge/ as
-    a whole -- it is the single source of truth for duckdb-path isolation.
-    Explicit duckdb_path=... arguments passed by individual tests still win
-    over this default and are unaffected.
+    Isolation guard for anything in tests/knowledge that resolves the default
+    Duck path at call time (learn pipeline, chat tool layer): without it those
+    calls would read the developer's real ~1GB ~/.esdc/esdc.duckdb. It also
+    keeps the real implementation away from a test run, because that getter is
+    not pure -- it can rename a legacy default database and rewrite config.yaml.
+    InstanceGraphManager itself no longer resolves any Duck path (it reads SQLite
+    only), so this fixture is not what protects the graph; the constructor
+    regression in test_instance_graph.py re-reads the real implementation against
+    its own tmp paths and asserts construction leaves nothing changed.
     """
     from esdc.configs import Config
 
@@ -68,70 +90,143 @@ def _isolate_instance_graph_duckdb(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(Config, "get_db_file", classmethod(lambda cls: missing))
 
 
-@pytest.fixture
-def sqlite_conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
-    """Registry + minimal documents table, seeded with a tiny POD world."""
-    conn = get_sqlite_connection(tmp_path / "esdc.sqlite")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS documents (
-            doc_id TEXT PRIMARY KEY,
-            file_name TEXT, file_hash TEXT, doc_type TEXT, doc_topic TEXT,
-            doc_number TEXT, doc_date TEXT, subject TEXT,
-            wk_name TEXT, field_name TEXT, project_name TEXT,
-            pod_name TEXT, suggested_pod_ids TEXT, markdown TEXT,
-            raw_entities TEXT, metadata TEXT, ingested_at TEXT
-        )
-        """
+def _issue_pod(
+    conn: sqlite3.Connection,
+    *,
+    approval_date: date,
+    daily_slot: int,
+    rev_num: int,
+    pod_name: str,
+    pod_letter_num: str,
+) -> int:
+    """Issue the permanent identity and write the matching current m_pod row."""
+    issued = issue_identity(
+        conn,
+        key=ApprovalKey(
+            approval_date=approval_date,
+            daily_slot=daily_slot,
+            institution_id=INSTITUTION_ID,
+            pod_type_id=POD_TYPE_ID,
+            rev_num=rev_num,
+        ),
+        actor=ACTOR,
     )
     conn.execute(
-        "INSERT INTO r_institution (code, institution) VALUES (2, 'SKK Migas')"
+        "INSERT INTO m_pod (pod_id_seq, pod_uuid, approval_date, institution_id, "
+        "pod_type_id, rev_num, pod_order_no, pod_id, pod_name, pod_letter_num, "
+        "is_latest, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+        (
+            issued.pod_id_seq,
+            str(issued.pod_uuid),
+            issued.approval_date.isoformat(),
+            INSTITUTION_ID,
+            POD_TYPE_ID,
+            rev_num,
+            issued.pod_order_no,
+            issued.pod_id,
+            pod_name,
+            pod_letter_num,
+            ACTOR,
+            ACTOR,
+        ),
     )
-    conn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD I')")
+    return issued.pod_id_seq
+
+
+def _seed_knowledge_world(conn: sqlite3.Connection) -> None:
+    """Seed the tiny POD world on the canonical single schema.
+
+    Reference labels come from the SQL seed (institution 4 = SKK Migas, POD
+    type 1 = POD I); they are never re-inserted or rewritten here. Identities
+    come from the permanent identity service, so every pod_id is the canonical
+    formula for its approval date and daily slot.
+    """
+    conn.execute(_DOCUMENTS_DDL)
+
     conn.executemany(
-        """
-        INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,
-                           institution_code, pod_type_code, rev_num, approval_seq)
-        VALUES (?, ?, ?, ?, ?, 2, 2, ?, ?)
-        """,
+        "INSERT INTO m_project (project_id, project_name, is_active, created_by, updated_by) "
+        "VALUES (?, ?, 1, ?, ?)",
+        [
+            (PROJECT_DURI, "Duri Steamflood", ACTOR, ACTOR),
+            (PROJECT_KAMPUNG, "Kampung Baru Dev", ACTOR, ACTOR),
+        ],
+    )
+
+    first_seq = _issue_pod(
+        conn,
+        approval_date=date(2019, 1, 1),
+        daily_slot=1,
+        rev_num=0,
+        pod_name="POD I Duri",
+        pod_letter_num="SRT-0368/SKKMA0000/2019/S1",
+    )
+    latest_seq = _issue_pod(
+        conn,
+        approval_date=date(2022, 1, 1),
+        daily_slot=2,
+        rev_num=1,
+        pod_name="POD I Duri Revisi 1",
+        pod_letter_num="SRT-0100/SKKMA0000/2022/S1",
+    )
+    kampung_seq = _issue_pod(
+        conn,
+        approval_date=date(2020, 1, 1),
+        daily_slot=3,
+        rev_num=0,
+        pod_name="POD Kampung Baru",
+        pod_letter_num="SRT-0200/SKKMA0000/2020/S1",
+    )
+
+    # The latest-only pointer is the current revision contract: a POD is current
+    # only while it has no successor, so both flags change in one statement.
+    conn.execute(
+        "UPDATE m_pod SET superseded_by=?, is_latest=0 WHERE pod_id_seq=?",
+        (latest_seq, first_seq),
+    )
+
+    conn.executemany(
+        "INSERT INTO pod_project (pod_project_uuid, pod_id_seq, project_id, "
+        "is_main_project, is_auto_inferred, created_by, updated_by) "
+        "VALUES (?, ?, ?, 1, 0, ?, ?)",
+        [
+            (str(uuid4()), first_seq, PROJECT_DURI, ACTOR, ACTOR),
+            (str(uuid4()), latest_seq, PROJECT_DURI, ACTOR, ACTOR),
+            (str(uuid4()), kampung_seq, PROJECT_KAMPUNG, ACTOR, ACTOR),
+        ],
+    )
+
+    conn.executemany(
+        "INSERT INTO api_project_resources (project_id, report_year, project_name, "
+        "field_name, wk_name, uncert_level, project_remarks) "
+        "VALUES (?, ?, ?, ?, ?, '1P', ?)",
         [
             (
-                1,
-                "PL-2019-0001-2-2-0",
-                "POD I Duri",
-                "SRT-0368/SKKMA0000/2019/S1",
-                "2019-05-01",
-                0,
-                1,
+                PROJECT_DURI,
+                2024,
+                "Duri Steamflood",
+                "Duri",
+                "Rokan",
+                "Water handling constraint ongoing",
             ),
             (
-                2,
-                "PL-2022-0002-2-2-1",
-                "POD I Duri Revisi 1",
-                "SRT-0100/SKKMA0000/2022/S1",
-                "2022-03-01",
-                1,
-                2,
+                PROJECT_DURI,
+                2023,
+                "Duri Steamflood",
+                "Duri",
+                "Rokan",
+                "Older remark",
             ),
             (
-                3,
-                "PL-2020-0003-2-2-0",
-                "POD Kampung Baru",
-                "SRT-0200/SKKMA0000/2020/S1",
-                "2020-01-01",
-                0,
-                3,
+                PROJECT_KAMPUNG,
+                2024,
+                "Kampung Baru Dev",
+                "Kampung Baru",
+                "Pertamina EP",
+                "Waiting rig availability",
             ),
         ],
     )
-    conn.executemany(
-        "INSERT INTO project_pod (pod_id, project_id) VALUES (?, ?)",
-        [(1, "PRJ-001"), (2, "PRJ-001"), (3, "PRJ-002")],
-    )
-    conn.execute(
-        "INSERT INTO pod_revision (successor_id, predecessor_id) VALUES (?, ?)",
-        ("PL-2022-0002-2-2-1", "PL-2019-0001-2-2-0"),
-    )
+
     conn.executemany(
         """
         INSERT INTO documents (doc_id, file_name, file_hash, doc_type, doc_topic,
@@ -140,7 +235,7 @@ def sqlite_conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            # letter number exactly matches m_pod id=2
+            # letter number exactly matches the current identity in 2022
             (
                 "DOC-A",
                 "a.pdf",
@@ -157,7 +252,7 @@ def sqlite_conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
                 None,
                 "# Approval\nEconomics: NPV 100 MUSD.",
             ),
-            # no letter match, but suggested_pod_ids present
+            # no letter match, but suggested_pod_ids present (review-only)
             (
                 "DOC-B",
                 "b.pdf",
@@ -171,7 +266,7 @@ def sqlite_conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
                 "Duri",
                 None,
                 "POD I Duri",
-                json.dumps(["PL-2019-0001-2-2-0"]),
+                json.dumps([POD_DURI]),
                 "# MoM\nDiscussed drilling delay.",
             ),
             # regulation: no entities at all
@@ -193,14 +288,38 @@ def sqlite_conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
             ),
         ],
     )
+
     conn.commit()
-    yield conn
-    conn.close()
+
+    # Knowledge is marked current only at the end-of-seed boundary, measured
+    # against the same snapshot the readers use.
+    conn.execute("BEGIN IMMEDIATE")
+    basis = compute_knowledge_basis(conn)
+    assert mark_knowledge_current(conn, basis)
+    conn.commit()
+
+
+@pytest.fixture
+def sqlite_conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
+    """Canonical registry plus a minimal documents table, seeded with a tiny POD world."""
+    conn = get_sqlite_connection(tmp_path / "esdc.sqlite")
+    try:
+        _seed_knowledge_world(conn)
+        yield conn
+    finally:
+        conn.close()
 
 
 @pytest.fixture
 def duck_conn(tmp_path: Path) -> Iterator[duckdb.DuckDBPyConnection]:
-    """Minimal project_resources for canonical names + remarks."""
+    """DuckDB connection for the disposable corpus mirror and dossier cache.
+
+    Knowledge readers take project, field, working-area and remark values from
+    the canonical SQLite raw resource rows seeded in ``sqlite_conn``. Since S2b2a
+    the instance graph never opens Duck (it reads the SQLite snapshot only), so
+    the mirror rows below serve the learn pipeline's mirror indexes and dossier
+    storage, not graph name resolution.
+    """
     conn = duckdb.connect(str(tmp_path / "esdc.duckdb"))
     conn.execute(
         """
@@ -213,10 +332,10 @@ def duck_conn(tmp_path: Path) -> Iterator[duckdb.DuckDBPyConnection]:
     conn.execute(
         """
         INSERT INTO project_resources VALUES
-        ('PRJ-001', 'Duri Steamflood', 'Duri', 'Rokan', 2024,
+        ('P-TEST001-01', 'Duri Steamflood', 'Duri', 'Rokan', 2024,
          'Water handling constraint ongoing'),
-        ('PRJ-001', 'Duri Steamflood', 'Duri', 'Rokan', 2023, 'Older remark'),
-        ('PRJ-002', 'Kampung Baru Dev', 'Kampung Baru', 'Pertamina EP', 2024,
+        ('P-TEST001-01', 'Duri Steamflood', 'Duri', 'Rokan', 2023, 'Older remark'),
+        ('P-TEST002-01', 'Kampung Baru Dev', 'Kampung Baru', 'Pertamina EP', 2024,
          'Waiting rig availability')
         """
     )

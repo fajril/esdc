@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 import duckdb
@@ -287,6 +288,30 @@ def compare_timeseries_projection(
         actual_types = {name: data_type.upper() for name, data_type in info}
         if not actual_types:
             raise ValueError("DuckDB project_timeseries table is missing")
+        if actual_types.get("report_date") == "DATE":
+            lossless_dates = True
+            for (value,) in sqlite_conn.execute(
+                "SELECT DISTINCT json_extract(row_json, '$.report_date') "
+                "FROM api_project_timeseries"
+            ):
+                if value is None:
+                    continue
+                try:
+                    if (
+                        not isinstance(value, str)
+                        or date.fromisoformat(value).isoformat() != value
+                    ):
+                        lossless_dates = False
+                        break
+                except ValueError:
+                    lossless_dates = False
+                    break
+            if lossless_dates:
+                compatible_types["report_date"].add("DATE")
+            else:
+                # Even a bootstrap-origin DATE type must not hide a lossy cast of
+                # newer raw values, such as a timestamp with a non-midnight time.
+                compatible_types["report_date"].discard("DATE")
         for name in expected_types:
             actual = actual_types.get(name)
             if actual not in compatible_types[name]:

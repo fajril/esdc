@@ -37,6 +37,7 @@ import io
 import json
 import logging
 import os
+import sqlite3
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
@@ -105,23 +106,45 @@ from esdc.fetching import (
 )
 from esdc.loaders import (  # noqa: E402
     LoadSchemaError,
-    PodProjectionError,
     SpreadsheetLoadError,
     copy_pod_schema_template,
     generate_schema_template_from_excel,
     load_excel_to_duckdb,
-    load_pod_workbook_to_sqlite,
     print_load_result,
 )
-from esdc.pod_registry.importer import (  # noqa: E402
-    PodRegistryImportError,
-    import_pod_registry_workbook,
+from esdc.pod_registry.api_context import read_pod_api_context  # noqa: E402
+from esdc.pod_registry.api_import import (  # noqa: E402
+    INPUT_TABLES,
+    PodApiImportError,
+    prepare_pod_api_batch,
+)
+from esdc.pod_registry.api_payload import (  # noqa: E402
+    PodApiPayloadError,
+    parse_pod_api_payload,
+)
+from esdc.pod_registry.contract import load_pod_contract  # noqa: E402
+from esdc.pod_registry.normalization import normalize_project_id  # noqa: E402
+from esdc.pod_registry.sqlite_import import (  # noqa: E402
+    PodImportError,
+    PodImportProjectionError,
+    load_prepared_pod_batch,
+    prepare_pod_import,
 )
 from esdc.pod_registry.store import (
     get_esdc_sqlite_path,
     get_sqlite_connection,
 )
-from esdc.selection import ApiVer, FileType, Severity, TableName  # noqa: E402
+from esdc.selection import (  # noqa: E402
+    ApiVer,
+    FileType,
+    PodApiTable,
+    Severity,
+    TableName,
+)
+from esdc.source_publication import (
+    committed_pod_source_generation,
+    get_fetch_publication_status,
+)
 from esdc.summarizer import (  # noqa: E402
     SummaryDependencyError,
     SummaryLookupError,
@@ -272,10 +295,64 @@ def schema_command(
     typer.echo(f"Schema: {result.output_path}")
 
 
+def _read_pod_crosswalk(path: Path) -> dict[int, int]:
+    import json
+
+    def _object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        seen_raw: set[str] = set()
+        for key, _ in pairs:
+            if key in seen_raw:
+                raise PodImportError(
+                    [f"Duplicate raw JSON key in POD crosswalk: {key}"]
+                )
+            seen_raw.add(key)
+        return dict(pairs)
+
+    try:
+        data = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_object,
+        )
+    except (OSError, UnicodeError) as exc:
+        raise PodImportError([f"Could not read POD crosswalk: {exc}"]) from None
+    except json.JSONDecodeError as exc:
+        raise PodImportError([f"Invalid JSON in POD crosswalk: {exc}"]) from None
+    except PodImportError:
+        raise
+
+    if not isinstance(data, dict):
+        raise PodImportError(["POD crosswalk must be a JSON object."])
+
+    mapping: dict[int, int] = {}
+    seen_normalized: set[int] = set()
+
+    for raw_key, raw_value in data.items():
+        try:
+            old_id = int(raw_key)
+        except ValueError:
+            raise PodImportError([f"Invalid POD crosswalk key: {raw_key!r}"]) from None
+
+        if old_id in seen_normalized:
+            raise PodImportError(
+                [f"Duplicate normalized POD crosswalk key: {old_id}"]
+            ) from None
+
+        seen_normalized.add(old_id)
+
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise PodImportError(
+                [f"Invalid POD crosswalk target for key {raw_key!r}"]
+            ) from None
+
+        mapping[old_id] = raw_value
+
+    return mapping
+
+
 @app.command()
 def load(
     from_excel: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--from-excel",
             exists=True,
@@ -284,7 +361,18 @@ def load(
             readable=True,
             help="Excel .xlsx file to load.",
         ),
-    ],
+    ] = None,
+    from_sqlite: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-sqlite",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Read-only SQLite POD source to import.",
+        ),
+    ] = None,
     schema: Annotated[
         Path | None,
         typer.Option(
@@ -307,50 +395,139 @@ def load(
         bool,
         typer.Option(
             "--pod-registry",
-            help="Seed the POD master registry (SQLite) from pod-itb-skk workbook.",
+            help="Import the master-only POD profile and preserve target facts.",
+        ),
+    ] = False,
+    pod_crosswalk: Annotated[
+        Path | None,
+        typer.Option(
+            "--pod-crosswalk",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help=(
+                "Approved JSON object mapping old numeric POD IDs to new "
+                "pod_id_seq values for a one-time full replacement."
+            ),
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Prepare and validate a POD source without opening a target writer.",
         ),
     ] = False,
 ) -> None:
-    """Load a spreadsheet into DuckDB and register its data dictionary.
+    """Load contract-driven POD sources or generic Excel tables.
 
     Run `esdc schema --generate --from-excel data.xlsx` to create a starter schema.
-    Use `--schema-pod` to load POD workbook data with the built-in POD template.
-    Use `--pod-registry` to seed the POD master registry from the pod-itb-skk workbook.
+    Use `--schema-pod` for the complete five-input Excel POD profile; SQLite
+    selects the full profile automatically. Use `--pod-registry` for the
+    three-table master-only profile. Replacing an old POD target requires a full
+    load and a reviewed `--pod-crosswalk` mapping for protected document links.
     """
-    modes = sum([schema is not None, schema_pod, pod_registry])
-    if modes != 1:
+    if pod_crosswalk is not None and (schema is not None or pod_registry):
         typer.echo(
-            "Error: specify exactly one of --schema, --schema-pod, or --pod-registry."
+            "Error: --pod-crosswalk applies only to a full POD load; it cannot be "
+            "combined with generic --schema or --pod-registry."
         )
         raise typer.Exit(1) from None
-    try:
-        if pod_registry:
-            counts = import_pod_registry_workbook(from_excel)
-            for table, n in counts.items():
-                typer.echo(f"  {table}: {n} rows")
-            typer.echo("POD registry seeded and published to DuckDB.")
-            return
-        if schema_pod:
-            try:
-                results = load_pod_workbook_to_sqlite(from_excel)
-            except PodProjectionError as e:
-                typer.echo(f"Error: {e}")
+
+    if schema is not None:
+        if schema_pod or pod_registry:
+            typer.echo("Error: generic --schema cannot be combined with a POD profile.")
+            raise typer.Exit(1) from None
+        if from_excel is None or from_sqlite is not None:
+            typer.echo(
+                "Error: generic --schema requires exactly one --from-excel source."
+            )
+            raise typer.Exit(1) from None
+        if dry_run:
+            typer.echo("Error: --dry-run is supported only for POD registry imports.")
+            raise typer.Exit(1) from None
+    else:
+        if schema_pod and pod_registry:
+            typer.echo(
+                "Error: --schema-pod and --pod-registry select different POD profiles."
+            )
+            raise typer.Exit(1) from None
+        sources = sum([from_excel is not None, from_sqlite is not None])
+        if sources != 1:
+            typer.echo("Error: specify exactly one of --from-excel or --from-sqlite.")
+            raise typer.Exit(1) from None
+        if from_excel is not None and not (schema_pod or pod_registry):
+            typer.echo("Error: Excel POD loads require --schema-pod or --pod-registry.")
+            raise typer.Exit(1) from None
+
+    if schema is None:
+        profile = "master-only" if pod_registry else "full"
+        source = "xlsx" if from_excel is not None else "sqlite"
+        source_path = from_excel if from_excel is not None else from_sqlite
+        assert source_path is not None
+        batch = None
+        try:
+            approved_map = (
+                _read_pod_crosswalk(pod_crosswalk)
+                if pod_crosswalk is not None
+                else None
+            )
+            batch = prepare_pod_import(
+                source_path,
+                source,
+                profile=profile,
+                approved_crosswalk=approved_map,
+            )
+            for table, rows in batch.rows.items():
+                typer.echo(f"  {table}: {len(rows):,} rows")
+            if batch.staged_snapshots is not None:
                 typer.echo(
-                    "The POD value cases were committed to SQLite. "
-                    "Run 'esdc corpus sync' to retry the DuckDB projection."
+                    "  snapshots: "
+                    f"{batch.staged_snapshots.resource_row_count:,} resource rows, "
+                    f"{batch.staged_snapshots.timeseries_row_count:,} timeseries rows"
                 )
-                raise typer.Exit(1) from None
-            for result in results:
-                print_load_result(result)
+            if dry_run:
+                typer.echo(
+                    f"POD {profile} source validation passed; target was not "
+                    "opened for writing."
+                )
+                return
+            result, publication = load_prepared_pod_batch(
+                batch,
+                sqlite_path=get_esdc_sqlite_path(),
+                duck_path=Config.get_db_file(),
+            )
+            typer.echo(
+                f"SQLite POD source committed at generation {result.source_generation}."
+            )
+            if publication is None:
+                typer.echo("DuckDB publication was skipped.")
+            else:
+                typer.echo("POD registry published to DuckDB.")
             return
+        except PodImportProjectionError as e:
+            typer.echo(f"Error: {e}")
+            typer.echo(
+                "The SQLite source committed. Retry publication with "
+                "'esdc rebuild-api-analytics'; "
+                "do not re-import the source."
+            )
+            raise typer.Exit(1) from None
+        except PodImportError as e:
+            typer.echo("Error: POD import failed:")
+            for message in e.errors:
+                typer.echo(f"  - {message}")
+            raise typer.Exit(1) from None
+        finally:
+            if batch is not None:
+                batch.cleanup_staging()
+
+    try:
         schema_path = schema
         assert schema_path is not None
+        assert from_excel is not None
         result = load_excel_to_duckdb(from_excel, schema_path)
-    except PodRegistryImportError as e:
-        typer.echo("Error: POD registry import failed:")
-        for msg in e.errors:
-            typer.echo(f"  - {msg}")
-        raise typer.Exit(1) from None
     except (LoadSchemaError, SpreadsheetLoadError) as e:
         typer.echo(f"Error: {e}")
         raise typer.Exit(1) from None
@@ -637,6 +814,17 @@ def fetch(
                 context_parts.append(f"year={exc.report_year}")
             context = " (" + ", ".join(context_parts) + ")"
         typer.echo(f"Fetch failed{context}: {exc}")
+        if isinstance(exc, FetchFailure) and exc.sqlite_committed:
+            # The committed source and the pending mirror are two different facts.
+            generation = committed_pod_source_generation(get_esdc_sqlite_path())
+            if generation is None:
+                console.print("SQLite source committed.")
+            else:
+                console.print(f"SQLite source committed at generation {generation}.")
+            if exc.recovery_command is not None or not exc.duckdb_committed:
+                console.print("DuckDB publication pending.")
+                recovery = exc.recovery_command or "esdc rebuild-api-analytics"
+                console.print(f"Run '{recovery}' to complete the mirror.")
         raise typer.Exit(1) from None
 
 
@@ -705,6 +893,24 @@ def reload(
         return
 
     _reload_files(filetype)
+    from esdc.pod_registry.publication import PodPublicationReport, has_v2_state
+
+    sqlite_path = get_esdc_sqlite_path()
+    if has_v2_state(sqlite_path):
+        from esdc.pod_registry.publish import publish_pod_registry
+
+        publication = publish_pod_registry(sqlite_path, Config.get_db_file())
+        if (
+            isinstance(publication, PodPublicationReport)
+            and publication.projection_error is not None
+        ):
+            typer.echo(
+                "POD registry source was "
+                f"{'committed' if publication.source_committed else 'not committed'}; "
+                f"DuckDB publication failed: {publication.projection_error}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
     # Generate embeddings after reload (unless disabled)
     if not no_embeddings:
@@ -920,6 +1126,97 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
         resolver.close()
 
 
+_V2_POD_SHOW_TABLES = frozenset(
+    {
+        "m_project",
+        "m_pod",
+        "pod_registry",
+        "pod_project",
+        "pod_document",
+        "pod_monitoring_api",
+        "pod_forecast_api",
+        "r_institution",
+        "r_pod_type",
+        "r_pod_stage",
+        "pod_registry_state",
+        "pod_knowledge_state",
+        "pod_read_model_snapshot",
+        "pod_read_model_diagnostic",
+    }
+)
+
+
+def _show_v2_pod_table(
+    table: str,
+    *,
+    where: str | None,
+    search: str | None,
+    years: list[int] | None,
+    columns: list[str] | str,
+) -> pd.DataFrame | None:
+    """Query a published v2 POD object after checking its current schema."""
+    conn = get_duckdb_connection(Config.get_db_file(), read_only=True)
+    try:
+        exists = conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='main' AND table_name=?",
+            [table],
+        ).fetchone()
+        if exists is None:
+            logging.warning("POD registry object %s is not published.", table)
+            return None
+        available = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='main' AND table_name=?",
+                [table],
+            ).fetchall()
+        }
+        selected = columns if isinstance(columns, list) else columns.split()
+        if selected and any(column not in available for column in selected):
+            raise ValueError("requested column is not in the published POD schema")
+        projection = (
+            ", ".join(f'"{column}"' for column in selected) if selected else "*"
+        )
+        query = f'SELECT {projection} FROM "{table}"'
+        predicates: list[str] = []
+        params: list[str | int] = []
+        if where and search:
+            if where not in available:
+                raise ValueError("search column is not in the published POD schema")
+            predicates.append(f'CAST("{where}" AS VARCHAR) ILIKE ?')
+            params.append(f"%{search}%")
+        if years:
+            year_column = next(
+                (
+                    name
+                    for name in (
+                        "report_year",
+                        "year_frcast",
+                        "reported_date",
+                        "approval_date",
+                    )
+                    if name in available
+                ),
+                None,
+            )
+            if year_column is None:
+                raise ValueError(f"{table} has no year or date column")
+            year_expression = (
+                f'CAST("{year_column}" AS INTEGER)'
+                if year_column in {"report_year", "year_frcast"}
+                else f'EXTRACT(YEAR FROM TRY_CAST("{year_column}" AS DATE))'
+            )
+            predicates.append(f"{year_expression} IN ({', '.join('?' for _ in years)})")
+            params.extend(years)
+        if predicates:
+            query += " WHERE " + " AND ".join(predicates)
+        return conn.execute(query, params).fetchdf()
+    finally:
+        conn.close()
+
+
 @app.command()
 def show(
     table: Annotated[str, typer.Argument(help="Table name.")],
@@ -968,14 +1265,23 @@ def show(
     years_list = year if year else None
     details_list = detail if detail else None
 
-    df = run_query(
-        table=TableName(table),
-        where=where,
-        like=search,
-        years=years_list,
-        details=details_list,
-        columns=columns_splitted,
-    )
+    if table in _V2_POD_SHOW_TABLES:
+        df = _show_v2_pod_table(
+            table,
+            where=where,
+            search=search,
+            years=years_list,
+            columns=columns_splitted,
+        )
+    else:
+        df = run_query(
+            table=TableName(table),
+            where=where,
+            like=search,
+            years=years_list,
+            details=details_list,
+            columns=columns_splitted,
+        )
     if df is not None:
         pd.options.display.float_format = "{:,.2f}".format
         formatted_df = df.map(lambda x: f"{x:<,.2f}" if isinstance(x, float) else x)
@@ -1126,29 +1432,53 @@ def _fetch_and_parse_table(
 
 def _fetch_failure(
     message: str,
-    table: TableName,
+    table: TableName | PodApiTable | str,
     report_year: int | None,
     *,
     phase: FetchPhase,
 ) -> FetchFailure:
+    name = table.value if isinstance(table, (TableName, PodApiTable)) else str(table)
     scope = f" report year {report_year}" if report_year is not None else ""
     return FetchFailure(
-        f"{table.value}{scope}: {message}",
+        f"{name}{scope}: {message}",
         phase=phase,
-        table=table.value,
+        table=name,
         report_year=report_year,
     )
 
 
+def _pod_validation_failure(
+    exc: PodApiImportError, selected_years: tuple[int, ...] | None
+) -> FetchFailure:
+    """Keep the record index and the request scope that produced a batch failure."""
+    reason = exc.reason
+    if exc.row is not None:
+        reason = f"record {exc.row}: {reason}"
+    year: int | None = None
+    if selected_years and exc.table_name == PodApiTable.POD_MONITORING.value:
+        if len(selected_years) == 1:
+            # One selected year is exactly the request scope the record came from.
+            year = selected_years[0]
+        else:
+            # A combined batch cannot attribute a record index to one year reliably, so
+            # the message names the years it covered instead of reporting a silent None.
+            years = ", ".join(str(value) for value in selected_years)
+            reason = f"{reason} across selected years {years}"
+    return _fetch_failure(reason, exc.table_name, year, phase="validation")
+
+
 def _download_table_bytes(
-    table: TableName,
+    table: TableName | PodApiTable,
     filetype: FileType,
     username: str,
     password: str,
     report_year: int | None,
 ) -> tuple[bytes, str]:
+    # The five POD endpoints answer JSON only; the snapshot file format does not
+    # change that, so a CSV request still asks for a JSON body here.
+    requested_type = FileType.JSON if isinstance(table, PodApiTable) else filetype
     url = esdc_url_builder(
-        table_name=table, file_type=filetype, report_year=report_year
+        table_name=table, file_type=requested_type, report_year=report_year
     )
     logging.info("downloading from %s", url)
     scope = f" (report year {report_year})" if report_year is not None else ""
@@ -1166,15 +1496,17 @@ def _download_table_bytes(
 
 
 def _save_download(
-    table: TableName,
+    table: TableName | PodApiTable,
     filetype: FileType,
     data: bytes,
     report_year: int | None,
 ) -> None:
+    # A POD body is saved as the exact bytes it answered, which are always JSON.
+    requested_type = FileType.JSON if isinstance(table, PodApiTable) else filetype
     filename = table.value
     if report_year is not None:
         filename = f"{table.value}_{report_year}"
-    save_path = Config.get_db_dir() / f"{filename}.{filetype.value}"
+    save_path = Config.get_db_dir() / f"{filename}.{requested_type.value}"
     logging.debug("Save data as %s", save_path)
     save_payload_atomically(save_path, data)
 
@@ -1301,9 +1633,32 @@ def prepare_fetch(
     password: str,
     years: Sequence[int] | None,
     directory: Path,
+    sqlite_path: Path | None = None,
 ) -> PreparedFetch:
     """Download and validate all fetch inputs without touching either database."""
     selected_years = None if years is None else tuple(sorted(set(years)))
+    contract = load_pod_contract()
+    target_path = (
+        Path(sqlite_path) if sqlite_path is not None else get_esdc_sqlite_path()
+    )
+    # One read-only snapshot of the POD target, closed before any request is made.
+    try:
+        context = read_pod_api_context(target_path, contract)
+    except PodImportError as exc:
+        raise _fetch_failure(
+            str(exc), PodApiTable.MASTER_DATA_POD, None, phase="preflight"
+        ) from exc
+
+    def canonical_project_id(value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return normalize_project_id(value)
+        except ValueError:
+            # A stated alphanumeric identifier is preserved as given; only the
+            # documented compact form is expanded for v2 storage here.
+            return value
+
     resource_rows: list[ApiProjectResourceRow] = []
     resource_years: list[int] = []
     skipped_resource_years: list[int] = []
@@ -1337,14 +1692,18 @@ def prepare_fetch(
                 normalized = _csv_rows_to_normalized_project_resources(
                     cast(Sequence[Sequence[str]], parsed[0]), parsed[1]
                 )
+            normalized = tuple(
+                replace(row, project_id=canonical_project_id(row.project_id))
+                for row in normalized
+            )
             if year is None:
                 resource_rows.extend(normalized)
             else:
                 scoped = [row for row in normalized if row.report_year == year]
                 resource_rows.extend(scoped)
-                if scoped:
-                    resource_years.append(year)
-                else:
+                # A requested year stays recorded even when it answers valid-empty.
+                resource_years.append(year)
+                if not scoped:
                     skipped_resource_years.append(year)
             if to_file:
                 _save_download(TableName.PROJECT_RESOURCES, filetype, payload, year)
@@ -1365,9 +1724,6 @@ def prepare_fetch(
                 phase="validation",
             ) from exc
 
-    if selected_years is None and not resource_rows:
-        return PreparedFetch((), None, (), (), ())
-
     timeseries_years = selected_years
     if timeseries_years is None:
         timeseries_years = tuple(
@@ -1377,13 +1733,15 @@ def prepare_fetch(
                     for row in resource_rows
                     if isinstance(row.report_year, int)
                     and not isinstance(row.report_year, bool)
-                    and row.report_year >= 2020
                 }
             )
         )
 
     timeseries: list[PreparedTimeseriesSlice] = []
     skipped_timeseries_years: list[int] = []
+    # Every requested year is observed because a failed request stops the batch;
+    # a valid-empty year is recorded as skipped *and* as observed.
+    observed_timeseries_years: list[int] = list(timeseries_years)
     for year in timeseries_years:
         payload, _ = _download_table_bytes(
             TableName.PROJECT_TIMESERIES, filetype, username, password, year
@@ -1431,20 +1789,85 @@ def prepare_fetch(
         finally:
             del payload
 
+    # The masters and the approved forecast are requested once globally; monitoring
+    # follows the deduplicated, sorted selection, or answers one full request when
+    # no year is selected. `--year` never filters the forecast year.
+    pod_requests: list[tuple[PodApiTable, int | None]] = [
+        (table, None)
+        for table in (
+            PodApiTable.MASTER_DATA_PROJECT,
+            PodApiTable.MASTER_DATA_POD,
+            PodApiTable.POD_PROJECT,
+        )
+    ]
+    monitoring_scope = (None,) if selected_years is None else selected_years
+    pod_requests.extend((PodApiTable.POD_MONITORING, year) for year in monitoring_scope)
+    pod_requests.append((PodApiTable.POD_FORECAST, None))
+
+    bodies: dict[str, list[bytes]] = {table: [] for table in INPUT_TABLES}
+    saved: list[tuple[PodApiTable, int | None, bytes]] = []
+    for table, year in pod_requests:
+        payload, _ = _download_table_bytes(
+            table, FileType.JSON, username, password, year
+        )
+        try:
+            parse_pod_api_payload(payload, table_name=table.value, contract=contract)
+        except PodApiPayloadError as exc:
+            raise _fetch_failure(
+                f"Invalid response: {exc.reason}", table, year, phase="parse"
+            ) from exc
+        bodies[table.value].append(payload)
+        saved.append((table, year, payload))
+
+    try:
+        batch = prepare_pod_api_batch(
+            bodies,
+            existing_rows=context.existing_rows,
+            reserved_pod_identities=context.reserved_pod_identities,
+            monitoring_years=selected_years,
+            contract=contract,
+        )
+    except PodApiImportError as exc:
+        raise _pod_validation_failure(exc, selected_years) from exc
+    batch = replace(batch, target_basis=context.target_basis)
+
+    # Linked POD documents must be covered by the prepared masters. Master data is a
+    # global replace, so the prepared rows are the whole final scope: a stored row the
+    # new source omits cannot rescue its link. An orphan link aborts here rather than
+    # guessing a numeric POD identity.
+    prepared_sequences = {
+        int(str(row.get("pod_id_seq")))
+        for row in batch.rows[PodApiTable.MASTER_DATA_POD.value]
+        if row.get("pod_id_seq") is not None
+    }
+    orphaned = sorted(set(context.linked_pod_ids) - prepared_sequences)
+    if orphaned:
+        raise _fetch_failure(
+            "linked POD documents reference POD sequences the prepared masters do not "
+            f"cover: {', '.join(str(sequence) for sequence in orphaned)}; they must be "
+            "reconciled by an explicit crosswalk, never inferred",
+            PodApiTable.MASTER_DATA_POD,
+            None,
+            phase="preflight",
+        )
+
+    # Nothing is saved until the whole batch and its links validate.
+    if to_file:
+        for table, year, payload in saved:
+            _save_download(table, FileType.JSON, payload, year)
+
     return PreparedFetch(
         tuple(resource_rows),
         None if selected_years is None else tuple(resource_years),
         tuple(timeseries),
         tuple(skipped_resource_years),
         tuple(skipped_timeseries_years),
-        timeseries_observed_years=(
-            tuple(timeseries_years)
-            if selected_years is None and timeseries_years
-            else ()
-        ),
+        timeseries_observed_years=tuple(sorted(observed_timeseries_years)),
         timeseries_complete_observation=(
             selected_years is None and bool(timeseries_years)
         ),
+        pod_batch=batch,
+        resources_observed=True,
     )
 
 
@@ -1675,6 +2098,11 @@ def load_esdc_data(
             console.print(
                 "[green]Fetch payloads validated; no database changes.[/green]"
             )
+            # The gate needs a committed source; this route stopped before it.
+            console.print("POD source generation: none created.")
+            console.print(
+                "Nothing committed to SQLite and the mirror gate was not touched."
+            )
             return FetchOutcome(
                 None,
                 None,
@@ -1739,12 +2167,56 @@ def load_esdc_data(
         "Resources: skipped years "
         f"{', '.join(map(str, outcome.skipped_resource_years)) or 'none'}."
     )
+    if outcome.pod_source_generation is not None:
+        # The combined gate is read from committed SQLite truth, not from this call's
+        # flags: the pair and the POD projection must both agree before freshness is
+        # claimed, and a pending part is reported separately from the committed source.
+        gate = get_fetch_publication_status(
+            sqlite_path=get_esdc_sqlite_path(), duckdb_path=Config.get_db_file()
+        )
+        console.print(
+            f"POD source generation {outcome.pod_source_generation}: SQLite committed."
+        )
+        for component in gate.components:
+            console.print(f"Gate {component.name}: {component.status}")
+        for component in gate.components:
+            if component.status == "published" and component.rows_written == 0:
+                console.print(
+                    f"{component.name}: observed-empty snapshot published."
+                )
+            elif component.status == "absent":
+                console.print(f"{component.name}: never observed.")
+        if gate.fresh:
+            console.print(
+                f"Whole fetch is fresh for generation {outcome.pod_source_generation}."
+            )
+        else:
+            unpublished = [
+                f"{component.name} ({component.status})"
+                for component in gate.components
+                if component.status != "published"
+            ]
+            generation_label = (
+                f" for generation {outcome.pod_source_generation}"
+                if outcome.pod_source_generation is not None
+                else ""
+            )
+            console.print(
+                f"Whole fetch is not fresh{generation_label}: "
+                f"{', '.join(unpublished)}."
+            )
+            if gate.recovery_command is not None:
+                console.print(f"Run '{gate.recovery_command}' to complete the mirror.")
+            else:
+                console.print(
+                    "Fetch or load the missing source data before rebuilding."
+                )
     return outcome
 
 
 def esdc_url_builder(
-    table_name: TableName,
-    api_ver: ApiVer = ApiVer.V2,
+    table_name: TableName | PodApiTable,
+    api_ver: ApiVer | None = None,
     verbose: int = 3,
     report_year: int | None = None,
     file_type: FileType = FileType.CSV,
@@ -1754,10 +2226,11 @@ def esdc_url_builder(
 
     Parameters
     ----------
-    table_name : TableName
+    table_name : TableName | PodApiTable
         The table name to query.
-    api_ver : ApiVer, optional
-        The API version to use. Defaults to ApiVer.V2.
+    api_ver : ApiVer | None, optional
+        The API version to use. Defaults to V1 for a POD table and V2 otherwise;
+        an explicit version is always honored.
     verbose : int, optional
         The verbosity level. Defaults to 3.
     report_year : int, optional
@@ -1777,20 +2250,33 @@ def esdc_url_builder(
     If a report year is provided, it is added as a query parameter.
     For example, the url for project_resources table is:
     https://esdc.skkmigas.go.id/api/v2/project-resources?verbose=3&output=csv
+
+    A POD table uses its configured relative endpoint path under the API version
+    and always requests JSON output, so a CSV snapshot format does not change it:
+    https://esdc.skkmigas.go.id/api/v1/master-data-pod?verbose=3&output=json
     """
-    url = Config.get_api_url().rstrip("/") + api_ver.value
+    pod_table = isinstance(table_name, PodApiTable)
+    default_version = ApiVer.V1 if pod_table else ApiVer.V2
+    version = api_ver if api_ver is not None else default_version
+    url = Config.get_api_url().rstrip("/") + version.value
     tables = {
         TableName.PROJECT_RESOURCES: "project-resources",
         TableName.PROJECT_TIMESERIES: "project-timeseries",
     }
-    url = f"{url}/{tables[table_name]}?verbose={verbose}"
+    if pod_table:
+        segment = Config.get_pod_endpoint(table_name.value)
+    else:
+        segment = tables[table_name]
+    url = f"{url}/{segment}?verbose={verbose}"
 
     # TODO this is temporary fix since as of 2024-07-06
     # the API for time series does not support all year selection
     # remove this conditional if the API for project_timeseries is fixed.
     if report_year is not None:
         url = f"{url}&report-year={report_year}"
-    url = f"{url}&output={file_type.value}"
+    # POD endpoints answer JSON only, whatever the snapshot file format is.
+    output = FileType.JSON if pod_table else file_type
+    url = f"{url}&output={output.value}"
 
     return url
 
@@ -2209,9 +2695,7 @@ def _status_fetch_report() -> bool:
     return True
 
 
-def _print_api_source_status(
-    db_file: Path, sqlite_path: Path
-):
+def _print_api_source_status(db_file: Path, sqlite_path: Path):
     """Report both API snapshots and DuckDB markers using read-only connections."""
     from esdc.analytics_rebuild import ApiSourceStatus, get_api_analytics_status
 
@@ -2247,10 +2731,38 @@ def _print_api_source_status(
                 f"sha256={lineage['source_sha256']}"
             )
             if table == "project_resources":
+                rich.print(f"    Invalid geometry: {lineage['invalid_geometry_count']}")
+    from esdc.knowledge.freshness import knowledge_freshness_markers
+    from esdc.pod_registry.publication import get_pod_registry_status
+    from esdc.pod_registry.store import get_sqlite_readonly_connection
+
+    source = get_sqlite_readonly_connection(sqlite_path)
+    if source is not None:
+        try:
+            is_v2 = (
+                source.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='pod_registry_state'"
+                ).fetchone()
+                is not None
+            )
+            if is_v2:
+                registry = get_pod_registry_status(sqlite_path, db_file)
+                knowledge = knowledge_freshness_markers(source)
+                rich.print()
+                rich.print("[bold]POD publication and knowledge:[/bold]")
                 rich.print(
-                    "    Invalid geometry: "
-                    f"{lineage['invalid_geometry_count']}"
+                    f"  Business projection: {registry.state} — "
+                    f"{registry.message or 'generation markers agree'}"
                 )
+                rich.print(
+                    "  Knowledge: "
+                    f"{'fresh' if knowledge.fresh else 'stale'} — "
+                    f"source generation={knowledge.source_generation}, "
+                    f"knowledge generation={knowledge.knowledge_generation}"
+                )
+        finally:
+            source.close()
     return sources
 
 
@@ -3385,15 +3897,25 @@ def learn(
 def proposals() -> None:
     """List pending schema proposals discovered by `esdc corpus learn`."""
     from esdc.knowledge.store import KnowledgeStore
-    from esdc.pod_registry.store import get_sqlite_connection
+    from esdc.pod_registry.store import (
+        get_sqlite_readonly_connection,
+        is_missing_table_error,
+    )
 
-    conn = get_sqlite_connection()
-    try:
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-        props = store.pending_proposals()
-    finally:
-        conn.close()
+    conn = get_sqlite_readonly_connection()
+    if conn is None:
+        props = []
+    else:
+        try:
+            store = KnowledgeStore(conn)
+            try:
+                props = store.pending_proposals()
+            except sqlite3.OperationalError as exc:
+                if not is_missing_table_error(exc):
+                    raise
+                props = []
+        finally:
+            conn.close()
     if not props:
         rich.print("No pending proposals.")
         return
@@ -3411,13 +3933,21 @@ def proposals() -> None:
 
 @corpus_app.command(name="sync")
 def corpus_sync() -> None:
-    """Rebuild DuckDB's derived tables from the SQLite source of truth."""
-    from esdc.corpus.store import CorpusStore
+    """Rebuild DuckDB projections from the existing SQLite source."""
+    from esdc.configs import Config
+    from esdc.corpus.mirror import refresh_all
+    from esdc.dbmanager import get_duckdb_connection
+    from esdc.pod_registry.store import get_esdc_sqlite_path
 
-    store = CorpusStore(read_only=False)
+    database_path = Config.get_db_file()
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = get_duckdb_connection(
+        database_path,
+        read_only=False,
+        allow_install=False,
+    )
     try:
-        store.ensure_tables()
-        report = store.refresh_mirror()
+        report = refresh_all(conn, get_esdc_sqlite_path())
         typer.echo(f"documents mirrored: {report.documents}")
         if report.orphan_chunks:
             typer.echo(f"orphan chunks removed: {report.orphan_chunks}")
@@ -3425,7 +3955,7 @@ def corpus_sync() -> None:
             typer.echo(f"  {table}: {n}")
         typer.echo(f"views: {', '.join(report.views)}")
     finally:
-        store.close()
+        conn.close()
 
 
 @corpus_app.command(name="status")
@@ -3723,9 +4253,11 @@ def _warn_pod_links(doc_ids: list[str]) -> None:
     if not doc_ids:
         return
     try:
-        from esdc.pod_registry.store import get_sqlite_connection
+        from esdc.pod_registry.store import get_sqlite_readonly_connection
 
-        conn = get_sqlite_connection()
+        conn = get_sqlite_readonly_connection()
+        if conn is None:
+            return
         try:
             placeholders = ", ".join("?" for _ in doc_ids)
             rows = conn.execute(

@@ -27,10 +27,17 @@ import duckdb
 from esdc.console import console
 from esdc.knowledge.dossier import ensure_dossier_table, generate_pod_dossier
 from esdc.knowledge.extractor import extract_knowledge
+from esdc.knowledge.freshness import (
+    compute_knowledge_basis,
+    invalidate_knowledge_after_dependency_change,
+    knowledge_freshness,
+    mark_knowledge_current,
+)
 from esdc.knowledge.guideline import load_guideline
 from esdc.knowledge.linker import run_deterministic_linking
 from esdc.knowledge.resolver import resolve_extraction
 from esdc.knowledge.store import KnowledgeStore
+from esdc.pod_registry.migrations import _validate_existing_v2_registry
 
 logger = logging.getLogger(__name__)
 
@@ -100,67 +107,191 @@ def run_learn(
     model: str = "",
     progress: bool = True,
 ) -> LearnReport:
-    close_sqlite = close_duck = False
-    if sqlite_conn is None:
-        from esdc.pod_registry.store import get_sqlite_connection
-
-        sqlite_conn = get_sqlite_connection()
-        close_sqlite = True
-    if duck_conn is None:
-        from esdc.configs import Config
-        from esdc.dbmanager import get_duckdb_connection
-
-        duck_conn = get_duckdb_connection(Config.get_db_file(), read_only=False)
-        close_duck = True
-
     report = LearnReport(dry_run=dry_run)
+    close_sqlite = close_duck = False
     try:
-        guideline = load_guideline()
-        store = KnowledgeStore(sqlite_conn)
-        store.ensure_tables()
+        # The single truth is acquired first: the SQLite source, or its read-only
+        # form for a dry run. The cache is not opened until this connection is idle
+        # and validated as the current structure, so an invalid or busy source is
+        # refused without touching the cache or a provider.
+        if sqlite_conn is None:
+            if dry_run:
+                from esdc.pod_registry.store import get_sqlite_readonly_connection
 
-        docs = sqlite_conn.execute(
-            "SELECT doc_id, file_hash, doc_type, doc_date, subject, markdown "
-            "FROM documents ORDER BY doc_date, doc_id"
-        ).fetchall()
-        report.docs_total = len(docs)
-
-        pending: list[sqlite3.Row] = []
-        for doc in docs:
-            src_hash = _doc_source_hash(doc["file_hash"], guideline.content_hash)
-            if force or store.needs_learn(doc["doc_id"], src_hash):
-                pending.append(doc)
+                sqlite_conn = get_sqlite_readonly_connection()
+                if sqlite_conn is None:
+                    return report
             else:
-                report.docs_skipped += 1
+                from esdc.pod_registry.store import get_sqlite_writer_connection
+
+                sqlite_conn = get_sqlite_writer_connection()
+            close_sqlite = True
+        if sqlite_conn.in_transaction:
+            raise RuntimeError("learn requires an idle SQLite connection")
+        # The action source is validated before anything is created or written:
+        # a wrong or missing current schema is refused, never repaired or
+        # reinterpreted, and no LLM work is started for it.
+        _validate_existing_v2_registry(sqlite_conn)
+        # Only now is the disposable cache acquired, for a run that can write.
+        if duck_conn is None and not dry_run:
+            from esdc.configs import Config
+            from esdc.dbmanager import get_duckdb_connection
+
+            duck_conn = get_duckdb_connection(Config.get_db_file(), read_only=False)
+            close_duck = True
+        guideline = load_guideline()
+        store = KnowledgeStore(sqlite_conn, allow_stale=True)
+        if not dry_run:
+            store.ensure_tables()
+
+        def capture_inputs():
+            # Basis, document text, and per-document cache markers must share a
+            # single SQLite snapshot. A WAL writer can otherwise change text
+            # between the basis calculation and the document read.
+            sqlite_conn.execute("BEGIN")
+            try:
+                current_freshness = knowledge_freshness(sqlite_conn)
+                run_basis = current_freshness.basis_sha256
+                basis_changed = bool(
+                    current_freshness.stored_basis_sha256
+                    != current_freshness.basis_sha256
+                )
+                documents_exists = (
+                    sqlite_conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='documents'"
+                    ).fetchone()
+                    is not None
+                )
+                learn_state_exists = (
+                    sqlite_conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='learn_state'"
+                    ).fetchone()
+                    is not None
+                )
+                docs = (
+                    sqlite_conn.execute(
+                        "SELECT doc_id, file_hash, doc_type, doc_date, subject, "
+                        "markdown "
+                        "FROM documents ORDER BY doc_date, doc_id"
+                    ).fetchall()
+                    if documents_exists
+                    else []
+                )
+                pending: list[sqlite3.Row] = []
+                docs_skipped = 0
+                for doc in docs:
+                    src_hash = _doc_source_hash(
+                        doc["file_hash"], guideline.content_hash
+                    )
+                    if (
+                        force
+                        or basis_changed
+                        or not learn_state_exists
+                        or store.needs_learn(doc["doc_id"], src_hash, run_basis)
+                    ):
+                        pending.append(doc)
+                    else:
+                        docs_skipped += 1
+                sqlite_conn.commit()
+                return (
+                    current_freshness,
+                    run_basis,
+                    basis_changed,
+                    docs,
+                    pending,
+                    docs_skipped,
+                )
+            except Exception:
+                sqlite_conn.rollback()
+                raise
+
+        (
+            current_freshness,
+            run_basis,
+            basis_changed,
+            docs,
+            pending,
+            docs_skipped,
+        ) = capture_inputs()
+        if not dry_run and (basis_changed or force):
+            # Confirm the captured inputs are still current before clearing
+            # derived state. Retry the short read snapshot if a writer won
+            # the gap after it was released; no lock spans provider work.
+            for _attempt in range(3):
+                sqlite_conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if compute_knowledge_basis(sqlite_conn) != run_basis:
+                        sqlite_conn.rollback()
+                        (
+                            current_freshness,
+                            run_basis,
+                            basis_changed,
+                            docs,
+                            pending,
+                            docs_skipped,
+                        ) = capture_inputs()
+                        continue
+                    invalidate_knowledge_after_dependency_change(
+                        sqlite_conn, actor="corpus:learn", force=True
+                    )
+                    sqlite_conn.commit()
+                    break
+                except Exception:
+                    sqlite_conn.rollback()
+                    raise
+            else:
+                raise RuntimeError(
+                    "knowledge dependencies changed repeatedly during learn setup"
+                )
+
+        report.docs_total = len(docs)
+        report.docs_skipped = docs_skipped
         if limit is not None:
             pending = pending[:limit]
 
         if dry_run:
             report.docs_processed = len(pending)
             return report
+        if duck_conn is None:
+            raise RuntimeError("DuckDB connection is required for corpus learn")
 
         # Phase 1: deterministic
         with _status(progress, "linking deterministic edges"):
-            link_report = run_deterministic_linking(sqlite_conn, duck_conn, store)
+            sqlite_conn.execute("BEGIN IMMEDIATE")
+            try:
+                link_report = run_deterministic_linking(
+                    sqlite_conn, duck_conn, store, commit=False
+                )
+                sqlite_conn.commit()
+            except Exception:
+                sqlite_conn.rollback()
+                raise
         report.edges_written += link_report.edges_written
         report.pod_document_added = link_report.pod_document_added
 
-        if llm_caller is None:
-            from esdc.configs import Config
+        extraction_caller: Callable[[str], str] | None = llm_caller
+        dossier_caller: Callable[[str], str] | None = llm_caller
 
-            corpus_cfg = Config.get_corpus_config()
-            extraction_caller, provider, model = _open_default_llm(
-                max_output_tokens=(
-                    int(corpus_cfg.get("extract_max_tokens") or 0) or None
-                ),
-                timeout_seconds=(
-                    float(corpus_cfg.get("extract_timeout_seconds") or 0) or None
-                ),
-            )
-            dossier_caller, _, _ = _open_default_llm()
-        else:
-            extraction_caller = llm_caller
-            dossier_caller = llm_caller
+        def open_default_callers() -> tuple[
+            Callable[[str], str], Callable[[str], str]
+        ]:
+            nonlocal extraction_caller, dossier_caller, provider, model
+            if extraction_caller is None or dossier_caller is None:
+                from esdc.configs import Config
+
+                corpus_cfg = Config.get_corpus_config()
+                extraction_caller, provider, model = _open_default_llm(
+                    max_output_tokens=(
+                        int(corpus_cfg.get("extract_max_tokens") or 0) or None
+                    ),
+                    timeout_seconds=(
+                        float(corpus_cfg.get("extract_timeout_seconds") or 0) or None
+                    ),
+                )
+                dossier_caller, _, _ = _open_default_llm()
+            return extraction_caller, dossier_caller
 
         # Phases 2+3: extraction + resolution
         from esdc.corpus.pipeline import _progress_with_status
@@ -178,41 +309,67 @@ def run_learn(
                     handle.file(doc_id)
                 src_hash = _doc_source_hash(doc["file_hash"], guideline.content_hash)
                 try:
+                    doc_basis = compute_knowledge_basis(sqlite_conn)
+                    if doc_basis != run_basis:
+                        raise RuntimeError(
+                            "knowledge dependencies changed before learning; "
+                            "discarded the stale document snapshot"
+                        )
                     meta = {
                         "doc_id": doc_id,
                         "doc_type": doc["doc_type"],
                         "doc_date": doc["doc_date"],
                         "subject": doc["subject"],
                     }
+                    if extraction_caller is None:
+                        extraction_caller, _ = open_default_callers()
                     extraction = extract_knowledge(
                         doc["markdown"] or "", meta, guideline, extraction_caller
                     )
-                    resolution = resolve_extraction(
-                        doc_id, extraction, sqlite_conn, duck_conn
-                    )
-                    # replace this doc's previous LLM knowledge, keep deterministic
-                    # edges (they are re-upserted by phase 1 on every run)
-                    store.delete_doc_edges(doc_id)
-                    if resolution.edges:
-                        report.edges_written += store.upsert_edges(resolution.edges)
-                    report.claims_written += store.replace_claims(
-                        doc_id, resolution.claims
-                    )
+                    sqlite_conn.execute("BEGIN IMMEDIATE")
+                    if compute_knowledge_basis(sqlite_conn) != doc_basis:
+                        sqlite_conn.rollback()
+                        raise RuntimeError(
+                            "knowledge dependencies changed while learning; "
+                            "discarded the in-flight extraction"
+                        )
+                    try:
+                        resolution = resolve_extraction(
+                            doc_id, extraction, sqlite_conn, duck_conn
+                        )
+                        # Replace only this document's LLM edges; deterministic
+                        # exact links remain part of the same result transaction.
+                        store.delete_doc_edges(
+                            doc_id, method="llm_extracted", commit=False
+                        )
+                        if resolution.edges:
+                            store.upsert_edges(resolution.edges, commit=False)
+                        store.replace_claims(
+                            doc_id, resolution.claims, commit=False
+                        )
+                        for unknown in extraction.unknown_types:
+                            store.bump_proposal(
+                                unknown["kind"], unknown["name"], doc_id, commit=False
+                            )
+                        store.mark_learned(
+                            doc_id,
+                            src_hash,
+                            basis_sha256=doc_basis,
+                            commit=False,
+                        )
+                        sqlite_conn.commit()
+                    except Exception:
+                        sqlite_conn.rollback()
+                        raise
+                    report.edges_written += len(resolution.edges)
+                    report.claims_written += len(resolution.claims)
                     report.unresolved_mentions += len(resolution.unresolved)
-                    for unknown in extraction.unknown_types:
-                        store.bump_proposal(unknown["kind"], unknown["name"], doc_id)
-                    store.mark_learned(doc_id, src_hash)
                     report.docs_processed += 1
                 except Exception as e:  # noqa: BLE001 - one bad doc must not stop learn
                     logger.error("[Learn] doc_failed | doc_id=%s error=%s", doc_id, e)
                     report.docs_failed += 1
                 if handle is not None:
                     handle.advance()
-
-        # Deleting doc edges above also removed deterministic doc edges for
-        # processed docs; restore them.
-        with _status(progress, "restoring deterministic edges"):
-            link_report = run_deterministic_linking(sqlite_conn, duck_conn, store)
 
         # Phase 4: dossiers for every POD with at least one document link
         ensure_dossier_table(duck_conn)
@@ -223,6 +380,8 @@ def run_learn(
                 "WHERE rel = 'ABOUT_POD' ORDER BY dst_id"
             ).fetchall()
         ]
+        if pod_ids and dossier_caller is None:
+            _, dossier_caller = open_default_callers()
         handle = None
         with ExitStack() as stack:
             if progress and pod_ids:
@@ -230,6 +389,8 @@ def run_learn(
                     _progress_with_status("dossiers", len(pod_ids), "pods")
                 )
             for pod_id in pod_ids:
+                if dossier_caller is None:
+                    raise RuntimeError("dossier caller was not initialized")
                 if handle is not None:
                     handle.file(pod_id)
                 status = generate_pod_dossier(
@@ -251,6 +412,17 @@ def run_learn(
                     handle.advance()
 
         report.proposals_pending = len(store.pending_proposals())
+
+        if limit is None and report.docs_failed == 0 and run_basis is not None:
+            sqlite_conn.execute("BEGIN IMMEDIATE")
+            try:
+                if not mark_knowledge_current(sqlite_conn, run_basis):
+                    sqlite_conn.rollback()
+                else:
+                    sqlite_conn.commit()
+            except Exception:
+                sqlite_conn.rollback()
+                raise
 
         # insert_document no longer writes the mirror row (Task 7), so the
         # mirror is only correct once the batch ends with a refresh. There
@@ -298,7 +470,19 @@ def run_learn(
             pass
         return report
     finally:
-        if close_sqlite:
-            sqlite_conn.close()
-        if close_duck:
-            duck_conn.close()
+        # Every connection this function acquired is closed, and one failing close
+        # must not skip the other. A close failure is reported as a warning so the
+        # original failure survives; connections the caller supplied stay
+        # caller-owned.
+        for label, acquired_conn, acquired in (
+            ("sqlite", sqlite_conn, close_sqlite),
+            ("duck", duck_conn, close_duck),
+        ):
+            if not acquired or acquired_conn is None:
+                continue
+            try:
+                acquired_conn.close()
+            except Exception as close_error:  # noqa: BLE001 - must not skip the other close
+                logger.warning(
+                    "[Learn] close_failed | connection=%s error=%s", label, close_error
+                )

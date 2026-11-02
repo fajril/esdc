@@ -11,7 +11,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -134,6 +134,8 @@ def _validate_baseline(
         raise ValueError("baseline under ~/.esdc is forbidden")
     if output == home_esdc or home_esdc in output.parents:
         raise ValueError("output under ~/.esdc is forbidden")
+    if output.exists():
+        raise ValueError("output-dir must not already exist")
     if not baseline.is_dir():
         raise ValueError("baseline-dir must be a directory")
     source_sqlite, source_duckdb = baseline / "esdc.sqlite", baseline / "esdc.duckdb"
@@ -145,8 +147,6 @@ def _validate_baseline(
         for path in baseline.iterdir()
     ):
         raise ValueError("baseline contains SQLite WAL/SHM/journal sidecars")
-    if output.exists():
-        raise ValueError("output-dir must not already exist")
     if output == baseline or output in baseline.parents or baseline in output.parents:
         raise ValueError("baseline and output directories overlap")
     fixture_root = manifest_path.parent
@@ -156,21 +156,13 @@ def _validate_baseline(
         or fixture_root in output.parents
     ):
         raise ValueError("fixture and output directories overlap")
-    with sqlite3.connect(
-        source_sqlite.resolve().as_uri() + "?mode=ro", uri=True
-    ) as source:
-        result = source.execute("PRAGMA integrity_check").fetchone()
-        if result is None or result[0] != "ok":
-            raise ValueError("baseline SQLite integrity_check failed")
-    connection = duckdb.connect(str(source_duckdb), read_only=True)
-    connection.close()
     entries, manifest = _read_manifest(manifest_path)
     return baseline, output, manifest_path, entries, manifest
 
 
 def _require_legacy_bootstrap_state(sqlite_path: Path) -> None:
-    with sqlite3.connect(
-        sqlite_path.resolve().as_uri() + "?mode=ro", uri=True
+    with closing(
+        sqlite3.connect(sqlite_path.resolve().as_uri() + "?mode=ro", uri=True)
     ) as source:
         table = source.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -208,12 +200,10 @@ def _scale_classification(
     """Classify completed rehearsal volume from observed endpoint counts."""
     million_rows = 1_000_000
     complete_volume = (
-        initial_legacy_rows >= million_rows
-        and final_canonical_rows >= million_rows
+        initial_legacy_rows >= million_rows and final_canonical_rows >= million_rows
     )
     both_small = (
-        initial_legacy_rows < million_rows
-        and final_canonical_rows < million_rows
+        initial_legacy_rows < million_rows and final_canonical_rows < million_rows
     )
     classification = (
         "synthetic million-row lifecycle"
@@ -230,18 +220,60 @@ def _scale_classification(
     }
 
 
+def current_pod_fixture_bodies(sqlite_path: Path) -> dict[str, bytes]:
+    """Declare the unchanged current POD baseline for a raw-data-only rehearsal.
+
+    These are explicit offline API fixtures, not an alternative production fetch
+    path. Old POD schemas refuse; only an absent registry produces empty inputs.
+    """
+    from esdc.pod_registry.api_context import read_pod_api_context
+    from esdc.selection import PodApiTable
+
+    context = read_pod_api_context(sqlite_path)
+    return {
+        table.value: json.dumps(
+            [dict(row) for row in context.existing_rows.get(table.value, ())],
+            default=str,
+        ).encode()
+        for table in PodApiTable
+    }
+
+
+def pod_fixture_body(
+    bodies: dict[str, bytes], table_name: str, report_year: int | None
+) -> bytes:
+    """Apply the monitoring endpoint's year selection to its explicit baseline."""
+    body = bodies[table_name]
+    if table_name == "pod_monitoring" and report_year is not None:
+        rows = [
+            row
+            for row in json.loads(body)
+            if str(row.get("reported_date")).startswith(f"{report_year:04d}-")
+        ]
+        return json.dumps(rows).encode()
+    return body
+
+
 @contextmanager
 def _fixture_transport(
     scenario: str,
     entries: dict[tuple[str, str, int | None], Path],
     expected: set[tuple[str, str, int | None]],
+    *,
+    pod_bodies: dict[str, bytes] | None = None,
 ) -> Iterator[list[str]]:
     import esdc.esdc as app
-    from esdc.selection import FileType, TableName
+    from esdc.selection import FileType, PodApiTable, TableName
 
     remaining = set(expected)
     urls: list[str] = []
     original = app.esdc_downloader
+    pod_paths = {
+        urlparse(
+            app.esdc_url_builder(PodApiTable(name), file_type=FileType.JSON)
+        ).path: name
+        for name in (pod_bodies or {})
+    }
 
     def download(url: str, username: str = "", password: str = "") -> bytes:
         parsed = urlparse(url)
@@ -255,6 +287,18 @@ def _fixture_transport(
         query = parse_qs(parsed.query)
         year_values = query.get("report-year")
         year = int(year_values[0]) if year_values else None
+        if parsed.path in pod_paths:
+            name = pod_paths[parsed.path]
+            expected_url = app.esdc_url_builder(
+                PodApiTable(name), file_type=FileType.JSON, report_year=year
+            )
+            if url != expected_url:
+                raise RuntimeError(
+                    f"POD fixture URL differs from endpoint contract: {url}"
+                )
+            assert pod_bodies is not None
+            urls.append(url)
+            return pod_fixture_body(pod_bodies, name, year)
         key = (scenario, table_name, year)
         if key not in remaining:
             raise RuntimeError(f"unspecified API request: {url}")
@@ -294,6 +338,16 @@ def _file_hashes(sqlite_path: Path, duckdb_path: Path) -> dict[str, str]:
 
 
 def _protected_digests(duckdb_path: Path) -> dict[str, str]:
+    from esdc.loaders import _METADATA_TABLE
+    from esdc.pod_registry.contract import load_pod_contract
+    from esdc.pod_registry.ownership import pod_reserved_names
+
+    managed = {
+        "project_resources",
+        "project_timeseries",
+        "api_publication",
+        *pod_reserved_names(load_pod_contract()),
+    }
     conn = duckdb.connect(str(duckdb_path), read_only=True)
     result: dict[str, str] = {}
     try:
@@ -305,10 +359,17 @@ def _protected_digests(duckdb_path: Path) -> dict[str, str]:
             ).fetchall()
         ]
         for name in names:
-            if name in {"project_resources", "project_timeseries", "api_publication"}:
+            if name in managed:
                 continue
             escaped = name.replace('"', '""')
-            if name == "_metadata":
+            if name == _METADATA_TABLE:
+                placeholders = ", ".join("?" for _ in managed)
+                cursor = conn.execute(
+                    f'SELECT * FROM "{escaped}" WHERE table_name IS NULL '
+                    f"OR lower(table_name) NOT IN ({placeholders}) ORDER BY ALL",
+                    sorted(managed),
+                )
+            elif name == "_metadata":
                 cursor = conn.execute(
                     f"SELECT CAST(key AS VARCHAR), CAST(value AS VARCHAR) "
                     f"FROM \"{escaped}\" WHERE key != 'last_updated' ORDER BY key"
@@ -327,10 +388,14 @@ def _protected_digests(duckdb_path: Path) -> dict[str, str]:
                     f'SELECT {projection} FROM "{escaped}" ORDER BY ALL'
                 )
             digest = hashlib.sha256()
+            count = 0
             while batch := cursor.fetchmany(1000):
+                count += len(batch)
                 digest.update(
                     json.dumps(batch, default=str, separators=(",", ":")).encode()
                 )
+            if name == _METADATA_TABLE and count == 0:
+                continue
             result[name] = digest.hexdigest()
     finally:
         conn.close()
@@ -420,6 +485,44 @@ def _identity_digest(cursor: object, *, sample_limit: int = 10) -> dict[str, obj
             if len(samples) < sample_limit:
                 samples.append(tuple(row))
     return {"count": count, "sha256": digest.hexdigest(), "samples": samples}
+
+
+def _retained_timeseries_values(
+    path: Path, replaced_years: set[int] | None = None
+) -> dict[str, object]:
+    """Hash retained business rows independently of regenerated cache identities."""
+    conn = duckdb.connect(
+        str(path), read_only=True, config={"autoinstall_known_extensions": "false"}
+    )
+    try:
+        columns = [
+            row[0]
+            for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='main' AND table_name='project_timeseries' "
+                "ORDER BY column_name"
+            ).fetchall()
+            if row[0] not in ("id", "uuid")
+        ]
+        projection = ", ".join('"' + name.replace('"', '""') + '"' for name in columns)
+        years = sorted(replaced_years or set())
+        if years:
+            placeholders = ", ".join("?" for _ in years)
+            cursor = conn.execute(
+                f"SELECT {projection} FROM project_timeseries "
+                f"WHERE report_year IS NULL OR report_year NOT IN ({placeholders}) "
+                "ORDER BY ALL",
+                years,
+            )
+        else:
+            cursor = conn.execute(
+                f"SELECT {projection} FROM project_timeseries ORDER BY ALL"
+            )
+        result = _identity_digest(cursor)
+        result["columns"] = columns
+        return result
+    finally:
+        conn.close()
 
 
 def _retained_timeseries_identity(
@@ -606,7 +709,14 @@ def run_analytics_rehearsal(
         raise ValueError(
             "closed baseline clone hashes do not match source before execution"
         )
-    with sqlite3.connect(sqlite_path) as count_source:
+    with closing(
+        sqlite3.connect(sqlite_path.resolve().as_uri() + "?mode=ro", uri=True)
+    ) as count_source:
+        # Inspect only the verified closed-file clone. Even a read-only SQLite
+        # connection can create WAL coordination files beside its source file.
+        integrity = count_source.execute("PRAGMA integrity_check").fetchone()
+        if integrity is None or integrity[0] != "ok":
+            raise ValueError("baseline SQLite integrity_check failed")
         resource_count_sqlite = count_source.execute(
             "SELECT COUNT(*) FROM api_project_resources"
         ).fetchone()[0]
@@ -779,17 +889,28 @@ def run_analytics_rehearsal(
                 active_scenario = scenario
                 active_command = "load_esdc_data(filetype=json)"
                 active_assertion = (
-                    "complete fixture fetch, typed parity, retained identities, "
+                    "complete fixture fetch, typed parity, retained canonical values, "
                     "and result-cache invalidation"
                 )
-                changed_years = _nonempty_fixture_years(entries, scenario)
+                changed_years = {
+                    year
+                    for entry_scenario, table, year in entries
+                    if entry_scenario == scenario
+                    and table == "project_timeseries"
+                    and year is not None
+                }
                 _seed_result_caches(chat_tools)
                 caches_before = _result_cache_state(chat_tools)
-                retained_before = _retained_timeseries_identity(
+                retained_before = _retained_timeseries_values(
                     duckdb_path, changed_years
                 )
                 expected = {key for key in entries if key[0] == scenario}
-                with _fixture_transport(scenario, entries, expected) as urls:
+                with _fixture_transport(
+                    scenario,
+                    entries,
+                    expected,
+                    pod_bodies=current_pod_fixture_bodies(sqlite_path),
+                ) as urls:
                     outcome = app.load_esdc_data(
                         filetype=FileType.JSON,
                         to_file=False,
@@ -811,13 +932,15 @@ def run_analytics_rehearsal(
                     raise RuntimeError(
                         f"{scenario} resource parity failed: {resource_audit['issues']}"
                     )
-                retained_after = _retained_timeseries_identity(
-                    duckdb_path, changed_years
-                )
-                if retained_after != retained_before:
+                retained_after = _retained_timeseries_values(duckdb_path, changed_years)
+                if years is None and retained_after["count"] != 0:
+                    raise RuntimeError(
+                        f"{scenario} retained rows outside the complete source snapshot"
+                    )
+                if years is not None and retained_after != retained_before:
                     raise RuntimeError(
                         f"{scenario} changed retained older/NULL-year timeseries "
-                        "IDs or UUIDs"
+                        "canonical values"
                     )
                 protected_now = _protected_digests(duckdb_path)
                 if protected_now != protected_before:
@@ -840,15 +963,16 @@ def run_analytics_rehearsal(
                             "all URLs matched esdc_url_builder",
                             "timeseries typed parity passed",
                             "resource parity passed",
-                            "retained row IDs/UUIDs unchanged outside replaced slices",
+                            "retained canonical values unchanged "
+                            "outside replaced slices",
                             "both SQL and tool result caches invalidated",
                             "protected objects unchanged",
                         ],
                         "requests": urls,
                         "resource_rows": outcome.resource_row_count,
                         "timeseries_rows": outcome.timeseries_row_count,
-                        "retained_identity_before": retained_before,
-                        "retained_identity_after": retained_after,
+                        "retained_values_before": retained_before,
+                        "retained_values_after": retained_after,
                         "result_caches_before": caches_before,
                         "result_caches_after": caches_after,
                         "source_snapshots": _snapshots(sqlite_path),
@@ -877,6 +1001,7 @@ def run_analytics_rehearsal(
                     active_scenario,
                     entries,
                     {key for key in entries if key[0] == active_scenario},
+                    pod_bodies=current_pod_fixture_bodies(sqlite_path),
                 ):
                     try:
                         app.load_esdc_data(
@@ -947,9 +1072,9 @@ def run_analytics_rehearsal(
                 )
             }
             snapshots_before_c2 = _snapshots(sqlite_path)
-            from esdc import fetch_publication
+            from esdc import analytics_rebuild
 
-            original_stage = fetch_publication.apply_timeseries_stage
+            original_stage = analytics_rebuild.apply_timeseries_stage
 
             def fail_after_c1(*args, **kwargs):
                 raise RuntimeError(
@@ -957,12 +1082,13 @@ def run_analytics_rehearsal(
                     "inside C2 before timeseries apply"
                 )
 
-            fetch_publication.apply_timeseries_stage = fail_after_c1
+            analytics_rebuild.apply_timeseries_stage = fail_after_c1
             try:
                 with _fixture_transport(
                     active_scenario,
                     entries,
                     {key for key in entries if key[0] == active_scenario},
+                    pod_bodies=current_pod_fixture_bodies(sqlite_path),
                 ) as urls:
                     try:
                         app.load_esdc_data(
@@ -986,7 +1112,7 @@ def run_analytics_rehearsal(
                     else:
                         raise RuntimeError("post-C1 injected failure was not observed")
             finally:
-                fetch_publication.apply_timeseries_stage = original_stage
+                analytics_rebuild.apply_timeseries_stage = original_stage
             if _protected_digests(duckdb_path) != protected_before:
                 raise RuntimeError("C2 failure changed a protected DuckDB object")
             after_c2 = {table: _table_digest(duckdb_path, table) for table in before_c2}
@@ -1021,7 +1147,9 @@ def run_analytics_rehearsal(
             }
             if not expected_resources or not expected_timeseries:
                 raise RuntimeError("C2 failure fixture lacks durable project IDs")
-            with sqlite3.connect(sqlite_path) as source_check:
+            with closing(
+                sqlite3.connect(sqlite_path.resolve().as_uri() + "?mode=ro", uri=True)
+            ) as source_check:
                 resource_placeholders = ",".join("?" for _ in expected_resources)
                 durable_resources = {
                     (row[0], row[1])

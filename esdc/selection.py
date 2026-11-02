@@ -32,6 +32,30 @@ class TableName(Enum):
     PROJECT_TIMESERIES = "project_timeseries"
 
 
+class PodApiTable(str, Enum):
+    """
+    Enum for the five canonical POD input tables served by the v1 endpoints.
+
+    Attributes:
+        MASTER_DATA_PROJECT (str): Canonical table ``m_project``.
+        MASTER_DATA_POD (str): Canonical table ``m_pod``.
+        POD_PROJECT (str): Canonical table ``pod_project``.
+        POD_MONITORING (str): Canonical table ``pod_monitoring``.
+        POD_FORECAST (str): Canonical table ``pod_forecast``.
+
+    Notes:
+    -----
+    The values are the canonical input table names the POD contract and adapter
+    use; the endpoint slugs are configuration, not table identity.
+    """
+
+    MASTER_DATA_PROJECT = "m_project"
+    MASTER_DATA_POD = "m_pod"
+    POD_PROJECT = "pod_project"
+    POD_MONITORING = "pod_monitoring"
+    POD_FORECAST = "pod_forecast"
+
+
 class FileType(Enum):
     """
     Enum for file types.

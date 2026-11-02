@@ -6,7 +6,8 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from esdc.corpus.store import _SQLITE_DOC_DDL, CorpusStore
+from esdc.corpus.store import _SQLITE_DOC_DDL
+from esdc.knowledge.freshness import invalidate_knowledge_after_dependency_change
 from esdc.pod_registry.store import get_sqlite_connection
 from esdc.portal.document_entities import ENTITY_FIELDS, apply_document_entity_changeset
 
@@ -318,18 +319,45 @@ def test_mirror_failure_returns_warning_but_saves(tmp_path):
     assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
 
 
-def test_entity_save_reembeds_edited_documents(monkeypatch, tmp_path):
-    """The edited doc_ids are handed to the re-embed pass after commit."""
-    from esdc.corpus.pipeline import CorpusReport
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"updates": [{"doc_id": "D1", "wk_name": "rokan"}, "not-a-row"]},
+        {"updates": "not-a-list"},
+        {"inserts": "not-a-list"},
+        {"deletes": None},
+        {"updates": [{"doc_id": "D1", "wk_name": "rokan", "source_generation": 7}]},
+        {"updates": [{f"wk_name{i}": "x"} for i in range(501)]},
+    ],
+)
+def test_malformed_payload_rejected_before_db(tmp_path, payload):
+    """Structural validation runs before any resolver or DB access."""
+    sqlite_path = _seed_sqlite(tmp_path)
+    resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
 
-    seen: dict[str, object] = {}
+    result = apply_document_entity_changeset(
+        payload,
+        sqlite_path=sqlite_path,
+        db_path=tmp_path / "no-mirror.duckdb",
+        resolver=resolver,
+    )
 
-    def _fake(doc_ids, store=None):
-        seen["doc_ids"] = list(doc_ids)
-        seen["store"] = store
-        return CorpusReport()
+    assert result.ok is False
+    assert result.errors
+    assert result.source_committed is False
+    # no unvalidated write happened
+    assert _read_doc(sqlite_path, "D1")["wk_name"] is None
 
-    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fake)
+
+def test_successful_save_never_loads_embedding_models(monkeypatch, tmp_path):
+    """Ordinary saves do no automatic LLM/embedding work."""
+    from esdc.corpus.pipeline import run_reembed_documents
+
+    monkeypatch.setattr(
+        "esdc.corpus.pipeline.run_reembed_documents",
+        lambda *a, **k: pytest.fail("reembed"),
+    )
+    assert run_reembed_documents is not None
 
     sqlite_path = _seed_sqlite(tmp_path)
     duckdb_path = _make_duckdb_mirror(tmp_path)
@@ -343,45 +371,10 @@ def test_entity_save_reembeds_edited_documents(monkeypatch, tmp_path):
     )
 
     assert result.ok is True
-    assert seen["doc_ids"] == ["D1"]
-    # The store must carry the caller's paths. Asserting merely that it is
-    # not None would also pass for a default-constructed CorpusStore, which
-    # is exactly the bug this guards: that one targets the user's real
-    # ~/.esdc databases and would re-embed the live corpus during tests.
-    store = seen["store"]
-    assert store is not None
-    assert isinstance(store, CorpusStore)
-    assert store._db_path == duckdb_path
-    assert store._sqlite_path == sqlite_path
-
-
-def test_entity_save_warns_on_reembed_error_after_commit(monkeypatch, tmp_path):
-    """A re-embed failure warns while the committed SQLite and mirror stay saved."""
-    seen: dict[str, object] = {}
-    failure = "offline re-embed failed"
-
-    def _fail(doc_ids, store=None):
-        seen["doc_ids"] = list(doc_ids)
-        seen["store"] = store
-        raise RuntimeError(failure)
-
-    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fail)
-
-    sqlite_path = _seed_sqlite(tmp_path)
-    duckdb_path = _make_duckdb_mirror(tmp_path)
-    resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
-
-    result = apply_document_entity_changeset(
-        {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
-        sqlite_path=sqlite_path,
-        db_path=duckdb_path,
-        resolver=resolver,
-    )
-
-    assert result.ok is True
-    assert result.warnings
-    assert failure in result.warnings[0]
-    assert "reembed --stale" in result.warnings[0]
+    # successful mirror publication -> no reminders at all
+    assert result.warnings == []
+    assert result.source_committed is True
+    assert result.source_generation == 0
     assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
 
     mirror = duckdb.connect(str(duckdb_path))
@@ -392,31 +385,60 @@ def test_entity_save_warns_on_reembed_error_after_commit(monkeypatch, tmp_path):
     assert mirrored_row is not None
     assert mirrored_row[0] == json.dumps(["Rokan"])
 
-    assert seen["doc_ids"] == ["D1"]
-    store = seen["store"]
-    assert store is not None
-    assert isinstance(store, CorpusStore)
-    assert store._db_path == duckdb_path
-    assert store._sqlite_path == sqlite_path
+
+def test_mirror_failure_warns_and_reminds_manual_reembed(monkeypatch, tmp_path):
+    """A lost DuckDB lock degrades to a warning plus a manual reembed reminder."""
+    from esdc.corpus.pipeline import run_reembed_documents
+
+    monkeypatch.setattr(
+        "esdc.corpus.pipeline.run_reembed_documents",
+        lambda *a, **k: pytest.fail("reembed"),
+    )
+    assert run_reembed_documents is not None
+
+    sqlite_path = _seed_sqlite(tmp_path)
+    duckdb_path = tmp_path / "locked.duckdb"
+    duckdb.connect(str(duckdb_path)).close()
+    lock_conn = duckdb.connect(str(duckdb_path), read_only=True)
+    resolver = FakeResolver(matches={("wk_name", "rokan"): [{"name": "Rokan"}]})
+
+    try:
+        result = apply_document_entity_changeset(
+            {"updates": [{"doc_id": "D1", "wk_name": "rokan"}]},
+            sqlite_path=sqlite_path,
+            db_path=duckdb_path,
+            resolver=resolver,
+        )
+    finally:
+        lock_conn.close()
+
+    assert result.ok is True
+    assert result.source_committed is True
+    assert "esdc corpus sync" in result.warnings[0]
+    assert any("reembed --stale" in w for w in result.warnings)
+    assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])
 
 
-def test_entity_save_skips_reembed_when_the_mirror_refresh_failed(
+def test_knowledge_invalidation_runs_inside_the_source_transaction(
     monkeypatch, tmp_path
 ):
-    """A stale mirror must not be baked into fresh-looking chunks."""
+    """KG invalidation happens in the same transaction as the updates, before commit."""
     from esdc.portal import document_entities
 
-    called = False
+    calls: list[dict] = []
+    real_helper = invalidate_knowledge_after_dependency_change
 
-    def _fake(doc_ids, store=None):
-        nonlocal called
-        called = True
+    def _spy(conn, *, actor, force=False):
+        # The helper itself requires an open transaction; asserting here proves
+        # the call is inside it rather than after the commit.
+        assert conn.in_transaction
+        calls.append({"actor": actor, "force": force})
+        return real_helper(conn, actor=actor, force=force)
 
-    monkeypatch.setattr("esdc.corpus.pipeline.run_reembed_documents", _fake)
     monkeypatch.setattr(
         document_entities,
-        "_refresh_mirror_after_save",
-        lambda *a, **k: ["DuckDB mirror refresh deferred: locked."],
+        "invalidate_knowledge_after_dependency_change",
+        _spy,
     )
 
     sqlite_path = _seed_sqlite(tmp_path)
@@ -430,5 +452,10 @@ def test_entity_save_skips_reembed_when_the_mirror_refresh_failed(
         resolver=resolver,
     )
 
-    assert called is False
-    assert any("reembed --stale" in w for w in result.warnings)
+    assert result.ok is True
+    assert calls == [
+        {"actor": "FA:portal-document", "force": True},
+    ]
+    # Metadata edits leave the current POD source generation unchanged.
+    assert result.source_generation == 0
+    assert _read_doc(sqlite_path, "D1")["wk_name"] == json.dumps(["Rokan"])

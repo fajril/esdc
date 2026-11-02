@@ -14,15 +14,31 @@ from esdc.analytics_rebuild import AnalyticsRebuildReport, rebuild_api_analytics
 from esdc.analytics_rehearsal import run_analytics_rehearsal
 from esdc.configs import Config
 from esdc.pod_registry.store import get_esdc_sqlite_path
+from esdc.source_publication import (
+    committed_pod_source_generation,
+    publish_committed_pod_sources,
+)
 from esdc.timeseries_bootstrap import bootstrap_timeseries_source
 
 
 def rebuild_api_analytics_command() -> None:
     """Rebuild both API analytical projections from committed SQLite snapshots."""
+    sqlite_path = get_esdc_sqlite_path()
+    generation = committed_pod_source_generation(sqlite_path)
     try:
-        report = rebuild_api_analytics(
-            duckdb_path=Config.get_db_file(), sqlite_path=get_esdc_sqlite_path()
-        )
+        if generation is None:
+            # A database without POD uses the generic raw-source recovery route.
+            report = rebuild_api_analytics(
+                duckdb_path=Config.get_db_file(), sqlite_path=sqlite_path
+            )
+        else:
+            # The v2 route publishes committed truth only: no HTTP, no source re-apply,
+            # no new revision UUID and no new source generation.
+            report = publish_committed_pod_sources(
+                sqlite_path,
+                Config.get_db_file(),
+                expected_generation=generation,
+            )
     except (OSError, RuntimeError, ValueError, sqlite3.Error, duckdb.Error) as exc:
         typer.echo(f"API analytics recovery failed: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -30,7 +46,7 @@ def rebuild_api_analytics_command() -> None:
 
 
 def _report_payload(report: AnalyticsRebuildReport) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "output_path": str(report.output_path),
         "source_revisions": report.source_revisions,
         "source_hashes": report.source_hashes,
@@ -38,6 +54,24 @@ def _report_payload(report: AnalyticsRebuildReport) -> dict[str, object]:
         "object_counts": report.object_counts,
         "requires_regeneration": report.requires_regeneration,
     }
+    # The optional fields appear only for the route that has them, so the legacy payload
+    # stays exactly as it was; the v2 payload reports each component's real status.
+    if report.components:
+        payload["components"] = [
+            {
+                "name": component.name,
+                "status": component.status,
+                "rows_written": component.rows_written,
+                "revision": component.revision,
+                "generation": component.generation,
+                "error": component.error,
+            }
+            for component in report.components
+        ]
+        payload["fresh"] = report.fresh
+    if report.recovery_command is not None:
+        payload["recovery_command"] = report.recovery_command
+    return payload
 
 
 def bootstrap_timeseries_source_command(

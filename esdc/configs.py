@@ -24,9 +24,33 @@ ENUM_CHOICES: dict[str, list[str]] = {
     "logging.chat.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
 }
 
+# Documented relative endpoint paths for the five canonical POD input tables.
+# Only the monitoring and forecast slugs are configurable; the masters use the
+# paths the POD contract declares, and no server availability is asserted.
+POD_ENDPOINT_DEFAULTS: dict[str, str] = {
+    "m_project": "master-data-project",
+    "m_pod": "master-data-pod",
+    "pod_project": "pod-project",
+    "pod_monitoring": "pod-monitoring",
+    "pod_forecast": "pod-forecast",
+}
+# Config field names under the ``api`` section, matching KEY_DESCRIPTIONS.
+POD_CONFIGURABLE_PATH_KEYS: dict[str, str] = {
+    "pod_monitoring": "pod_monitoring_path",
+    "pod_forecast": "pod_forecast_path",
+}
+
 KEY_DESCRIPTIONS: dict[str, str] = {
     "api_url": "Base URL for the ESDC API",
     "api.verify_ssl": "Verify SSL certificates for API requests",
+    "api.pod_monitoring_path": (
+        "Relative path of the POD monitoring endpoint under the API version "
+        "(default: pod-monitoring)"
+    ),
+    "api.pod_forecast_path": (
+        "Relative path of the approved POD forecast endpoint under the API "
+        "version (default: pod-forecast)"
+    ),
     "database_path": "Path to the DuckDB database file",
     "tool_format": "Format for tool results (native, markdown, or auto)",
     "default_provider": "Default LLM provider name",
@@ -332,6 +356,31 @@ class Config:
             return config["api_url"]
 
         return cls.BASE_API_URL_V2
+
+    @classmethod
+    def get_pod_endpoint(cls, table: str) -> str:
+        """Return the relative endpoint path for one canonical POD input table.
+
+        Priority: ``config.yaml`` ``api.pod_monitoring_path`` or
+        ``api.pod_forecast_path`` override > documented default. Only the
+        monitoring and forecast slugs are configurable; the masters use the paths
+        the POD contract declares. Nothing here asserts server availability.
+        """
+        default = POD_ENDPOINT_DEFAULTS[table]
+        field = POD_CONFIGURABLE_PATH_KEYS.get(table)
+        if field is None:
+            return default
+
+        config = cls._load_config()
+        if not config:
+            return default
+        api_config = config.get("api")
+        if not isinstance(api_config, dict):
+            return default
+        value = api_config.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lstrip("/")
+        return default
 
     @classmethod
     def get_tool_format(cls) -> str:

@@ -4,6 +4,12 @@
 Currently holds the POD master registry; intended to grow into the
 app-wide operational database (auth, entity relationships, ...), hence
 the generic esdc.sqlite filename.
+
+The store serves one current schema: the canonical POD registry SQL plus the
+generic raw API source tables. The superseded POD tables (numeric ``m_pod`` id,
+``project_pod``, ``pod_revision``, ``pod_value_case``) are no longer created or
+repaired here; replacing an old-shaped dataset is a dedicated validated
+operation, not a runtime fallback.
 """
 
 from __future__ import annotations
@@ -12,53 +18,22 @@ import sqlite3
 from pathlib import Path
 
 from esdc.configs import Config
+from esdc.pod_registry.migrations import (
+    MigrationRefusedError,
+    MigrationReport,
+    _atomic_writer,
+    _ensure_registry_writer,
+    initialize_registry_v2,
+    inspect_migration,
+)
+from esdc.sqlite_runtime import configure_writer, require_wal_runtime
 
 ESDC_SQLITE_FILENAME = "esdc.sqlite"
 
-_DDL = """
-CREATE TABLE IF NOT EXISTS r_institution (
-    code        INTEGER PRIMARY KEY,
-    institution TEXT NOT NULL UNIQUE,
-    description TEXT
-);
-CREATE TABLE IF NOT EXISTS r_pod_type (
-    code        INTEGER PRIMARY KEY,
-    pod_type    TEXT NOT NULL UNIQUE,
-    description TEXT
-);
-CREATE TABLE IF NOT EXISTS m_pod (
-    id               INTEGER PRIMARY KEY,
-    pod_id           TEXT NOT NULL UNIQUE,
-    pod_name         TEXT NOT NULL,
-    pod_letter_num   TEXT,
-    approval_date    TEXT NOT NULL,
-    institution_code INTEGER NOT NULL REFERENCES r_institution(code),
-    pod_type_code    INTEGER NOT NULL REFERENCES r_pod_type(code),
-    rev_num          INTEGER NOT NULL DEFAULT 0,
-    approval_seq     INTEGER NOT NULL UNIQUE
-);
-CREATE TABLE IF NOT EXISTS project_pod (
-    pod_id     INTEGER NOT NULL REFERENCES m_pod(id),
-    project_id TEXT NOT NULL,
-    UNIQUE (pod_id, project_id)
-);
-CREATE TABLE IF NOT EXISTS pod_document (
-    pod_id INTEGER NOT NULL REFERENCES m_pod(id),
-    doc_id TEXT NOT NULL,
-    UNIQUE (pod_id, doc_id)
-);
-CREATE TABLE IF NOT EXISTS pod_revision (
-    successor_id   TEXT NOT NULL REFERENCES m_pod(pod_id),
-    predecessor_id TEXT NOT NULL REFERENCES m_pod(pod_id),
-    revision_effect TEXT NOT NULL DEFAULT 'unknown'
-        CHECK (revision_effect IN ('unknown', 'partial_amendment', 'full_replacement')),
-    effective_date TEXT,
-    amended_scope TEXT,
-    previous_remains_valid INTEGER
-        CHECK (previous_remains_valid IN (0, 1)),
-    UNIQUE (successor_id, predecessor_id),
-    CHECK (successor_id <> predecessor_id)
-);
+# Canonical raw API source tables. These are current generic capabilities
+# (source corpus storage, geometry audit, provenance), not the retired POD
+# schema, so they stay explicit here instead of being parsed out of an old DDL.
+_PROJECT_RESOURCES_DDL = """
 CREATE TABLE IF NOT EXISTS api_project_resources (
     project_id TEXT NOT NULL CHECK (length(trim(project_id)) > 0),
     report_year INTEGER,
@@ -226,7 +201,10 @@ CREATE TABLE IF NOT EXISTS api_project_resources (
     dcpy_gtr_an REAL,
     ghv_avg REAL,
     PRIMARY KEY (project_id, report_year, uncert_level)
-);
+)
+"""
+
+_SNAPSHOT_DDL = """
 CREATE TABLE IF NOT EXISTS api_snapshot (
     source_table TEXT PRIMARY KEY,
     revision TEXT NOT NULL,
@@ -238,20 +216,8 @@ CREATE TABLE IF NOT EXISTS api_snapshot (
     ),
     invalid_geometry_count INTEGER NOT NULL DEFAULT 0
         CHECK (invalid_geometry_count >= 0)
-);
-"""
-
-_POD_REVISION_TEMPORAL_COLUMNS = (
-    (
-        "revision_effect",
-        "TEXT NOT NULL DEFAULT 'unknown'"
-        " CHECK (revision_effect IN ('unknown', 'partial_amendment',"
-        " 'full_replacement'))",
-    ),
-    ("effective_date", "TEXT"),
-    ("amended_scope", "TEXT"),
-    ("previous_remains_valid", "INTEGER CHECK (previous_remains_valid IN (0, 1))"),
 )
+"""
 
 
 def get_esdc_sqlite_path() -> Path:
@@ -259,71 +225,136 @@ def get_esdc_sqlite_path() -> Path:
     return Config.get_db_dir() / ESDC_SQLITE_FILENAME
 
 
-def ensure_tables(conn: sqlite3.Connection) -> None:
-    conn.executescript(_DDL)
-    # Migrate pre-temporal pod_revision tables (two-column) in place: add only
-    # absent columns. Existing rows keep revision_effect='unknown'; no
-    # supersession is inferred. ADD COLUMN with NOT NULL DEFAULT backfills rows.
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(pod_revision)")}
-    for name, definition in _POD_REVISION_TEMPORAL_COLUMNS:
-        if name not in existing:
-            conn.execute(f"ALTER TABLE pod_revision ADD COLUMN {name} {definition}")
-    snapshot_columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(api_snapshot)")
-    }
-    if "invalid_geometry_count" not in snapshot_columns:
+def ensure_project_resources_table(conn: sqlite3.Connection) -> None:
+    """Ensure only the canonical API resource input table exists.
+
+    This additive helper is also safe for an explicitly initialized current POD
+    registry, and it never commits: it runs inside the caller's transaction.
+    """
+    conn.execute(_PROJECT_RESOURCES_DDL.strip())
+
+    from esdc.api_snapshot import ApiProjectResourceRow
+
+    expected = tuple(ApiProjectResourceRow.__dataclass_fields__)
+    actual = tuple(
+        str(row[1]) for row in conn.execute("PRAGMA table_info(api_project_resources)")
+    )
+    if actual != expected:
+        raise RuntimeError(
+            "api_project_resources has unsupported columns or column order"
+        )
+
+
+def ensure_snapshot_table(conn: sqlite3.Connection) -> None:
+    """Ensure the shared raw snapshot marker, inside the caller's transaction."""
+    conn.execute(_SNAPSHOT_DDL.strip())
+
+    # Generic raw metadata repair only: an older raw snapshot gains the geometry
+    # audit column, which is a current capability rather than old POD migration.
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(api_snapshot)")}
+    if "invalid_geometry_count" not in columns:
         conn.execute(
             "ALTER TABLE api_snapshot ADD COLUMN invalid_geometry_count "
             "INTEGER NOT NULL DEFAULT 0"
         )
+
+
+def ensure_raw_source_tables(conn: sqlite3.Connection) -> None:
+    """Create the shared raw API source tables statement-wise, never committing."""
+    ensure_project_resources_table(conn)
+    ensure_snapshot_table(conn)
+
     from esdc.timeseries_snapshot import ensure_timeseries_tables
 
     ensure_timeseries_tables(conn)
 
 
-def validate_revision_effect(
-    effect: str,
-    previous_remains_valid: bool | None,
-) -> None:
-    """Validate a revision_effect against its previous_remains_valid flag."""
-    if effect == "partial_amendment":
-        if previous_remains_valid is not True:
-            raise ValueError("partial_amendment requires previous_remains_valid=True")
-    elif effect == "full_replacement":
-        if previous_remains_valid is not False:
-            raise ValueError("full_replacement requires previous_remains_valid=False")
-    elif effect == "unknown":
-        if previous_remains_valid is not None:
-            raise ValueError("unknown permits previous_remains_valid=None only")
-    else:
-        raise ValueError(f"unknown revision_effect: {effect!r}")
+def ensure_tables(conn: sqlite3.Connection) -> None:
+    """Create or validate the single current schema as one atomic unit.
+
+    Read-only classification runs before any writer transition, so a source with a
+    retired or incompatible shape is refused while its journal mode, schema, data,
+    bytes and mtime stay exactly as the caller left them. Every phase runs
+    statement-wise inside a transaction owned here, or inside a savepoint when the
+    caller already owns the transaction, so an injected failure leaves no partial
+    registry, raw-source, or timeseries objects and the caller's preexisting rows and
+    transaction ownership stay correct. The initialization commits exactly once when it
+    owns the transaction.
+    """
+    _refuse_incompatible_shape(inspect_migration(conn))
+    _ensure_registry_writer(conn)
+
+    with _atomic_writer(conn):
+        initialize_registry_v2(conn)
+        ensure_raw_source_tables(conn)
+
+
+def get_sqlite_readonly_connection(
+    path: Path | None = None,
+) -> sqlite3.Connection | None:
+    """Open an existing operational database read-only, or return ``None``."""
+    db_path = path or get_esdc_sqlite_path()
+    if not db_path.exists():
+        return None
+    if not db_path.is_file():
+        raise ValueError(f"operational database path is not a regular file: {db_path}")
+    uri = db_path.resolve().as_uri() + "?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def is_missing_table_error(error: sqlite3.OperationalError) -> bool:
+    """Return whether SQLite reports an absent table rather than another failure."""
+    return str(error).startswith("no such table:")
+
+
+def _refuse_incompatible_shape(report: MigrationReport) -> None:
+    """Refuse a source that cannot serve the single current schema, without writing."""
+    if report.status not in {"legacy", "blocked"}:
+        return
+    detail = "; ".join(report.blockers) or ", ".join(report.legacy_tables)
+    message = (
+        "the operational store serves only the current POD schema; this "
+        f"database needs the explicit validated replacement ({detail})"
+    )
+    if report.status == "legacy":
+        # The crosswalk route is part of this policy: an application-only or raw-only
+        # target stays additive, while a legacy or partial POD footprint is never
+        # reconciled by inference.
+        message = (
+            "The operational SQLite database has a legacy POD registry. "
+            + message
+            + " Replace it once using 'esdc load --from-sqlite SOURCE' or "
+            "'esdc load --from-excel SOURCE --schema-pod'. Protected document links "
+            "require a reviewed --pod-crosswalk JSON mapping; numeric POD IDs "
+            "are never inferred."
+        )
+    raise MigrationRefusedError(message)
 
 
 def get_sqlite_connection(path: Path | None = None) -> sqlite3.Connection:
-    """Open (creating if needed) the operational db with FK enforcement on."""
+    """Open (creating if needed) the operational db with writer policy enabled."""
     db_path = path or get_esdc_sqlite_path()
+    require_wal_runtime()
+    probe = get_sqlite_readonly_connection(db_path)
+    if probe is not None:
+        try:
+            _refuse_incompatible_shape(inspect_migration(probe))
+        finally:
+            probe.close()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    ensure_tables(conn)
+    try:
+        configure_writer(conn)
+        conn.row_factory = sqlite3.Row
+        ensure_tables(conn)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
-def allocate_pod_id(
-    conn: sqlite3.Connection,
-    approval_date: str,
-    institution_code: int,
-    pod_type_code: int,
-    rev_num: int,
-) -> tuple[str, int]:
-    """Compute the next pod_id. Caller must insert within the same transaction.
-
-    pod_id is immutable once issued and approval_seq never gets reused, so the
-    next sequence is always max(approval_seq) + 1 (gaps from deletes are fine).
-    """
-    year = approval_date[:4]
-    row = conn.execute("SELECT COALESCE(MAX(approval_seq), 0) FROM m_pod").fetchone()
-    seq = int(row[0]) + 1
-    pod_id = f"PL-{year}-{seq:04d}-{institution_code}-{pod_type_code}-{rev_num}"
-    return pod_id, seq
+def get_sqlite_writer_connection(path: Path | None = None) -> sqlite3.Connection:
+    """Open the operational db through the single latest-only writer policy."""
+    return get_sqlite_connection(path)

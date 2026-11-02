@@ -149,3 +149,33 @@ def test_independent_tool_cache_handle_observes_invalidation(
     finally:
         first.close()
         second.close()
+
+
+def test_knowledge_context_fails_closed_when_sqlite_is_unavailable(monkeypatch):
+    from esdc.chat import tools as chat_tools
+    from esdc.knowledge import dossier as dossier_module
+    from esdc.pod_registry import store as pod_store
+
+    opened = []
+
+    class CachedDuckConnection:
+        def close(self) -> None:
+            pass
+
+    def open_duckdb():
+        connection = CachedDuckConnection()
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(
+        pod_store, "get_sqlite_readonly_connection", lambda: None
+    )
+    monkeypatch.setattr(chat_tools, "get_db_connection", open_duckdb)
+    monkeypatch.setattr(
+        dossier_module,
+        "get_dossier",
+        lambda *_args, **_kwargs: {"dossier_text": "stale cached dossier"},
+    )
+
+    assert chat_tools._get_knowledge_context("POD", "POD-1") == (None, [])
+    assert opened == []

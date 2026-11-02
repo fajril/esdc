@@ -12,14 +12,9 @@ refresh can lose DuckDB's single-writer lock to a running corpus
 command; a failure is reported as a warning, never rolls back the
 SQLite commit.
 
-Once the mirror refresh succeeds, the edited documents' chunks are
-re-embedded (`_reembed_edited`) so `document_chunks.embed_text` — which
-bakes in the entity names via `build_context_prefix` — stops carrying
-the pre-edit names. A failed or skipped mirror refresh means the
-re-embed is skipped too (it reads document metadata from the mirror);
-`esdc corpus reembed --stale` is the fallback in both cases. Like the
-mirror refresh, a re-embed failure is reported as a warning and never
-rolls back the SQLite commit.
+Ordinary saves never invoke LLMs or embedding models. Re-embedding stale
+chunks is a separate operation: ``esdc corpus reembed --stale``. Derived
+knowledge is invalidated in the same SQLite transaction as the metadata edit.
 
 Name validation mirrors `_validate_entity_overrides` in
 `esdc.corpus.pipeline`: each cell is `;`-separated raw names, each name
@@ -35,6 +30,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from esdc.knowledge.freshness import invalidate_knowledge_after_dependency_change
 from esdc.pod_registry.changesets import ChangesetResult, RowError
 from esdc.pod_registry.store import get_sqlite_connection
 
@@ -63,9 +59,32 @@ def apply_document_entity_changeset(
     `documents` table is best-effort: any failure is appended to
     `result.warnings` rather than raised.
     """
-    inserts = changes.get("inserts") or []
-    updates = changes.get("updates") or []
-    deletes = changes.get("deletes") or []
+    if not isinstance(changes, dict):
+        return ChangesetResult(
+            ok=False, errors=[RowError("payload", -1, "Expected an object")]
+        )
+    extra = set(changes) - {"inserts", "updates", "deletes", "source_generation"}
+    operations = [changes.get(key, []) for key in ("inserts", "updates", "deletes")]
+    if extra or any(not isinstance(rows, list) for rows in operations):
+        return ChangesetResult(
+            ok=False,
+            errors=[RowError("payload", -1, "Unknown fields or non-list operations")],
+        )
+    if sum(len(rows) for rows in operations) > 500 or any(
+        not isinstance(row, dict) for rows in operations for row in rows
+    ):
+        return ChangesetResult(
+            ok=False,
+            errors=[RowError("payload", -1, "Expected at most 500 object operations")],
+        )
+    expected = changes.get("source_generation")
+    if "source_generation" in changes and (
+        isinstance(expected, bool) or not isinstance(expected, int) or expected < 0
+    ):
+        return ChangesetResult(
+            ok=False, errors=[RowError("payload", -1, "Invalid source_generation")]
+        )
+    inserts, updates, deletes = operations
 
     errors: list[RowError] = []
     for i, _row in enumerate(inserts):
@@ -128,6 +147,23 @@ def apply_document_entity_changeset(
 
     sconn = get_sqlite_connection(sqlite_path)
     try:
+        sconn.execute("BEGIN IMMEDIATE")
+        current = sconn.execute(
+            "SELECT source_generation FROM pod_registry_state WHERE singleton_id=1"
+        ).fetchone()[0]
+        if expected is not None and current != expected:
+            if resolver_conn is not None:
+                resolver_conn.close()
+            return ChangesetResult(
+                ok=False,
+                source_generation=current,
+                conflict=True,
+                errors=[
+                    RowError(
+                        "conflict", -1, "Source changed; preserve this draft and reload"
+                    )
+                ],
+            )
         resolved_rows: list[dict[str, Any]] = []
         try:
             for item in parsed_updates:
@@ -160,27 +196,28 @@ def apply_document_entity_changeset(
         with sconn:
             for row in resolved_rows:
                 _apply_row_update(sconn, row["doc_id"], row["fields"])
+            if resolved_rows:
+                invalidate_knowledge_after_dependency_change(
+                    sconn, actor="FA:portal-document", force=True
+                )
     finally:
         sconn.close()
 
     warnings: list[str] = []
     if resolved_rows:
         warnings = _refresh_mirror_after_save(db_path, sqlite_path)
-        # Only re-embed once the mirror actually converged — see
-        # _reembed_edited's docstring for why a stale mirror is worse than
-        # skipping the re-embed entirely.
-        if not warnings:
-            warnings = _reembed_edited(resolved_rows, db_path, sqlite_path)
-        else:
+        if warnings:
             warnings.append(
-                "Chunk re-embedding skipped because the mirror is stale. "
-                "Run `esdc corpus reembed --stale` after `esdc corpus sync`."
+                "After corpus sync, run `esdc corpus reembed --stale` "
+                "to refresh chunk context."
             )
 
     return ChangesetResult(
         ok=True,
         applied={"inserts": 0, "updates": len(resolved_rows), "deletes": 0},
         warnings=warnings,
+        source_committed=bool(resolved_rows),
+        source_generation=current,
     )
 
 
@@ -288,9 +325,7 @@ def _refresh_mirror_after_save(
 
     store = None
     try:
-        store = CorpusStore(
-            db_path=db_path, sqlite_path=sqlite_path, read_only=False
-        )
+        store = CorpusStore(db_path=db_path, sqlite_path=sqlite_path, read_only=False)
         store.refresh_mirror()
         return []
     except Exception as exc:
@@ -301,60 +336,3 @@ def _refresh_mirror_after_save(
     finally:
         if store is not None:
             store.close()
-
-
-def _reembed_edited(
-    resolved_rows: list[dict[str, Any]],
-    db_path: Path | None,
-    sqlite_path: Path | None,
-) -> list[str]:
-    """Re-embed documents whose entity names just changed.
-
-    embed_text bakes the document's entities into every chunk, so an
-    entity correction that stops at the mirror would leave search matching
-    the old names. The SQLite truth is already committed when this runs,
-    so a failure is reported as a warning and repaired later by
-    `esdc corpus reembed --stale` — never a failed save.
-
-    MUST run after _refresh_mirror_after_save and only when that refresh
-    succeeded: run_reembed_documents reads each document's metadata from
-    the DuckDB mirror, so re-embedding against a stale one would rebuild
-    the chunks from exactly the pre-edit names this save replaced — and
-    unlike doing nothing, it would leave chunks the staleness detector
-    then reports as current.
-
-    Both paths are threaded into the store for the same reason
-    _refresh_mirror_after_save threads them (see its docstring): a
-    default-constructed CorpusStore targets ~/.esdc regardless of what the
-    caller asked for.
-
-    First call in a portal process loads the llama.cpp embedding model
-    (seconds), and the re-embed ends in a whole-corpus index rebuild.
-    Latency only — the save is already durable.
-    """
-    doc_ids = sorted({row["doc_id"] for row in resolved_rows})
-    if not doc_ids:
-        return []
-
-    from esdc.corpus.pipeline import run_reembed_documents
-    from esdc.corpus.store import CorpusStore
-
-    store = None
-    try:
-        store = CorpusStore(
-            db_path=db_path, sqlite_path=sqlite_path, read_only=False
-        )
-        store.ensure_tables()
-        report = run_reembed_documents(doc_ids, store=store)
-    except Exception as exc:
-        return [
-            f"Re-embedding deferred for {len(doc_ids)} document(s): {exc}. "
-            "Run `esdc corpus reembed --stale`."
-        ]
-    finally:
-        if store is not None:
-            store.close()
-    return [
-        f"Re-embed failed for {name}: {err}. Run `esdc corpus reembed --stale`."
-        for name, err in report.failed.items()
-    ]

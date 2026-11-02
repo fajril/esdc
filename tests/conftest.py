@@ -186,6 +186,18 @@ def mock_esdc_api():
         def add_status(self, pattern, status):
             _add_response(responses_lib.GET, pattern, status=status)
 
+    # These resource-focused fixtures declare an empty current POD snapshot.
+    # The full fetch protocol still downloads and validates all five endpoints.
+    from esdc.configs import POD_ENDPOINT_DEFAULTS
+
+    for endpoint in POD_ENDPOINT_DEFAULTS.values():
+        pattern = (
+            r"https://esdc\.skkmigas\.go\.id/api/v1/"
+            + re.escape(endpoint)
+            + r"(?:\?.*)?$"
+        )
+        _add_response(responses_lib.GET, pattern, json=[])
+
     yield MockAPI()
 
     responses_lib.stop()

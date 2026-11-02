@@ -1,564 +1,399 @@
-"""Tests for POD registry changesets."""
+"""Current portal transaction, precision, and permanent identity regressions."""
 
-import esdc.configs as configs
-from esdc.corpus.store import _SQLITE_DOC_DDL
+import sqlite3
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+
 from esdc.pod_registry.changesets import apply_changeset
 from esdc.pod_registry.store import get_sqlite_connection
 
 
-def _patch_dirs(monkeypatch, tmp_path):
-    monkeypatch.setattr(configs.Config, "get_db_dir", classmethod(lambda cls: tmp_path))
+@pytest.fixture()
+def target(tmp_path):
+    path = tmp_path / "source.sqlite"
+    conn = get_sqlite_connection(path)
+    conn.close()
+    return path
 
 
-def _seed_documents(doc_ids):
-    conn = get_sqlite_connection()
-    conn.execute(_SQLITE_DOC_DDL)
-    for _i, doc_id in enumerate(doc_ids):
-        conn.execute(
-            "INSERT INTO documents (doc_id, file_name, file_path, file_hash,"
-            " markdown, extraction_method, embedding_model)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                doc_id,
-                f"{doc_id}.pdf",
-                f"/x/{doc_id}.pdf",
-                doc_id * 4,
-                "# isi",
-                "native",
-                "fake-embed",
+def rows(path: Path, table: str) -> list[dict]:
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(row) for row in conn.execute(f'SELECT * FROM "{table}"')]
+    finally:
+        conn.close()
+
+
+def gen(path):
+    return rows(path, "pod_registry_state")[0]["source_generation"]
+
+
+def save(path, table, **changes):
+    return apply_changeset(table, {"source_generation": gen(path), **changes}, path)
+
+
+def approval(**changes):
+    return {
+        "approval_date": "2024-01-01",
+        "institution_id": 1,
+        "pod_type_id": 1,
+        "pod_name": "POD Example",
+        "pod_letter_num": "POD/001",
+        **changes,
+    }
+
+
+def test_exact_decimal_edit_preserves_identity_and_audit(target):
+    result = save(target, "m_pod", inserts=[approval()])
+    assert result.ok, result.errors
+    assert result.source_committed and result.source_generation == 1
+    before = rows(target, "m_pod")[0]
+    assert before["pod_id"] == "PL-2024-0001-1-1-0"
+    assert UUID(before["pod_uuid"]).version == 4
+    ledger = rows(target, "_pod_identity_ledger")
+    value = "12345678901234567.123"
+    result = save(
+        target,
+        "m_pod",
+        updates=[{"pod_id_seq": before["pod_id_seq"], "capital_drilling_pod": value}],
+    )
+    assert result.ok, result.errors
+    after = rows(target, "m_pod")[0]
+    assert after["capital_drilling_pod"] == value
+    assert (after["pod_id"], after["pod_uuid"]) == (
+        before["pod_id"],
+        before["pod_uuid"],
+    )
+    assert rows(target, "_pod_identity_ledger") == ledger
+    assert gen(target) == 2
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"approval_date": "2025-01-01"},
+        {"pod_uuid": "forged"},
+        {"created_by": "forged"},
+        {"rev_num": 2},
+        {"is_latest": False},
+    ],
+)
+def test_identity_and_generated_fields_are_not_editable(target, patch):
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    before = rows(target, "m_pod")
+    result = save(
+        target, "m_pod", updates=[{"pod_id_seq": before[0]["pod_id_seq"], **patch}]
+    )
+    assert not result.ok and rows(target, "m_pod") == before and gen(target) == 1
+
+
+def test_validation_rolls_back_identity_reservation(target):
+    bad = approval()
+    bad.pop("pod_letter_num")
+    assert not save(target, "m_pod", inserts=[bad]).ok
+    assert rows(target, "_pod_identity_ledger") == [] and gen(target) == 0
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    assert rows(target, "_pod_identity_ledger")[0]["daily_slot"] == 1
+
+
+def test_deleted_master_keeps_permanent_slot(target):
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    old = rows(target, "m_pod")[0]
+    assert save(target, "m_pod", deletes=[{"pod_id_seq": old["pod_id_seq"]}]).ok
+    assert save(target, "m_pod", inserts=[approval(pod_name="Historical addition")]).ok
+    new = rows(target, "m_pod")[0]
+    assert (
+        new["pod_id"] == "PL-2024-0002-1-1-0" and new["pod_id_seq"] != old["pod_id_seq"]
+    )
+    assert len(rows(target, "_pod_identity_ledger")) == 2
+
+
+def test_supersession_is_atomic_and_explicit_name_revision_takes_precedence(target):
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    old = rows(target, "m_pod")[0]
+    result = save(
+        target,
+        "m_pod",
+        inserts=[
+            approval(
+                approval_date="2024-01-02",
+                pod_name="POD Revisi II",
+                predecessors=[old["pod_id_seq"]],
+            )
+        ],
+    )
+    assert result.ok, result.errors
+    old, new = sorted(rows(target, "m_pod"), key=lambda row: row["pod_id_seq"])
+    assert old["superseded_by"] == new["pod_id_seq"] and old["is_latest"] == 0
+    assert new["pod_id"] == "PL-2024-0021-1-1-2" and new["is_latest"] == 1
+
+
+def test_twenty_first_slot_and_stale_edit_leave_no_partial_writes(target):
+    result = save(
+        target, "m_pod", inserts=[approval(pod_name=f"POD {i}") for i in range(20)]
+    )
+    assert result.ok, result.errors
+    before = rows(target, "_pod_identity_ledger")
+    assert not save(target, "m_pod", inserts=[approval(pod_name="Overflow")]).ok
+    assert rows(target, "_pod_identity_ledger") == before and gen(target) == 1
+    result = apply_changeset(
+        "m_pod",
+        {
+            "source_generation": 0,
+            "updates": [{"pod_id_seq": 1, "pod_name": "Stale draft"}],
+        },
+        target,
+    )
+    assert not result.ok and result.conflict and gen(target) == 1
+
+
+def test_inactive_project_mapping_and_final_reference_validation(target):
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    assert save(
+        target,
+        "m_project",
+        inserts=[
+            {
+                "project_id": "P-001459F-01",
+                "project_name": "Inactive master",
+                "is_active": False,
+            }
+        ],
+    ).ok
+    assert save(
+        target,
+        "pod_project",
+        inserts=[
+            {"pod_id_seq": 1, "project_id": "P-001459F-01", "is_main_project": True}
+        ],
+    ).ok
+    link = rows(target, "pod_project")[0]
+    assert link["is_auto_inferred"] == 0
+    assert not save(target, "m_project", deletes=[{"project_id": "P-001459F-01"}]).ok
+    assert not save(
+        target,
+        "pod_project",
+        updates=[{"id": link["id"], "project_id": "P-0000000-00"}],
+    ).ok
+    assert rows(target, "pod_project") == [link] and gen(target) == 3
+
+
+def test_monitoring_and_forecast_use_current_schema(target):
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    result = save(
+        target,
+        "pod_monitoring",
+        inserts=[
+            {
+                "pod_id_seq": 1,
+                "reported_date": "2024-06-30",
+                "pod_stage_id": 1,
+                "capital_drilling_real": "98765432109876543.210",
+                "well_prd_real": 0,
+            }
+        ],
+    )
+    assert result.ok, result.errors
+    result = save(
+        target,
+        "pod_forecast",
+        inserts=[{"pod_id_seq": 1, "year_frcast": 2030, "usf_oil_pod": "1.234"}],
+    )
+    assert result.ok, result.errors
+    mon = rows(target, "pod_monitoring")[0]
+    assert (
+        mon["capital_drilling_real"] == "98765432109876543.210"
+        and mon["well_prd_real"] == 0
+    )
+    assert mon["pod_id"] == "PL-2024-0001-1-1-0" and mon["created_by"] == "FA:portal"
+    assert gen(target) == 3 and rows(target, "pod_forecast")[0]["year_frcast"] == 2030
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "r_institution",
+        "r_pod_type",
+        "r_pod_stage",
+        "pod_monitoring_api",
+        "pod_forecast_api",
+    ],
+)
+def test_references_and_results_cannot_be_written(table, tmp_path):
+    target = tmp_path / "absent" / "source.sqlite"
+    with pytest.raises(ValueError):
+        apply_changeset(table, {"source_generation": 0, "inserts": [{}]}, target)
+    assert not target.parent.exists()
+
+
+def test_document_links_preserve_raw_documents_and_protect_master(target):
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    conn = get_sqlite_connection(target)
+    try:
+        conn.execute("CREATE TABLE documents(doc_id TEXT PRIMARY KEY, file_name TEXT)")
+        conn.execute("INSERT INTO documents VALUES ('doc-1', 'Source document')")
+        conn.commit()
+    finally:
+        conn.close()
+    documents = rows(target, "documents")
+    result = save(
+        target, "pod_document", inserts=[{"pod_id_seq": "1", "doc_id": "doc-1"}]
+    )
+    assert result.ok, result.errors
+    assert gen(target) == 2
+    assert not save(target, "m_pod", deletes=[{"pod_id_seq": 1}]).ok
+    assert rows(target, "documents") == documents
+    assert len(rows(target, "pod_document")) == 1 and gen(target) == 2
+    assert save(
+        target, "pod_document", deletes=[{"pod_id_seq": "1", "doc_id": "doc-1"}]
+    ).ok
+    assert rows(target, "pod_document") == [] and rows(target, "documents") == documents
+    assert gen(target) == 3
+
+
+def test_failure_after_shared_refresh_rolls_back_ledger_source_and_generation(
+    target, monkeypatch
+):
+    import esdc.pod_registry.changesets as changesets
+
+    real_apply = changesets.apply_pod_batch_in_transaction
+
+    def fail_after_apply(*args, **kwargs):
+        real_apply(*args, **kwargs)
+        raise RuntimeError("injected after final source refresh")
+
+    monkeypatch.setattr(changesets, "apply_pod_batch_in_transaction", fail_after_apply)
+    before = rows(target, "pod_registry_state")
+    with pytest.raises(RuntimeError, match="injected after final"):
+        save(target, "m_pod", inserts=[approval()])
+    assert rows(target, "m_pod") == [] and rows(target, "_pod_identity_ledger") == []
+    assert rows(target, "pod_registry_state") == before
+
+
+def test_writer_lock_rechecks_generation_before_identity_issuance(target, monkeypatch):
+    import esdc.pod_registry.changesets as changesets
+
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    original = changesets.read_pod_api_context
+    raced = False
+
+    def other_writer(path):
+        nonlocal raced
+        captured = original(path)
+        if not raced:
+            raced = True
+            result = save(
+                path, "m_pod", updates=[{"pod_id_seq": 1, "pod_name": "Other writer"}]
+            )
+            assert result.ok, result.errors
+        return captured
+
+    monkeypatch.setattr(changesets, "read_pod_api_context", other_writer)
+    result = save(target, "m_pod", inserts=[approval(approval_date="2024-02-01")])
+    assert not result.ok and result.conflict
+    assert rows(target, "m_pod")[0]["pod_name"] == "Other writer"
+    assert len(rows(target, "m_pod")) == len(rows(target, "_pod_identity_ledger")) == 1
+    assert gen(target) == 2
+
+
+def test_mapping_edit_rebuilds_physical_results_from_local_resources(target):
+    from esdc.api_snapshot import ApiSnapshot, replace_project_resources_snapshot
+    from tests.pod_registry.test_read_models_v2 import _resource
+
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    assert save(
+        target,
+        "m_project",
+        inserts=[
+            {"project_id": "P-001459F-01", "project_name": "One", "is_active": True},
+            {"project_id": "P-001459F-02", "project_name": "Two", "is_active": False},
+        ],
+    ).ok
+    assert save(
+        target,
+        "pod_project",
+        inserts=[
+            {"pod_id_seq": 1, "project_id": "P-001459F-01", "is_main_project": True}
+        ],
+    ).ok
+    assert save(
+        target,
+        "pod_monitoring",
+        inserts=[{"pod_id_seq": 1, "reported_date": "2024-06-30", "pod_stage_id": 1}],
+    ).ok
+    conn = get_sqlite_connection(target)
+    try:
+        replace_project_resources_snapshot(
+            conn,
+            [
+                _resource("P-001459F-01", 2024, oil_reserve="10.25"),
+                _resource("P-001459F-02", 2024, oil_reserve="20.75"),
+            ],
+            ApiSnapshot(
+                "project_resources",
+                "local-resource-r1",
+                2,
+                "",
+                "2026-11-02T00:00:00+00:00",
+                "committed",
             ),
         )
-    conn.commit()
-    conn.close()
-
-
-def _seed_refs(monkeypatch, tmp_path):
-    _patch_dirs(monkeypatch, tmp_path)
-    conn = get_sqlite_connection()
-    conn.execute(
-        "INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')"
-    )
-    conn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (1, 'POD I')")
-    conn.commit()
-    conn.close()
-
-
-def test_insert_m_pod_generates_pod_id(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Baru",
-                    "pod_letter_num": "X/2026",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                }
-            ]
-        },
-    )
-    assert result.ok
-    assert result.applied["inserts"] == 1
-    assert result.generated[0]["pod_id"] == "PL-2026-0001-4-1-0"
-
-
-def test_update_m_pod_rejects_structural_change(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    apply_changeset(
-        "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Baru",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                }
-            ]
-        },
-    )
-    result = apply_changeset(
-        "m_pod", {"updates": [{"id": 900, "approval_date": "2001-01-01"}]}
-    )
-    assert not result.ok
-    assert "locked" in result.errors[0].message
-
-
-def test_update_m_pod_name_ok(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    apply_changeset(
-        "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Baru",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                }
-            ]
-        },
-    )
-    result = apply_changeset(
-        "m_pod", {"updates": [{"id": 900, "pod_name": "POD Renamed"}]}
-    )
-    assert result.ok
-    conn = get_sqlite_connection()
-    try:
-        assert (
-            conn.execute("SELECT pod_name FROM m_pod WHERE id=900").fetchone()[0]
-            == "POD Renamed"
-        )
     finally:
         conn.close()
+    assert rows(target, "pod_monitoring_api")[0]["res_oil_2p"] == 10.25
+    before = gen(target)
+    link = rows(target, "pod_project")[0]
+    result = save(
+        target,
+        "pod_project",
+        updates=[{"id": link["id"], "project_id": "P-001459F-02"}],
+    )
+    assert result.ok, result.errors
+    assert result.source_generation == before + 1
+    assert rows(target, "pod_monitoring_api")[0]["res_oil_2p"] == 20.75
 
 
-def test_delete_m_pod_blocked_when_referenced(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    apply_changeset(
+def test_reassigning_monitoring_updates_its_derived_identity(target):
+    assert save(
+        target,
         "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Baru",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                }
-            ]
-        },
+        inserts=[
+            approval(),
+            approval(approval_date="2024-01-02", pod_name="Second scope"),
+        ],
+    ).ok
+    assert save(
+        target,
+        "pod_monitoring",
+        inserts=[{"pod_id_seq": 1, "reported_date": "2024-06-30", "pod_stage_id": 1}],
+    ).ok
+    record = rows(target, "pod_monitoring")[0]
+    result = save(
+        target,
+        "pod_monitoring",
+        updates=[{"monpod_id": record["monpod_id"], "pod_id_seq": 2}],
     )
-    apply_changeset("project_pod", {"inserts": [{"pod_id": 900, "project_id": "P-1"}]})
-    result = apply_changeset("m_pod", {"deletes": [{"id": 900}]})
-    assert not result.ok
+    assert result.ok, result.errors
+    after = rows(target, "pod_monitoring")[0]
+    assert after["pod_id_seq"] == 2 and after["pod_id"] == "PL-2024-0021-1-1-0"
+    assert after["monpod_uuid"] == record["monpod_uuid"]
 
 
-def test_project_pod_validates_against_known_ids(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    apply_changeset(
+def test_contract_errors_preserve_operation_row_and_field(target):
+    assert save(target, "m_pod", inserts=[approval()]).ok
+    result = save(
+        target,
         "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Baru",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                }
-            ]
-        },
-    )
-    result = apply_changeset(
-        "project_pod",
-        {"inserts": [{"pod_id": 900, "project_id": "P-TYPO"}]},
-        known_project_ids={"P-1", "P-2"},
+        updates=[{"pod_id_seq": 1, "capital_drilling_pod": "12345678901234567.1234"}],
     )
     assert not result.ok
-    assert "P-TYPO" in result.errors[0].message
-
-
-def _insert_pod_900(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    apply_changeset(
-        "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Baru",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                }
-            ]
-        },
+    assert all(
+        error.kind == "update"
+        and error.index == 0
+        and error.field == "capital_drilling_pod"
+        for error in result.errors
     )
-
-
-def test_pod_document_insert_and_delete(monkeypatch, tmp_path):
-    _insert_pod_900(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
-    assert result.ok
-    result = apply_changeset(
-        "pod_document", {"deletes": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
-    assert result.ok
-    conn = get_sqlite_connection()
-    try:
-        assert conn.execute("SELECT COUNT(*) FROM pod_document").fetchone()[0] == 0
-    finally:
-        conn.close()
-
-
-def test_pod_document_validates_against_documents_table(monkeypatch, tmp_path):
-    _insert_pod_900(monkeypatch, tmp_path)
-    _seed_documents(["abc123"])
-    result = apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "nope"}]}
-    )
-    assert not result.ok
-    assert "nope" in result.errors[0].message
-    result = apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
-    assert result.ok
-
-
-def test_pod_document_check_skipped_when_no_documents_table(monkeypatch, tmp_path):
-    _insert_pod_900(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "anything"}]}
-    )
-    assert result.ok
-
-
-def test_pod_document_unknown_pod_rejected(monkeypatch, tmp_path):
-    _insert_pod_900(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 999, "doc_id": "abc123"}]}
-    )
-    assert not result.ok
-    assert "999" in result.errors[0].message
-
-
-def test_pod_document_rejects_updates_and_duplicates(monkeypatch, tmp_path):
-    _insert_pod_900(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_document", {"updates": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
-    assert not result.ok
-    apply_changeset("pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]})
-    result = apply_changeset(
-        "pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]}
-    )
-    assert not result.ok
-    assert "already exists" in result.errors[0].message
-
-
-def test_delete_m_pod_blocked_by_pod_document(monkeypatch, tmp_path):
-    _insert_pod_900(monkeypatch, tmp_path)
-    apply_changeset("pod_document", {"inserts": [{"pod_id": 900, "doc_id": "abc123"}]})
-    result = apply_changeset("m_pod", {"deletes": [{"id": 900}]})
-    assert not result.ok
-    assert "pod_document" in result.errors[0].message
-
-
-def _seed_pod_pair(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Succ",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                },
-                {
-                    "id": 901,
-                    "pod_name": "POD Pred",
-                    "approval_date": "2025-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                },
-            ]
-        },
-    )
-    return result.generated[0]["pod_id"], result.generated[1]["pod_id"]
-
-
-def test_pod_revision_insert_full_temporal_fields(monkeypatch, tmp_path):
-    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_revision",
-        {
-            "inserts": [
-                {
-                    "successor_id": succ,
-                    "predecessor_id": pred,
-                    "revision_effect": "full_replacement",
-                    "effective_date": "2026-08-01",
-                    "amended_scope": "all clauses",
-                    "previous_remains_valid": False,
-                }
-            ]
-        },
-    )
-    assert result.ok
-    conn = get_sqlite_connection()
-    try:
-        row = conn.execute(
-            "SELECT revision_effect, effective_date, amended_scope,"
-            " previous_remains_valid FROM pod_revision"
-        ).fetchone()
-        assert tuple(row) == ("full_replacement", "2026-08-01", "all clauses", 0)
-    finally:
-        conn.close()
-
-
-def test_pod_revision_insert_partial_temporal_fields(monkeypatch, tmp_path):
-    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_revision",
-        {
-            "inserts": [
-                {
-                    "successor_id": succ,
-                    "predecessor_id": pred,
-                    "revision_effect": "partial_amendment",
-                    "effective_date": "2026-09-01",
-                    "amended_scope": "clause 4",
-                    "previous_remains_valid": True,
-                }
-            ]
-        },
-    )
-    assert result.ok
-    conn = get_sqlite_connection()
-    try:
-        row = conn.execute(
-            "SELECT revision_effect, effective_date, amended_scope,"
-            " previous_remains_valid FROM pod_revision"
-        ).fetchone()
-        assert tuple(row) == ("partial_amendment", "2026-09-01", "clause 4", 1)
-    finally:
-        conn.close()
-
-
-def test_pod_revision_insert_legacy_defaults_to_unknown(monkeypatch, tmp_path):
-    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_revision",
-        {"inserts": [{"successor_id": succ, "predecessor_id": pred}]},
-    )
-    assert result.ok
-    conn = get_sqlite_connection()
-    try:
-        row = conn.execute(
-            "SELECT revision_effect, effective_date, amended_scope,"
-            " previous_remains_valid FROM pod_revision"
-        ).fetchone()
-        assert tuple(row) == ("unknown", None, None, None)
-    finally:
-        conn.close()
-
-
-def test_pod_revision_insert_rejects_inconsistent_effect(monkeypatch, tmp_path):
-    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_revision",
-        {
-            "inserts": [
-                {
-                    "successor_id": succ,
-                    "predecessor_id": pred,
-                    "revision_effect": "full_replacement",
-                    "previous_remains_valid": True,
-                }
-            ]
-        },
-    )
-    assert not result.ok
-    assert "previous_remains_valid" in result.errors[0].message
-
-
-def test_pod_revision_insert_rejects_unknown_effect(monkeypatch, tmp_path):
-    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "pod_revision",
-        {
-            "inserts": [
-                {
-                    "successor_id": succ,
-                    "predecessor_id": pred,
-                    "revision_effect": "supersedes_entirely",
-                }
-            ]
-        },
-    )
-    assert not result.ok
-    assert "revision_effect" in result.errors[0].message
-
-
-def test_pod_revision_change_is_delete_plus_insert(monkeypatch, tmp_path):
-    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
-    apply_changeset(
-        "pod_revision",
-        {
-            "inserts": [
-                {
-                    "successor_id": succ,
-                    "predecessor_id": pred,
-                    "revision_effect": "partial_amendment",
-                    "previous_remains_valid": True,
-                }
-            ]
-        },
-    )
-    result = apply_changeset(
-        "pod_revision",
-        {
-            "deletes": [{"successor_id": succ, "predecessor_id": pred}],
-            "inserts": [
-                {
-                    "successor_id": succ,
-                    "predecessor_id": pred,
-                    "revision_effect": "full_replacement",
-                    "effective_date": "2026-08-01",
-                    "amended_scope": "all clauses",
-                    "previous_remains_valid": False,
-                }
-            ],
-        },
-    )
-    assert result.ok
-    conn = get_sqlite_connection()
-    try:
-        row = conn.execute(
-            "SELECT revision_effect, effective_date, amended_scope,"
-            " previous_remains_valid FROM pod_revision"
-        ).fetchone()
-        assert tuple(row) == ("full_replacement", "2026-08-01", "all clauses", 0)
-    finally:
-        conn.close()
-
-
-def test_pod_revision_insert_rejects_invalid_previous_remains_valid(
-    monkeypatch, tmp_path
-):
-    """An invalid non-null previous_remains_valid must fail validation.
-
-    Previously _bool_or_none coerced it to None, so revision_effect='unknown'
-    passed validation and storage silently wrote NULL.
-    """
-    succ, pred = _seed_pod_pair(monkeypatch, tmp_path)
-    for invalid in ("garbage", 2):
-        result = apply_changeset(
-            "pod_revision",
-            {
-                "inserts": [
-                    {
-                        "successor_id": succ,
-                        "predecessor_id": pred,
-                        "revision_effect": "unknown",
-                        "previous_remains_valid": invalid,
-                    }
-                ]
-            },
-        )
-        assert not result.ok
-        assert "previous_remains_valid" in result.errors[0].message
-
-
-def test_pod_revision_rejects_self_link(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    r = apply_changeset(
-        "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Baru",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                }
-            ]
-        },
-    )
-    pod_id = r.generated[0]["pod_id"]
-    result = apply_changeset(
-        "pod_revision",
-        {
-            "inserts": [
-                {
-                    "successor_id": pod_id,
-                    "predecessor_id": pod_id,
-                }
-            ]
-        },
-    )
-    assert not result.ok
-
-
-def test_constraint_violation_returns_row_error_not_exception(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    apply_changeset(
-        "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "POD Baru",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                }
-            ]
-        },
-    )
-    result = apply_changeset("m_pod", {"updates": [{"id": 900, "pod_name": None}]})
-    assert not result.ok
-    assert result.errors[0].kind == "apply"
-    conn = get_sqlite_connection()
-    try:
-        assert (
-            conn.execute("SELECT pod_name FROM m_pod WHERE id=900").fetchone()[0]
-            == "POD Baru"
-        )
-    finally:
-        conn.close()
-
-
-def test_atomic_no_partial_writes(monkeypatch, tmp_path):
-    _seed_refs(monkeypatch, tmp_path)
-    result = apply_changeset(
-        "m_pod",
-        {
-            "inserts": [
-                {
-                    "id": 900,
-                    "pod_name": "OK",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 4,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                },
-                {
-                    "id": 901,
-                    "pod_name": "Bad",
-                    "approval_date": "2026-07-15",
-                    "institution_code": 99,
-                    "pod_type_code": 1,
-                    "rev_num": 0,
-                },
-            ]
-        },
-    )
-    assert not result.ok
-    conn = get_sqlite_connection()
-    try:
-        assert conn.execute("SELECT COUNT(*) FROM m_pod").fetchone()[0] == 0
-    finally:
-        conn.close()
+    assert gen(target) == 1

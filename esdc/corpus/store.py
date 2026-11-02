@@ -419,9 +419,9 @@ class CorpusStore:
                 self._sconn = self._open_readonly_sqlite()
                 return self._sconn
 
-            from esdc.pod_registry.store import get_sqlite_connection
+            from esdc.pod_registry.store import get_sqlite_writer_connection
 
-            self._sconn = get_sqlite_connection(self._sqlite_path)
+            self._sconn = get_sqlite_writer_connection(self._sqlite_path)
             self._sconn.execute(_SQLITE_DOC_DDL)
             for col in (
                 "pod_name",
@@ -891,6 +891,13 @@ class CorpusStore:
                     self._DOC_INSERT_SQL_TEMPLATE.format(table=self.DOC_TABLE),
                     values,
                 )
+                from esdc.knowledge.freshness import (
+                    invalidate_knowledge_after_dependency_change,
+                )
+
+                invalidate_knowledge_after_dependency_change(
+                    sconn, actor=f"corpus:insert_document:{doc['doc_id']}"
+                )
         except Exception:
             # Truth write failed: drop the chunks we just wrote so no
             # orphaned embeddings survive. (A later refresh would sweep
@@ -929,6 +936,13 @@ class CorpusStore:
         sconn = self._get_sqlite()
         with sconn:
             sconn.execute(f"DELETE FROM {self.DOC_TABLE} WHERE doc_id = ?", [doc_id])
+            from esdc.knowledge.freshness import (
+                invalidate_knowledge_after_dependency_change,
+            )
+
+            invalidate_knowledge_after_dependency_change(
+                sconn, actor=f"corpus:delete_document:{doc_id}"
+            )
 
     def list_documents(self) -> list[dict[str, Any]]:
         """List all documents from the DuckDB mirror with chunk counts, newest first.
@@ -1122,6 +1136,13 @@ class CorpusStore:
 
         with sconn:
             sconn.execute(f"DELETE FROM {self.DOC_TABLE}")
+            from esdc.knowledge.freshness import (
+                invalidate_knowledge_after_dependency_change,
+            )
+
+            invalidate_knowledge_after_dependency_change(
+                sconn, actor="corpus:clear"
+            )
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(f"DELETE FROM {self.CHUNK_TABLE}")

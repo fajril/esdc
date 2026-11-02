@@ -49,7 +49,9 @@ class FakeEmbedder2(FakeEmbedder):
 
 @pytest.fixture
 def store(tmp_path: Path):
-    s = CorpusStore(read_only=False, db_path=tmp_path / "t.duckdb", embedder=FakeEmbedder())
+    s = CorpusStore(
+        read_only=False, db_path=tmp_path / "t.duckdb", embedder=FakeEmbedder()
+    )
     s.ensure_tables()
     yield s
     s.close()
@@ -334,7 +336,9 @@ def test_ensure_tables_migrates_legacy_varchar_entities(tmp_path: Path):
 
 
 def test_search_entity_filter_is_case_insensitive_substring(tmp_path: Path):
-    store = CorpusStore(read_only=False, db_path=tmp_path / "c.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(
+        read_only=False, db_path=tmp_path / "c.duckdb", embedder=FakeEmbedder()
+    )
     try:
         store.ensure_tables()
         doc1 = _doc_variant("d1", "d1.pdf")
@@ -368,7 +372,9 @@ def test_search_entity_filter_is_case_insensitive_substring(tmp_path: Path):
 
 def test_search_hydrated_docs_have_parsed_entity_lists(tmp_path: Path):
     """search() results must return wk_name as a list, not a JSON string."""
-    store = CorpusStore(read_only=False, db_path=tmp_path / "c2.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(
+        read_only=False, db_path=tmp_path / "c2.duckdb", embedder=FakeEmbedder()
+    )
     try:
         store.ensure_tables()
         doc = _doc_variant("d1", "d1.pdf")
@@ -388,7 +394,8 @@ def test_insert_and_get_pod_name_round_trip(store):
     store.refresh_mirror()  # get_document/list_documents are serving reads
     got = store.get_document(DOC["doc_id"])
     assert got["pod_name"] == ["POD Mengoepeh"]
-    assert got["suggested_pod_ids"] == ["PL-2003-0005-3-2-0"]
+    # Corpus changes invalidate derived suggestions; raw POD names survive.
+    assert got["suggested_pod_ids"] is None
     docs = store.list_documents()
     assert docs[0]["pod_name"] == ["POD Mengoepeh"]
 
@@ -412,7 +419,9 @@ def test_list_documents_includes_doc_topic(store):
 
 
 def test_build_filter_clause_doc_topic_case_insensitive_substring(tmp_path: Path):
-    store = CorpusStore(read_only=False, db_path=tmp_path / "c3.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(
+        read_only=False, db_path=tmp_path / "c3.duckdb", embedder=FakeEmbedder()
+    )
     try:
         store.ensure_tables()
         doc1 = _doc_variant("d1", "d1.pdf")
@@ -435,7 +444,9 @@ def test_build_filter_clause_doc_topic_case_insensitive_substring(tmp_path: Path
 
 
 def test_search_filter_by_doc_topic_returns_matching_doc_only(tmp_path: Path):
-    store = CorpusStore(read_only=False, db_path=tmp_path / "c4.duckdb", embedder=FakeEmbedder())
+    store = CorpusStore(
+        read_only=False, db_path=tmp_path / "c4.duckdb", embedder=FakeEmbedder()
+    )
     try:
         store.ensure_tables()
         doc1 = _doc_variant("d1", "d1.pdf")
@@ -784,7 +795,8 @@ def test_default_embedder_is_internal(monkeypatch, tmp_path):
 
     store = CorpusStore(
         read_only=False,
-        db_path=tmp_path / "corpus.duckdb", sqlite_path=tmp_path / "esdc.sqlite"
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
     )
     assert store._embedder.model == MODEL_ID
     assert type(store._embedder).__name__ == "InternalEmbedder"
@@ -2069,7 +2081,9 @@ def _seed_corpus(
     """Build and close a writable corpus; safe to reopen as a reader."""
     db = tmp_path / name
     sqlite = tmp_path / f"{name}.sqlite"
-    store = CorpusStore(read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder())
+    store = CorpusStore(
+        read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder()
+    )
     store.ensure_tables()
     if doc is not None:
         store.insert_document(
@@ -2241,9 +2255,13 @@ def test_legacy_corpus_meta_missing_probe_repaired_on_write(tmp_path):
     db, sqlite = _seed_corpus(tmp_path, name="legacy_probe.duckdb")
     _exec_sql(db, ["ALTER TABLE corpus_meta DROP COLUMN probe_vec"])
 
-    writer = CorpusStore(read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder())
+    writer = CorpusStore(
+        read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder()
+    )
     writer.ensure_tables(validate_model=True)
-    row = writer._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    row = (
+        writer._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    )
     writer.close()
 
     assert row is not None
@@ -2254,7 +2272,9 @@ def test_readonly_sqlite_handles_uri_special_path(tmp_path):
     """A '?'/'#' in the SQLite path must not break reader URI parsing."""
     db = tmp_path / "uri.duckdb"
     sqlite = tmp_path / "we?ird#name.sqlite"
-    writer = CorpusStore(read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder())
+    writer = CorpusStore(
+        read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder()
+    )
     writer.ensure_tables()
     writer.insert_document(DOC, [Chunk(0, None, "isi")])
     writer.refresh_mirror()

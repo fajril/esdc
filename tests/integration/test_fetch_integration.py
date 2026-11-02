@@ -50,7 +50,14 @@ class TestFetchCreatesDatabase:
         mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=project_resources_data)
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "PRJ-001", "report_year": 2024, "year": 2024, "cprd_grs_oil": 100.0}],
+            json_data=[
+                {
+                    "project_id": "PRJ-001",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 100.0,
+                }
+            ],
         )
 
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -179,9 +186,9 @@ class TestFetchJsonToDatabase:
         timeseries_snapshot = get_timeseries_snapshot(sqlite_conn)
         assert resource_snapshot is not None and timeseries_snapshot is not None
         assert resource_snapshot.revision == timeseries_snapshot.revision
-        assert tuple(sqlite_conn.execute(
-            "SELECT origin FROM api_project_timeseries"
-        ).fetchone()) == ("api_json",)
+        assert tuple(
+            sqlite_conn.execute("SELECT origin FROM api_project_timeseries").fetchone()
+        ) == ("api_json",)
         sqlite_conn.close()
         with duckdb.connect(str(db_dir / "esdc.duckdb"), read_only=True) as conn:
             lineages = conn.execute(
@@ -193,7 +200,7 @@ class TestFetchJsonToDatabase:
                 ("project_timeseries", resource_snapshot.revision),
             ]
 
-    def test_explicit_bootstrap_then_fetch_preserves_legacy_timeseries_history(
+    def test_full_fetch_replaces_bootstrapped_timeseries_history(
         self, isolated_config, mock_esdc_api, monkeypatch
     ):
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -207,7 +214,12 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
             json_data=[
-                {"project_id": "P24", "report_year": 2024, "year": 2024, "cprd_grs_oil": 10}
+                {
+                    "project_id": "P24",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 10,
+                }
             ],
         )
         initial = runner.invoke(app, ["fetch"])
@@ -222,8 +234,7 @@ class TestFetchJsonToDatabase:
                 "VALUES ('historical-null', NULL, 2020, 5)"
             )
             conn.execute(
-                "DELETE FROM api_publication "
-                "WHERE source_table='project_timeseries'"
+                "DELETE FROM api_publication WHERE source_table='project_timeseries'"
             )
         sqlite_file.unlink()
         bootstrap = runner.invoke(app, ["bootstrap-timeseries-source", "--apply"])
@@ -239,13 +250,23 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
             json_data=[
-                {"project_id": "P24", "report_year": 2024, "year": 2024, "cprd_grs_oil": 20}
+                {
+                    "project_id": "P24",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 20,
+                }
             ],
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2025),
             json_data=[
-                {"project_id": "P25", "report_year": 2025, "year": 2025, "cprd_grs_oil": 30}
+                {
+                    "project_id": "P25",
+                    "report_year": 2025,
+                    "year": 2025,
+                    "cprd_grs_oil": 30,
+                }
             ],
         )
         result = runner.invoke(app, ["fetch"])
@@ -256,10 +277,13 @@ class TestFetchJsonToDatabase:
             assert conn.execute(
                 "SELECT project_id, report_year FROM project_resources ORDER BY project_id"
             ).fetchall() == [("P24", 2024), ("P25", 2025)]
-            assert conn.execute(
-                "SELECT project_id, report_year, cprd_grs_oil FROM project_timeseries "
-                "WHERE report_year IS NULL"
-            ).fetchall() == [("historical-null", None, 5.0)]
+            assert (
+                conn.execute(
+                    "SELECT project_id, report_year, cprd_grs_oil FROM project_timeseries "
+                    "WHERE report_year IS NULL"
+                ).fetchall()
+                == []
+            )
             assert conn.execute(
                 "SELECT COUNT(*) FROM information_schema.views "
                 "WHERE table_name IN ('field_timeseries', 'wa_timeseries', 'nkri_timeseries')"
@@ -323,12 +347,16 @@ class TestFetchJsonToDatabase:
 
         repeated = runner.invoke(app, ["fetch"])
         assert repeated.exit_code == 0, repeated.output
-        assert "updated years none" in repeated.output
+        assert "updated years 2025" in repeated.output
         sqlite_conn = get_sqlite_connection(sqlite_path)
-        assert get_timeseries_snapshot(sqlite_conn) == first_snapshot
+        second_snapshot = get_timeseries_snapshot(sqlite_conn)
+        assert second_snapshot is not None
+        assert second_snapshot.revision != first_snapshot.revision
+        assert second_snapshot.row_count == 0
+        assert second_snapshot.publication_state == "published"
         sqlite_conn.close()
 
-    def test_default_empty_timeseries_keeps_published_rows_unchanged(
+    def test_default_empty_timeseries_clears_observed_snapshot(
         self, isolated_config, mock_esdc_api, monkeypatch
     ):
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -342,7 +370,12 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2025),
             json_data=[
-                {"project_id": "P-1", "report_year": 2025, "year": 2025, "cprd_grs_oil": 25}
+                {
+                    "project_id": "P-1",
+                    "report_year": 2025,
+                    "year": 2025,
+                    "cprd_grs_oil": 25,
+                }
             ],
         )
         assert runner.invoke(app, ["fetch"]).exit_code == 0
@@ -350,9 +383,6 @@ class TestFetchJsonToDatabase:
         sqlite_path = isolated_config / ".esdc" / "esdc.sqlite"
         sqlite_conn = get_sqlite_connection(sqlite_path)
         before_snapshot = get_timeseries_snapshot(sqlite_conn)
-        before_rows = sqlite_conn.execute(
-            "SELECT row_json FROM api_project_timeseries ORDER BY storage_id"
-        ).fetchall()
         sqlite_conn.close()
 
         mock_esdc_api.add_json(
@@ -365,22 +395,32 @@ class TestFetchJsonToDatabase:
         result = runner.invoke(app, ["fetch"])
 
         assert result.exit_code == 0, result.output
-        assert "updated years none" in result.output
+        assert "updated years 2025" in result.output
         assert "skipped years 2025" in result.output
         sqlite_conn = get_sqlite_connection(sqlite_path)
-        assert get_timeseries_snapshot(sqlite_conn) == before_snapshot
-        assert sqlite_conn.execute(
-            "SELECT row_json FROM api_project_timeseries ORDER BY storage_id"
-        ).fetchall() == before_rows
+        after_snapshot = get_timeseries_snapshot(sqlite_conn)
+        assert before_snapshot is not None and after_snapshot is not None
+        assert after_snapshot.revision != before_snapshot.revision
+        assert after_snapshot.row_count == 0
+        assert after_snapshot.publication_state == "published"
+        assert (
+            sqlite_conn.execute(
+                "SELECT row_json FROM api_project_timeseries ORDER BY storage_id"
+            ).fetchall()
+            == []
+        )
         sqlite_conn.close()
         with duckdb.connect(
             str(isolated_config / ".esdc" / "esdc.duckdb"), read_only=True
         ) as conn:
-            assert conn.execute(
-                "SELECT project_id, report_year, cprd_grs_oil FROM project_timeseries"
-            ).fetchall() == [("P-1", 2025, 25.0)]
+            assert (
+                conn.execute(
+                    "SELECT project_id, report_year, cprd_grs_oil FROM project_timeseries"
+                ).fetchall()
+                == []
+            )
 
-    def test_default_fetch_refuses_legacy_timeseries_before_c1(
+    def test_incompatible_analytical_schema_keeps_committed_source_and_last_good_cache(
         self, isolated_config, mock_esdc_api, monkeypatch
     ):
         db_path = isolated_config / ".esdc" / "esdc.duckdb"
@@ -407,8 +447,23 @@ class TestFetchJsonToDatabase:
         result = runner.invoke(app, ["fetch"])
 
         assert result.exit_code == 1
-        assert "canonical project_timeseries baseline is missing" in result.output
-        assert not (isolated_config / ".esdc" / "esdc.sqlite").exists()
+        assert "SQLite source committed at generation 1" in result.output
+        assert "DuckDB publication pending" in result.output
+        assert "esdc rebuild-api-analytics" in result.output
+        source = get_sqlite_connection(isolated_config / ".esdc" / "esdc.sqlite")
+        try:
+            snapshot = get_timeseries_snapshot(source)
+            assert snapshot is not None and snapshot.row_count == 1
+            assert snapshot.publication_state == "analytics_stale"
+            assert [
+                tuple(row)
+                for row in source.execute(
+                    "SELECT json_extract(row_json, '$.project_id'), report_year "
+                    "FROM api_project_timeseries"
+                )
+            ] == [("P-1", 2025)]
+        finally:
+            source.close()
         with duckdb.connect(str(db_path), read_only=True) as conn:
             assert conn.execute(
                 "SELECT report_year, project_id, cprd_grs_oil, uuid "
@@ -419,7 +474,7 @@ class TestFetchJsonToDatabase:
                 "WHERE table_name='project_resources'"
             ).fetchone() == (0,)
 
-    def test_bootstrap_then_default_fetch_retains_old_timeseries_years(
+    def test_full_fetch_replaces_bootstrapped_old_years(
         self, isolated_config, mock_esdc_api, monkeypatch
     ):
         from esdc.db_security import _load_sql_script
@@ -467,11 +522,11 @@ class TestFetchJsonToDatabase:
                 "SELECT report_year, project_id, cprd_grs_oil, uuid "
                 "FROM project_timeseries ORDER BY report_year"
             ).fetchall()
-        assert rows[0] == (2024, "legacy", 17.0, "legacy-uuid")
-        assert rows[1][:3] == (2025, "P-1", 25.0)
-        assert rows[1][3] is not None
+        assert len(rows) == 1
+        assert rows[0][:3] == (2025, "P-1", 25.0)
+        assert rows[0][3] is not None
 
-    def test_selective_fetch_requires_published_pair_baseline(
+    def test_selective_fetch_replaces_corrupted_mirror_from_canonical_source(
         self, isolated_config, mock_esdc_api, monkeypatch
     ):
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -483,7 +538,12 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
             json_data=[
-                {"project_id": "P-1", "report_year": 2024, "year": 2024, "cprd_grs_oil": 10}
+                {
+                    "project_id": "P-1",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 10,
+                }
             ],
         )
         assert runner.invoke(app, ["fetch"]).exit_code == 0
@@ -506,27 +566,37 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
             json_data=[
-                {"project_id": "P-1", "report_year": 2024, "year": 2024, "cprd_grs_oil": 11}
+                {
+                    "project_id": "P-1",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 11,
+                }
             ],
         )
 
         result = runner.invoke(app, ["fetch", "--year", "2024"])
 
-        assert result.exit_code == 1
-        assert "canonical and analytical project_timeseries values differ" in result.output
+        assert result.exit_code == 0, result.output
+        assert "Whole fetch is fresh" in result.output
         conn = get_sqlite_connection(sqlite_path)
-        assert get_project_resources_snapshot(conn) == before_resource
-        assert get_timeseries_snapshot(conn) == before_timeseries
+        after_resource = get_project_resources_snapshot(conn)
+        after_timeseries = get_timeseries_snapshot(conn)
+        assert before_resource is not None and after_resource is not None
+        assert before_timeseries is not None and after_timeseries is not None
+        assert after_resource.revision != before_resource.revision
+        assert after_timeseries.revision != before_timeseries.revision
+        assert after_timeseries.publication_state == "published"
         conn.close()
         with duckdb.connect(str(db_path), read_only=True) as conn:
             assert conn.execute(
                 "SELECT cprd_grs_oil FROM project_timeseries WHERE report_year=2024"
-            ).fetchone() == (999.0,)
+            ).fetchone() == (11.0,)
 
-    def test_stale_historical_c2_then_default_fetch_refuses_false_lineage(
+    def test_full_fetch_replaces_stale_canonical_snapshot_after_c2_failure(
         self, isolated_config, mock_esdc_api, monkeypatch
     ):
-        from esdc.fetch_publication import apply_timeseries_stage as apply_stage
+        from esdc.analytics_rebuild import apply_timeseries_stage as apply_stage
 
         monkeypatch.setenv("ESDC_USER", "testuser")
         monkeypatch.setenv("ESDC_PASS", "testpass")
@@ -540,13 +610,23 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
             json_data=[
-                {"project_id": "P24", "report_year": 2024, "year": 2024, "cprd_grs_oil": 10}
+                {
+                    "project_id": "P24",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 10,
+                }
             ],
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2025),
             json_data=[
-                {"project_id": "P25", "report_year": 2025, "year": 2025, "cprd_grs_oil": 20}
+                {
+                    "project_id": "P25",
+                    "report_year": 2025,
+                    "year": 2025,
+                    "cprd_grs_oil": 20,
+                }
             ],
         )
         assert runner.invoke(app, ["fetch"]).exit_code == 0
@@ -554,7 +634,7 @@ class TestFetchJsonToDatabase:
         def fail_c2(*args, **kwargs):
             raise ValueError("simulated C2 failure")
 
-        monkeypatch.setattr("esdc.fetch_publication.apply_timeseries_stage", fail_c2)
+        monkeypatch.setattr("esdc.analytics_rebuild.apply_timeseries_stage", fail_c2)
         mock_esdc_api.add_json(
             _resources_url_for_year(2025),
             json_data=[{"project_id": "P25", "report_year": 2025}],
@@ -562,7 +642,12 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2025),
             json_data=[
-                {"project_id": "P25", "report_year": 2025, "year": 2025, "cprd_grs_oil": 21}
+                {
+                    "project_id": "P25",
+                    "report_year": 2025,
+                    "year": 2025,
+                    "cprd_grs_oil": 21,
+                }
             ],
         )
         failed = runner.invoke(app, ["fetch", "--year", "2025"])
@@ -577,7 +662,9 @@ class TestFetchJsonToDatabase:
         assert stale_snapshot is not None
         assert stale_snapshot.publication_state == "analytics_stale"
 
-        monkeypatch.setattr("esdc.fetch_publication.apply_timeseries_stage", apply_stage)
+        monkeypatch.setattr(
+            "esdc.analytics_rebuild.apply_timeseries_stage", apply_stage
+        )
         mock_esdc_api.add_json(
             PROJECT_RESOURCES_URL,
             json_data=[
@@ -587,11 +674,17 @@ class TestFetchJsonToDatabase:
         )
         result = runner.invoke(app, ["fetch"])
 
-        assert result.exit_code == 1
-        assert "analytics_stale" in result.output
+        assert result.exit_code == 0, result.output
+        assert "Whole fetch is fresh" in result.output
         conn = get_sqlite_connection(sqlite_path)
-        assert get_timeseries_snapshot(conn) == stale_snapshot
-        assert get_project_resources_snapshot(conn) == committed_resource
+        recovered = get_timeseries_snapshot(conn)
+        resources = get_project_resources_snapshot(conn)
+        assert recovered is not None and resources is not None
+        assert recovered.publication_state == "published"
+        assert resources.publication_state == "published"
+        assert recovered.revision != stale_snapshot.revision
+        assert committed_resource is not None
+        assert resources.revision != committed_resource.revision
         conn.close()
 
     def test_fetch_json_to_database(self, isolated_config, mock_esdc_api, monkeypatch):
@@ -607,7 +700,14 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=project_resources_data)
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "PRJ-001", "report_year": 2024, "year": 2024, "cprd_grs_oil": 100.0}],
+            json_data=[
+                {
+                    "project_id": "PRJ-001",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 100.0,
+                }
+            ],
         )
 
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -649,11 +749,25 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=project_resources_data)
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2023),
-            json_data=[{"project_id": "PRJ-001", "report_year": 2023, "year": 2023, "cprd_grs_oil": 50.0}],
+            json_data=[
+                {
+                    "project_id": "PRJ-001",
+                    "report_year": 2023,
+                    "year": 2023,
+                    "cprd_grs_oil": 50.0,
+                }
+            ],
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "PRJ-002", "report_year": 2024, "year": 2024, "cprd_grs_oil": 100.0}],
+            json_data=[
+                {
+                    "project_id": "PRJ-002",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 100.0,
+                }
+            ],
         )
 
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -692,7 +806,14 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=resources_2024)
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "PRJ-001", "report_year": 2024, "year": 2024, "cprd_grs_oil": 100.0}],
+            json_data=[
+                {
+                    "project_id": "PRJ-001",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 100.0,
+                }
+            ],
         )
 
         monkeypatch.setenv("ESDC_USER", "testuser")
@@ -732,7 +853,14 @@ class TestFetchJsonToDatabase:
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2025),
-            json_data=[{"project_id": "PRJ-001", "report_year": 2025, "year": 2025, "cprd_grs_oil": 200.0}],
+            json_data=[
+                {
+                    "project_id": "PRJ-001",
+                    "report_year": 2025,
+                    "year": 2025,
+                    "cprd_grs_oil": 200.0,
+                }
+            ],
         )
 
         result = runner.invoke(app, ["fetch", "--filetype", "json", "--year", "2025"])
@@ -786,7 +914,9 @@ class TestFetchJsonToDatabase:
         monkeypatch.setenv("ESDC_USER", "u")
         monkeypatch.setenv("ESDC_PASS", "p")
         assert runner.invoke(app, ["fetch", "--filetype", "json"]).exit_code == 0
-        extra = initial + [{"project_id": "P26", "project_name": "26", "report_year": 2026}]
+        extra = initial + [
+            {"project_id": "P26", "project_name": "26", "report_year": 2026}
+        ]
         mock_esdc_api.add_json(_resources_url_for_year(2024), json_data=extra)
         mock_esdc_api.add_json(
             _resources_url_for_year(2025),
@@ -838,10 +968,15 @@ class TestFetchJsonToDatabase:
         assert result.exit_code != 0
         conn = get_sqlite_connection(sqlite_path)
         assert get_project_resources_snapshot(conn) == before_snapshot
-        assert conn.execute("SELECT * FROM api_project_resources").fetchall() == before_rows
+        assert (
+            conn.execute("SELECT * FROM api_project_resources").fetchall()
+            == before_rows
+        )
         conn.close()
         with duckdb.connect(str(isolated_config / ".esdc" / "esdc.duckdb")) as db:
-            assert db.execute("SELECT * FROM project_resources").fetchall() == before_duck
+            assert (
+                db.execute("SELECT * FROM project_resources").fetchall() == before_duck
+            )
 
     def test_download_failure_second_year_preserves_sqlite_and_duckdb(
         self, isolated_config, mock_esdc_api, monkeypatch
@@ -901,11 +1036,25 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=seed_resources)
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "P24", "report_year": 2024, "year": 2024, "cprd_grs_oil": 100}],
+            json_data=[
+                {
+                    "project_id": "P24",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 100,
+                }
+            ],
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2025),
-            json_data=[{"project_id": "P25", "report_year": 2025, "year": 2025, "cprd_grs_oil": 200}],
+            json_data=[
+                {
+                    "project_id": "P25",
+                    "report_year": 2025,
+                    "year": 2025,
+                    "cprd_grs_oil": 200,
+                }
+            ],
         )
         monkeypatch.setenv("ESDC_USER", "u")
         monkeypatch.setenv("ESDC_PASS", "p")
@@ -949,7 +1098,14 @@ class TestFetchJsonToDatabase:
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "P24", "report_year": 2024, "year": 2024, "cprd_grs_oil": 110}],
+            json_data=[
+                {
+                    "project_id": "P24",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 110,
+                }
+            ],
         )
         mock_esdc_api.add_status(_timeseries_url_for_year(2025), status=500)
 
@@ -962,20 +1118,32 @@ class TestFetchJsonToDatabase:
         assert reindexes == []
         sqlite_conn = get_sqlite_connection(sqlite_path)
         assert get_project_resources_snapshot(sqlite_conn) == before_snapshot
-        assert sqlite_conn.execute(
-            "SELECT project_id, project_name FROM api_project_resources ORDER BY project_id"
-        ).fetchall() == before_resources
+        assert (
+            sqlite_conn.execute(
+                "SELECT project_id, project_name FROM api_project_resources ORDER BY project_id"
+            ).fetchall()
+            == before_resources
+        )
         sqlite_conn.close()
         with duckdb.connect(str(duckdb_path), read_only=True) as conn:
-            assert conn.execute(
-                "SELECT project_id, project_name FROM project_resources ORDER BY project_id"
-            ).fetchall() == before_analytics
-            assert conn.execute(
-                "SELECT project_id, report_year, cprd_grs_oil FROM project_timeseries ORDER BY report_year"
-            ).fetchall() == before_timeseries
-            assert conn.execute(
-                "SELECT revision, source_row_count, source_sha256 FROM api_publication"
-            ).fetchall() == before_lineage
+            assert (
+                conn.execute(
+                    "SELECT project_id, project_name FROM project_resources ORDER BY project_id"
+                ).fetchall()
+                == before_analytics
+            )
+            assert (
+                conn.execute(
+                    "SELECT project_id, report_year, cprd_grs_oil FROM project_timeseries ORDER BY report_year"
+                ).fetchall()
+                == before_timeseries
+            )
+            assert (
+                conn.execute(
+                    "SELECT revision, source_row_count, source_sha256 FROM api_publication"
+                ).fetchall()
+                == before_lineage
+            )
 
     def test_later_year_duckdb_conversion_failure_rolls_back_both_tables(
         self, isolated_config, mock_esdc_api, monkeypatch
@@ -987,11 +1155,25 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=old_resources)
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "P24", "report_year": 2024, "year": 2024, "cprd_grs_oil": 100}],
+            json_data=[
+                {
+                    "project_id": "P24",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 100,
+                }
+            ],
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2025),
-            json_data=[{"project_id": "P25", "report_year": 2025, "year": 2025, "cprd_grs_oil": 200}],
+            json_data=[
+                {
+                    "project_id": "P25",
+                    "report_year": 2025,
+                    "year": 2025,
+                    "cprd_grs_oil": 200,
+                }
+            ],
         )
         monkeypatch.setenv("ESDC_USER", "u")
         monkeypatch.setenv("ESDC_PASS", "p")
@@ -1032,11 +1214,25 @@ class TestFetchJsonToDatabase:
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "P24", "report_year": 2024, "year": 2024, "cprd_grs_oil": 110}],
+            json_data=[
+                {
+                    "project_id": "P24",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 110,
+                }
+            ],
         )
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2025),
-            json_data=[{"project_id": "P25", "report_year": 2025, "year": 2025, "cprd_grs_oil": "not-a-number"}],
+            json_data=[
+                {
+                    "project_id": "P25",
+                    "report_year": 2025,
+                    "year": 2025,
+                    "cprd_grs_oil": "not-a-number",
+                }
+            ],
         )
 
         result = runner.invoke(app, ["fetch"])
@@ -1062,17 +1258,26 @@ class TestFetchJsonToDatabase:
         ] == [("P24", "new24"), ("P25", "new25")]
         sqlite_conn.close()
         with duckdb.connect(str(duckdb_path), read_only=True) as conn:
-            assert conn.execute(
-                "SELECT project_id, project_name FROM project_resources ORDER BY project_id"
-            ).fetchall() == before_resources
-            assert conn.execute(
-                "SELECT project_id, report_year, cprd_grs_oil FROM project_timeseries ORDER BY report_year"
-            ).fetchall() == before_timeseries
-            assert conn.execute(
-                "SELECT revision, source_row_count, source_sha256 FROM api_publication"
-            ).fetchall() == before_lineage
+            assert (
+                conn.execute(
+                    "SELECT project_id, project_name FROM project_resources ORDER BY project_id"
+                ).fetchall()
+                == before_resources
+            )
+            assert (
+                conn.execute(
+                    "SELECT project_id, report_year, cprd_grs_oil FROM project_timeseries ORDER BY report_year"
+                ).fetchall()
+                == before_timeseries
+            )
+            assert (
+                conn.execute(
+                    "SELECT revision, source_row_count, source_sha256 FROM api_publication"
+                ).fetchall()
+                == before_lineage
+            )
 
-    def test_empty_selected_year_preserves_prior_rows_in_both_stores(
+    def test_empty_selected_year_clears_its_scope_in_both_stores(
         self, isolated_config, mock_esdc_api, monkeypatch
     ):
         seed = [
@@ -1108,7 +1313,7 @@ class TestFetchJsonToDatabase:
             ).fetchall()
         ]
         conn.close()
-        assert rows == [("P24", "new24"), ("P25", "old25")]
+        assert rows == [("P24", "new24")]
         import duckdb
 
         with duckdb.connect(str(isolated_config / ".esdc" / "esdc.duckdb")) as db:
@@ -1147,7 +1352,8 @@ class TestFetchJsonToDatabase:
         csv_body = 'grov_current_situation;rec_oil;field_geom;report_year;project_name;project_id\n"line one\nline two";12.5;"POINT (1 2)";2024;Parity;0007\n'
         mock_esdc_api.add_csv(PROJECT_RESOURCES_URL, body=csv_body)
         mock_esdc_api.add_csv(
-            _timeseries_url_for_year(2024), body="report_year;project_id;year\n2024;0007;2024\n"
+            _timeseries_url_for_year(2024),
+            body="report_year;project_id;year\n2024;0007;2024\n",
         )
         assert runner.invoke(app, ["fetch", "--filetype", "csv"]).exit_code == 0
         conn = get_sqlite_connection(isolated_config / ".esdc" / "esdc.sqlite")
@@ -1195,14 +1401,16 @@ class TestFetchJsonToDatabase:
             ("csv", "project_id;project_name;report_year\n", 0),
         ],
     )
-    def test_empty_or_malformed_full_project_response_preserves_truth(
+    def test_full_project_empty_replaces_and_malformed_preserves_truth(
         self, isolated_config, mock_esdc_api, monkeypatch, filetype, body, expected_exit
     ):
         monkeypatch.setenv("ESDC_USER", "u")
         monkeypatch.setenv("ESDC_PASS", "p")
         mock_esdc_api.add_json(
             PROJECT_RESOURCES_URL,
-            json_data=[{"project_id": "KEEP", "project_name": "Keep", "report_year": 2024}],
+            json_data=[
+                {"project_id": "KEEP", "project_name": "Keep", "report_year": 2024}
+            ],
         )
         mock_esdc_api.add_json(_timeseries_url_for_year(2024), json_data=[])
         assert runner.invoke(app, ["fetch", "--filetype", "json"]).exit_code == 0
@@ -1230,15 +1438,22 @@ class TestFetchJsonToDatabase:
         result = runner.invoke(app, ["fetch", "--filetype", filetype])
         assert (result.exit_code != 0) == (expected_exit != 0), result.output
         conn = get_sqlite_connection(sqlite_path)
-        assert get_project_resources_snapshot(conn) == before_snapshot
+        after = get_project_resources_snapshot(conn)
+        if expected_exit:
+            assert after == before_snapshot
+        else:
+            assert after is not None and before_snapshot is not None
+            assert after.row_count == 0
+            assert after.revision != before_snapshot.revision
+            assert after.publication_state == "published"
         assert conn.execute(
             "SELECT project_id, project_name, report_year FROM api_project_resources"
-        ).fetchall() == before_rows
+        ).fetchall() == (before_rows if expected_exit else [])
         conn.close()
         with duckdb.connect(str(isolated_config / ".esdc" / "esdc.duckdb")) as db:
             assert db.execute(
                 "SELECT project_id, project_name, report_year FROM project_resources"
-            ).fetchall() == before_duck
+            ).fetchall() == (before_duck if expected_exit else [])
 
     def test_canonical_csv_full_fetch_and_local_reload_preserve_fields(
         self, isolated_config, mock_esdc_api, monkeypatch, tmp_path
@@ -1250,7 +1465,9 @@ class TestFetchJsonToDatabase:
         monkeypatch.setenv("ESDC_USER", "u")
         monkeypatch.setenv("ESDC_PASS", "p")
         mock_esdc_api.add_csv(PROJECT_RESOURCES_URL, body=csv_body)
-        mock_esdc_api.add_csv(_timeseries_url_for_year(2024), body="report_year;project_id;year\n")
+        mock_esdc_api.add_csv(
+            _timeseries_url_for_year(2024), body="report_year;project_id;year\n"
+        )
         assert runner.invoke(app, ["fetch", "--filetype", "csv"]).exit_code == 0
         path = tmp_path / "canonical.csv"
         path.write_text(csv_body)
@@ -1285,16 +1502,23 @@ class TestFetchJsonToDatabase:
             body="project_id;report_year;project_name;groovy_report\nNEW24;2024;New;Canonical\n",
         )
         mock_esdc_api.add_status(_resources_url_for_year(2025), 500)
-        result = runner.invoke(app, ["fetch", "--filetype", "csv", "--year", "2024", "--year", "2025"])
+        result = runner.invoke(
+            app, ["fetch", "--filetype", "csv", "--year", "2024", "--year", "2025"]
+        )
         assert result.exit_code != 0
         conn = get_sqlite_connection(isolated_config / ".esdc" / "esdc.sqlite")
         assert get_project_resources_snapshot(conn) == before
-        assert conn.execute("SELECT * FROM api_project_resources").fetchall() == before_rows
+        assert (
+            conn.execute("SELECT * FROM api_project_resources").fetchall()
+            == before_rows
+        )
         conn.close()
         with duckdb.connect(str(isolated_config / ".esdc" / "esdc.duckdb")) as db:
-            assert db.execute("SELECT * FROM project_resources").fetchall() == before_duck
+            assert (
+                db.execute("SELECT * FROM project_resources").fetchall() == before_duck
+            )
 
-    def test_selected_year_without_matching_rows_is_noop(
+    def test_selected_empty_scope_preserves_unselected_rows(
         self, isolated_config, mock_esdc_api, monkeypatch
     ):
         monkeypatch.setenv("ESDC_USER", "u")
@@ -1315,11 +1539,18 @@ class TestFetchJsonToDatabase:
         mock_esdc_api.add_json(_timeseries_url_for_year(2025), json_data=[])
         result = runner.invoke(app, ["fetch", "--filetype", "json", "--year", "2025"])
         assert result.exit_code == 0
-        assert "No project-resource rows for report year 2025" in " ".join(
-            result.output.split()
-        )
+        assert "Resources: skipped years 2025" in result.output
         conn = get_sqlite_connection(isolated_config / ".esdc" / "esdc.sqlite")
-        assert get_project_resources_snapshot(conn) == before
+        after = get_project_resources_snapshot(conn)
+        assert before is not None and after is not None
+        assert after.revision != before.revision
+        assert after.row_count == 1
+        assert [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT project_id, report_year FROM api_project_resources"
+            )
+        ] == [("KEEP", 2024)]
         conn.close()
 
 
@@ -1332,7 +1563,9 @@ class TestFetchCsvToDatabase:
             "project_id;project_name;report_year;project_stage\n"
             "PRJ-002;CSV Project;2024;DEVELOPMENT"
         )
-        csv_timeseries = "report_year;project_id;year;cprd_grs_oil\n2024;PRJ-002;2024;200.0"
+        csv_timeseries = (
+            "report_year;project_id;year;cprd_grs_oil\n2024;PRJ-002;2024;200.0"
+        )
         mock_esdc_api.add_csv(PROJECT_RESOURCES_URL, body=csv_content)
         mock_esdc_api.add_csv(_timeseries_url_for_year(2024), body=csv_timeseries)
 
@@ -1418,7 +1651,14 @@ class TestFetchWithEnvCredentials:
         mock_esdc_api.add_json(PROJECT_RESOURCES_URL, json_data=project_resources_data)
         mock_esdc_api.add_json(
             _timeseries_url_for_year(2024),
-            json_data=[{"project_id": "PRJ-003", "report_year": 2024, "year": 2024, "cprd_grs_oil": 300.0}],
+            json_data=[
+                {
+                    "project_id": "PRJ-003",
+                    "report_year": 2024,
+                    "year": 2024,
+                    "cprd_grs_oil": 300.0,
+                }
+            ],
         )
 
         monkeypatch.setenv("ESDC_USER", "envuser")

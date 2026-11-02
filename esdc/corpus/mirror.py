@@ -17,23 +17,27 @@ no-partially-diverged-state invariant above holds for the registry too.
 See `refresh_registry`'s own docstring for which tables are deliberately
 excluded from mirroring altogether.
 
-The POD registry is deliberately NOT raw-mirrored here. `m_pod`,
-`r_institution`, `r_pod_type`, `project_pod`, `pod_document`, and
-`pod_revision` are normalized SQLite operational tables — `pod_id` on
-the SQLite `pod_document` is `m_pod.id`, a surrogate BIGINT foreign key.
-`esdc/pod_registry/publish.py` owns the read-side POD shapes: it
-denormalizes them into `pod_registry` / `pod_project` / `pod_document`
-/ `pod_revision` / `pod_value_case`, dissolves `r_institution`/
-`r_pod_type` into plain text columns, and replaces every `pod_id` with
-the canonical string identifier (`PL-YYYY-XXXX-A-B-R`) that
-`esdc/chat/domain_knowledge/ pod_registry_schema.yaml` documents to the
-chat agent. A raw copy of the SQLite tables under those same names would
-silently overwrite the published, agent-documented shapes with the
-internal surrogate-keyed ones — `refresh_all` converges the published
-tables instead (see its docstring) precisely to avoid that collision.
-The economics read views (`pod_economics`, `pod_plan`,
-`pod_monitoring`, `pod_project_economics`) are published in the same
-transaction and hold no independent state.
+The POD registry is deliberately NOT raw-mirrored here. The SQLite
+operational tables are source truth; their DuckDB shapes are produced by the
+canonical publisher reached through `esdc/pod_registry/publish.py`, which
+publishes the current contract tables (`m_project`, `m_pod`, `pod_project`,
+`pod_monitoring`, `pod_forecast` and the two API output tables) plus the
+r_refs seed and technical state tables, and exposes `pod_registry` as the
+documents-facing view of `m_pod` holding the canonical string identifier
+(`PL-YYYY-XXXX-A-B-R`) documented to the chat agent. Published shapes and
+their documented columns come from `esdc/schemas/pod.yaml`; the document
+link table `pod_document` keys its join on `pod_id_seq`, the surrogate
+identity key that contract defines. A raw copy of the SQLite tables under
+those same names would silently overwrite the published, agent-documented
+shapes with internal source shapes, so `refresh_registry` never copies them.
+Retirement and replacement of POD-owned objects is the publisher's, inside
+its own transaction. `refresh_all` checks the source against the contract
+read-only before it mutates anything in DuckDB, so a missing, empty, corrupt,
+or shape-incompatible source is refused while the projection the mirror
+already had is still intact.
+Objects from the superseded POD model (`pod_economics`, `pod_plan`,
+`pod_project_economics`, the revision registry, and the value-case table)
+are retired by the publisher and are not recreated on refresh.
 
 `document_chunks` is NOT derived from SQLite — its embeddings exist only
 in DuckDB — so refresh never rebuilds it and may only delete orphans.
@@ -228,24 +232,15 @@ REGISTRY_TABLES = (
     "kg_claim",
 )
 
-# POD tables an earlier build of this module raw-mirrored under the old,
-# larger REGISTRY_TABLES. `esdc/pod_registry/publish.py` now owns all six
-# shapes (see module docstring), so none of them belong here any more —
-# but a DuckDB file refreshed by that older code can still be carrying
-# them, most importantly a `pod_document` with a BIGINT `pod_id`
-# clobbering the published, agent-documented VARCHAR one. `refresh_registry`
-# retires any of these it finds using the same DROP TABLE IF EXISTS
-# mechanism it already uses for a table that vanished from the truth, so
-# the very next `esdc corpus sync` (or any commit/learn batch) repairs a
-# database left in that state.
-_RETIRED_REGISTRY_TABLES = (
-    "r_institution",
-    "r_pod_type",
-    "m_pod",
-    "project_pod",
-    "pod_document",
-    "pod_revision",
-)
+# SQLite operational tables this module must never raw-mirror: the canonical
+# publisher owns their DuckDB shapes (see the module docstring), so a raw copy
+# under the same names would clobber the published, agent-documented ones. They
+# are not copied here and they are not dropped here either — retirement is the
+# publisher's inside its own transaction, which is what keeps a source the
+# publisher cannot validate from destroying a projection it can no longer
+# rebuild. `pod_document`, `m_pod`, `r_institution`, `r_pod_type` and the
+# superseded-model names are listed in `esdc.pod_registry.publication` as the
+# objects that publisher replaces.
 
 
 def refresh_registry(
@@ -259,10 +254,11 @@ def refresh_registry(
     (per-document idempotency bookkeeping for `esdc corpus learn`) are
     deliberately left out of `REGISTRY_TABLES` — neither is domain
     knowledge the chat agent should query, so their absence here is
-    intentional, not an oversight. The POD registry tables are excluded
-    for a different reason — see the module docstring and
-    `_RETIRED_REGISTRY_TABLES` — and are actively retired below rather
-    than just never copied.
+    intentional, not an oversight. The POD registry tables are excluded for a
+    different reason — see the module docstring — and they are neither copied
+    nor dropped here: retiring and replacing them is the canonical publisher's
+    job inside its own transaction, so a source the publisher cannot validate
+    cannot cost the mirror a projection it already had.
 
     kg_edge and kg_claim only exist after `esdc corpus learn` has run, so
     an absent table does not raise. But absent is not the same as never
@@ -280,10 +276,7 @@ def refresh_registry(
     at all — `esdc corpus learn` has never run — and that steady state
     must not log anything above debug on every `corpus commit`/`learn`/
     `sync`; only a genuine state change (a table that DID exist in DuckDB
-    losing its truth) is worth an info line. The same silence-unless-
-    something-changed rule applies to retiring `_RETIRED_REGISTRY_TABLES`:
-    once a database has been cleaned up once, every subsequent refresh is
-    a silent no-op.
+    losing its truth) is worth an info line.
     """
     copied: dict[str, int] = {}
     with attached_truth(conn, sqlite_path) as truth:
@@ -300,9 +293,7 @@ def refresh_registry(
         # that has simply never existed on either side (e.g. kg_edge/
         # kg_claim before `esdc corpus learn` has ever run), which is the
         # steady state on most installs and must stay silent. Same filter
-        # form as create_views uses for the main catalog. Also doubles as
-        # the retirement check below, since it reflects DuckDB's actual
-        # catalog regardless of REGISTRY_TABLES membership.
+        # form as create_views uses for the main catalog.
         mirrored = {
             r[0]
             for r in conn.execute(
@@ -334,18 +325,6 @@ def refresh_registry(
             if copied_row is None:
                 raise RuntimeError("mirror query returned no row")
             copied[table] = copied_row[0]
-        # Retire any POD table a pre-fix build left raw-mirrored here.
-        # Unconditional on truth presence (unlike the loop above): these
-        # tables are real SQLite operational tables and normally ARE
-        # present in the truth, so "present in truth" cannot be the
-        # signal to drop them — the signal is simply that this module no
-        # longer wants to see them mirrored at all, regardless of truth
-        # state. `publish_pod_registry`/`refresh_all` owns recreating
-        # `pod_document` correctly immediately afterward.
-        for table in _RETIRED_REGISTRY_TABLES:
-            if table in mirrored:
-                conn.execute(f"DROP TABLE IF EXISTS {table}")
-                logger.info("[Mirror] dropped retired registry table | table=%s", table)
     logger.info("[Mirror] registry refreshed | tables=%d", len(copied))
     return copied
 
@@ -366,12 +345,17 @@ def create_views(conn: duckdb.DuckDBPyConnection) -> list[str]:
     empty `linked_pod_ids`; any `v_doc_pod_link` left over from an
     earlier refresh is dropped so it cannot dangle and reference a table
     that no longer exists.
+
+    Presence is measured in the catalog being written to: an attached
+    database cannot satisfy the link join here, because the view's
+    unqualified names resolve in the current catalog. A pair that exists
+    only there, or one half here and one half attached, must not count.
     """
     created: list[str] = []
     has_links_row = conn.execute(
-        "SELECT COUNT(*) FROM duckdb_tables() "
-        "WHERE table_name IN ('pod_document', 'pod_registry') "
-        "AND database_name = current_database()"
+        "SELECT COUNT(DISTINCT table_name) FROM information_schema.tables "
+        "WHERE table_catalog = current_database() AND table_schema='main' "
+        "AND table_name IN ('pod_document', 'pod_registry')"
     ).fetchone()
     if has_links_row is None:
         raise RuntimeError("mirror query returned no row")
@@ -380,13 +364,18 @@ def create_views(conn: duckdb.DuckDBPyConnection) -> list[str]:
     has_links = has_links_row[0] == 2
 
     if has_links:
+        # The published shapes only: `pod_document` links on the contract's
+        # `pod_id_seq`, and `pod_registry` is the view that carries the
+        # canonical string `pod_id`. There is no alternate join for an older
+        # column shape — a half-published or superseded-shape registry is
+        # refused by the publisher, so it cannot reach here.
         conn.execute("""
             CREATE OR REPLACE VIEW v_doc_pod_link AS
             SELECT d.doc_id, d.file_name, d.doc_type, d.doc_date, d.subject,
                    p.pod_id, p.pod_name
             FROM documents d
             JOIN pod_document pd ON pd.doc_id = d.doc_id
-            JOIN pod_registry p ON p.pod_id = pd.pod_id
+            JOIN pod_registry p ON p.pod_id_seq = pd.pod_id_seq
         """)
         created.append("v_doc_pod_link")
         conn.execute("""
@@ -400,10 +389,11 @@ def create_views(conn: duckdb.DuckDBPyConnection) -> list[str]:
         """)
     else:
         # A registry table that backed v_doc_pod_link in a previous refresh
-        # may have just been dropped (see refresh_registry). Leaving the
-        # view in place would make it reference a table that no longer
-        # exists, turning any query against it into a CatalogException
-        # instead of returning stale rows.
+        # may have just been retired (the publisher drops and recreates the
+        # POD objects inside its own transaction). Leaving the view in place
+        # would make it reference a table that no longer exists, turning any
+        # query against it into a CatalogException instead of returning stale
+        # rows.
         conn.execute("DROP VIEW IF EXISTS v_doc_pod_link")
         conn.execute("""
             CREATE OR REPLACE VIEW v_document AS
@@ -418,12 +408,12 @@ class MirrorReport:
     documents: int = 0
     orphan_chunks: int = 0
     # Every table this refresh actually converged in DuckDB, by row count:
-    # kg_edge/kg_claim (raw-mirrored, see REGISTRY_TABLES) plus
-    # pod_registry/pod_project/pod_document/pod_revision/pod_value_case
-    # (published, see esdc.pod_registry.publish). One flat dict rather than
-    # a separate field per source — `esdc corpus sync` just enumerates it —
-    # so the CLI output stays honest about everything refresh_all touched
-    # without the report shape caring which module produced which table.
+    # kg_edge/kg_claim (raw-mirrored, see REGISTRY_TABLES) plus the canonical
+    # POD publication (contract tables, r_refs seed, and technical state, see
+    # esdc.pod_registry.publish). One flat dict rather than a separate field
+    # per source — `esdc corpus sync` just enumerates it — so the CLI output
+    # stays honest about everything refresh_all touched without the report
+    # shape caring which module produced which table.
     registry: dict[str, int] = field(default_factory=dict)
     views: list[str] = field(default_factory=list)
 
@@ -431,28 +421,74 @@ class MirrorReport:
 def refresh_all(conn: duckdb.DuckDBPyConnection, sqlite_path: Path) -> MirrorReport:
     """Rebuild every derived table/view in DuckDB from the SQLite truth.
 
-    Converges both raw mirrors (`documents`, `kg_edge`/`kg_claim`) and
-    the published POD registry (`pod_registry`, `pod_project`,
-    `pod_document`, `pod_revision`, `pod_value_case`) plus the economics
-    read views, so `esdc corpus sync` — the only place a user runs
-    this by hand — repairs the whole read side in one call, including
-    the collision `refresh_registry`/`_RETIRED_REGISTRY_TABLES` retires
-    (see their docstrings): a pre-fix build's raw `pod_document` mirror
-    clobbering the published, agent-documented one.
+    Converges the raw mirrors (`documents`, `kg_edge`/`kg_claim`) and the
+    canonical POD publication — the contract tables, the r_refs seed, and the
+    technical state tables that `publish_pod_registry` produces, including the
+    `pod_registry` view and the `pod_document` link keyed on `pod_id_seq`.
+    Objects from the superseded POD model are retired by the publisher and are
+    not recreated here. One `esdc corpus sync` therefore repairs the whole read
+    side, including a database left raw-mirrored by an older build: the
+    publisher replaces those raw copies with the current shapes.
 
-    The POD publish runs on this same `conn` rather than opening a
-    second write connection — see `_publish_registry_tables`'s docstring
-    in `esdc/pod_registry/publish.py` for why a second connection is
-    unsafe for the in-memory DuckDB handles this module's own tests use,
-    even though it happens to be safe for on-disk ones.
+    The source is checked against the contract read-only before anything in
+    DuckDB is mutated. A missing, empty, corrupt, or shape-incompatible source
+    is refused at that point, so the documents mirror, the knowledge-graph
+    mirror, and the POD projection a previous successful refresh published all
+    stay exactly as they were. Without that ordering a refused source could
+    destroy a projection it can no longer rebuild, because the publisher's own
+    transaction is the only place POD objects are dropped and replaced.
+
+    The POD publish runs on this same `conn` rather than opening a second write
+    connection: DuckDB allows only one writer per file, and an in-memory handle
+    passed in by the caller cannot be re-opened as a writer at all. Publish is
+    the only POD write path here.
+
+    A publication failure is checked on `projection_error`, not on report
+    truthiness: the report is a sequence and an empty one is falsy.
     """
-    from esdc.pod_registry.publish import _publish_registry_tables
+    from esdc.pod_registry.publication import publish_v2_registry
+    from esdc.pod_registry.publish import source_preflight_error
+
+    preflight_error = source_preflight_error(sqlite_path)
+    if preflight_error is not None:
+        raise RuntimeError(preflight_error)
 
     report = MirrorReport()
     report.documents = refresh_documents(conn, sqlite_path)
     report.orphan_chunks = sweep_orphan_chunks(conn)
     report.registry = refresh_registry(conn, sqlite_path)
-    pod_results = _publish_registry_tables(conn, sqlite_path)
-    report.registry.update({r.table_name: r.row_count for r in pod_results})
+
+    db_row = conn.execute(
+        "SELECT path FROM duckdb_databases() "
+        "WHERE database_name = current_database()"
+    ).fetchone()
+    db_path = Path(db_row[0]) if db_row and db_row[0] else Path(":memory:")
+    publication = publish_v2_registry(sqlite_path, db_path, duck_conn=conn)
+    if publication.projection_error is not None:
+        raise RuntimeError(publication.projection_error)
+    report.registry.update(
+        {result.table_name: result.row_count for result in publication.results}
+    )
+
+    from esdc.knowledge.freshness import knowledge_freshness
+    from esdc.pod_registry.store import get_sqlite_readonly_connection
+
+    source = get_sqlite_readonly_connection(sqlite_path)
+    if source is not None:
+        try:
+            stale_knowledge = not knowledge_freshness(source).fresh
+        finally:
+            source.close()
+        if stale_knowledge:
+            mirrored = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT table_name FROM duckdb_tables() "
+                    "WHERE database_name = current_database()"
+                ).fetchall()
+            }
+            for table in ("kg_edge", "kg_claim"):
+                if table in mirrored:
+                    conn.execute(f'DELETE FROM "{table}"')
     report.views = create_views(conn)
     return report

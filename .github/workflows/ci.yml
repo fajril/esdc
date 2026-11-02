@@ -2,30 +2,86 @@ name: CI
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches: [main, develop, "feature/**", "feat/**"]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
           enable-cache: true
+
+      - name: Build pinned SQLite runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/sqlite-autoconf-3540100.tar.gz"
+          source_dir="${RUNNER_TEMP}/sqlite-autoconf-3540100"
+          prefix="${RUNNER_TEMP}/sqlite-3.54.1"
+          curl --fail --location --silent --show-error \
+            https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz \
+            --output "$archive"
+          python - "$archive" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+
+          archive = pathlib.Path(sys.argv[1])
+          actual = hashlib.sha3_256(archive.read_bytes()).hexdigest()
+          expected = "b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4"
+          if actual != expected:
+              raise SystemExit(f"SQLite archive SHA3-256 mismatch: {actual}")
+          PY
+          mkdir -p "$source_dir"
+          tar -xzf "$archive" --strip-components=1 -C "$source_dir"
+          (
+            cd "$source_dir"
+            ./configure --prefix="$prefix" --enable-shared --disable-static
+            make -j2
+            make install
+          )
+          echo "ESDC_SQLITE_PREFIX=$prefix" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         # llama-cpp-python resolves to a prebuilt cpu wheel on Linux via the
         # platform-marked [tool.uv.sources] index in pyproject.toml (no source
         # compile) — no extra env needed.
-        run: uv sync --group dev
+        run: uv sync --python "$(command -v python)" --group dev
+
+      - name: Verify SQLite runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          extension="$(uv run python -c 'import _sqlite3; print(_sqlite3.__file__)')"
+          ldd "$extension"
+          ldd "$extension" | grep -F "$ESDC_SQLITE_PREFIX/lib/libsqlite3.so"
+          uv run python - <<'PY'
+          import sqlite3
+
+          from esdc.sqlite_runtime import require_wal_runtime
+
+          if sqlite3.sqlite_version != "3.54.1":
+              raise SystemExit(f"Expected SQLite 3.54.1, got {sqlite3.sqlite_version}")
+          require_wal_runtime()
+          print(f"SQLite {sqlite3.sqlite_version} WAL runtime verified")
+          PY
 
       - name: Lint
         run: uv run ruff check esdc/ tests/
+
+      - name: Type check
+        run: uv run basedpyright .
 
       - name: Test
         run: uv run pytest -q

@@ -128,7 +128,9 @@ def patch_seams(tmp_path, monkeypatch):
         pipeline,
         "CorpusStore",
         lambda *a, **kw: CorpusStore(
-            db_path=tmp_path / "_default.duckdb", embedder=FakeEmbedder(), read_only=False
+            db_path=tmp_path / "_default.duckdb",
+            embedder=FakeEmbedder(),
+            read_only=False,
         ),
     )
 
@@ -2908,24 +2910,40 @@ def test_extract_passes_ollama_host_to_ocr_and_text_caller(tmp_path, monkeypatch
 
 
 def _seed_registry_pod(store):
+    """Seed one master POD through the current identity issuer."""
+    from esdc.pod_registry.changesets import apply_changeset
+
     sconn = store._get_sqlite()
-    sconn.execute(
-        "INSERT INTO r_institution (code, institution) VALUES (4, 'SKK Migas')"
+    source_generation = sconn.execute(
+        "SELECT source_generation FROM pod_registry_state WHERE singleton_id = 1"
+    ).fetchone()[0]
+    result = apply_changeset(
+        "m_pod",
+        {
+            "source_generation": source_generation,
+            "inserts": [
+                {
+                    "approval_date": "2019-07-16",
+                    "institution_id": 4,
+                    "pod_type_id": 1,
+                    "pod_name": "POD I Lapangan Abadi",
+                    "pod_letter_num": "SRT-0368",
+                }
+            ],
+        },
+        sqlite_path=store._sqlite_path,
     )
-    sconn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (1, 'POD I')")
-    sconn.execute(
-        "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
-        " institution_code, pod_type_code, rev_num, approval_seq)"
-        " VALUES (1, 'PL-2019-0300-4-1-0', 'POD I Lapangan Abadi',"
-        " 'SRT-0368', '2019-07-16', 4, 1, 0, 300)"
-    )
-    sconn.commit()
+    assert result.ok, result.errors
+    # pod_id is issued by the identity ledger, not supplied by the fixture.
+    return sconn.execute(
+        "SELECT pod_id FROM m_pod WHERE pod_letter_num = 'SRT-0368'"
+    ).fetchone()[0]
 
 
 def test_extract_writes_pod_suggestions(tmp_path, monkeypatch):
     store = make_store(tmp_path)
     patch_store_factory(monkeypatch, store)
-    _seed_registry_pod(store)
+    pod_id = _seed_registry_pod(store)
     monkeypatch.setattr(
         pipeline,
         "llm_extract",
@@ -2940,7 +2958,7 @@ def test_extract_writes_pod_suggestions(tmp_path, monkeypatch):
     assert report.processed and not report.failed
     meta, _ = read_sidecar(sidecar_path(pdf))
     assert meta["pod_name"] == ["POD I Lapangan Abadi"]
-    assert meta["suggested_pod_ids"] == ["PL-2019-0300-4-1-0"]
+    assert meta["suggested_pod_ids"] == [pod_id]
     assert any("suggested POD" in w for w in report.warnings)
 
 
@@ -2963,7 +2981,9 @@ def test_commit_stores_pod_fields(tmp_path, monkeypatch):
     doc = store.get_document(("cc" * 32)[:16])
     assert doc is not None
     assert doc["pod_name"] == ["POD I Lapangan Abadi"]
-    assert doc["suggested_pod_ids"] == ["PL-2019-0300-4-1-0"]
+    # Source commit invalidates all derived knowledge, so the cached suggestion is gone
+    # until an explicit rebuild.
+    assert doc["suggested_pod_ids"] is None
     store.close()
 
 

@@ -1,0 +1,6828 @@
+contract_id: esdc.pod
+contract_version: 1
+dictionary_version: 0.4.0
+source_of_truth: Data Dictionary POD.xlsx
+notes:
+- Static package metadata; runtime never reads references/ or a user database.
+- Partial-data input policy retains unknown domain values as NULL and never zero-fills them.
+- m_project metadata follows the seven-column mockup project master.
+- API tables are derived outputs and are not source input tables.
+reference_values:
+  r_institution.id:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  r_pod_type.id:
+  - 1
+  - 2
+  - 3
+  - 4
+  r_pod_stage.id:
+  - 1
+  - 2
+  - 3
+  - 4
+exceptions:
+- table: m_pod
+  column: pod_id
+  columns:
+  - pod_id
+  - pod_order_no
+  identity:
+    pod_id_seq: 856
+    approval_date: '1997-06-01'
+    pod_name: Pengembangan Lapangan Semoga
+  reason: Known placeholder; final pod_id and pod_order_no have not been issued.
+tables:
+- name: m_project
+  role: input
+  required: true
+  source_names:
+  - m_project
+  primary_key:
+  - project_id
+  unique_keys: []
+  references: []
+  columns:
+  - name: project_id
+    formal_name: Project Id
+    logical_type: text
+    pattern: "^P-[A-Z0-9]{7}-[A-Z0-9]{2}$"
+    data_type: TEXT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: PRIMARY KEY
+    description: Canonical project master field.
+    group: identity
+    source: mockup
+    aliases: []
+  - name: project_name
+    formal_name: Project Name
+    logical_type: text
+    data_type: TEXT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL
+    description: Canonical project master field.
+    group: identity
+    source: mockup
+    aliases: []
+  - name: is_active
+    formal_name: Is Active
+    logical_type: boolean
+    data_type: INTEGER
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL
+    description: Canonical project master field.
+    group: identity
+    source: mockup
+    aliases: []
+  - name: created_at
+    formal_name: Created At
+    logical_type: datetime
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL
+    description: Mockup project master field; audit columns are generated locally.
+    group: audit
+    source: mockup
+    aliases: []
+  - name: created_by
+    formal_name: Created By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL
+    description: Mockup project master field; audit columns are generated locally.
+    group: audit
+    source: mockup
+    aliases: []
+  - name: updated_at
+    formal_name: Updated At
+    logical_type: datetime
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL
+    description: Mockup project master field; audit columns are generated locally.
+    group: audit
+    source: mockup
+    aliases: []
+  - name: updated_by
+    formal_name: Updated By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL
+    description: Mockup project master field; audit columns are generated locally.
+    group: audit
+    source: mockup
+    aliases: []
+- name: m_pod
+  role: input
+  required: true
+  source_names:
+  - m_pod
+  primary_key:
+  - pod_id_seq
+  unique_keys:
+  - - pod_uuid
+  - - pod_id
+  references:
+  - column: superseded_by
+    target_table: m_pod
+    target_column: pod_id_seq
+    nullable: true
+  - column: institution_id
+    target_table: r_institution
+    target_column: id
+    allowed_values:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+  - column: pod_type_id
+    target_table: r_pod_type
+    target_column: id
+    allowed_values:
+    - 1
+    - 2
+    - 3
+    - 4
+  columns:
+  - name: pod_id_seq
+    formal_name: Sequential POD Record ID
+    logical_type: integer
+    data_type: BIGINT
+    nullable: false
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: PRIMARY KEY; GENERATED ALWAYS AS IDENTITY
+    description: Primary Key. Sequential POD ID. Meant for Database operations
+    group: null
+    source: null
+    aliases:
+    - id
+  - name: pod_uuid
+    formal_name: POD ID UUID v4
+    logical_type: uuid
+    data_type: UUID
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; UNIQUE; DEFAULT gen_random_uuid(); UPDATE prohibited by trigger
+    description: null
+    group: null
+    source: null
+    aliases: []
+    uuid_version: 4
+  - name: approval_date
+    formal_name: Approval Date of POD
+    logical_type: date
+    data_type: DATE
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; immutable after creation; direct UPDATE prohibited because approval year is
+      embedded in pod_id
+    description: POD Approval Date. Signed at.
+    group: null
+    source: null
+    aliases: []
+  - name: superseded_by
+    formal_name: Superseded By
+    logical_type: integer
+    data_type: BIGINT
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NULL; REFERENCES m_pod(pod_id_seq) ON UPDATE RESTRICT ON DELETE RESTRICT; CHECK (superseded_by
+      <> pod_id_seq); NON-UNIQUE INDEX on superseded_by; controlled atomic writer; acyclic graph and strictly
+      later replacement approval_date enforced by trigger
+    description: References the approval that replaces THIS approval. NULL means no recorded replacement,
+      not an original/root approval. Several old approvals may point to one replacement, including a merger.
+      Select eligible old approvals; the controlled writer creates the replacement and updates their superseded_by
+      and is_latest atomically. Reject missing targets, self-links, cycles and non-later replacement dates.
+      A later phase that leaves this approval valid is not supersession. Audited corrections must preserve
+      issued identities.
+    group: null
+    source: null
+    aliases: []
+  - name: institution_id
+    formal_name: Approval Institution ID
+    logical_type: integer
+    data_type: INTEGER
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; REFERENCES r_institution(id) ON UPDATE RESTRICT ON DELETE RESTRICT; CHECK (institution_id
+      BETWEEN 1 AND 9); immutable after creation
+    description: One-digit institution identifier referencing r_institution(id). The value is embedded
+      as component A in pod_id.
+    group: null
+    source: null
+    aliases:
+    - inst_id
+  - name: pod_type_id
+    formal_name: POD Type ID
+    logical_type: integer
+    data_type: INTEGER
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; REFERENCES r_pod_type(id) ON UPDATE RESTRICT ON DELETE RESTRICT; CHECK (pod_type_id
+      BETWEEN 1 AND 9); immutable after creation
+    description: One-digit POD type identifier referencing r_pod_type(id). The ID is embedded as component
+      B in pod_id.
+    group: null
+    source: null
+    aliases: []
+  - name: rev_num
+    formal_name: Revision Number
+    logical_type: integer
+    data_type: INTEGER
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (rev_num BETWEEN 0 AND 9); explicit revision number in pod_name first,
+      otherwise calculated via reverse superseded_by lookup; recalculate after name/chain corrections
+      before identity issuance; controlled write; issued identity corrections require reconciliation
+    description: 'Use an explicit revision number qualifying Revisi/Revision in pod_name when present.
+      POD Pertama/POD I and phase, area or well numbers are not revision numbers. Otherwise use 0 for
+      a root, or MAX(predecessor.rev_num)+1 using predecessor.superseded_by = current.pod_id_seq, including
+      mergers. Explicit names take precedence over trace; log differences (Sisi Nubi ID 614: name 2, trace
+      3, use 2). Recalculate after name or chain corrections before issuing IDs. K107 supersedes the previous
+      merger-numbering hold.'
+    group: null
+    source: null
+    aliases: []
+  - name: pod_order_no
+    formal_name: Year-scoped POD Ordering Number
+    logical_type: integer
+    data_type: SMALLINT
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (pod_order_no BETWEEN 1 AND 7320); unique expression index on ((EXTRACT(YEAR
+      FROM approval_date)::integer), pod_order_no); controlled allocator validates the date-specific 20-slot
+      block; persistent ledger; immutable after issuance; direct INSERT/UPDATE prohibited
+    description: 'Forms XXXX in PL-YYYY-XXXX-A-B-R. pod_order_no = (day_of_year(approval_date)-1)*20 +
+      daily_slot; daily_slot is 1..20 in persistent recording order for that date. Day 1: 0001-0020; day
+      2: 0021-0040; day 366: 7301-7320 in leap years only (common-year maximum 7300). Every approval,
+      including revisions, consumes its own slot across all institutions/types. Historical additions use
+      unused slots on their actual date without shifting issued numbers. If all 20 slots are used, stop
+      issuance for that date; never spill to another date or reuse an issued slot, including after deletion.
+      Ledger allocation and writes are atomic. K108 replaces annual increments 10,20,30.'
+    group: null
+    source: null
+    aliases: []
+    minimum: -32768
+    maximum: 32767
+  - name: pod_id
+    formal_name: POD ID following KSMI Standard
+    logical_type: text
+    data_type: VARCHAR(18)
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: 18
+    constraint: NOT NULL; UNIQUE; CHECK (pod_id ~ '^PL-[0-9]{4}-[0-9]{4}-[0-9]-[0-9]-[0-9]$'); generated
+      by controlled database function from approval_date, pod_order_no, institution_id, pod_type_id, and
+      rev_num; immutable after creation; direct INSERT/UPDATE prohibited
+    description: 'Immutable 18-character identifier PL-YYYY-XXXX-A-B-R. YYYY is the approval year; XXXX
+      is pod_order_no padded to four digits, allocated in a 20-slot block for the approval day under K108.
+      A is institution_id; B is pod_type_id; R follows K107: explicit revision number in pod_name first,
+      otherwise root 0 or MAX(predecessor.rev_num)+1. Each approval including revisions gets its own ordering
+      slot. Issued IDs must never be changed or reused; reconcile corrections before issuance.'
+    group: null
+    source: null
+    aliases: []
+    pattern: ^PL-[0-9]{4}-[0-9]{4}-[0-9]-[0-9]-[0-9]$
+  - name: pod_name
+    formal_name: POD Name
+    logical_type: text
+    data_type: TEXT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(pod_name) <> ''); revision-chain consistency enforced by CONSTRAINT
+      TRIGGER
+    description: Official name of this approved POD or development project. Must be non-empty. Names may
+      differ across revisions or merged approvals; do not infer supersession from name similarity or rename
+      earlier approvals automatically.
+    group: null
+    source: null
+    aliases: []
+  - name: pod_letter_num
+    formal_name: POD Approval Letter Number
+    logical_type: text
+    data_type: TEXT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(pod_letter_num) <> '')
+    description: Official POD approval letter number. The value must be non-empty.
+    group: null
+    source: null
+    aliases: []
+  - name: is_latest
+    formal_name: Is Latest
+    logical_type: boolean
+    data_type: BOOLEAN
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT TRUE; TRUE iff superseded_by IS NULL; maintained atomically by the controlled
+      writer and relationship INSERT/UPDATE/DELETE triggers; direct edits prohibited
+    description: 'Current latest status: TRUE when this approval has no recorded replacement (superseded_by
+      IS NULL), otherwise FALSE. In one transaction, each replaced approval points to the new approval
+      and becomes FALSE; the new terminal approval is TRUE. Failures roll back all pointers/status changes.
+      Historical reports also filter approval dates and replacement approval dates; current is_latest
+      alone is insufficient.'
+    group: null
+    source: null
+    aliases: []
+  - name: onstream_date
+    formal_name: Onstream Date
+    logical_type: date
+    data_type: DATE
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL
+    description: null
+    group: null
+    source: null
+    aliases: []
+  - name: res_oil_1p_pod
+    formal_name: Reserves Oil 1P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_oil_1p_pod >= 0)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_oil_2p_pod
+    formal_name: Reserves Oil 2P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_oil_2p_pod >= res_oil_1p_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_oil_3p_pod
+    formal_name: Reserves Oil 3P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_oil_3p_pod >= res_oil_2p_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_oil_2p_risked_pod
+    formal_name: Reserves Oil 2P Risked
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NULL; CHECK (res_oil_2p_risked_pod IS NULL OR res_oil_2p_risked_pod BETWEEN 0 AND res_oil_2p_pod)
+    description: Risk-adjusted 2P oil reserves stated in the approved POD. Leave NULL when the POD approval
+      does not specify a risked 2P volume; do not replace missing information with zero.
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_con_1p_pod
+    formal_name: Reserves Condensate 1P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_con_1p_pod >= 0)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_con_2p_pod
+    formal_name: Reserves Condensate 2P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_con_2p_pod >= res_con_1p_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_con_3p_pod
+    formal_name: Reserves Condensate 3P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_con_3p_pod >= res_con_2p_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_con_2p_risked_pod
+    formal_name: Reserves Condensate 2P Risked
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NULL; CHECK (res_con_2p_risked_pod IS NULL OR res_con_2p_risked_pod BETWEEN 0 AND res_con_2p_pod)
+    description: Risk-adjusted 2P condensate reserves stated in the approved POD. Leave NULL when the
+      POD approval does not specify a risked 2P volume; do not replace missing information with zero.
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_ga_1p_pod
+    formal_name: Reserves Associated Gas 1P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_ga_1p_pod >= 0)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_ga_2p_pod
+    formal_name: Reserves Associated Gas 2P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_ga_2p_pod >= res_ga_1p_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_ga_3p_pod
+    formal_name: Reserves Associated Gas 3P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_ga_3p_pod >= res_ga_2p_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_ga_2p_risked_pod
+    formal_name: Reserves Associated Gas 2P Risked
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NULL; CHECK (res_ga_2p_risked_pod IS NULL OR res_ga_2p_risked_pod BETWEEN 0 AND res_ga_2p_pod)
+    description: Risk-adjusted 2P associated gas reserves stated in the approved POD. Leave NULL when
+      the POD approval does not specify a risked 2P volume; do not replace missing information with zero.
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_gn_1p_pod
+    formal_name: Reserves Non Associated Gas 1P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_gn_1p_pod >= 0)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_gn_2p_pod
+    formal_name: Reserves Non Associated Gas 2P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_gn_2p_pod >= res_gn_1p_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_gn_3p_pod
+    formal_name: Reserves Non Associated Gas 3P
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (res_gn_3p_pod >= res_gn_2p_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: res_gn_2p_risked_pod
+    formal_name: Reserves Non Associated Gas 2P Risked
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NULL; CHECK (res_gn_2p_risked_pod IS NULL OR res_gn_2p_risked_pod BETWEEN 0 AND res_gn_2p_pod)
+    description: Risk-adjusted 2P non-associated gas reserves stated in the approved POD. Leave NULL when
+      the POD approval does not specify a risked 2P volume; do not replace missing information with zero.
+    group: subsurface
+    source: null
+    aliases: []
+  - name: ioip_low_pod
+    formal_name: IOIP P90
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ioip_low_pod >= 0)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: ioip_mid_pod
+    formal_name: IOIP P50
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ioip_mid_pod >= ioip_low_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: ioip_high_pod
+    formal_name: IOIP P10
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ioip_high_pod >= ioip_mid_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: igip_low_pod
+    formal_name: IGIP P90
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (igip_low_pod >= 0)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: igip_mid_pod
+    formal_name: IGIP P50
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (igip_mid_pod >= igip_low_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: igip_high_pod
+    formal_name: IGIP P10
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (igip_high_pod >= igip_mid_pod)
+    description: null
+    group: subsurface
+    source: null
+    aliases: []
+  - name: ghv_avg_pod
+    formal_name: Average Gross Heat Value
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MMBTU/MMSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 1000::double precision; CHECK (ghv_avg_pod > 0)
+    description: Default value 1000 MMBTU/MMSCF
+    group: subsurface
+    source: null
+    aliases: []
+  - name: lpg_yield_pod
+    formal_name: LPG Yield
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: TONNE/MMSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (lpg_yield_pod >= 0)
+    description: Metric TON LPG per MMSCF feed gas
+    group: subsurface
+    source: null
+    aliases: []
+  - name: well_total_pod
+    formal_name: Total Wells
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_total_pod >= 0)
+    description: null
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_prd_pod
+    formal_name: Total Producer Wells
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_prd_pod >= 0)
+    description: null
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_inj_pod
+    formal_name: Total Injector Wells
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_inj_pod >= 0)
+    description: null
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_surv_pod
+    formal_name: Total Surveillance Wells
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_surv_pod >= 0)
+    description: null
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_conv_pod
+    formal_name: Total Conversion Wells
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_conv_pod >= 0)
+    description: null
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: sow_pod
+    formal_name: Approved Scope of Work
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(sow_pod) <> '')
+    description: Scope of work approved in this POD revision and used as the monitoring baseline.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: scenario_pod
+    formal_name: Approved POD Scenario
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(scenario_pod) <> '')
+    description: Approved scenario or case associated with the POD economics and development assumptions,
+      such as base, upside, or downside.
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_oil_pod
+    formal_name: Weighted Average Price of Oil
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_oil_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_con_pod
+    formal_name: Weighted Average Condensate Price
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_con_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_an_pod
+    formal_name: Weighted Average Gas Price
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_an_pod >= 0)
+    description: Weighted Average Price of Associated + Non Associated Gas.
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_lpg_pod
+    formal_name: Weighted Average LPG Price
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/TONNE
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_lpg_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_lng_pod
+    formal_name: Weighted Average LNG Price
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_lng_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: capital_drilling_pod
+    formal_name: Capital Drilling Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (capital_drilling_pod >= 0)
+    description: part of drilling costs that is categorized as capital, which is subject to depreciations.
+    group: economics
+    source: null
+    aliases: []
+  - name: capital_facilities_pod
+    formal_name: Capital Facilities Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (capital_facilities_pod >= 0)
+    description: part of facility costs that is categorized as capital, which is subject to depreciations
+    group: economics
+    source: null
+    aliases: []
+  - name: intang_drilling_pod
+    formal_name: Intangible Drilling Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (intang_drilling_pod >= 0)
+    description: part of drilling costs that is categorized as intangible cost
+    group: economics
+    source: null
+    aliases: []
+  - name: intang_facilities_pod
+    formal_name: Intangible Facilities Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (intang_facilities_pod >= 0)
+    description: part of facility costs that is categorized as intangible cost
+    group: economics
+    source: null
+    aliases: []
+  - name: opex_pod
+    formal_name: Operating Expenditure
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (opex_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: asr_pod
+    formal_name: Abandonment and Site Restoration Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (asr_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: lbt_pod
+    formal_name: Land and Building Tax
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (lbt_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: sunk_cost_pod
+    formal_name: Sunk Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (sunk_cost_pod >= 0)
+    description: all expenses prior to POD approval
+    group: economics
+    source: null
+    aliases: []
+  - name: rev_gross_pod
+    formal_name: Gross Revenue
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (rev_gross_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ftp_gov_pod
+    formal_name: First Tranche Petroleum Government
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ftp_gov_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ftp_ctr_pod
+    formal_name: First Tranche Petroleum Contractor
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ftp_ctr_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ic_pod
+    formal_name: Investment Credit
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ic_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: cost_rec_ded_pod
+    formal_name: Cost Recovery or Deductible Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (cost_rec_ded_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: share_gross_gov_pod
+    formal_name: Gross Government Share
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (share_gross_gov_pod >= 0)
+    description: also known as ETS Government Pre Tax
+    group: economics
+    source: null
+    aliases: []
+  - name: share_gross_ctr_pod
+    formal_name: Gross Contractor Share
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (share_gross_ctr_pod >= 0)
+    description: also known as ETS Contractor Pre Tax
+    group: economics
+    source: null
+    aliases: []
+  - name: share_net_ctr_pod
+    formal_name: Net Contractor Share
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: dmo_net_pod
+    formal_name: Net Domestic Market Obligation
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (dmo_net_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ncf_ctr_pod
+    formal_name: Net Contractor Cash Flow
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: npv_pf_ctr_pod
+    formal_name: Point-Forward Contractor NPV
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: irr_pf_ctr_pod
+    formal_name: Point-Forward Contractor IRR
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NULL; store mathematically undefined IRR as NULL; analytical views may use COALESCE(irr_pf_ctr_pod,
+      0) only with an explicit undefined-status flag
+    description: Internal Rate of Return Point Forward stored as a decimal fraction (for example, 0.15
+      = 15%). A valid IRR can be exactly 0%; for example, periodic cash flows [-100, +100] have NPV =
+      0 at r = 0. NULL means IRR is mathematically undefined or no valid result is produced. Analytical
+      views may map NULL to 0 only for presentation/ranking and must retain an explicit 'IRR undefined'
+      flag.
+    group: economics
+    source: null
+    aliases: []
+  - name: pot_pod
+    formal_name: Payout Time POD
+    logical_type: decimal
+    data_type: NUMERIC(12,4)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: YEAR(S)
+    precision: 12
+    scale: 4
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (pot_pod >= 0)
+    description: Payout time in years from the defined point-forward start date.
+    group: economics
+    source: null
+    aliases: []
+  - name: pv_ratio_pf_ctr_pod
+    formal_name: Point-Forward Contractor PV Ratio
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: pi_pf_ctr_pod
+    formal_name: Point-Forward Contractor Profitability Index
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: take_gov_pod
+    formal_name: Government Take
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: take_gov_pv_pod
+    formal_name: Government Take Present Value
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: inc_gov_pod
+    formal_name: Government Income
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Government Income. Include Indirect Taxes
+    group: economics
+    source: null
+    aliases: []
+  - name: tax_pod
+    formal_name: Tax Payment
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: unrec_cost_pod
+    formal_name: Unrecovered Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (unrec_cost_pod >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: remarks_pod
+    formal_name: General POD Remarks
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: 'NULL'
+    description: Optional general remarks or contextual notes about the POD record that are not captured
+      by other structured attributes.
+    group: null
+    source: null
+    aliases: []
+  - name: created_at
+    formal_name: Record Creation Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT CURRENT_TIMESTAMP; immutable after creation
+    description: Timestamp when the database record was created. Stored with time-zone awareness and set
+      by the database.
+    group: audit
+    source: null
+    aliases: []
+  - name: created_by
+    formal_name: Record Created By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(created_by) <> ''); immutable after creation; supplied by controlled
+      database function
+    description: Stable actor identifier from the authentication context that created the record. Store
+      a user/service subject ID, not a display name.
+    group: audit
+    source: null
+    aliases: []
+  - name: updated_at
+    formal_name: Last Update Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT CURRENT_TIMESTAMP; maintained by BEFORE UPDATE TRIGGER
+    description: Timestamp of the most recent permitted update to the record, maintained automatically
+      by the database.
+    group: audit
+    source: null
+    aliases: []
+  - name: updated_by
+    formal_name: Last Updated By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(updated_by) <> ''); supplied by controlled database function or
+      trusted session context
+    description: Stable actor identifier responsible for the most recent permitted update. Store a user/service
+      subject ID, not a display name.
+    group: audit
+    source: null
+    aliases: []
+- name: pod_project
+  role: input
+  required: true
+  source_names:
+  - pod_project
+  - project_pod
+  primary_key:
+  - id
+  unique_keys:
+  - - pod_project_uuid
+  - - pod_id_seq
+    - project_id
+  references:
+  - column: pod_id_seq
+    target_table: m_pod
+    target_column: pod_id_seq
+  - column: project_id
+    target_table: m_project
+    target_column: project_id
+  columns:
+  - name: id
+    formal_name: Project record ID
+    logical_type: integer
+    data_type: BIGINT
+    nullable: false
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: PRIMARY KEY; GENERATED ALWAYS AS IDENTITY
+    description: Unique integer identifier for each POD project record.
+    group: null
+    source: null
+    aliases: []
+  - name: pod_project_uuid
+    formal_name: POD Project Junction UUID v4
+    logical_type: uuid
+    data_type: UUID
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; UNIQUE; DEFAULT gen_random_uuid(); UPDATE prohibited by trigger
+    description: Globally unique UUID v4 identifier for the POD–eSDC project junction record.
+    group: null
+    source: null
+    aliases: []
+    uuid_version: 4
+  - name: pod_id_seq
+    formal_name: POD ID Sequence
+    logical_type: integer
+    data_type: BIGINT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; REFERENCES m_pod(pod_id_seq) ON UPDATE RESTRICT ON DELETE RESTRICT; UNIQUE (pod_id_seq,
+      project_id)
+    description: Links this project record to its POD master record.
+    group: null
+    source: null
+    aliases:
+    - pod_id
+  - name: project_id
+    formal_name: eSDC Project ID
+    logical_type: text
+    data_type: TEXT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; UNIQUE (pod_id_seq, project_id); validated against eSDC project master by integration/service
+    description: External eSDC project identifier. The same project may map to multiple PODs; validation
+      is performed by the eSDC integration because no local project-master table is defined.
+    group: null
+    source: null
+    aliases: []
+  - name: is_main_project
+    formal_name: Is Main Project
+    logical_type: boolean
+    data_type: BOOLEAN
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT FALSE; partial UNIQUE INDEX on (pod_id_seq) WHERE is_main_project =
+      TRUE
+    description: Flags the designated main project within this POD; at most one main project is allowed
+      per pod_id_seq.
+    group: null
+    source: null
+    aliases: []
+  - name: is_auto_inferred
+    formal_name: Is Automatically Inferred
+    logical_type: boolean
+    data_type: BOOLEAN
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT FALSE
+    description: 'Indicates how the POD–eSDC project mapping was created: TRUE = automatically inferred
+      by the system; FALSE = manually mapped (default). The system must explicitly set TRUE for automatically
+      inferred mappings.'
+    group: null
+    source: null
+    aliases:
+    - is_inferred
+  - name: created_at
+    formal_name: Record Creation Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT CURRENT_TIMESTAMP; immutable after creation
+    description: Timestamp when the record was created, maintained by the database.
+    group: null
+    source: null
+    aliases: []
+  - name: created_by
+    formal_name: Record Created By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(created_by) <> ''); immutable after creation; supplied by controlled
+      database function
+    description: Stable actor identifier from the authentication context that created the record. Store
+      a user/service subject ID, not a display name.
+    group: null
+    source: null
+    aliases: []
+  - name: updated_at
+    formal_name: Last Update Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT CURRENT_TIMESTAMP; maintained by BEFORE UPDATE TRIGGER
+    description: Timestamp of the most recent permitted update to the record, maintained automatically
+      by the database.
+    group: null
+    source: null
+    aliases: []
+  - name: updated_by
+    formal_name: Last Updated By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(updated_by) <> ''); supplied by controlled database function or
+      trusted session context
+    description: Stable actor identifier responsible for the most recent permitted update. Store a user/service
+      subject ID, not a display name.
+    group: null
+    source: null
+    aliases: []
+  conditional_unique:
+  - columns:
+    - pod_id_seq
+    when:
+      column: is_main_project
+      equals: true
+- name: pod_monitoring
+  role: input
+  required: true
+  source_names:
+  - pod_monitoring
+  primary_key:
+  - monpod_id
+  unique_keys:
+  - - monpod_uuid
+  - - pod_id_seq
+    - reported_date
+  references:
+  - column: pod_id_seq
+    target_table: m_pod
+    target_column: pod_id_seq
+  - column: pod_id
+    target_table: m_pod
+    target_column: pod_id
+    consistent_with: pod_id_seq
+  - column: pod_stage_id
+    target_table: r_pod_stage
+    target_column: id
+    allowed_values:
+    - 1
+    - 2
+    - 3
+    - 4
+  columns:
+  - name: monpod_id
+    formal_name: Monitoring POD ID
+    logical_type: integer
+    data_type: BIGINT
+    nullable: false
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: PRIMARY KEY; GENERATED ALWAYS AS IDENTITY
+    description: POD Monitoring table ID
+    group: null
+    source: null
+    aliases: []
+  - name: monpod_uuid
+    formal_name: Monitoring POD UUID v4
+    logical_type: uuid
+    data_type: UUID
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; UNIQUE; DEFAULT gen_random_uuid(); UPDATE prohibited by trigger
+    description: null
+    group: null
+    source: null
+    aliases: []
+    uuid_version: 4
+  - name: pod_id_seq
+    formal_name: POD ID Sequential
+    logical_type: integer
+    data_type: BIGINT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; REFERENCES m_pod(pod_id_seq) ON UPDATE RESTRICT ON DELETE RESTRICT; UNIQUE (pod_id_seq,
+      reported_date) [table-level constraint shared with row 7]
+    description: Foreign Key based on m_pod
+    group: null
+    source: null
+    aliases: []
+  - name: pod_id
+    formal_name: POD ID
+    logical_type: text
+    data_type: VARCHAR(18)
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: 18
+    constraint: NOT NULL; REFERENCES m_pod(pod_id) ON UPDATE RESTRICT ON DELETE RESTRICT; derived from
+      pod_id_seq; direct INSERT/UPDATE prohibited; NOT UNIQUE (multiple monitoring submissions per POD);
+      consistency with m_pod(pod_id_seq, pod_id) enforced by trigger
+    description: Stable display POD ID copied from the m_pod row referenced by pod_id_seq; repeated across
+      monitoring submissions. Must match its parent POD.
+    group: null
+    source: null
+    aliases: []
+  - name: reported_date
+    formal_name: Reported Date
+    logical_type: date
+    data_type: DATE
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; UNIQUE (pod_id_seq, reported_date) [table-level constraint shared with row 5];
+      one submission per POD per reported date
+    description: Reporting date; unique per pod_id_seq. If multiple submissions on the same date are needed,
+      add a submission sequence instead of this uniqueness rule.
+    group: null
+    source: null
+    aliases: []
+  - name: is_completed
+    formal_name: is_completed
+    logical_type: boolean
+    data_type: BOOLEAN
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT FALSE; maintained from latest monitoring record
+    description: whether this POD scope of work is completed or not
+    group: null
+    source: null
+    aliases: []
+  - name: pod_stage_id
+    formal_name: POD Stage ID
+    logical_type: integer
+    data_type: INTEGER
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; REFERENCES r_pod_stage(id) ON UPDATE RESTRICT ON DELETE RESTRICT; CHECK (pod_stage_id
+      BETWEEN 1 AND 4)
+    description: Foreign key referencing r_pod_stage(id). Stage name and definition are resolved from
+      the reference table.
+    group: null
+    source: null
+    aliases: []
+  - name: lpg_yield
+    formal_name: LPG Yield
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: TONNE/MMSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (lpg_yield >= 0)
+    description: Metric Ton of LPG yield per MMSCF gas
+    group: subsurface
+    source: null
+    aliases: []
+  - name: ghv_avg
+    formal_name: Average Gross Heat Value
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MMBTU/MMSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 1000::double precision; CHECK (ghv_avg > 0)
+    description: Default value 1000 MMBTU/MMSCF
+    group: subsurface
+    source: null
+    aliases: []
+  - name: onstream_date
+    formal_name: Onstream Date
+    logical_type: date
+    data_type: DATE
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL
+    description: if onstream_date > reported_date then it is estimated. Otherwise it is actual.
+    group: subsurface
+    source: null
+    aliases: []
+  - name: well_total_real
+    formal_name: Total Wells Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_total_real >= 0)
+    description: total wells approved.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_prd_real
+    formal_name: Total Producer Wells Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_prd_real >= 0)
+    description: total production wells approved.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_inj_real
+    formal_name: Total Injector Wells Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_inj_real >= 0)
+    description: total injector wells approved.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_surv_real
+    formal_name: Total Surveillance Wells Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_surv_real >= 0)
+    description: total surveillance wells approved.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_conv_real
+    formal_name: Convert to Injection Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_conv_real >= 0)
+    description: total well conversions
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: sow_real
+    formal_name: Scope of Work Realization
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(sow_real) <> '')
+    description: Scope of work physically completed or realized as of the reported date.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: scenario_real
+    formal_name: Realization Scenario
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(scenario_real) <> '')
+    description: Scenario or case label used to interpret the reported realization values as of the reported
+      date.
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_oil_real
+    formal_name: WAP Oil Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_oil_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_con_real
+    formal_name: WAP Condensate Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_con_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_an_real
+    formal_name: WAP Total Gas Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_an_real >= 0)
+    description: Weighted Average Price of Associated + Non Associated Gas.
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_lpg_real
+    formal_name: WAP LPG Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/MTON
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_lpg_real >= 0)
+    description: Weighted Average Price of LPG in Metric Ton
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_lng_real
+    formal_name: WAP LNG Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_lng_real >= 0)
+    description: Weighted Average Price of LNG in MMBTU
+    group: economics
+    source: null
+    aliases: []
+  - name: capital_drilling_real
+    formal_name: Capital Cost of Drillings Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (capital_drilling_real >= 0); DERIVED from cost detail; write-protected
+      except controlled recomputation on detail changes
+    description: 'Derived total by monpod_id from pod_cost_monitoring.item_cost_monitoring_real joined
+      to pod_cost_register: cost_category=Capital, item_category=drilling. Recompute on cost-detail INSERT/UPDATE/DELETE
+      and register category changes; not a cross-table CHECK.'
+    group: economics
+    source: null
+    aliases: []
+  - name: capital_facilities_real
+    formal_name: Capital Cost of Facilities Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (capital_facilities_real >= 0); DERIVED from cost detail; write-protected
+      except controlled recomputation on detail changes
+    description: 'Derived total: sum item_cost_monitoring_real for this monpod_id where pod_cost_register.cost_category
+      = Capital and item_category is facilities-transport, facilities-process, facilities-power, or facilities-engineering;
+      MUSD. Recalculate when detail changes.'
+    group: economics
+    source: null
+    aliases: []
+  - name: intang_drilling_real
+    formal_name: Intangible Cost of Drilling Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (intang_drilling_real >= 0); DERIVED from cost detail; write-protected
+      except controlled recomputation on detail changes
+    description: 'Derived total: sum item_cost_monitoring_real for this monpod_id where pod_cost_register.cost_category
+      = Intangible and item_category = drilling; MUSD. Recalculate when detail changes.'
+    group: economics
+    source: null
+    aliases: []
+  - name: intang_facilities_real
+    formal_name: Intangible Cost of Facilities Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (intang_facilities_real >= 0); DERIVED from cost detail; write-protected
+      except controlled recomputation on detail changes
+    description: 'Derived total: sum item_cost_monitoring_real for this monpod_id where pod_cost_register.cost_category
+      = Intangible and item_category is facilities-transport, facilities-process, facilities-power, or
+      facilities-engineering; MUSD. Recalculate when detail changes.'
+    group: economics
+    source: null
+    aliases: []
+  - name: opex_real
+    formal_name: OPEX Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (opex_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: asr_real
+    formal_name: ASR Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (asr_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: lbt_real
+    formal_name: LBT Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (lbt_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: rev_gross_real
+    formal_name: Gross Revenue Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (rev_gross_real >= 0)
+    description: Gross Revenue. Thousand USD
+    group: economics
+    source: null
+    aliases: []
+  - name: ftp_gov_real
+    formal_name: First Tranche Petroleum Government Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ftp_gov_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ftp_ctr_real
+    formal_name: First Tranche Petroleum Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ftp_ctr_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ic_real
+    formal_name: Investment Credit Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ic_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: cost_rec_ded_real
+    formal_name: Cost Recovery or Deductible Cost Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (cost_rec_ded_real >= 0)
+    description: Cost Recovery or Deductible Cost
+    group: economics
+    source: null
+    aliases: []
+  - name: share_gross_gov_real
+    formal_name: Gross Government Share Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (share_gross_gov_real >= 0)
+    description: Also known as ETS Government Pre Tax.
+    group: economics
+    source: null
+    aliases: []
+  - name: share_gross_ctr_real
+    formal_name: Gross Contractor Share Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (share_gross_ctr_real >= 0)
+    description: Also known as ETS Contractor Pre Tax.
+    group: economics
+    source: null
+    aliases: []
+  - name: dmo_net_real
+    formal_name: Net Domestic Market Obligation Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (dmo_net_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: sunk_cost_real
+    formal_name: Sunk Cost Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (sunk_cost_real >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ncf_ctr_real
+    formal_name: Net Contractor Cash Flow Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Net Cash Flow Contractor
+    group: economics
+    source: null
+    aliases: []
+  - name: npv_pf_ctr_real
+    formal_name: NPV Point Forward Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Net Present Value Point Forward
+    group: economics
+    source: null
+    aliases: []
+  - name: irr_pf_ctr_real
+    formal_name: IRR Point Forward Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NULL; store mathematically undefined IRR as NULL; valid 0% is permitted
+    description: Internal Rate of Return Point Forward
+    group: economics
+    source: null
+    aliases: []
+  - name: pv_ratio_pf_ctr_real
+    formal_name: PV Ratio Point Forward Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: PV Ratio Point Forward
+    group: economics
+    source: null
+    aliases: []
+  - name: pi_pf_ctr_real
+    formal_name: PI Point Forward Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Profitability Index Point Forward
+    group: economics
+    source: null
+    aliases: []
+  - name: take_gov_real
+    formal_name: GOI Take Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Government Take
+    group: economics
+    source: null
+    aliases: []
+  - name: take_gov_pv_real
+    formal_name: GOI Take Present Value Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: inc_gov_real
+    formal_name: GOI Income Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Government Income. Include Indirect Taxes
+    group: economics
+    source: null
+    aliases: []
+  - name: tax_real
+    formal_name: Tax Payment Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Tax Payment
+    group: economics
+    source: null
+    aliases: []
+  - name: unrec_cost_real
+    formal_name: Unrecovered Cost Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (unrec_cost_real >= 0)
+    description: Unrecovered Cost
+    group: economics
+    source: null
+    aliases: []
+  - name: well_total_otlk
+    formal_name: Total Wells Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_total_otlk >= 0)
+    description: total wells approved.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_prd_otlk
+    formal_name: Total Producer Wells Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_prd_otlk >= 0)
+    description: total production wells approved.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_inj_otlk
+    formal_name: Total Injector Wells Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_inj_otlk >= 0)
+    description: total injector wells approved.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_surv_otlk
+    formal_name: Total Surveillance Wells Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_surv_otlk >= 0)
+    description: total surveillance wells approved.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: well_conv_otlk
+    formal_name: Convert to Injection Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (well_conv_otlk >= 0)
+    description: total well conversions
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: sow_otlk
+    formal_name: Scope of Work Outlook
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(sow_otlk) <> '')
+    description: Latest expected scope of work at completion as of the reported date; includes completed
+      and remaining scope.
+    group: Drilling & Facilities
+    source: null
+    aliases: []
+  - name: scenario_otlk
+    formal_name: Outlook Scenario
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(scenario_otlk) <> '')
+    description: Scenario or case applied to the outlook values as of the reported date, such as base,
+      upside, or downside.
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_oil_otlk
+    formal_name: WAP Oil Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_oil_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_con_otlk
+    formal_name: WAP Condensate Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_con_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_an_otlk
+    formal_name: WAP Total Gas Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_an_otlk >= 0)
+    description: Weighted Average Price of Associated + Non Associated Gas.
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_lpg_otlk
+    formal_name: WAP LPG Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/MTON
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_lpg_otlk >= 0)
+    description: Weighted Average Price of LPG in Metric Ton
+    group: economics
+    source: null
+    aliases: []
+  - name: wap_lng_otlk
+    formal_name: WAP LNG Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (wap_lng_otlk >= 0)
+    description: Weighted Average Price of LNG in MMBTU
+    group: economics
+    source: null
+    aliases: []
+  - name: capital_drilling_otlk
+    formal_name: Capital Cost of Drillings Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (capital_drilling_otlk >= 0); DERIVED from cost detail; write-protected
+      except controlled recomputation on detail changes
+    description: 'Derived full forecast by monpod_id from pod_cost_monitoring.item_cost_monitoring_otlk
+      joined to pod_cost_register: cost_category=Capital, item_category=drilling. Recompute on cost-detail
+      INSERT/UPDATE/DELETE and register category changes; do not add realization.'
+    group: economics
+    source: null
+    aliases: []
+  - name: capital_facilities_otlk
+    formal_name: Capital Cost of Facilities Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (capital_facilities_otlk >= 0); DERIVED from cost detail; write-protected
+      except controlled recomputation on detail changes
+    description: 'Derived total forecast: sum item_cost_monitoring_otlk for this monpod_id where pod_cost_register.cost_category
+      = Capital and item_category is facilities-transport, facilities-process, facilities-power, or facilities-engineering;
+      MUSD. Do not add realization again.'
+    group: economics
+    source: null
+    aliases: []
+  - name: intang_drilling_otlk
+    formal_name: Intangible Cost of Drilling Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (intang_drilling_otlk >= 0); DERIVED from cost detail; write-protected
+      except controlled recomputation on detail changes
+    description: 'Derived total forecast: sum item_cost_monitoring_otlk for this monpod_id where pod_cost_register.cost_category
+      = Intangible and item_category = drilling; MUSD. Do not add realization again.'
+    group: economics
+    source: null
+    aliases: []
+  - name: intang_facilities_otlk
+    formal_name: Intangible Cost of Facilities Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (intang_facilities_otlk >= 0); DERIVED from cost detail; write-protected
+      except controlled recomputation on detail changes
+    description: 'Derived total forecast: sum item_cost_monitoring_otlk for this monpod_id where pod_cost_register.cost_category
+      = Intangible and item_category is facilities-transport, facilities-process, facilities-power, or
+      facilities-engineering; MUSD. Do not add realization again.'
+    group: economics
+    source: null
+    aliases: []
+  - name: opex_otlk
+    formal_name: OPEX Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (opex_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: asr_otlk
+    formal_name: ASR Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (asr_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: lbt_otlk
+    formal_name: LBT Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (lbt_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: rev_gross_otlk
+    formal_name: Gross Revenue Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (rev_gross_otlk >= 0)
+    description: Gross Revenue. Thousand USD
+    group: economics
+    source: null
+    aliases: []
+  - name: ftp_gov_otlk
+    formal_name: First Tranche Petroleum Government Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ftp_gov_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ftp_ctr_otlk
+    formal_name: First Tranche Petroleum Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ftp_ctr_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ic_otlk
+    formal_name: Investment Credit Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (ic_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: cost_rec_ded_otlk
+    formal_name: Cost Recovery or Deductible Cost Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (cost_rec_ded_otlk >= 0)
+    description: Cost Recovery or Deductible Cost
+    group: economics
+    source: null
+    aliases: []
+  - name: share_gross_gov_otlk
+    formal_name: Gross Government Share Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (share_gross_gov_otlk >= 0)
+    description: Also known as ETS Government Pre Tax.
+    group: economics
+    source: null
+    aliases: []
+  - name: share_gross_ctr_otlk
+    formal_name: Gross Contractor Share Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (share_gross_ctr_otlk >= 0)
+    description: Also known as ETS Contractor Pre Tax.
+    group: economics
+    source: null
+    aliases: []
+  - name: dmo_net_otlk
+    formal_name: Net Domestic Market Obligation Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (dmo_net_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: sunk_cost_otlk
+    formal_name: Sunk Cost Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (sunk_cost_otlk >= 0)
+    description: null
+    group: economics
+    source: null
+    aliases: []
+  - name: ncf_ctr_otlk
+    formal_name: Net Contractor Cash Flow Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Net Cash Flow Contractor
+    group: economics
+    source: null
+    aliases: []
+  - name: npv_pf_ctr_otlk
+    formal_name: NPV Point Forward Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Net Present Value Point Forward
+    group: economics
+    source: null
+    aliases: []
+  - name: irr_pf_ctr_otlk
+    formal_name: IRR Point Forward Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NULL; store mathematically undefined IRR as NULL; valid 0% is permitted
+    description: Internal Rate of Return Point Forward
+    group: economics
+    source: null
+    aliases: []
+  - name: pot_ctr_otlk
+    formal_name: Payout Time Outlook
+    logical_type: decimal
+    data_type: NUMERIC(12,4)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: YEAR(S)
+    precision: 12
+    scale: 4
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (pot_ctr_otlk >= 0)
+    description: Single payout-time metric for the monitoring assessment and outlook; a separate pot_ctr_real
+      is intentionally not stored to avoid duplicate interpretation.
+    group: economics
+    source: null
+    aliases: []
+  - name: pv_ratio_pf_ctr_otlk
+    formal_name: PV Ratio Point Forward Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: PV Ratio Point Forward
+    group: economics
+    source: null
+    aliases: []
+  - name: pi_pf_ctr_otlk
+    formal_name: PI Point Forward Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Profitability Index Point Forward
+    group: economics
+    source: null
+    aliases: []
+  - name: take_gov_otlk
+    formal_name: GOI Take Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Government Take
+    group: economics
+    source: null
+    aliases: []
+  - name: take_gov_pv_otlk
+    formal_name: GOI Take Present Value Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Government Take Present Value
+    group: economics
+    source: null
+    aliases: []
+  - name: inc_gov_otlk
+    formal_name: GOI Income Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Government Income. Include Indirect Taxes
+    group: economics
+    source: null
+    aliases: []
+  - name: tax_otlk
+    formal_name: Tax Payment Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0
+    description: Tax Payment
+    group: economics
+    source: null
+    aliases: []
+  - name: unrec_cost_otlk
+    formal_name: Unrecovered Cost Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (unrec_cost_otlk >= 0)
+    description: Unrecovered Cost
+    group: economics
+    source: null
+    aliases: []
+  - name: remarks_monitoring
+    formal_name: General POD Monitoring Remarks
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: 'NULL'
+    description: Optional general remarks or contextual notes about this POD monitoring record not captured
+      by other structured attributes.
+    group: null
+    source: null
+    aliases: []
+  - name: created_at
+    formal_name: Record Creation Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT CURRENT_TIMESTAMP; immutable after creation
+    description: Timestamp when the database record was created. Stored with time-zone awareness and set
+      by the database.
+    group: audit
+    source: null
+    aliases: []
+  - name: created_by
+    formal_name: Record Created By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(created_by) <> ''); immutable after creation; supplied by controlled
+      database function
+    description: Stable actor identifier from the authentication context that created the record. Store
+      a user/service subject ID, not a display name.
+    group: audit
+    source: null
+    aliases: []
+  - name: updated_at
+    formal_name: Last Update Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT CURRENT_TIMESTAMP; maintained by BEFORE UPDATE TRIGGER
+    description: Timestamp of the most recent permitted update to the record, maintained automatically
+      by the database.
+    group: audit
+    source: null
+    aliases: []
+  - name: updated_by
+    formal_name: Last Updated By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(updated_by) <> ''); supplied by controlled database function or
+      trusted session context
+    description: Stable actor identifier responsible for the most recent permitted update. Store a user/service
+      subject ID, not a display name.
+    group: audit
+    source: null
+    aliases: []
+- name: pod_forecast
+  role: input
+  required: true
+  source_names:
+  - pod_forecast
+  primary_key:
+  - frcast_id
+  unique_keys:
+  - - frcast_uuid
+  - - pod_id_seq
+    - year_frcast
+  references:
+  - column: pod_id_seq
+    target_table: m_pod
+    target_column: pod_id_seq
+  columns:
+  - name: frcast_id
+    formal_name: Forecast ID
+    logical_type: integer
+    data_type: BIGINT
+    nullable: false
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: PRIMARY KEY; GENERATED ALWAYS AS IDENTITY
+    description: Sequential primary key for each annual POD forecast record.
+    group: null
+    source: null
+    aliases: []
+  - name: frcast_uuid
+    formal_name: Forecast UUID v4
+    logical_type: uuid
+    data_type: UUID
+    nullable: false
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; UNIQUE; DEFAULT gen_random_uuid(); UPDATE prohibited by trigger
+    description: Globally unique UUID v4 identifier for the POD forecast record.
+    group: null
+    source: null
+    aliases: []
+    uuid_version: 4
+  - name: pod_id_seq
+    formal_name: POD ID Sequence
+    logical_type: integer
+    data_type: BIGINT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; REFERENCES m_pod(pod_id_seq) ON UPDATE RESTRICT ON DELETE RESTRICT; UNIQUE (pod_id_seq,
+      year_frcast)
+    description: Links the annual forecast record to the corresponding POD master record.
+    group: null
+    source: null
+    aliases: []
+  - name: year_frcast
+    formal_name: Year Forecast
+    logical_type: integer
+    data_type: SMALLINT
+    nullable: false
+    declared_nullable: false
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (year_frcast BETWEEN 1900 AND 9999); UNIQUE (pod_id_seq, year_frcast)
+    description: Calendar year represented by the POD sales forecast. Together with pod_id_seq, identifies
+      one forecast record per POD and year.
+    group: null
+    source: null
+    aliases: []
+    minimum: 1900
+    maximum: 9999
+  - name: usf_oil_pod
+    formal_name: Ultimate Sales Forecast Oil POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTBY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (usf_oil_pod >= 0)
+    description: Annual ultimate oil sales forecast stated in the approved POD, expressed in thousand
+      stock tank barrels per year (MSTBY).
+    group: null
+    source: null
+    aliases: []
+  - name: usf_con_pod
+    formal_name: Ultimate Sales Forecast Cond. POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: MSTBY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (usf_con_pod >= 0)
+    description: Annual ultimate condensate sales forecast stated in the approved POD, expressed in thousand
+      stock tank barrels per year (MSTBY).
+    group: null
+    source: null
+    aliases: []
+  - name: usf_ga_pod
+    formal_name: Ultimate Sales Forecast Assoc. Gas POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCFY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (usf_ga_pod >= 0)
+    description: Annual ultimate associated-gas sales forecast stated in the approved POD, expressed in
+      billion standard cubic feet per year (BSCFY).
+    group: null
+    source: null
+    aliases: []
+  - name: usf_gn_pod
+    formal_name: Ultimate Sales Forecast Non Assoc. Gas POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: false
+    ownership: input
+    unit: BSCFY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: NOT NULL; DEFAULT 0; CHECK (usf_gn_pod >= 0)
+    description: Annual ultimate non-associated-gas sales forecast stated in the approved POD, expressed
+      in billion standard cubic feet per year (BSCFY).
+    group: null
+    source: null
+    aliases: []
+  - name: frcast_remarks
+    formal_name: Forecast Remarks
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: true
+    ownership: input
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NULL; CHECK (frcast_remarks IS NULL OR btrim(frcast_remarks) <> '')
+    description: Optional notes, assumptions, scenario context, or other remarks for the annual POD forecast.
+    group: null
+    source: null
+    aliases: []
+  - name: created_at
+    formal_name: Record Creation Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT CURRENT_TIMESTAMP; immutable after creation
+    description: Timestamp when the record was created, maintained by the database.
+    group: null
+    source: null
+    aliases: []
+  - name: created_by
+    formal_name: Record Created By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(created_by) <> ''); immutable after creation; supplied by controlled
+      database function
+    description: Stable actor identifier from the authentication context that created the record. Store
+      a user/service subject ID, not a display name.
+    group: null
+    source: null
+    aliases: []
+  - name: updated_at
+    formal_name: Last Update Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; DEFAULT CURRENT_TIMESTAMP; maintained by BEFORE UPDATE TRIGGER
+    description: Timestamp of the most recent permitted update to the record, maintained automatically
+      by the database.
+    group: null
+    source: null
+    aliases: []
+  - name: updated_by
+    formal_name: Last Updated By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: false
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: NOT NULL; CHECK (btrim(updated_by) <> ''); supplied by controlled database function or
+      trusted session context
+    description: Stable actor identifier responsible for the most recent permitted update. Store a user/service
+      subject ID, not a display name.
+    group: null
+    source: null
+    aliases: []
+- name: pod_monitoring_api
+  role: output
+  required: false
+  source_names:
+  - pod_monitoring_api
+  primary_key: []
+  unique_keys: []
+  references: []
+  columns:
+  - name: monpod_id
+    formal_name: Monitoring POD ID
+    logical_type: integer
+    data_type: BIGINT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: NULL when no monitoring submission exists; no synthetic ID.
+    group: null
+    source: pod_monitoring
+    aliases: []
+  - name: monpod_uuid
+    formal_name: Monitoring POD UUID v4
+    logical_type: uuid
+    data_type: UUID
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: NULL when no monitoring submission exists; no synthetic UUID.
+    group: null
+    source: pod_monitoring
+    aliases: []
+    uuid_version: 4
+  - name: remarks_monitoring
+    formal_name: General POD Monitoring Remarks
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Optional general remarks or contextual notes about this POD monitoring record not captured
+      by other structured attributes.
+    group: null
+    source: pod_monitoring
+    aliases: []
+  - name: pod_id_seq
+    formal_name: pod_id_seq
+    logical_type: integer
+    data_type: BIGINT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Foreign Key
+    group: null
+    source: m_pod
+    aliases: []
+  - name: pod_id
+    formal_name: pod_id
+    logical_type: text
+    data_type: VARCHAR(18)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: 18
+    constraint: null
+    description: null
+    group: null
+    source: m_pod
+    aliases: []
+  - name: pod_uuid
+    formal_name: POD ID UUID v4
+    logical_type: uuid
+    data_type: UUID
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: null
+    source: m_pod
+    aliases: []
+    uuid_version: 4
+  - name: approval_date
+    formal_name: Approval Date of POD
+    logical_type: date
+    data_type: DATE
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: null
+    source: m_pod
+    aliases: []
+  - name: approval_institution
+    formal_name: Approval Institution
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Institution name resolved by joining m_pod.institution_id to r_institution.id.
+    group: null
+    source: r_institution
+    aliases: []
+  - name: pod_type
+    formal_name: POD Type
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: POD type name resolved by joining m_pod.pod_type_id to r_pod_type.id.
+    group: null
+    source: r_pod_type
+    aliases: []
+  - name: rev_num
+    formal_name: Revision Number
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Revision sequence within the same POD chain; 0 identifies the initial approved POD.
+    group: null
+    source: m_pod
+    aliases: []
+  - name: pod_letter_num
+    formal_name: POD Approval Letter Number
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: null
+    source: m_pod
+    aliases: []
+  - name: is_latest
+    formal_name: Is Latest Revision
+    logical_type: boolean
+    data_type: BOOLEAN
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: 'Current latest status: TRUE iff m_pod.superseded_by IS NULL. Historical selection also
+      applies approval-date and replacement-date filters; it does not rely on current is_latest alone.'
+    group: null
+    source: m_pod
+    aliases: []
+  - name: preceded_by_pod_name
+    formal_name: Preceding POD Names
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Reverse lookup predecessor.superseded_by = current.pod_id_seq. Return DISTINCT predecessor
+      names ordered by pod_id_seq and separated by semicolons; NULL if none. Aggregate to one row per
+      current approval before joining monitoring so multiple predecessors do not multiply facts. The existing
+      API alias preceded_by_pod_name is retained.
+    group: null
+    source: m_pod
+    aliases: []
+  - name: reported_date
+    formal_name: Reported Date
+    logical_type: date
+    data_type: DATE
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Status date from the submission, or 31 December report_year when input is absent. Later
+      approvals do not apply retroactively.
+    group: null
+    source: calculated
+    aliases: []
+  - name: pod_name
+    formal_name: POD Name
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: null
+    source: m_pod
+    aliases: []
+  - name: wk_name_list
+    formal_name: Working Area Names
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Distinct working area names from mapped project resources for the reporting year, separated
+      by semicolons.
+    group: null
+    source: esdc
+    aliases: []
+  - name: field_name_list
+    formal_name: field_name_list
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: semicolon (;) separated
+    group: null
+    source: esdc
+    aliases: []
+  - name: project_name_list
+    formal_name: List of projects
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: semicolon (;) separated
+    group: null
+    source: esdc
+    aliases: []
+  - name: project_level_highest
+    formal_name: Highest Project Level
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Highest project level in the POD. Retrieved from eSDC Report.
+    group: null
+    source: esdc
+    aliases: []
+  - name: is_completed
+    formal_name: is_completed
+    logical_type: boolean
+    data_type: BOOLEAN
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: whether this POD scope of work is completed or not
+    group: null
+    source: pod_monitoring
+    aliases: []
+  - name: onstream_date_pod
+    formal_name: POD Onstream Date
+    logical_type: date
+    data_type: DATE
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Approved POD onstream date from m_pod.onstream_date; distinct from monitoring onstream_date.
+    group: null
+    source: m_pod
+    aliases: []
+  - name: onstream_date
+    formal_name: Onstream Date
+    logical_type: date
+    data_type: DATE
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: null
+    source: pod_monitoring
+    aliases: []
+  - name: pod_stage
+    formal_name: POD Stage
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Stage name from r_pod_stage(stage_name), joined through pod_monitoring.pod_stage_id.
+    group: null
+    source: r_pod_stage
+    aliases: []
+  - name: res_oil_2p_pod
+    formal_name: Reserves Oil POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: m_pod
+    aliases: []
+  - name: res_con_2p_pod
+    formal_name: Reserves Condensate POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: m_pod
+    aliases: []
+  - name: res_ga_2p_pod
+    formal_name: Reserves Associated Gas POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: m_pod
+    aliases: []
+  - name: res_gn_2p_pod
+    formal_name: Reserves Non Associated Gas POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: m_pod
+    aliases: []
+  - name: res_oc_2p_pod
+    formal_name: Reserves Oil + Cond. POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: res_oil_2p_pod + res_con_2p_pod
+    group: subsurface
+    source: calculated
+    aliases: []
+  - name: res_an_2p_pod
+    formal_name: Reserves Total Gas POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: res_ga_2p_pod+res_gn_2p_pod
+    group: subsurface
+    source: calculated
+    aliases: []
+  - name: res_oc_2p_risked_pod
+    formal_name: Reserves Oil + Cond. Risked POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: res_oil_2p_risked_pod + res_con_2p_risked_pod
+    group: subsurface
+    source: calculated
+    aliases: []
+  - name: res_an_2p_risked_pod
+    formal_name: Reserves Total Gas Risked POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: res_ga_2p_risked_pod+res_gn_2p_risked_pod
+    group: subsurface
+    source: calculated
+    aliases: []
+  - name: ioip_mid_pod
+    formal_name: Initial Oil in Place POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: m_pod
+    aliases: []
+  - name: igip_mid_pod
+    formal_name: Initial Gas in Place POD
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: m_pod
+    aliases: []
+  - name: lpg_yield_pod
+    formal_name: LPG Yield
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: TONNE/MMSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: m_pod
+    aliases: []
+  - name: ghv_avg_pod
+    formal_name: Average Gross Heat Value
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MMBTU/MMSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: m_pod
+    aliases: []
+  - name: cprd_sls_oil
+    formal_name: Cumulative Sales Oil
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: cprd_sls_con
+    formal_name: Cumulative Sales Condensate
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: cprd_sls_ga
+    formal_name: Cumulative Sales Associated Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: cprd_sls_gn
+    formal_name: Cumulative Sales Non Associated Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: cprd_sls_oc
+    formal_name: Cumulative Sales Oil + Cond.
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: cprd_sls_an
+    formal_name: Cumulative Sales Total Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: res_oil_2p
+    formal_name: Reserves Oil
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: res_con_2p
+    formal_name: Reserves Condensate
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: res_ga_2p
+    formal_name: Reserves Associated Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: res_gn_2p
+    formal_name: Reserves Non Associated Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: res_oc_2p
+    formal_name: Reserves Oil + Cond.
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: res_an_2p
+    formal_name: Reserves Total Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: rec_oil_mid
+    formal_name: Resources Oil
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: rec_con_mid
+    formal_name: Resources Condensate
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: rec_ga_mid
+    formal_name: Resources Associated Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: rec_gn_mid
+    formal_name: Resources Non Associated Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: rec_oc_mid
+    formal_name: Resources Oil + Cond.
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: rec_an_mid
+    formal_name: Resources Total Gas
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: ioip_mid
+    formal_name: Initial Oil in Place
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTB
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: igip_mid
+    formal_name: Initial Gas in Place
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: esdc
+    aliases: []
+  - name: lpg_yield
+    formal_name: LPG Yield
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: TONNE/MMSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: subsurface
+    source: pod_monitoring
+    aliases: []
+  - name: ghv_avg
+    formal_name: Average Gross Heat Value
+    logical_type: decimal
+    data_type: DOUBLE PRECISION
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MMBTU/MMSCF
+    precision: 15
+    scale: null
+    max_length: null
+    constraint: null
+    description: Default value 1000 MMBTU/MMSCF
+    group: subsurface
+    source: pod_monitoring
+    aliases: []
+  - name: well_total_pod
+    formal_name: Total Wells POD
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: m_pod
+    aliases: []
+  - name: well_prd_pod
+    formal_name: Total Producer Wells POD
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: m_pod
+    aliases: []
+  - name: well_inj_pod
+    formal_name: Total Injector Wells POD
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: m_pod
+    aliases: []
+  - name: well_surv_pod
+    formal_name: Total Surveillance Wells POD
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: m_pod
+    aliases: []
+  - name: well_conv_pod
+    formal_name: Convert to Injection POD
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: m_pod
+    aliases: []
+  - name: sow_pod
+    formal_name: Approved Scope of Work
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Scope of work approved in the applicable POD revision and used as the monitoring baseline.
+    group: Drilling & Facilities
+    source: m_pod
+    aliases: []
+  - name: scenario_pod
+    formal_name: Approved POD Scenario
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Approved scenario or case associated with the POD economics and development assumptions,
+      such as base, upside, or downside.
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: wap_oil_pod
+    formal_name: Weighted Average Price of Oil
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: wap_con_pod
+    formal_name: Weighted Average Condensate Price
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: wap_an_pod
+    formal_name: Weighted Average Gas Price
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: Weighted Average Price of Associated + Non Associated Gas.
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: wap_lpg_pod
+    formal_name: Weighted Average LPG Price
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/TONNE
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: wap_lng_pod
+    formal_name: Weighted Average LNG Price
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: capital_drilling_pod
+    formal_name: Capital Drilling Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: part of drilling costs that is categorized as capital, which is subject to depreciations.
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: capital_facilities_pod
+    formal_name: Capital Facilities Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: part of facility costs that is categorized as capital, which is subject to depreciations
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: intang_drilling_pod
+    formal_name: Intangible Drilling Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: part of drilling costs that is categorized as intangible cost
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: intang_facilities_pod
+    formal_name: Intangible Facilities Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: part of facility costs that is categorized as intangible cost
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: opex_pod
+    formal_name: Operating Expenditure
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: asr_pod
+    formal_name: Abandonment and Site Restoration Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: lbt_pod
+    formal_name: Land and Building Tax
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: sunk_cost_pod
+    formal_name: Sunk Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: all expenses prior to POD approval
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: rev_gross_pod
+    formal_name: Gross Revenue
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: ftp_gov_pod
+    formal_name: First Tranche Petroleum Government
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: ftp_ctr_pod
+    formal_name: First Tranche Petroleum Contractor
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: ic_pod
+    formal_name: Investment Credit
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: cost_rec_ded_pod
+    formal_name: Cost Recovery or Deductible Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: share_gross_gov_pod
+    formal_name: Gross Government Share
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: also known as ETS Government Pre Tax
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: share_gross_ctr_pod
+    formal_name: Gross Contractor Share
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: also known as ETS Contractor Pre Tax
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: share_net_ctr_pod
+    formal_name: Net Contractor Share
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: dmo_net_pod
+    formal_name: Net Domestic Market Obligation
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: ncf_ctr_pod
+    formal_name: Net Contractor Cash Flow
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: npv_pf_ctr_pod
+    formal_name: Point-Forward Contractor NPV
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: irr_pf_ctr_pod
+    formal_name: Point-Forward Contractor IRR
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: Internal Rate of Return Point Forward stored as a decimal fraction (for example, 0.15
+      = 15%). A valid IRR can be exactly 0%; for example, periodic cash flows [-100, +100] have NPV =
+      0 at r = 0. NULL means IRR is mathematically undefined or no valid result is produced. Analytical
+      views may map NULL to 0 only for presentation/ranking and must retain an explicit 'IRR undefined'
+      flag.
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: pot_pod
+    formal_name: Payout Time POD
+    logical_type: decimal
+    data_type: NUMERIC(12,4)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: YEAR(S)
+    precision: 12
+    scale: 4
+    max_length: null
+    constraint: null
+    description: Payout time in years from the defined point-forward start date.
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: pv_ratio_pf_ctr_pod
+    formal_name: Point-Forward Contractor PV Ratio
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: pi_pf_ctr_pod
+    formal_name: Point-Forward Contractor Profitability Index
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: take_gov_pod
+    formal_name: Government Take
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: take_gov_pv_pod
+    formal_name: Government Take Present Value
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: inc_gov_pod
+    formal_name: Government Income
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Government Income. Include Indirect Taxes
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: tax_pod
+    formal_name: Tax Payment
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: unrec_cost_pod
+    formal_name: Unrecovered Cost
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: m_pod
+    aliases: []
+  - name: remarks_pod
+    formal_name: General POD Remarks
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Optional general remarks or contextual notes about the POD record that are not captured
+      by other structured attributes.
+    group: null
+    source: m_pod
+    aliases: []
+  - name: well_total_real
+    formal_name: Total Wells Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: well_prd_real
+    formal_name: Total Producer Wells Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: well_inj_real
+    formal_name: Total Injector Wells Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: well_surv_real
+    formal_name: Total Surveillance Wells Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: well_conv_real
+    formal_name: Convert to Injection Realization
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: sow_real
+    formal_name: Scope of Work Realization
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Scope of work physically completed or realized as of the reported date.
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: scenario_real
+    formal_name: Realization Scenario
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Scenario or case label used to interpret the reported realization values as of the reported
+      date.
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: incentives_list
+    formal_name: List of Incentives Granted
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: list of cumulative incentives given to POD up to reported date. Semicolon (;) separated.
+    group: economics
+    source: pod_incentives
+    aliases: []
+  - name: wap_oil_real
+    formal_name: WAP Oil Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_con_real
+    formal_name: WAP Condensate Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_an_real
+    formal_name: WAP Total Gas Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: Weighted Average Price of Associated + Non Associated Gas.
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_lpg_real
+    formal_name: WAP LPG Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/MTON
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: Weighted Average Price of LPG in Metric Ton
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_lng_real
+    formal_name: WAP LNG Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: Weighted Average Price of LNG in MMBTU
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: capital_drilling_real
+    formal_name: Capital Cost of Drillings Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Source: pod_monitoring.capital_drilling_real; aggregate matching pod_cost_monitoring.item_cost_monitoring_real
+      by registered Capital and drilling category per monpod_id.'
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: capital_facilities_real
+    formal_name: Capital Cost of Facilities Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Source: pod_monitoring.capital_facilities_real; aggregate matching realized item costs
+      by registered Capital and the four facilities-* categories per monpod_id.'
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: intang_drilling_real
+    formal_name: Intangible Cost of Drilling Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Source: pod_monitoring.intang_drilling_real; aggregate matching realized item costs
+      by registered Intangible and drilling category per monpod_id.'
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: intang_facilities_real
+    formal_name: Intangible Cost of Facilities Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Source: pod_monitoring.intang_facilities_real; aggregate matching realized item costs
+      by registered Intangible and the four facilities-* categories per monpod_id.'
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: opex_real
+    formal_name: OPEX Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: asr_real
+    formal_name: ASR Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: lbt_real
+    formal_name: LBT Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: rev_gross_real
+    formal_name: Gross Revenue Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: ftp_gov_real
+    formal_name: First Tranche Petroleum Government Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: ftp_ctr_real
+    formal_name: First Tranche Petroleum Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: ic_real
+    formal_name: Investment Credit Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: cost_rec_ded_real
+    formal_name: Cost Recovery or Deductible Cost Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: share_gross_gov_real
+    formal_name: Gross Government Share Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Also known as ETS Government Pre Tax.
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: share_gross_ctr_real
+    formal_name: Gross Contractor Share Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Also known as ETS Contractor Pre Tax.
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: dmo_net_real
+    formal_name: Net Domestic Market Obligation Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: sunk_cost_real
+    formal_name: Sunk Cost Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: ncf_ctr_real
+    formal_name: Net Contractor Cash Flow Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: npv_pf_ctr_real
+    formal_name: NPV Point Forward Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: irr_pf_ctr_real
+    formal_name: IRR Point Forward Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: Internal Rate of Return Point Forward stored as a decimal fraction (for example, 0.15
+      = 15%).
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: pv_ratio_pf_ctr_real
+    formal_name: PV Ratio Point Forward Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: pi_pf_ctr_real
+    formal_name: PI Point Forward Contractor Realization
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: take_gov_real
+    formal_name: GOI Take Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: take_gov_pv_real
+    formal_name: GOI Take Present Value Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: inc_gov_real
+    formal_name: GOI Income Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: tax_real
+    formal_name: Tax Payment Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: unrec_cost_real
+    formal_name: Unrecovered Cost Realization
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: well_total_otlk
+    formal_name: Total Wells Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: well_prd_otlk
+    formal_name: Total Producer Wells Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: well_inj_otlk
+    formal_name: Total Injector Wells Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: well_surv_otlk
+    formal_name: Total Surveillance Wells Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: well_conv_otlk
+    formal_name: Convert to Injection Outlook
+    logical_type: integer
+    data_type: INTEGER
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: WELL(S)
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: null
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: sow_otlk
+    formal_name: Scope of Work Outlook
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Latest expected scope of work at completion as of the reported date; includes completed
+      and remaining scope.
+    group: Drilling & Facilities
+    source: pod_monitoring
+    aliases: []
+  - name: scenario_otlk
+    formal_name: Outlook Scenario
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Scenario or case applied to the outlook values as of the reported date, such as base,
+      upside, or downside.
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_oil_otlk
+    formal_name: WAP Oil Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_con_otlk
+    formal_name: WAP Condensate Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/STB
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_an_otlk
+    formal_name: WAP Total Gas Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_lpg_otlk
+    formal_name: WAP LPG Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/MTON
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: wap_lng_otlk
+    formal_name: WAP LNG Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,6)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: USD/MMBTU
+    precision: 20
+    scale: 6
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: capital_drilling_otlk
+    formal_name: Capital Cost of Drillings Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Source: pod_monitoring.capital_drilling_otlk; aggregate matching pod_cost_monitoring.item_cost_monitoring_otlk
+      by registered Capital and drilling category per monpod_id. Full outlook, not added to realization.'
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: capital_facilities_otlk
+    formal_name: Capital Cost of Facilities Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Source: pod_monitoring.capital_facilities_otlk; aggregate matching outlook item costs
+      by registered Capital and the four facilities-* categories per monpod_id. Do not add realization.'
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: intang_drilling_otlk
+    formal_name: Intangible Cost of Drilling Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Source: pod_monitoring.intang_drilling_otlk; aggregate matching outlook item costs by
+      registered Intangible and drilling category per monpod_id. Do not add realization.'
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: intang_facilities_otlk
+    formal_name: Intangible Cost of Facilities Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Source: pod_monitoring.intang_facilities_otlk; aggregate matching outlook item costs
+      by registered Intangible and the four facilities-* categories per monpod_id. Do not add realization.'
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: opex_otlk
+    formal_name: OPEX Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: asr_otlk
+    formal_name: ASR Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: lbt_otlk
+    formal_name: LBT Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: rev_gross_otlk
+    formal_name: Gross Revenue Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: ftp_gov_otlk
+    formal_name: First Tranche Petroleum Government Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: ftp_ctr_otlk
+    formal_name: First Tranche Petroleum Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: ic_otlk
+    formal_name: Investment Credit Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: cost_rec_ded_otlk
+    formal_name: Cost Recovery or Deductible Cost Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: share_gross_gov_otlk
+    formal_name: Gross Government Share Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Also known as ETS Government Pre Tax.
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: share_gross_ctr_otlk
+    formal_name: Gross Contractor Share Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Also known as ETS Contractor Pre Tax.
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: dmo_net_otlk
+    formal_name: Net Domestic Market Obligation Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: sunk_cost_otlk
+    formal_name: Sunk Cost Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: ncf_ctr_otlk
+    formal_name: Net Contractor Cash Flow Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: npv_pf_ctr_otlk
+    formal_name: NPV Point Forward Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: irr_pf_ctr_otlk
+    formal_name: IRR Point Forward Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: Internal Rate of Return Point Forward stored as a decimal fraction (for example, 0.15
+      = 15%).
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: pot_ctr_otlk
+    formal_name: Payout Time Outlook
+    logical_type: decimal
+    data_type: NUMERIC(12,4)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: YEAR(S)
+    precision: 12
+    scale: 4
+    max_length: null
+    constraint: null
+    description: Single payout-time metric for the monitoring assessment and outlook; a separate pot_ctr_real
+      is intentionally not exposed to avoid duplicate interpretation.
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: pv_ratio_pf_ctr_otlk
+    formal_name: PV Ratio Point Forward Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: pi_pf_ctr_otlk
+    formal_name: PI Point Forward Contractor Outlook
+    logical_type: decimal
+    data_type: NUMERIC(18,8)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: fraction
+    precision: 18
+    scale: 8
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: take_gov_otlk
+    formal_name: GOI Take Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: take_gov_pv_otlk
+    formal_name: GOI Take Present Value Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: inc_gov_otlk
+    formal_name: GOI Income Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: tax_otlk
+    formal_name: Tax Payment Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+  - name: unrec_cost_otlk
+    formal_name: Unrecovered Cost Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MUSD
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: null
+    group: economics
+    source: pod_monitoring
+    aliases: []
+- name: pod_forecast_api
+  role: output
+  required: false
+  source_names:
+  - pod_forecast_api
+  primary_key: []
+  unique_keys: []
+  references: []
+  columns:
+  - name: frcast_id
+    formal_name: Forecast ID
+    logical_type: integer
+    data_type: BIGINT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Approved annual forecast-record identifier. NULL for eSDC-only years with no approved
+      forecast row; never generate a synthetic ID.
+    group: Metadata
+    source: pod_forecast
+    aliases: []
+  - name: reported_date
+    formal_name: Reported Date
+    logical_type: date
+    data_type: DATE
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Status date from monitoring, or 31 December eSDC report_year if input is absent. Upstream
+      report_date does not override this year-end status.
+    group: Reporting Period
+    source: calculated
+    aliases: []
+  - name: monpod_id
+    formal_name: Monitoring POD ID
+    logical_type: integer
+    data_type: BIGINT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Monitoring-submission ID for the selected POD and status date; it provides outlook context,
+      not the parent key of pod_forecast. NULL when no monitoring submission exists; never generate a
+      synthetic ID. Approved forecasts link directly to m_pod.
+    group: Metadata
+    source: pod_monitoring
+    aliases: []
+  - name: pod_id_seq
+    formal_name: POD ID Sequence
+    logical_type: integer
+    data_type: BIGINT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: POD master ID driving the projection with valid project mappings, even when approved
+      forecast or monitoring input is absent.
+    group: POD Reference
+    source: m_pod
+    aliases: []
+  - name: pod_id
+    formal_name: POD ID
+    logical_type: text
+    data_type: VARCHAR(18)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: 18
+    constraint: null
+    description: Human-readable POD identifier from m_pod. The same identifier is also stored in pod_monitoring.pod_id
+      and may be read from the selected monitoring snapshot when that snapshot is required and present.
+      Changing this field's source alone does not remove the m_pod join while pod_name remains in the
+      response.
+    group: POD Reference
+    source: m_pod
+    aliases: []
+  - name: pod_name
+    formal_name: POD Name
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Official POD name from m_pod, matched by pod_id_seq. Neither pod_forecast nor pod_monitoring
+      currently stores pod_name; retaining this field requires a master lookup/join. The current foreign
+      keys link both forecast and monitoring directly to m_pod, not forecast to monitoring.
+    group: POD Reference
+    source: m_pod
+    aliases: []
+  - name: year_frcast
+    formal_name: Year Forecast
+    logical_type: integer
+    data_type: SMALLINT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Series year from approved forecasts or linked eSDC timeseries, including eSDC-only years.
+      Distinct from report_year, which selects the status context.
+    group: Forecast Period
+    source: calculated
+    aliases: []
+    minimum: -32768
+    maximum: 32767
+  - name: usf_oil_pod
+    formal_name: Ultimate Sales Forecast Oil POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTBY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Annual ultimate oil sales forecast stated in the approved POD, in thousand stock tank
+      barrels per year (MSTBY).
+    group: Approved POD Forecast
+    source: pod_forecast
+    aliases: []
+  - name: usf_con_pod
+    formal_name: Ultimate Sales Forecast Cond. POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTBY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Annual ultimate condensate sales forecast stated in the approved POD, in thousand stock
+      tank barrels per year (MSTBY).
+    group: Approved POD Forecast
+    source: pod_forecast
+    aliases: []
+  - name: usf_ga_pod
+    formal_name: Ultimate Sales Forecast Assoc. Gas POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCFY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Annual ultimate associated-gas sales forecast stated in the approved POD, in billion
+      standard cubic feet per year (BSCFY).
+    group: Approved POD Forecast
+    source: pod_forecast
+    aliases: []
+  - name: usf_gn_pod
+    formal_name: Ultimate Sales Forecast Non Assoc. Gas POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCFY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: Annual ultimate non-associated-gas sales forecast stated in the approved POD, in billion
+      standard cubic feet per year (BSCFY).
+    group: Approved POD Forecast
+    source: pod_forecast
+    aliases: []
+  - name: usf_oc_pod
+    formal_name: Ultimate Sales Forecast Oil + Cond. POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTBY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Calculated total liquid sales forecast: usf_oil_pod + usf_con_pod.'
+    group: Approved POD Forecast
+    source: calculated
+    aliases: []
+  - name: usf_an_pod
+    formal_name: Ultimate Sales Forecast Assoc. + Non Assoc. Gas POD
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCFY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Calculated total gas sales forecast: usf_ga_pod + usf_gn_pod.'
+    group: Approved POD Forecast
+    source: calculated
+    aliases: []
+  - name: usf_oil_otlk
+    formal_name: Ultimate Sales Forecast Oil Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTBY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Oil outlook for the selected report_year, aggregated from mapped projects. For each
+      completed series year Y at or before report_year, calculate cprd_sls_oil(Y) minus cprd_sls_oil(Y-1)
+      within the same project and Middle case; both values must be present exactly once. For future years,
+      use slf_oil. Return NULL when a required project component is incomplete.'
+    group: eSDC Outlook
+    source: esdc
+    aliases: []
+  - name: usf_con_otlk
+    formal_name: Ultimate Sales Forecast Cond. Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTBY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Condensate outlook for the selected report_year, aggregated from mapped projects. For each
+      completed series year Y at or before report_year, calculate cprd_sls_con(Y) minus cprd_sls_con(Y-1)
+      within the same project and Middle case; both values must be present exactly once. For future years,
+      use slf_con. Return NULL when a required project component is incomplete.'
+    group: eSDC Outlook
+    source: esdc
+    aliases: []
+  - name: usf_ga_otlk
+    formal_name: Ultimate Sales Forecast Assoc. Gas Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCFY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Associated gas outlook for the selected report_year, aggregated from mapped projects. For
+      each completed series year Y at or before report_year, calculate cprd_sls_ga(Y) minus cprd_sls_ga(Y-1)
+      within the same project and Middle case; both values must be present exactly once. For future years,
+      use slf_ga. Return NULL when a required project component is incomplete.'
+    group: eSDC Outlook
+    source: esdc
+    aliases: []
+  - name: usf_gn_otlk
+    formal_name: Ultimate Sales Forecast Non Assoc. Gas Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCFY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Non-associated gas outlook for the selected report_year, aggregated from mapped projects.
+      For each completed series year Y at or before report_year, calculate cprd_sls_gn(Y) minus cprd_sls_gn(Y-1)
+      within the same project and Middle case; both values must be present exactly once. For future years,
+      use slf_gn. Return NULL when a required project component is incomplete.'
+    group: eSDC Outlook
+    source: esdc
+    aliases: []
+  - name: usf_oc_otlk
+    formal_name: Ultimate Sales Forecast Oil + Cond. Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: MSTBY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Calculated total liquid outlook: usf_oil_otlk + usf_con_otlk. NULL when either component
+      is incomplete.'
+    group: eSDC Outlook
+    source: calculated
+    aliases: []
+  - name: usf_an_otlk
+    formal_name: Ultimate Sales Forecast Assoc. + Non Assoc. Gas Outlook
+    logical_type: decimal
+    data_type: NUMERIC(20,3)
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: BSCFY
+    precision: 20
+    scale: 3
+    max_length: null
+    constraint: null
+    description: 'Calculated total gas outlook: usf_ga_otlk + usf_gn_otlk. NULL when either component
+      is incomplete.'
+    group: eSDC Outlook
+    source: calculated
+    aliases: []
+  - name: frcast_remarks
+    formal_name: Forecast Remarks
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Optional notes, assumptions, scenario context, or remarks for the annual POD forecast.
+    group: Notes
+    source: pod_forecast
+    aliases: []
+  - name: created_at
+    formal_name: Record Creation Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Timestamp when the forecast record was created, maintained by the database.
+    group: Audit
+    source: pod_forecast
+    aliases: []
+  - name: created_by
+    formal_name: Record Created By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Stable user or service identifier that created the forecast record.
+    group: Audit
+    source: pod_forecast
+    aliases: []
+  - name: updated_at
+    formal_name: Last Update Timestamp
+    logical_type: datetime
+    data_type: TIMESTAMPTZ
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Timestamp of the most recent permitted update, maintained automatically by the database.
+    group: Audit
+    source: pod_forecast
+    aliases: []
+  - name: updated_by
+    formal_name: Last Updated By
+    logical_type: text
+    data_type: TEXT
+    nullable: true
+    declared_nullable: null
+    ownership: derived
+    unit: null
+    precision: null
+    scale: null
+    max_length: null
+    constraint: null
+    description: Stable user or service identifier responsible for the most recent permitted update.
+    group: Audit
+    source: pod_forecast
+    aliases: []

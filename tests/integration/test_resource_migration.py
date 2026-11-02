@@ -47,9 +47,15 @@ def _write_inputs(root: Path) -> tuple[Path, Path]:
         conn.execute("CREATE TABLE protected_sentinel (value VARCHAR)")
         conn.execute("INSERT INTO protected_sentinel VALUES ('keep-me')")
         conn.execute("CREATE TABLE document_chunks (id VARCHAR, content VARCHAR)")
-        conn.execute("INSERT INTO document_chunks VALUES ('doc-sentinel', 'preserve me')")
-        conn.execute("CREATE TABLE project_embeddings (project_id VARCHAR, embedding FLOAT[])")
-        conn.execute("INSERT INTO project_embeddings VALUES ('embedding-sentinel', [0.25, 0.5])")
+        conn.execute(
+            "INSERT INTO document_chunks VALUES ('doc-sentinel', 'preserve me')"
+        )
+        conn.execute(
+            "CREATE TABLE project_embeddings (project_id VARCHAR, embedding FLOAT[])"
+        )
+        conn.execute(
+            "INSERT INTO project_embeddings VALUES ('embedding-sentinel', [0.25, 0.5])"
+        )
 
     resources = [
         {
@@ -102,7 +108,11 @@ def _write_inputs(root: Path) -> tuple[Path, Path]:
     manifest = fixture_root / "manifest.json"
     manifest.write_text(
         json.dumps(
-            {"schema_version": 1, "resource_scope": "unfiltered", "responses": responses}
+            {
+                "schema_version": 1,
+                "resource_scope": "unfiltered",
+                "responses": responses,
+            }
         ),
         encoding="utf-8",
     )
@@ -169,8 +179,12 @@ def _assert_pair_bootstrap_and_recovery(stages: dict[str, dict[str, object]]) ->
 
 def test_small_fixture_rehearsal_writes_a_complete_report(tmp_path: Path) -> None:
     baseline, manifest = _write_inputs(tmp_path)
-    resource_fixture = json.loads((manifest.parent / "project_resources.json").read_text(encoding="utf-8"))
-    timeseries_fixture = json.loads((manifest.parent / "project_timeseries_2024.json").read_text(encoding="utf-8"))
+    resource_fixture = json.loads(
+        (manifest.parent / "project_resources.json").read_text(encoding="utf-8")
+    )
+    timeseries_fixture = json.loads(
+        (manifest.parent / "project_timeseries_2024.json").read_text(encoding="utf-8")
+    )
     assert all(isinstance(row["report_year"], str) for row in resource_fixture)
     assert isinstance(timeseries_fixture[0]["report_year"], str)
     before = {
@@ -199,13 +213,30 @@ def test_small_fixture_rehearsal_writes_a_complete_report(tmp_path: Path) -> Non
     assert target_stage["timeseries_parity"]["ok"] is True
     pair_sources = target_stage["canonical_pair_sources_before_after"]
     assert pair_sources["before"] == pair_sources["after"]
-    assert target_stage["rebuild_source_revisions"]["project_timeseries"] == pair_sources["before"]["project_timeseries"]["revision"]
-    failure_stage = stage_map["empty_and_download_failure_injections"]["observations"]["download_failure"]
+    assert (
+        target_stage["rebuild_source_revisions"]["project_timeseries"]
+        == pair_sources["before"]["project_timeseries"]["revision"]
+    )
+    failure_stage = stage_map["empty_and_download_failure_injections"]["observations"][
+        "download_failure"
+    ]
+    empty_stage = stage_map["empty_and_download_failure_injections"]["observations"][
+        "empty_response"
+    ]
+    assert empty_stage["resource_snapshot_cleared"]
+    assert empty_stage["cache_cleared"]
     assert failure_stage["snapshot_unchanged"]
     assert failure_stage["analytical_state_unchanged"]
     assert failure_stage["cache_state_unchanged"]
-    assert stage_map["typed_parity_views_spatial_search_and_protected_rows"]["observations"]["fts_search"]["hits"] > 0
-    with duckdb.connect(str(Path(report["run_dir"]) / "db" / "esdc.duckdb"), read_only=True) as conn:
+    assert (
+        stage_map["typed_parity_views_spatial_search_and_protected_rows"][
+            "observations"
+        ]["fts_search"]["hits"]
+        > 0
+    )
+    with duckdb.connect(
+        str(Path(report["run_dir"]) / "db" / "esdc.duckdb"), read_only=True
+    ) as conn:
         conn.execute("LOAD spatial")
         resource_columns = {
             row[0]
@@ -223,41 +254,61 @@ def test_small_fixture_rehearsal_writes_a_complete_report(tmp_path: Path) -> Non
             ("001", 1, "1. Exploitation", "FLOAT", 0.0),
             ("002", 0, "3. Abandoned", "FLOAT", None),
         ]
-        spatial = stage_map["typed_parity_views_spatial_search_and_protected_rows"]["observations"]["spatial_query"]
+        spatial = stage_map["typed_parity_views_spatial_search_and_protected_rows"][
+            "observations"
+        ]["spatial_query"]
         assert spatial["resource_geometry_columns_present"] is False
-        assert conn.execute(
-            "SELECT report_year, project_id FROM project_timeseries WHERE project_id LIKE '%timeseries-sentinel' ORDER BY project_id"
-        ).fetchall() == [
-            (2025, "empty-response-timeseries-sentinel"),
-            (2019, "historical-timeseries-sentinel"),
-            (None, "null-year-timeseries-sentinel"),
-            (2023, "unrequested-timeseries-sentinel"),
-        ]
-        view_counts = dict(stage_map["typed_parity_views_spatial_search_and_protected_rows"]["observations"]["view_row_counts"])
-        assert {name: view_counts[name] for name in ("field_resources", "wa_resources", "nkri_resources")} == {
+        assert (
+            conn.execute(
+                "SELECT report_year, project_id FROM project_timeseries WHERE project_id LIKE '%timeseries-sentinel' ORDER BY project_id"
+            ).fetchall()
+            == []
+        )
+        view_counts = dict(
+            stage_map["typed_parity_views_spatial_search_and_protected_rows"][
+                "observations"
+            ]["view_row_counts"]
+        )
+        assert {
+            name: view_counts[name]
+            for name in ("field_resources", "wa_resources", "nkri_resources")
+        } == {
             "field_resources": 2,
             "wa_resources": 2,
             "nkri_resources": 2,
         }
-        assert {name: view_counts[name] for name in ("field_timeseries", "wa_timeseries", "nkri_timeseries")} == {
-            "field_timeseries": 5,
-            "wa_timeseries": 5,
-            "nkri_timeseries": 5,
+        assert {
+            name: view_counts[name]
+            for name in ("field_timeseries", "wa_timeseries", "nkri_timeseries")
+        } == {
+            "field_timeseries": 1,
+            "wa_timeseries": 1,
+            "nkri_timeseries": 1,
         }
         for view in ("field_resources", "wa_resources", "nkri_resources"):
-            assert conn.execute(f"SELECT SUM(rec_con), SUM(rec_oil) FROM {view}").fetchone() == (7.5, 0.0)
+            assert conn.execute(
+                f"SELECT SUM(rec_con), SUM(rec_oil) FROM {view}"
+            ).fetchone() == (7.5, 0.0)
         assert conn.execute("SELECT * FROM project_embeddings").fetchall() == [
             ("embedding-sentinel", [0.25, 0.5])
         ]
     sqlite_path = Path(report["run_dir"]) / "db" / "esdc.sqlite"
     with sqlite3.connect(f"file:{sqlite_path.resolve()}?mode=ro", uri=True) as conn:
-        assert conn.execute("SELECT DISTINCT typeof(report_year) FROM api_project_resources").fetchall() == [("integer",)]
-        assert conn.execute("SELECT report_year FROM api_project_resources WHERE project_id='001'").fetchone() == (2024,)
+        assert conn.execute(
+            "SELECT DISTINCT typeof(report_year) FROM api_project_resources"
+        ).fetchall() == [("integer",)]
+        assert conn.execute(
+            "SELECT report_year FROM api_project_resources WHERE project_id='001'"
+        ).fetchone() == (2024,)
         groovy = conn.execute(
             "SELECT groovy_report FROM api_project_resources WHERE project_id='001'"
         ).fetchone()
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(api_project_resources)")}
-        assert groovy == ("Current situation:\nlabel one\n\nExecutive summary:\nlabel two",)
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(api_project_resources)")
+        }
+        assert groovy == (
+            "Current situation:\nlabel one\n\nExecutive summary:\nlabel two",
+        )
         assert not any(column.startswith("grov_") for column in columns)
     after = {
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -272,14 +323,27 @@ def test_runner_derives_scope_and_protected_data_from_changed_fixture_inputs(
     baseline, manifest = _write_inputs(tmp_path)
     fixture_root = manifest.parent
     with duckdb.connect(str(baseline / "esdc.duckdb")) as conn:
-        conn.execute('CREATE TABLE "unrelated""domain_cache" (opaque_id VARCHAR, payload VARCHAR)')
-        conn.execute('INSERT INTO "unrelated""domain_cache" VALUES (\'arbitrary-key\', \'opaque payload\')')
+        conn.execute(
+            'CREATE TABLE "unrelated""domain_cache" (opaque_id VARCHAR, payload VARCHAR)'
+        )
+        conn.execute(
+            "INSERT INTO \"unrelated\"\"domain_cache\" VALUES ('arbitrary-key', 'opaque payload')"
+        )
         conn.execute("CREATE TABLE _metadata (key VARCHAR PRIMARY KEY, value VARCHAR)")
-        conn.execute("INSERT INTO _metadata VALUES ('operator_note', 'preserve-this'), ('last_updated', 'old timestamp')")
+        conn.execute(
+            "INSERT INTO _metadata VALUES ('operator_note', 'preserve-this'), ('last_updated', 'old timestamp')"
+        )
         conn.execute("DELETE FROM project_timeseries")
         conn.execute(
             "INSERT INTO project_timeseries (report_year, project_id) VALUES (?, ?), (?, ?), (?, ?)",
-            [2018, "unusual-old-row", None, "unusual-null-row", 2033, "unusual-empty-response-row"],
+            [
+                2018,
+                "unusual-old-row",
+                None,
+                "unusual-null-row",
+                2033,
+                "unusual-empty-response-row",
+            ],
         )
 
     resources = [
@@ -313,7 +377,10 @@ def test_runner_derives_scope_and_protected_data_from_changed_fixture_inputs(
         if filename == "project_resources.json":
             table, year = "project_resources", None
         else:
-            table, year = "project_timeseries", int(filename.split("_")[-1].split(".")[0])
+            table, year = (
+                "project_timeseries",
+                int(filename.split("_")[-1].split(".")[0]),
+            )
         responses.append(
             {
                 "table": table,
@@ -325,7 +392,13 @@ def test_runner_derives_scope_and_protected_data_from_changed_fixture_inputs(
             }
         )
     manifest.write_text(
-        json.dumps({"schema_version": 1, "resource_scope": "unfiltered", "responses": responses}),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "resource_scope": "unfiltered",
+                "responses": responses,
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -341,19 +414,49 @@ def test_runner_derives_scope_and_protected_data_from_changed_fixture_inputs(
     _assert_pair_bootstrap_and_recovery(
         {name: {"observations": observations} for name, observations in stages.items()}
     )
-    assert stages["unfiltered_cli_bootstrap"]["requested_and_scoped_years"]["timeseries_fixture_years"] == [2031, 2033]
-    assert stages["typed_parity_views_spatial_search_and_protected_rows"]["preserved_non_resource_table_hashes"]['unrelated"domain_cache']["row_count"] == 1
-    assert stages["typed_parity_views_spatial_search_and_protected_rows"]["unrequested_and_null_year_timeseries"]["row_count"] == 2
-    assert stages["typed_parity_views_spatial_search_and_protected_rows"]["valid_empty_timeseries_preservation"]["before"] == stages["typed_parity_views_spatial_search_and_protected_rows"]["valid_empty_timeseries_preservation"]["after"]
+    assert stages["unfiltered_cli_bootstrap"]["requested_and_scoped_years"][
+        "timeseries_fixture_years"
+    ] == [2031, 2033]
+    assert (
+        stages["typed_parity_views_spatial_search_and_protected_rows"][
+            "preserved_non_resource_table_hashes"
+        ]['unrelated"domain_cache']["row_count"]
+        == 1
+    )
+    assert (
+        stages["typed_parity_views_spatial_search_and_protected_rows"][
+            "unrequested_and_null_year_timeseries"
+        ]["row_count"]
+        == 0
+    )
+    assert (
+        stages["typed_parity_views_spatial_search_and_protected_rows"][
+            "valid_empty_timeseries_replacement"
+        ]["after"]["row_count"]
+        == 0
+    )
     selective = stages["selective_year_refresh"]
-    assert selective["unselected_canonical_resource_values_before_after"]["before"] == selective["unselected_canonical_resource_values_before_after"]["after"]
-    assert selective["unselected_and_null_timeseries_values_before_after"]["before"] == selective["unselected_and_null_timeseries_values_before_after"]["after"]
+    assert (
+        selective["unselected_canonical_resource_values_before_after"]["before"]
+        == selective["unselected_canonical_resource_values_before_after"]["after"]
+    )
+    assert (
+        selective["unselected_and_null_timeseries_values_before_after"]["before"]
+        == selective["unselected_and_null_timeseries_values_before_after"]["after"]
+    )
     target_stage = stages["separate_empty_target_rebuild_and_repeat"]
     assert "project_timeseries" in target_stage["target_table_names"]
     assert target_stage["timeseries_parity"]["ok"] is True
-    assert target_stage["canonical_pair_sources_before_after"]["before"] == target_stage["canonical_pair_sources_before_after"]["after"]
-    with duckdb.connect(str(Path(report["run_dir"]) / "db" / "esdc.duckdb"), read_only=True) as conn:
-        assert conn.execute("SELECT value FROM _metadata WHERE key='operator_note'").fetchone() == ("preserve-this",)
+    assert (
+        target_stage["canonical_pair_sources_before_after"]["before"]
+        == target_stage["canonical_pair_sources_before_after"]["after"]
+    )
+    with duckdb.connect(
+        str(Path(report["run_dir"]) / "db" / "esdc.duckdb"), read_only=True
+    ) as conn:
+        assert conn.execute(
+            "SELECT value FROM _metadata WHERE key='operator_note'"
+        ).fetchone() == ("preserve-this",)
 
 
 def test_logical_state_detects_same_count_resource_and_timeseries_value_changes(
@@ -361,9 +464,13 @@ def test_logical_state_detects_same_count_resource_and_timeseries_value_changes(
 ) -> None:
     path = tmp_path / "logical-state.duckdb"
     with duckdb.connect(str(path)) as conn:
-        conn.execute("CREATE TABLE project_resources (project_id VARCHAR, report_year INTEGER, source_value VARCHAR)")
+        conn.execute(
+            "CREATE TABLE project_resources (project_id VARCHAR, report_year INTEGER, source_value VARCHAR)"
+        )
         conn.execute("INSERT INTO project_resources VALUES ('res-a', 2031, 'before')")
-        conn.execute("CREATE TABLE project_timeseries (project_id VARCHAR, report_year INTEGER, source_value VARCHAR)")
+        conn.execute(
+            "CREATE TABLE project_timeseries (project_id VARCHAR, report_year INTEGER, source_value VARCHAR)"
+        )
         conn.execute("INSERT INTO project_timeseries VALUES ('res-a', 2031, 'before')")
 
     before = _logical_state(path)
@@ -376,8 +483,12 @@ def test_logical_state_detects_same_count_resource_and_timeseries_value_changes(
     with duckdb.connect(str(path)) as conn:
         conn.execute("UPDATE project_timeseries SET source_value='after'")
     timeseries_changed = _logical_state(path)
-    timeseries_tables = cast(dict[str, object], timeseries_changed["managed_table_states"])
-    assert resource_tables["project_timeseries"] != timeseries_tables["project_timeseries"]
+    timeseries_tables = cast(
+        dict[str, object], timeseries_changed["managed_table_states"]
+    )
+    assert (
+        resource_tables["project_timeseries"] != timeseries_tables["project_timeseries"]
+    )
 
 
 def test_runner_rejects_fixture_path_escape_before_copying_inputs(
@@ -414,16 +525,24 @@ def test_runner_rejects_fixture_hash_mismatch(tmp_path: Path) -> None:
     assert not (tmp_path / "runs").exists()
 
 
-def test_runner_rejects_wal_output_overlap_and_default_live_paths(tmp_path: Path) -> None:
+def test_runner_rejects_wal_output_overlap_and_default_live_paths(
+    tmp_path: Path,
+) -> None:
     baseline, manifest = _write_inputs(tmp_path)
     wal = baseline / "esdc.sqlite-wal"
     wal.write_bytes(b"incomplete clone")
     with pytest.raises(ValueError, match="WAL-bearing"):
-        run_rehearsal(baseline_dir=baseline, fixture_manifest=manifest, output_dir=tmp_path / "runs")
+        run_rehearsal(
+            baseline_dir=baseline,
+            fixture_manifest=manifest,
+            output_dir=tmp_path / "runs",
+        )
     wal.unlink()
 
     with pytest.raises(ValueError, match="overlap"):
-        run_rehearsal(baseline_dir=baseline, fixture_manifest=manifest, output_dir=baseline)
+        run_rehearsal(
+            baseline_dir=baseline, fixture_manifest=manifest, output_dir=baseline
+        )
 
     with pytest.raises(ValueError, match="~/.esdc"):
         run_rehearsal(
@@ -439,12 +558,19 @@ def test_runner_rejects_missing_timeseries_request_fixture(tmp_path: Path) -> No
     payload["responses"] = [
         response
         for response in payload["responses"]
-        if not (response["table"] == "project_timeseries" and response["report_year"] == 2024)
+        if not (
+            response["table"] == "project_timeseries"
+            and response["report_year"] == 2024
+        )
     ]
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="timeseries fixtures are missing"):
-        run_rehearsal(baseline_dir=baseline, fixture_manifest=manifest, output_dir=tmp_path / "runs")
+        run_rehearsal(
+            baseline_dir=baseline,
+            fixture_manifest=manifest,
+            output_dir=tmp_path / "runs",
+        )
     assert not (tmp_path / "runs").exists()
 
 
@@ -504,8 +630,14 @@ def test_runner_preserves_preexisting_cache_handles_and_scopes_new_caches(
         assert sentinel_tools.get("keep") == "tool sentinel"
         assert sentinel_sql.set("still-usable", True)
         assert sentinel_tools.set("still-usable", True)
-        assert run_dir in Path(report["cache_isolation"]["sql_cache_dir"]).resolve().parents
-        assert run_dir in Path(report["cache_isolation"]["tool_cache_dir"]).resolve().parents
+        assert (
+            run_dir
+            in Path(report["cache_isolation"]["sql_cache_dir"]).resolve().parents
+        )
+        assert (
+            run_dir
+            in Path(report["cache_isolation"]["tool_cache_dir"]).resolve().parents
+        )
     finally:
         chat_tools._sql_cache = old_sql
         chat_tools._tool_cache = old_tools

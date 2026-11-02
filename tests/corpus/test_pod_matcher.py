@@ -72,3 +72,38 @@ def test_missing_table_suggests_nothing():
 def test_dedupe_and_cap(conn):
     ids, _ = PodMatcher(conn).suggest("294/BP", ["POD Mengoepeh"])
     assert ids == ["PL-2003-0005-3-2-0"]  # both signals, one suggestion
+
+def test_fuzzy_suggestions_are_review_only(conn):
+    matcher = PodMatcher(conn)
+    ids, reasons = matcher.suggest(None, ["POD Mengupeh"])
+    assert ids == ["PL-2003-0005-3-2-0"]
+    assert "review-only fuzzy candidate PL-2003-0005-3-2-0" in reasons
+    assert matcher.resolve_exact(pod_names=["POD Mengupeh"]) == (None, None)
+
+
+def test_exact_name_resolution_rejects_ambiguity(conn):
+    conn.execute(
+        "INSERT INTO m_pod VALUES (?, ?, ?)",
+        ("PL-2024-0001-1-1-0", "POD Mengoepeh", "NEW-LETTER"),
+    )
+    matcher = PodMatcher(conn)
+    assert matcher.resolve_exact(pod_names=["POD Mengoepeh"]) == (
+        None,
+        "pod_name_ambiguous",
+    )
+
+
+def test_placeholder_without_pod_id_is_not_a_candidate(conn):
+    conn.execute(
+        "INSERT INTO m_pod VALUES (?, ?, ?)",
+        (None, "Placeholder POD", "PLACEHOLDER-LETTER"),
+    )
+    matcher = PodMatcher(conn)
+    assert matcher.suggest("PLACEHOLDER-LETTER", ["Placeholder POD"]) == ([], [])
+
+
+def test_malformed_registry_operational_error_is_not_swallowed():
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE m_pod (broken TEXT)")
+    with pytest.raises(sqlite3.OperationalError, match="no such column"):
+        PodMatcher(c)

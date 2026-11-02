@@ -15,6 +15,7 @@ from typing import Any
 import duckdb
 
 from esdc.api_snapshot import JSONScalar
+from esdc.sqlite_runtime import configure_writer, require_wal_runtime
 from esdc.timeseries_snapshot import (
     TIMESERIES_SOURCE_COLUMNS,
     TIMESERIES_SOURCE_TYPES,
@@ -287,9 +288,11 @@ def bootstrap_timeseries_source(
                 dict(first.source_types),
             )
 
+        require_wal_runtime()
         sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         sqlite_conn = sqlite3.connect(sqlite_path, isolation_level=None)
         try:
+            configure_writer(sqlite_conn)
             second_types = _source_types(source_conn)
             second = _read_source_fingerprint(source_conn, source_path, second_types)
             if second != first:

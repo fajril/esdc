@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Replace the retired POD serving model with canonical input tables and
+  physical monitoring and forecast outputs.
+
+
 - Rebuilt API `project_resources` analytics no longer include legacy geometry
   columns. Optional source WKT remains unchanged in canonical SQLite for replay
   and hash compatibility; use Spatial Resolver and published spatial catalogs
@@ -16,11 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing analytical projection.
 - ESDC fetch validates complete response batches, commits canonical API
   snapshots to SQLite before publishing analytics, and tracks revision, row
-  count, and source hash. Valid nonempty selected slices replace their selected
-  years; empty slices preserve them. Failed publication retains the SQLite
+  count, and source hash. Successful selected slices replace their selected years, including clearing
+  explicitly observed empty scopes. Full fetches replace observed sources;
+  missing or failed responses are never treated as empty. Failed publication retains the SQLite
   revision and marks it stale for repair.
 
 ### Added
+
+- Strict YAML contract and SQL references.
+- Five POD endpoint slugs: `master-data-project`, `master-data-pod`, `pod-project`, `pod-monitoring`, `pod-forecast`.
+- Full XLSX and `--from-sqlite` loading plus crosswalk replacement.
+- Portal current editing, full chart, diagnostic pagination, and XLSX backup.
+- SQLite WAL runtime check.
+
 
 - Explicit `esdc bootstrap-timeseries-source` dry-run/apply workflow for
   preserving legacy DuckDB timeseries before the first full baseline fetch,
@@ -34,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior, full-suite success, or production readiness.
 
 ### Fixed
+
+- Publication retry does not reissue identities or generation.
+- Document metadata KG invalidation is atomic and triggers no automatic model call.
+
 
 - Chat log files now use the configured ESDC directory, preserving the default
   `~/.esdc/logs` location while allowing isolated runs to keep logs under

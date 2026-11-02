@@ -20,7 +20,7 @@ from esdc.api_snapshot import (
 )
 from esdc.configs import Config
 from esdc.fetching import PreparedFetch, spool_timeseries
-from esdc.pod_registry.store import get_sqlite_connection
+from esdc.pod_registry.store import get_sqlite_writer_connection
 from esdc.timeseries_snapshot import (
     normalize_timeseries_row,
     record_observed_empty_timeseries,
@@ -48,7 +48,7 @@ def _seed_pair(
     wk_id: str | int | None = None,
     rec_oil: str | float | None = None,
 ) -> tuple[str, str]:
-    source = get_sqlite_connection(sqlite_path)
+    source = get_sqlite_writer_connection(sqlite_path)
     replace_project_resources_snapshot(
         source,
         [
@@ -144,7 +144,7 @@ def test_rebuild_pair_without_network(
         "project_resources": resource_revision,
         "project_timeseries": timeseries_revision,
     }
-    assert report.subsystem_status == {"api": "restored"}
+    assert report.subsystem_status == {"api": "restored", "pod_registry": "restored"}
     assert len(_analytics_rows(duckdb_path, "project_resources")) == 1
     assert len(_analytics_rows(duckdb_path, "project_timeseries")) == 1
     assert _analytics_rows(duckdb_path, "user_table") == [("preserve me",)]
@@ -194,7 +194,7 @@ def test_bootstrap_incremental_precision_survives_api_free_recovery(
     assert bootstrap.source_types["year"] == "HUGEINT"
     assert bootstrap.source_types["cprd_grs_oil"] == "DECIMAL(30,4)"
 
-    source = get_sqlite_connection(sqlite_path)
+    source = get_sqlite_writer_connection(sqlite_path)
     replace_project_resources_snapshot(
         source,
         [ApiProjectResourceRow(project_id="api-resource", report_year=2024)],
@@ -241,7 +241,7 @@ def test_bootstrap_incremental_precision_survives_api_free_recovery(
         reindex=False,
     )
 
-    source = get_sqlite_connection(sqlite_path)
+    source = get_sqlite_writer_connection(sqlite_path)
     snapshot = get_timeseries_snapshot(source)
     source.close()
     assert snapshot is not None
@@ -295,7 +295,7 @@ def test_source_revision_after_c2_is_not_marked_published(
         nonlocal advanced
         if state == "published" and not advanced:
             advanced = True
-            source = get_sqlite_connection(path)
+            source = get_sqlite_writer_connection(path)
             replace_project_resources_snapshot(
                 source,
                 [
@@ -347,7 +347,7 @@ def test_source_revision_after_c2_is_not_marked_published(
         ]
     finally:
         target.close()
-    source = get_sqlite_connection(sqlite_path)
+    source = get_sqlite_writer_connection(sqlite_path)
     try:
         resource_state = source.execute(
             "SELECT revision, publication_state FROM api_snapshot "
@@ -935,7 +935,7 @@ def test_source_revision_change_before_c2_commit_rolls_back_pair(
         rows: Iterable[ApiProjectResourceRow],
     ) -> ResourceStage:
         stage = original_stage(conn, rows)
-        concurrent = sqlite3.connect(sqlite_path)
+        concurrent = get_sqlite_writer_connection(sqlite_path)
         replace_project_resources_snapshot(
             concurrent,
             [
@@ -1138,9 +1138,12 @@ def test_offline_recovery_never_installs_extensions(
         config: dict[str, str | bool | int | float | list[str]] | None = None,
     ) -> ConnectionSpy:
         configs.append(config)
-        return ConnectionSpy(
-            original_connect(database, read_only=read_only, config=config)
+        connection = (
+            original_connect(database, read_only=read_only)
+            if config is None
+            else original_connect(database, read_only=read_only, config=config)
         )
+        return ConnectionSpy(connection)
 
     monkeypatch.setattr(duckdb, "connect", tracked_connect)
     rebuild_api_analytics(
@@ -1241,3 +1244,56 @@ def test_missing_timeseries_source_refuses_without_target_mutation(
             duckdb_path=duckdb_path, sqlite_path=sqlite_path, reindex=False
         )
     assert duckdb_path.exists() is False
+
+
+def test_rebuild_pair_also_publishes_v2_pod_registry(tmp_path: Path) -> None:
+    from esdc.analytics_rebuild import rebuild_api_analytics
+    from esdc.pod_registry.migrations import initialize_registry_v2
+    from esdc.pod_registry.store import ensure_project_resources_table
+    from esdc.timeseries_snapshot import ensure_timeseries_tables
+
+    sqlite_path = tmp_path / "source.sqlite"
+    duckdb_path = tmp_path / "analytics.duckdb"
+    source = sqlite3.connect(sqlite_path)
+    source.execute("PRAGMA foreign_keys=ON")
+    initialize_registry_v2(source)
+    ensure_project_resources_table(source)
+    source.execute(
+        "CREATE TABLE api_snapshot ("
+        "source_table TEXT PRIMARY KEY, revision TEXT NOT NULL, "
+        "row_count INTEGER NOT NULL, source_sha256 TEXT NOT NULL, "
+        "fetched_at TEXT NOT NULL, publication_state TEXT NOT NULL, "
+        "invalid_geometry_count INTEGER NOT NULL DEFAULT 0)"
+    )
+    ensure_timeseries_tables(source)
+    source.commit()
+    source.close()
+    _seed_pair(sqlite_path)
+    source = get_sqlite_writer_connection(sqlite_path)
+    source.execute(
+        "INSERT INTO m_project (project_id, project_name, is_active) "
+        "VALUES ('P-0000001-01', 'Canonical project', 1)"
+    )
+    source.commit()
+    source.close()
+
+    report = rebuild_api_analytics(
+        duckdb_path=duckdb_path, sqlite_path=sqlite_path, reindex=False
+    )
+
+    assert report.subsystem_status == {
+        "api": "restored",
+        "pod_registry": "restored",
+    }
+    conn = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema='main' AND table_name='m_pod'"
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT table_type FROM information_schema.tables "
+            "WHERE table_schema='main' AND table_name='pod_registry'"
+        ).fetchone() == ("VIEW",)
+    finally:
+        conn.close()

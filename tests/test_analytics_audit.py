@@ -116,6 +116,77 @@ def _mutate(duckdb_path: Path, sql: str) -> None:
         conn.close()
 
 
+@pytest.mark.parametrize(
+    ("report_date", "expected_ok"),
+    [(None, True), ("2025-01-02", True), ("2025-01-02T12:34:56", False)],
+)
+def test_date_projection_requires_lossless_api_calendar_dates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    report_date: str | None,
+    expected_ok: bool,
+) -> None:
+    from esdc.analytics_audit import compare_timeseries_projection
+    from esdc.sqlite_runtime import configure_writer
+
+    sqlite_path, duckdb_path = _published(tmp_path, monkeypatch)
+    source = sqlite3.connect(sqlite_path)
+    try:
+        configure_writer(source)
+        source.execute("BEGIN IMMEDIATE")
+        snapshot = replace_timeseries_in_transaction(
+            source,
+            [
+                normalize_timeseries_row(
+                    (
+                        "report_year",
+                        "project_id",
+                        "year",
+                        "rate_oil",
+                        "project_name",
+                        "report_date",
+                    ),
+                    (2025, "P-1", 2025, 1.25, "Cendana", report_date),
+                    origin="api_json",
+                )
+            ],
+            years=None,
+            revision="date-source-r2",
+            fetched_at="2026-11-02T00:00:00+00:00",
+        )
+        source.execute("UPDATE api_snapshot SET publication_state='published'")
+        source.commit()
+    finally:
+        source.close()
+    target = duckdb.connect(str(duckdb_path))
+    try:
+        for (name,) in target.execute(
+            "SELECT index_name FROM duckdb_indexes() WHERE table_name='project_timeseries'"
+        ).fetchall():
+            target.execute('DROP INDEX "' + name.replace('"', '""') + '"')
+        target.execute(
+            "ALTER TABLE project_timeseries ALTER COLUMN report_date TYPE DATE"
+        )
+        target.execute(
+            "UPDATE project_timeseries SET report_date=?",
+            [None if report_date is None else "2025-01-02"],
+        )
+        target.execute(
+            "UPDATE api_publication SET revision=?, source_sha256=?",
+            [snapshot.revision, snapshot.source_sha256],
+        )
+    finally:
+        target.close()
+    audit = compare_timeseries_projection(
+        sqlite_path=sqlite_path, duckdb_path=duckdb_path
+    )
+    assert audit["ok"] is expected_ok, audit
+    if not expected_ok:
+        issues = audit["issues"]
+        assert isinstance(issues, list)
+        assert any("report_date" in issue for issue in issues)
+
+
 def _wrong_type_copy(source_path: Path, target_path: Path) -> None:
     target = duckdb.connect(str(target_path))
     try:
@@ -403,9 +474,7 @@ def test_bootstrap_date_audits_same_path_and_fresh_recovery(
     fresh_path = tmp_path / "fresh.duckdb"
     legacy = duckdb.connect(str(legacy_path))
     _execute_sql_script(legacy, "create_table_project_timeseries.sql")
-    legacy.execute(
-        "ALTER TABLE project_timeseries ALTER COLUMN report_date TYPE DATE"
-    )
+    legacy.execute("ALTER TABLE project_timeseries ALTER COLUMN report_date TYPE DATE")
     legacy.execute(
         "INSERT INTO project_timeseries(report_date, report_year, project_id, year) "
         "VALUES (DATE '2025-01-02', 2025, 'legacy-date', 2025)"

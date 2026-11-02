@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS kg_proposal (
 CREATE TABLE IF NOT EXISTS learn_state (
     doc_id      TEXT PRIMARY KEY,
     source_hash TEXT NOT NULL,
+    basis_sha256 TEXT,
     learned_at  TEXT DEFAULT (datetime('now'))
 );
 """
@@ -108,13 +109,28 @@ class Claim:
 class KnowledgeStore:
     """CRUD over kg_edge / kg_claim / kg_proposal / learn_state."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, *, allow_stale: bool = False) -> None:
         self._conn = conn
+        self._allow_stale = allow_stale
 
-    def ensure_tables(self) -> None:
-        self._conn.executescript(_DDL)
+    def _readable(self) -> bool:
+        if self._allow_stale:
+            return True
+        from esdc.knowledge.freshness import knowledge_freshness
+
+        return knowledge_freshness(self._conn).fresh
+
+    def ensure_tables(self, *, commit: bool = True) -> None:
+        # executescript commits any pending transaction before it runs. Execute
+        # each DDL statement separately so source-change invalidation can own
+        # schema initialization and data deletion in one SQLite transaction.
+        for statement in _DDL.split(";"):
+            if statement.strip():
+                self._conn.execute(statement)
         self._migrate_kg_edge()
-        self._conn.commit()
+        self._migrate_learn_state()
+        if commit:
+            self._conn.commit()
 
     def _migrate_kg_edge(self) -> None:
         existing = {
@@ -125,9 +141,17 @@ class KnowledgeStore:
             if column not in existing:
                 self._conn.execute(f"ALTER TABLE kg_edge ADD COLUMN {column} TEXT")
 
+    def _migrate_learn_state(self) -> None:
+        existing = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(learn_state)").fetchall()
+        }
+        if "basis_sha256" not in existing:
+            self._conn.execute("ALTER TABLE learn_state ADD COLUMN basis_sha256 TEXT")
+
     # -- edges ------------------------------------------------------------
 
-    def upsert_edges(self, edges: list[Edge]) -> int:
+    def upsert_edges(self, edges: list[Edge], *, commit: bool = True) -> int:
         cur = self._conn.executemany(
             """
             INSERT INTO kg_edge
@@ -172,18 +196,35 @@ class KnowledgeStore:
                 for e in edges
             ],
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return cur.rowcount if cur.rowcount and cur.rowcount > 0 else len(edges)
 
-    def delete_doc_edges(self, doc_id: str) -> int:
-        cur = self._conn.execute(
-            "DELETE FROM kg_edge WHERE src_type = 'document' AND src_id = ?",
-            (doc_id,),
-        )
-        self._conn.commit()
-        return cur.rowcount
+    def delete_doc_edges(
+        self,
+        doc_id: str,
+        *,
+        method: str | None = None,
+        commit: bool = True,
+    ) -> int:
+        if method is None:
+            cursor = self._conn.execute(
+                "DELETE FROM kg_edge WHERE src_type = 'document' AND src_id = ?",
+                (doc_id,),
+            )
+        else:
+            cursor = self._conn.execute(
+                "DELETE FROM kg_edge WHERE src_type = 'document' AND src_id = ? "
+                "AND method = ?",
+                (doc_id, method),
+            )
+        if commit:
+            self._conn.commit()
+        return cursor.rowcount
 
     def edges_for(self, entity_type: str, entity_id: str) -> list[Edge]:
+        if not self._readable():
+            return []
         rows = self._conn.execute(
             """
             SELECT src_type, src_id, rel, dst_type, dst_id,
@@ -199,7 +240,9 @@ class KnowledgeStore:
 
     # -- claims -----------------------------------------------------------
 
-    def replace_claims(self, doc_id: str, claims: list[Claim]) -> int:
+    def replace_claims(
+        self, doc_id: str, claims: list[Claim], *, commit: bool = True
+    ) -> int:
         self._conn.execute("DELETE FROM kg_claim WHERE doc_id = ?", (doc_id,))
         self._conn.executemany(
             """
@@ -222,7 +265,8 @@ class KnowledgeStore:
                 for c in claims
             ],
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return len(claims)
 
     def _claim_rows(self, where: str, params: tuple[Any, ...]) -> list[Claim]:
@@ -240,16 +284,22 @@ class KnowledgeStore:
         ]
 
     def claims_for(self, subject_type: str, subject_id: str) -> list[Claim]:
+        if not self._readable():
+            return []
         return self._claim_rows(
             "subject_type = ? AND subject_id = ?", (subject_type, subject_id)
         )
 
     def claims_for_doc(self, doc_id: str) -> list[Claim]:
+        if not self._readable():
+            return []
         return self._claim_rows("doc_id = ?", (doc_id,))
 
     # -- proposals --------------------------------------------------------
 
-    def bump_proposal(self, proposal_type: str, name: str, doc_id: str) -> None:
+    def bump_proposal(
+        self, proposal_type: str, name: str, doc_id: str, *, commit: bool = True
+    ) -> None:
         row = self._conn.execute(
             "SELECT sample_doc_ids FROM kg_proposal "
             "WHERE proposal_type = ? AND name = ?",
@@ -265,7 +315,8 @@ class KnowledgeStore:
         else:
             docs = set(json.loads(row[0]))
             if doc_id in docs:
-                self._conn.commit()
+                if commit:
+                    self._conn.commit()
                 return
             docs.add(doc_id)
             self._conn.execute(
@@ -273,9 +324,12 @@ class KnowledgeStore:
                 "WHERE proposal_type = ? AND name = ?",
                 (len(docs), json.dumps(sorted(docs)), proposal_type, name),
             )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     def pending_proposals(self) -> list[dict[str, Any]]:
+        if not self._readable():
+            return []
         rows = self._conn.execute(
             "SELECT proposal_type, name, evidence_count, sample_doc_ids "
             "FROM kg_proposal WHERE status = 'pending' "
@@ -293,21 +347,38 @@ class KnowledgeStore:
 
     # -- learn state ------------------------------------------------------
 
-    def needs_learn(self, doc_id: str, source_hash: str) -> bool:
+    def needs_learn(
+        self, doc_id: str, source_hash: str, basis_sha256: str | None = None
+    ) -> bool:
         row = self._conn.execute(
-            "SELECT source_hash FROM learn_state WHERE doc_id = ?", (doc_id,)
+            "SELECT source_hash, basis_sha256 FROM learn_state WHERE doc_id = ?",
+            (doc_id,),
         ).fetchone()
-        return row is None or row[0] != source_hash
+        return (
+            row is None
+            or row[0] != source_hash
+            or (basis_sha256 is not None and row[1] != basis_sha256)
+        )
 
-    def mark_learned(self, doc_id: str, source_hash: str) -> None:
+    def mark_learned(
+        self,
+        doc_id: str,
+        source_hash: str,
+        *,
+        basis_sha256: str | None = None,
+        commit: bool = True,
+    ) -> None:
         self._conn.execute(
-            "INSERT INTO learn_state (doc_id, source_hash) VALUES (?, ?) "
+            "INSERT INTO learn_state (doc_id, source_hash, basis_sha256) "
+            "VALUES (?, ?, ?) "
             "ON CONFLICT (doc_id) DO UPDATE SET "
             "source_hash = excluded.source_hash, "
+            "basis_sha256 = excluded.basis_sha256, "
             "learned_at = datetime('now')",
-            (doc_id, source_hash),
+            (doc_id, source_hash, basis_sha256),
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     def learned_count(self) -> int:
         return int(self._conn.execute("SELECT COUNT(*) FROM learn_state").fetchone()[0])

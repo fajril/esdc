@@ -1,33 +1,87 @@
-"""End-to-end temporal POD harmonization: SQLite truth == DuckDB/Ladybug projections.
+"""Temporal POD facts survive a real current-path replacement in every consumer.
 
-One small POD world -- original, partial amendment, full replacement -- with
-plan/actual/outlook value cases and project/document links, asserted
-identically from SQLite (source of truth), DuckDB (read projection), and the
-disposable Ladybug instance graph. Then both projections are torn down and
-rebuilt from the same SQLite file and must restore the same answers.
+The retired value-case and pod_revision model projected a revision chain from static
+guidance. The current contract derives that chain from one latest-only pointer on
+``m_pod``. This test follows that pointer through SQLite truth, the published DuckDB
+projection and the real native instance graph, then performs an actual full-input
+replacement through the public import path: the protected document bridge, the
+permanent identity reservations and the raw document rows must survive it, the graph
+must refuse stale knowledge until a real deterministic rebuild marks it current, and
+every consumer must then report the change.
 """
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
+from typing import Any
 
 import duckdb
-import pandas as pd
 import pytest
+from openpyxl import load_workbook
 
 from esdc.chat.domain_knowledge.instance_graph import InstanceGraphManager
+from esdc.knowledge.freshness import compute_knowledge_basis, mark_knowledge_current
 from esdc.knowledge.linker import run_deterministic_linking
 from esdc.knowledge.store import KnowledgeStore
-from esdc.loaders import POD_SCHEMA_PATH, load_schema_from_yaml
-from esdc.pod_registry.publish import publish_pod_registry
-from esdc.pod_registry.store import get_sqlite_connection
-from esdc.pod_registry.value_cases import replace_pod_value_cases
+from esdc.loaders import generate_pod_workbook_template
+from esdc.pod_registry.contract import load_pod_contract
+from esdc.pod_registry.publication import publish_v2_registry
+from esdc.pod_registry.sqlite_import import (
+    load_prepared_pod_batch,
+    prepare_pod_import,
+)
+from tests.knowledge.conftest import (
+    POD_DURI,
+    POD_DURI_REV1,
+    POD_KAMPUNG,
+    PROJECT_DURI,
+    PROJECT_KAMPUNG,
+)
+from tests.pod_registry.test_importer import ACTOR, INPUT_TABLES
 
-ORIG = "PL-2019-0001-2-2-0"
-AMEND = "PL-2020-0003-2-2-0"
-FINAL = "PL-2021-0004-2-2-2"
-PROJECT = "PRJ-001"
-DOC = "DOC-ORIG"
+TemporalRow = tuple[str, int, str | None]
+Answer = dict[str, list[dict[str, Any]]]
+
+# One pointer only: the 2019 master is superseded by the current 2022 revision.
+# Successors are named by their business identity, not by a surrogate key.
+TEMPORAL_TRUTH: list[TemporalRow] = [
+    (POD_DURI, 0, POD_DURI_REV1),
+    (POD_KAMPUNG, 1, None),
+    (POD_DURI_REV1, 1, None),
+]
+
+TRUTH_QUERY = (
+    "SELECT m.pod_id, m.is_latest, s.pod_id FROM m_pod m "
+    "LEFT JOIN m_pod s ON s.pod_id_seq = m.superseded_by "
+    "ORDER BY m.pod_id"
+)
+
+REVISION_EDGE = {
+    "a.pod_id": POD_DURI_REV1,
+    "b.pod_id": POD_DURI,
+    "r.valid_from": "2022-01-01",
+    "r.properties_json": (
+        '{"revision_effect": "full_replacement", "source": "m_pod.superseded_by"}'
+    ),
+}
+SUPERSEDE_EDGE = {
+    "a.pod_id": POD_DURI_REV1,
+    "b.pod_id": POD_DURI,
+    "r.valid_from": "2022-01-01",
+}
+PROTECTED_DOC = "DOC-PROTECTED"
+IMPORTED_NAME = "POD I Duri Revisi 1 (imported)"
+ORIGINAL_NAMES = [
+    (POD_DURI, "POD I Duri"),
+    (POD_KAMPUNG, "POD Kampung Baru"),
+    (POD_DURI_REV1, "POD I Duri Revisi 1"),
+]
+CHANGED_NAMES = [
+    (POD_DURI, "POD I Duri"),
+    (POD_KAMPUNG, "POD Kampung Baru"),
+    (POD_DURI_REV1, IMPORTED_NAME),
+]
 
 
 @pytest.fixture(autouse=True)
@@ -37,259 +91,238 @@ def _reset_instance_graph_singleton():
     InstanceGraphManager.reset_for_tests()
 
 
-def _seed_sqlite(sqlite_path: Path) -> None:
-    conn = get_sqlite_connection(sqlite_path)
-    conn.execute(
-        "INSERT INTO r_institution (code, institution) VALUES (2, 'SKK Migas')"
-    )
-    conn.execute("INSERT INTO r_pod_type (code, pod_type) VALUES (2, 'POD I')")
-    conn.executemany(
-        "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
-        " institution_code, pod_type_code, rev_num, approval_seq)"
-        " VALUES (?,?,?,?,?,2,2,?,?)",
-        [
-            (1, ORIG, "POD Duri", "SRT-2019/ORIG", "2019-05-01", 0, 1),
-            (2, AMEND, "POD Duri Revisi", "SRT-2020/AMEND", "2020-06-01", 1, 2),
-            (3, FINAL, "POD Duri Final", "SRT-2021/FINAL", "2021-07-01", 2, 3),
-        ],
-    )
-    conn.execute(
-        "INSERT INTO project_pod (pod_id, project_id) VALUES (1, ?)", [PROJECT]
-    )
-    conn.executemany(
-        "INSERT INTO pod_revision (successor_id, predecessor_id, revision_effect,"
-        " effective_date, amended_scope, previous_remains_valid)"
-        " VALUES (?,?,?,?,?,?)",
-        [
-            (AMEND, ORIG, "partial_amendment", "2020-06-01", "sec. 3", 1),
-            (FINAL, AMEND, "full_replacement", "2021-07-01", "whole pod", 0),
-        ],
-    )
-    conn.execute(
-        """
-        CREATE TABLE documents (
-            doc_id TEXT PRIMARY KEY, file_name TEXT, file_hash TEXT,
-            doc_type TEXT, doc_topic TEXT, doc_number TEXT, doc_date TEXT,
-            subject TEXT, wk_name TEXT, field_name TEXT, project_name TEXT,
-            pod_name TEXT, suggested_pod_ids TEXT, markdown TEXT,
-            raw_entities TEXT, metadata TEXT, ingested_at TEXT
-        )
-        """
-    )
-    conn.execute(
-        "INSERT INTO documents (doc_id, file_name, doc_type, doc_number,"
-        " doc_date, subject) VALUES (?, 'orig.pdf', 'letter', 'SRT-2019/ORIG',"
-        " '2019-05-01', 'Persetujuan POD Duri')",
-        [DOC],
-    )
-    conn.commit()
-    conn.close()
+def _read_truth(
+    conn: duckdb.DuckDBPyConnection | sqlite3.Connection,
+) -> list[TemporalRow]:
+    return [
+        (str(row[0]), int(bool(row[1])), None if row[2] is None else str(row[2]))
+        for row in conn.execute(TRUTH_QUERY).fetchall()
+    ]
 
 
-def _seed_duckdb(duckdb_path: Path) -> None:
-    dconn = duckdb.connect(str(duckdb_path))
-    dconn.execute(
-        "CREATE TABLE project_resources (project_id VARCHAR, project_name VARCHAR,"
-        " field_name VARCHAR, wk_name VARCHAR, report_year INTEGER,"
-        " project_remarks VARCHAR)"
-    )
-    dconn.execute(
-        "INSERT INTO project_resources VALUES (?, 'Duri Steamflood', 'Duri',"
-        " 'Rokan', 2024, NULL)",
-        [PROJECT],
-    )
-    dconn.close()
-
-
-def _replace_value_cases(sqlite_path: Path) -> None:
-    schema = load_schema_from_yaml(POD_SCHEMA_PATH)
-    plan_df = pd.DataFrame(
-        [
-            {
-                "pod_id": ORIG,
-                "report_date": "2019-04-20",
-                "as_of_date": "2019-12-31",
-                "pod_scope": "Development",
-                "lifting_oil": 1.0,
-            }
-        ]
-    )
-    monitoring_df = pd.DataFrame(
-        [
-            {
-                "pod_id": ORIG,
-                "case_type": "actual",
-                "report_date": "2020-02-15",
-                "as_of_date": "2019-12-31",
-                "lifting_oil": 1.1,
-            },
-            {
-                "pod_id": ORIG,
-                "case_type": "outlook",
-                "report_date": "2020-09-30",
-                "as_of_date": "2020-12-31",
-                "lifting_oil": 1.5,
-            },
-        ]
-    )
-    replace_pod_value_cases(sqlite_path, plan_df, monitoring_df, schema)
-
-
-def _link(sqlite_path: Path, duckdb_path: Path) -> None:
-    conn = get_sqlite_connection(sqlite_path)
-    dconn = duckdb.connect(str(duckdb_path))
+def _projection_truth(duck_path: Path) -> list[TemporalRow]:
+    conn = duckdb.connect(str(duck_path), read_only=True)
     try:
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-        run_deterministic_linking(conn, dconn, store)
+        return _read_truth(conn)
     finally:
-        dconn.close()
         conn.close()
 
 
-def _assert_sqlite(sqlite_path: Path) -> None:
-    conn = get_sqlite_connection(sqlite_path)
+def _projection_names(duck_path: Path) -> list[tuple[str, str]]:
+    conn = duckdb.connect(str(duck_path), read_only=True)
     try:
-        revisions = conn.execute(
-            "SELECT successor_id, predecessor_id, revision_effect,"
-            " effective_date, previous_remains_valid"
-            " FROM pod_revision ORDER BY predecessor_id"
-        ).fetchall()
-        assert [tuple(r) for r in revisions] == [
-            (AMEND, ORIG, "partial_amendment", "2020-06-01", 1),
-            (FINAL, AMEND, "full_replacement", "2021-07-01", 0),
-        ]
-        value_cases = conn.execute(
-            "SELECT pod_id, case_type, report_date, as_of_date"
-            " FROM pod_value_case ORDER BY case_type"
-        ).fetchall()
-        assert [tuple(r) for r in value_cases] == [
-            (ORIG, "actual", "2020-02-15", "2019-12-31"),
-            (ORIG, "outlook", "2020-09-30", "2020-12-31"),
-            (ORIG, "plan", "2019-04-20", "2019-12-31"),
-        ]
-        assert [
-            tuple(r)
-            for r in conn.execute(
-                "SELECT pod_id, project_id FROM project_pod"
+        return [
+            (str(row[0]), str(row[1]))
+            for row in conn.execute(
+                "SELECT pod_id, pod_name FROM m_pod ORDER BY pod_id"
             ).fetchall()
-        ] == [(1, PROJECT)]
-        assert [
-            tuple(r)
-            for r in conn.execute("SELECT pod_id, doc_id FROM pod_document").fetchall()
-        ] == [(1, DOC)]
+        ]
     finally:
         conn.close()
 
 
-def _assert_duckdb(duckdb_path: Path) -> None:
-    conn = duckdb.connect(str(duckdb_path), read_only=True)
+def _sqlite_names(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    return [
+        (str(row[0]), str(row[1]))
+        for row in conn.execute(
+            "SELECT pod_id, pod_name FROM m_pod ORDER BY pod_id"
+        ).fetchall()
+    ]
+
+
+def _raw_documents(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
+    """Raw document fields; derived suggestions are excluded on purpose.
+
+    Source reconciliation legitimately clears ``suggested_pod_ids``, so comparing the
+    raw fields is what proves the protected row itself is untouched.
+    """
+    columns = [str(row[1]) for row in conn.execute("PRAGMA table_info(documents)")]
+    columns.remove("suggested_pod_ids")
+    selected = ", ".join(f'"{name}"' for name in columns)
+    rows = conn.execute(f"SELECT {selected} FROM documents ORDER BY doc_id").fetchall()
+    return [tuple(row) for row in rows]
+
+
+def _protected_links(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
+    rows = conn.execute("SELECT * FROM pod_document ORDER BY doc_id").fetchall()
+    return [tuple(row) for row in rows]
+
+
+def _ledger_reservations(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
+    rows = conn.execute(
+        "SELECT pod_id_seq, pod_id, pod_uuid FROM _pod_identity_ledger ORDER BY pod_id_seq"
+    ).fetchall()
+    return [tuple(row) for row in rows]
+
+
+def _source_generation(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT source_generation FROM pod_registry_state").fetchone()
+    return int(row[0])
+
+
+def _graph_answers(mgr: InstanceGraphManager) -> Answer:
+    return {
+        "temporal_edges": mgr.query(
+            "MATCH (a:POD)-[r:REVISES]->(b:POD) "
+            "RETURN a.pod_id, b.pod_id, r.valid_from, r.properties_json "
+            "ORDER BY b.pod_id"
+        ),
+        "supersede_edges": mgr.query(
+            "MATCH (a:POD)-[r:SUPERSEDES]->(b:POD) "
+            "RETURN a.pod_id, b.pod_id, r.valid_from ORDER BY b.pod_id"
+        ),
+        "document_links": mgr.query(
+            "MATCH (d:Document)-[:ABOUT_POD]->(p:POD) "
+            "RETURN d.doc_id, p.pod_id ORDER BY d.doc_id"
+        ),
+        "project_links": mgr.query(
+            "MATCH (a:POD)-[:HAS_PROJECT]->(b:Project) "
+            "RETURN a.pod_id, b.project_id ORDER BY a.pod_id"
+        ),
+        "pod_names": mgr.query(
+            "MATCH (p:POD) RETURN p.pod_id, p.pod_name ORDER BY p.pod_id"
+        ),
+    }
+
+
+def _pod_names(answers: Answer) -> list[tuple[str, str]]:
+    return [(row["p.pod_id"], row["p.pod_name"]) for row in answers["pod_names"]]
+
+
+def _rebuild(conn: sqlite3.Connection, duck_path: Path) -> None:
+    """Real deterministic rebuild, then the knowledge current boundary."""
+    # ``allow_stale`` only lets the writer run while the source has moved ahead of the
+    # stored marker; no consumer may read a graph over stale knowledge.
+    store = KnowledgeStore(conn, allow_stale=True)
+    store.ensure_tables()
+    duck = duckdb.connect(str(duck_path), read_only=True)
     try:
-        registry = conn.execute(
-            "SELECT pod_id, pod_name, preceded_by, revised_by, superseded_by"
-            " FROM pod_registry ORDER BY pod_id"
-        ).fetchall()
-        assert registry == [
-            (ORIG, "POD Duri", None, AMEND, None),
-            (AMEND, "POD Duri Revisi", ORIG, FINAL, FINAL),
-            (FINAL, "POD Duri Final", AMEND, None, None),
-        ]
-        project = conn.execute("SELECT pod_id, project_id FROM pod_project").fetchall()
-        assert project == [(ORIG, PROJECT)]
-        docs = conn.execute("SELECT pod_id, doc_id FROM pod_document").fetchall()
-        assert docs == [(ORIG, DOC)]
-        value_cases = conn.execute(
-            "SELECT pod_id, case_type, CAST(report_date AS VARCHAR),"
-            " CAST(as_of_date AS VARCHAR)"
-            " FROM pod_value_case ORDER BY case_type"
-        ).fetchall()
-        assert value_cases == [
-            (ORIG, "actual", "2020-02-15", "2019-12-31"),
-            (ORIG, "outlook", "2020-09-30", "2020-12-31"),
-            (ORIG, "plan", "2019-04-20", "2019-12-31"),
-        ]
-        economics = conn.execute(
-            "SELECT case_type, pod_name, lifting_oil,"
-            " CAST(as_of_date AS VARCHAR)"
-            " FROM pod_economics ORDER BY case_type"
-        ).fetchall()
-        assert economics == [
-            ("actual", "POD Duri", 1.1, "2019-12-31"),
-            ("outlook", "POD Duri", 1.5, "2020-12-31"),
-            ("plan", "POD Duri", 1.0, "2019-12-31"),
-        ]
+        run_deterministic_linking(conn, duck, store)
     finally:
-        conn.close()
+        duck.close()
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    assert mark_knowledge_current(conn, compute_knowledge_basis(conn))
+    conn.commit()
 
 
-def _revision_edges(mgr: InstanceGraphManager):
-    return mgr.query(
-        "MATCH (a:POD)-[r:REVISES]->(b:POD) "
-        "RETURN a.pod_id, b.pod_id, r.valid_from"
-        " ORDER BY b.pod_id, a.pod_id"
-    )
-
-
-def _supersede_edges(mgr: InstanceGraphManager):
-    return mgr.query(
-        "MATCH (a:POD)-[r:SUPERSEDES]->(b:POD) "
-        "RETURN a.pod_id, b.pod_id, r.valid_from"
-        " ORDER BY b.pod_id, a.pod_id"
-    )
-
-
-def _assert_graph(mgr: InstanceGraphManager) -> None:
-    assert _revision_edges(mgr) == [
-        {"a.pod_id": AMEND, "b.pod_id": ORIG, "r.valid_from": "2020-06-01"},
-        {"a.pod_id": FINAL, "b.pod_id": AMEND, "r.valid_from": "2021-07-01"},
-    ]
-    assert _supersede_edges(mgr) == [
-        {"a.pod_id": FINAL, "b.pod_id": AMEND, "r.valid_from": "2021-07-01"},
-    ]
-    props = mgr.query(
-        "MATCH (a:POD)-[r:SUPERSEDES]->(b:POD) "
-        "RETURN r.properties_json ORDER BY b.pod_id"
-    )
-    assert props == [
-        {
-            "r.properties_json": (
-                '{"amended_scope": "whole pod", "previous_remains_valid": false,'
-                ' "revision_effect": "full_replacement"}'
-            )
-        }
-    ]
-    assert mgr.query(
-        "MATCH (a:POD)-[:HAS_PROJECT]->(b:Project) "
-        "RETURN a.pod_id, b.project_id ORDER BY a.pod_id"
-    ) == [{"a.pod_id": ORIG, "b.project_id": PROJECT}]
-    assert mgr.query(
-        "MATCH (d:Document)-[:ABOUT_POD]->(p:POD) "
-        "RETURN d.doc_id, p.pod_id ORDER BY d.doc_id"
-    ) == [{"d.doc_id": DOC, "p.pod_id": ORIG}]
-
-
-def test_sqlite_truth_matches_duckdb_and_ladybug(tmp_path: Path) -> None:
+def test_current_replacement_preserves_the_protected_bridge_in_every_consumer(
+    sqlite_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
     sqlite_path = tmp_path / "esdc.sqlite"
-    duckdb_path = tmp_path / "esdc.duckdb"
-    _seed_sqlite(sqlite_path)
-    _seed_duckdb(duckdb_path)
-    _replace_value_cases(sqlite_path)
-    _link(sqlite_path, duckdb_path)
+    duck_path = tmp_path / "esdc.duckdb"
 
-    _assert_sqlite(sqlite_path)
+    assert _read_truth(sqlite_conn) == TEMPORAL_TRUTH
 
-    publish_pod_registry(sqlite_path=sqlite_path, db_path=duckdb_path)
-    _assert_duckdb(duckdb_path)
+    current_seq = int(
+        sqlite_conn.execute(
+            "SELECT pod_id_seq FROM m_pod WHERE pod_id = ?", (POD_DURI_REV1,)
+        ).fetchone()[0]
+    )
+    sqlite_conn.execute(
+        "INSERT INTO documents (doc_id, file_name, file_hash, doc_type, doc_topic, "
+        "markdown) VALUES (?, 'protected.pdf', 'hash-protected', 'letter', "
+        "'[\"pod\"]', '# Keep')",
+        (PROTECTED_DOC,),
+    )
+    sqlite_conn.execute(
+        "INSERT INTO pod_document (pod_id_seq, doc_id) VALUES (?, ?)",
+        (current_seq, PROTECTED_DOC),
+    )
+    sqlite_conn.commit()
 
-    mgr = InstanceGraphManager(sqlite_path=sqlite_path, duckdb_path=duckdb_path)
-    _assert_graph(mgr)
+    publish_v2_registry(sqlite_path, duck_path)
+    _rebuild(sqlite_conn, duck_path)
 
-    # Tear down both projections and rebuild from the same SQLite truth.
-    duckdb_path.unlink()
-    publish_pod_registry(sqlite_path=sqlite_path, db_path=duckdb_path)
-    _assert_duckdb(duckdb_path)
+    raw_before = _raw_documents(sqlite_conn)
+    links_before = _protected_links(sqlite_conn)
+    reservations_before = _ledger_reservations(sqlite_conn)
+    generation_before = _source_generation(sqlite_conn)
 
-    mgr.close()
-    InstanceGraphManager.reset_for_tests()
-    rebuilt = InstanceGraphManager(sqlite_path=sqlite_path, duckdb_path=duckdb_path)
-    _assert_graph(rebuilt)
+    assert _projection_truth(duck_path) == TEMPORAL_TRUTH
+
+    mgr = InstanceGraphManager(sqlite_path=sqlite_path)
+    try:
+        assert mgr.is_available()
+        before = _graph_answers(mgr)
+        assert before["temporal_edges"] == [REVISION_EDGE]
+        assert before["supersede_edges"] == [SUPERSEDE_EDGE]
+        # The exact letter match and the verified bridge both resolve the current POD.
+        assert before["document_links"] == [
+            {"d.doc_id": "DOC-A", "p.pod_id": POD_DURI_REV1},
+            {"d.doc_id": PROTECTED_DOC, "p.pod_id": POD_DURI_REV1},
+        ]
+        assert before["project_links"] == [
+            {"a.pod_id": POD_DURI, "b.project_id": PROJECT_DURI},
+            {"a.pod_id": POD_KAMPUNG, "b.project_id": PROJECT_KAMPUNG},
+            {"a.pod_id": POD_DURI_REV1, "b.project_id": PROJECT_DURI},
+        ]
+        assert _pod_names(before) == ORIGINAL_NAMES
+
+        # Real current-path replacement: same identities, changed master name and
+        # changed project relation, through the public prepare/apply/publish path.
+        contract = load_pod_contract()
+        template = generate_pod_workbook_template(
+            output_path=tmp_path / "incoming.xlsx"
+        )
+        incoming = template.output_path
+        workbook = load_workbook(incoming)
+        try:
+            for table in INPUT_TABLES:
+                columns = [column.name for column in contract.tables[table].columns]
+                quoted = ", ".join(f'"{name}"' for name in columns)
+                sheet = workbook[table]
+                has_seq = "pod_id_seq" in columns
+                for row in sqlite_conn.execute(f'SELECT {quoted} FROM "{table}"'):
+                    values = list(row)
+                    if has_seq and values[columns.index("pod_id_seq")] == current_seq:
+                        if table == "m_pod":
+                            values[columns.index("pod_name")] = IMPORTED_NAME
+                        elif table == "pod_project":
+                            values[columns.index("project_id")] = PROJECT_KAMPUNG
+                    sheet.append(values)
+            workbook.save(incoming)
+        finally:
+            workbook.close()
+
+        batch = prepare_pod_import(
+            incoming, "xlsx", contract, target_path=sqlite_path, stage_snapshots=False
+        )
+        load_prepared_pod_batch(
+            batch, sqlite_path=sqlite_path, duck_path=duck_path, actor=ACTOR
+        )
+
+        # Exactly one source generation advance, with the protected state intact.
+        assert _source_generation(sqlite_conn) == generation_before + 1
+        assert _raw_documents(sqlite_conn) == raw_before
+        assert _protected_links(sqlite_conn) == links_before
+        assert _ledger_reservations(sqlite_conn) == reservations_before
+        assert _projection_truth(duck_path) == TEMPORAL_TRUTH
+        # The replacement really applied on the source, not only in a projection.
+        assert _sqlite_names(sqlite_conn) == CHANGED_NAMES
+
+        # The same manager must refuse the now-stale knowledge rather than serve the
+        # graph it had already built.
+        assert not mgr.is_available()
+
+        _rebuild(sqlite_conn, duck_path)
+        assert mgr.is_available()
+        after = _graph_answers(mgr)
+        assert after["temporal_edges"] == before["temporal_edges"]
+        assert after["supersede_edges"] == before["supersede_edges"]
+        assert after["document_links"] == before["document_links"]
+        assert _pod_names(after) == CHANGED_NAMES
+        assert after["project_links"] == [
+            {"a.pod_id": POD_DURI, "b.project_id": PROJECT_DURI},
+            {"a.pod_id": POD_KAMPUNG, "b.project_id": PROJECT_KAMPUNG},
+            {"a.pod_id": POD_DURI_REV1, "b.project_id": PROJECT_KAMPUNG},
+        ]
+        graph_names = _pod_names(after)
+    finally:
+        mgr.close()
+
+    # Rebuild the projection from the same source with no live handle, and check the
+    # captured graph answers still agree with it.
+    publish_v2_registry(sqlite_path, duck_path)
+    assert _projection_truth(duck_path) == TEMPORAL_TRUTH
+    assert _projection_names(duck_path) == graph_names == CHANGED_NAMES

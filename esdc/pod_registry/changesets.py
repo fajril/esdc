@@ -1,36 +1,40 @@
-"""Validate-then-apply changesets against the POD registry SQLite db."""
+"""Controlled current-contract portal edits over the canonical POD source."""
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
-from esdc.pod_registry.store import (
-    allocate_pod_id,
-    get_sqlite_connection,
-    validate_revision_effect,
+from esdc.pod_registry.api_context import (
+    PodImportError,
+    read_pod_api_context,
+    read_source_identity_ledger_rows,
+    target_protected_state_digest,
 )
+from esdc.pod_registry.contract import (
+    ColumnContract,
+    load_pod_contract,
+    validate_pod_batch,
+)
+from esdc.pod_registry.identity import (
+    issue_identity,
+    next_available_daily_slot,
+    resolve_revision_number,
+)
+from esdc.pod_registry.identity_key import ApprovalKey
+from esdc.pod_registry.migrations import _atomic_writer, open_registry_v2_writer
+from esdc.pod_registry.models import PreparedPodBatch, PreparedScalar
+from esdc.pod_registry.normalization import normalize_pod_value
+from esdc.pod_registry.read_models import refresh_pod_after_source_change
+from esdc.pod_registry.sqlite_import import INPUT_TABLES, apply_pod_batch_in_transaction
+from esdc.pod_registry.store import get_esdc_sqlite_path
 
-_TABLES = (
-    "m_pod",
-    "project_pod",
-    "pod_document",
-    "pod_revision",
-    "r_institution",
-    "r_pod_type",
-)
-_M_POD_REQUIRED = (
-    "id",
-    "pod_name",
-    "approval_date",
-    "institution_code",
-    "pod_type_code",
-    "rev_num",
-)
-_M_POD_UPDATABLE = {"pod_name", "pod_letter_num"}
-_M_POD_OPTIONAL = {"pod_letter_num"}
+_ACTOR = "FA:portal"
+_IDENTITY = frozenset({"approval_date", "institution_id", "pod_type_id", "rev_num"})
 
 
 @dataclass
@@ -38,6 +42,7 @@ class RowError:
     kind: str
     index: int
     message: str
+    field: str | None = None
 
 
 @dataclass
@@ -46,774 +51,484 @@ class ChangesetResult:
     applied: dict[str, int] = field(default_factory=dict)
     generated: list[dict] = field(default_factory=list)
     errors: list[RowError] = field(default_factory=list)
-    # Non-fatal issues that didn't block the SQLite commit (e.g. a DuckDB
-    # mirror write failure in document_entities.py) — surfaced to callers,
-    # never cause ok=False on their own.
     warnings: list[str] = field(default_factory=list)
+    source_generation: int | None = None
+    source_committed: bool = False
+    conflict: bool = False
 
 
-def apply_changeset(
-    table: str,
-    changes: dict,
-    sqlite_path: Path | None = None,
-    known_project_ids: set[str] | None = None,
-) -> ChangesetResult:
-    if table not in _TABLES:
-        raise ValueError(f"unknown table: {table}")
-    inserts = changes.get("inserts") or []
-    updates = changes.get("updates") or []
-    deletes = changes.get("deletes") or []
+class _RejectedError(ValueError):
+    def __init__(
+        self,
+        kind: str,
+        index: int,
+        message: str,
+        column: str | None = None,
+        *,
+        errors: list[RowError] | None = None,
+    ):
+        super().__init__(message)
+        self.errors = errors or [RowError(kind, index, message, column)]
+        self.issue = self.errors[0]
 
-    conn = get_sqlite_connection(sqlite_path)
-    try:
-        errors = _validate(conn, table, inserts, updates, deletes, known_project_ids)
-        if errors:
-            return ChangesetResult(ok=False, errors=errors)
-        generated: list[dict] = []
-        try:
-            with conn:
-                _apply_deletes(conn, table, deletes)
-                _apply_updates(conn, table, updates)
-                generated = _apply_inserts(conn, table, inserts)
-        except sqlite3.IntegrityError as exc:
-            # Second line of defense: the with-block above has already rolled
-            # back, so map the constraint violation to a row error.
-            return ChangesetResult(
-                ok=False,
-                errors=[RowError("apply", -1, f"constraint violation: {exc}")],
-            )
-        return ChangesetResult(
-            ok=True,
-            applied={
-                "inserts": len(inserts),
-                "updates": len(updates),
-                "deletes": len(deletes),
-            },
-            generated=generated,
+
+def _value(value: object, column: ColumnContract) -> PreparedScalar:
+    # Form editors return text; imports keep their own stricter source adapters.
+    if isinstance(value, str):
+        if column.logical_type == "integer":
+            if not re.fullmatch(r"[+-]?[0-9]+", value):
+                raise ValueError(f"{column.name} must be an integer")
+            value = int(value)
+        elif column.logical_type == "boolean":
+            if value not in {"true", "false", "0", "1"}:
+                raise ValueError(f"{column.name} must be true, false, 0, or 1")
+            value = value in {"true", "1"}
+    return normalize_pod_value(value, column, source="api")
+
+
+def _audit(row: dict[str, PreparedScalar], *, created: bool) -> None:
+    now = datetime.now(timezone.utc)
+    for key, value in (("updated_at", now), ("updated_by", _ACTOR)):
+        if key in row:
+            row[key] = value
+    if created:
+        for key, value in (("created_at", now), ("created_by", _ACTOR)):
+            if key in row:
+                row[key] = value
+
+
+def _shape(changes: dict) -> tuple[int, dict[str, list[dict]]]:
+    if not isinstance(changes, dict) or set(changes) - {
+        "source_generation",
+        "inserts",
+        "updates",
+        "deletes",
+    }:
+        raise _RejectedError("batch", -1, "Unknown changeset fields")
+    generation = changes.get("source_generation")
+    if (
+        isinstance(generation, bool)
+        or not isinstance(generation, int)
+        or generation < 0
+    ):
+        raise _RejectedError(
+            "batch", -1, "A current source_generation is required; reload the table"
         )
-    finally:
-        conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Validation dispatch
-# ---------------------------------------------------------------------------
-
-
-def _validate(
-    conn: sqlite3.Connection,
-    table: str,
-    inserts: list[dict],
-    updates: list[dict],
-    deletes: list[dict],
-    known_project_ids: set[str] | None,
-) -> list[RowError]:
-    if table == "m_pod":
-        return _validate_m_pod(conn, inserts, updates, deletes)
-    if table == "project_pod":
-        return _validate_project_pod(conn, inserts, updates, deletes, known_project_ids)
-    if table == "pod_document":
-        return _validate_pod_document(conn, inserts, updates, deletes)
-    if table == "pod_revision":
-        return _validate_pod_revision(conn, inserts, updates, deletes)
-    if table in ("r_institution", "r_pod_type"):
-        return _validate_r_table(conn, table, inserts, updates, deletes)
-    raise ValueError(f"unknown table: {table}")
-
-
-# ---------------------------------------------------------------------------
-# m_pod
-# ---------------------------------------------------------------------------
-
-
-def _validate_m_pod(
-    conn: sqlite3.Connection,
-    inserts: list[dict],
-    updates: list[dict],
-    deletes: list[dict],
-) -> list[RowError]:
-    errors: list[RowError] = []
-    seen_ids_in_changeset: set[int] = set()
-
-    for i, row in enumerate(inserts):
-        missing = [k for k in _M_POD_REQUIRED if k not in row]
-        if missing:
-            errors.append(
-                RowError(
-                    "insert", i, f"missing required field(s): {', '.join(missing)}"
-                )
-            )
-            continue
-        extra = set(row.keys()) - set(_M_POD_REQUIRED) - _M_POD_OPTIONAL
-        if extra:
-            errors.append(
-                RowError("insert", i, f"unknown field(s): {', '.join(sorted(extra))}")
-            )
-
-        row_id = row["id"]
-        if not isinstance(row_id, int):
-            errors.append(RowError("insert", i, "id must be an integer"))
-        else:
-            if row_id in seen_ids_in_changeset:
-                errors.append(
-                    RowError("insert", i, f"duplicate id {row_id} within changeset")
-                )
-            seen_ids_in_changeset.add(row_id)
-            existing = conn.execute(
-                "SELECT 1 FROM m_pod WHERE id = ?", (row_id,)
-            ).fetchone()
-            if existing is not None:
-                errors.append(RowError("insert", i, f"id {row_id} already exists"))
-
-        inst_code = row.get("institution_code")
-        if (
-            conn.execute(
-                "SELECT 1 FROM r_institution WHERE code = ?", (inst_code,)
-            ).fetchone()
-            is None
+    groups = {}
+    for kind in ("inserts", "updates", "deletes"):
+        group = changes.get(kind, [])
+        if not isinstance(group, list) or any(
+            not isinstance(row, dict) for row in group
         ):
-            errors.append(
-                RowError("insert", i, f"institution_code {inst_code} does not exist")
-            )
-
-        type_code = row.get("pod_type_code")
-        if (
-            conn.execute(
-                "SELECT 1 FROM r_pod_type WHERE code = ?", (type_code,)
-            ).fetchone()
-            is None
-        ):
-            errors.append(
-                RowError("insert", i, f"pod_type_code {type_code} does not exist")
-            )
-
-        rev_num = row.get("rev_num")
-        if not isinstance(rev_num, int) or isinstance(rev_num, bool) or rev_num < 0:
-            errors.append(RowError("insert", i, "rev_num must be an integer >= 0"))
-
-        approval_date = row.get("approval_date")
-        try:
-            date.fromisoformat(str(approval_date))
-        except (ValueError, TypeError):
-            errors.append(
-                RowError(
-                    "insert",
-                    i,
-                    f"approval_date {approval_date!r} is not a valid ISO date",
-                )
-            )
-
-    for i, row in enumerate(updates):
-        if "id" not in row:
-            errors.append(RowError("update", i, "missing required field: id"))
-            continue
-        row_id = row["id"]
-        existing = conn.execute(
-            "SELECT 1 FROM m_pod WHERE id = ?", (row_id,)
-        ).fetchone()
-        if existing is None:
-            errors.append(RowError("update", i, f"id {row_id} does not exist"))
-            continue
-        extra = set(row.keys()) - {"id"} - _M_POD_UPDATABLE
-        if extra:
-            errors.append(
-                RowError(
-                    "update",
-                    i,
-                    "structural fields are locked once pod_id is issued: "
-                    f"{', '.join(sorted(extra))}",
-                )
-            )
-
-    for i, row in enumerate(deletes):
-        if "id" not in row:
-            errors.append(RowError("delete", i, "missing required field: id"))
-            continue
-        row_id = row["id"]
-        existing = conn.execute(
-            "SELECT 1 FROM m_pod WHERE id = ?", (row_id,)
-        ).fetchone()
-        if existing is None:
-            errors.append(RowError("delete", i, f"id {row_id} does not exist"))
-            continue
-        ref_count = conn.execute(
-            "SELECT COUNT(*) FROM project_pod WHERE pod_id = ?", (row_id,)
-        ).fetchone()[0]
-        if ref_count:
-            errors.append(
-                RowError("delete", i, f"id {row_id} is referenced by project_pod")
-            )
-            continue
-        doc_count = conn.execute(
-            "SELECT COUNT(*) FROM pod_document WHERE pod_id = ?", (row_id,)
-        ).fetchone()[0]
-        if doc_count:
-            errors.append(
-                RowError("delete", i, f"id {row_id} is referenced by pod_document")
-            )
-            continue
-        pod_id_row = conn.execute(
-            "SELECT pod_id FROM m_pod WHERE id = ?", (row_id,)
-        ).fetchone()
-        pod_id = pod_id_row[0] if pod_id_row else None
-        if pod_id is not None:
-            rev_count = conn.execute(
-                "SELECT COUNT(*) FROM pod_revision"
-                " WHERE successor_id = ? OR predecessor_id = ?",
-                (pod_id, pod_id),
-            ).fetchone()[0]
-            if rev_count:
-                errors.append(
-                    RowError("delete", i, f"id {row_id} is referenced by pod_revision")
-                )
-
-    return errors
+            raise _RejectedError("batch", -1, f"{kind} must be an array of row objects")
+        groups[kind] = group
+    if sum(map(len, groups.values())) > 500:
+        raise _RejectedError("batch", -1, "Save at most 500 changed rows at once")
+    return generation, groups
 
 
-def _apply_inserts(
-    conn: sqlite3.Connection, table: str, inserts: list[dict]
-) -> list[dict]:
+def _new_row(
+    conn: sqlite3.Connection, table: str, frame: dict, supplied: dict
+) -> dict[str, PreparedScalar]:
+    contract = load_pod_contract().tables[table]
+    result: dict[str, PreparedScalar] = {
+        column.name: None for column in contract.columns
+    }
+    result.update(supplied)
+    for column in contract.columns:
+        if column.logical_type == "uuid":
+            result[column.name] = uuid4()
     if table == "m_pod":
-        return _apply_m_pod_inserts(conn, inserts)
-    if table == "project_pod":
-        for row in inserts:
-            conn.execute(
-                "INSERT INTO project_pod (pod_id, project_id) VALUES (?, ?)",
-                (row["pod_id"], row["project_id"]),
-            )
-        return []
-    if table == "pod_document":
-        for row in inserts:
-            conn.execute(
-                "INSERT INTO pod_document (pod_id, doc_id) VALUES (?, ?)",
-                (row["pod_id"], row["doc_id"]),
-            )
-        return []
-    if table == "pod_revision":
-        for row in inserts:
-            # Validation has already normalized previous_remains_valid, so the
-            # shared helper cannot raise here; map bool back to 1/0 for storage.
-            prev = _previous_remains_valid(row.get("previous_remains_valid"))
-            conn.execute(
-                "INSERT INTO pod_revision (successor_id, predecessor_id,"
-                " revision_effect, effective_date, amended_scope,"
-                " previous_remains_valid) VALUES (?,?,?,?,?,?)",
-                (
-                    row["successor_id"],
-                    row["predecessor_id"],
-                    row.get("revision_effect", "unknown"),
-                    row.get("effective_date"),
-                    row.get("amended_scope"),
-                    None if prev is None else (1 if prev else 0),
-                ),
-            )
-        return []
-    if table in ("r_institution", "r_pod_type"):
-        col = "institution" if table == "r_institution" else "pod_type"
-        for row in inserts:
-            conn.execute(
-                f"INSERT INTO {table} (code, {col}, description) VALUES (?, ?, ?)",
-                (row["code"], row["name"], row.get("description")),
-            )
-        return []
-    return []
-
-
-def _apply_m_pod_inserts(conn: sqlite3.Connection, inserts: list[dict]) -> list[dict]:
-    generated: list[dict] = []
-    for i, row in enumerate(inserts):
-        pod_id, approval_seq = allocate_pod_id(
+        predecessors = supplied.pop("predecessors", [])
+        result.pop("predecessors", None)
+        if not isinstance(predecessors, list):
+            raise ValueError("predecessors must be an array of POD sequence integers")
+        sequence_column = load_pod_contract().tables["m_pod"].columns[0]
+        predecessors = [_value(value, sequence_column) for value in predecessors]
+        if any(not isinstance(pk, int) for pk in predecessors):
+            raise ValueError("predecessor POD sequences must be integers")
+        if len(set(predecessors)) != len(predecessors):
+            raise ValueError("predecessors contains duplicate PODs")
+        prior = {row["pod_id_seq"]: row for row in frame["m_pod"]}
+        if any(pk not in prior for pk in predecessors):
+            raise ValueError("a predecessor POD does not exist")
+        if any(prior[pk]["superseded_by"] is not None for pk in predecessors):
+            raise ValueError("a predecessor is already superseded")
+        revision = resolve_revision_number(
+            [int(str(prior[pk]["rev_num"])) for pk in predecessors],
+            explicit_rev_num=supplied.get("rev_num"),
+            pod_name=supplied.get("pod_name"),
+        )
+        approved = supplied.get("approval_date")
+        if not isinstance(approved, date) or isinstance(approved, datetime):
+            raise ValueError("approval_date is required as an ISO calendar date")
+        institution = supplied.get("institution_id")
+        pod_type = supplied.get("pod_type_id")
+        if isinstance(institution, bool) or not isinstance(institution, int):
+            raise ValueError("institution_id is required as an integer")
+        if isinstance(pod_type, bool) or not isinstance(pod_type, int):
+            raise ValueError("pod_type_id is required as an integer")
+        issued = issue_identity(
             conn,
-            row["approval_date"],
-            row["institution_code"],
-            row["pod_type_code"],
-            row["rev_num"],
-        )
-        conn.execute(
-            "INSERT INTO m_pod (id, pod_id, pod_name, pod_letter_num, approval_date,"
-            " institution_code, pod_type_code, rev_num, approval_seq)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                row["id"],
-                pod_id,
-                row["pod_name"],
-                row.get("pod_letter_num"),
-                row["approval_date"],
-                row["institution_code"],
-                row["pod_type_code"],
-                row["rev_num"],
-                approval_seq,
+            key=ApprovalKey(
+                approved,
+                next_available_daily_slot(conn, approved),
+                institution,
+                pod_type,
+                revision,
             ),
+            actor=_ACTOR,
         )
-        generated.append(
-            {
-                "index": i,
-                "id": row["id"],
-                "pod_id": pod_id,
-                "approval_seq": approval_seq,
-            }
+        result.update(
+            pod_id_seq=issued.pod_id_seq,
+            pod_uuid=issued.pod_uuid,
+            approval_date=approved,
+            pod_order_no=issued.pod_order_no,
+            pod_id=issued.pod_id,
+            rev_num=revision,
         )
+        for pk in predecessors:
+            prior[pk].update(superseded_by=issued.pod_id_seq, is_latest=False)
+            _audit(prior[pk], created=False)
+    elif table != "m_project":
+        pk = contract.primary_key[0]
+        sequence = conn.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name=?", (table,)
+        ).fetchone()
+        result[pk] = (
+            max(
+                [int(sequence[0]) if sequence else 0]
+                + [int(str(row[pk])) for row in frame[table]]
+            )
+            + 1
+        )
+    if table == "pod_project":
+        result["is_auto_inferred"] = False
+    if table == "pod_monitoring":
+        master = next(
+            (
+                row
+                for row in frame["m_pod"]
+                if row["pod_id_seq"] == result["pod_id_seq"]
+            ),
+            None,
+        )
+        result["pod_id"] = None if master is None else master["pod_id"]
+        result["is_completed"] = False
+    _audit(result, created=True)
+    return result
+
+
+def _edit_inputs(
+    conn: sqlite3.Connection,
+    table: str,
+    frame: dict,
+    groups: dict,
+    affected: dict[tuple, tuple[str, int]],
+) -> list[dict]:
+    spec = load_pod_contract().tables[table]
+    columns = {col.name: col for col in spec.columns}
+    keys = spec.primary_key
+    targets = {tuple(row[key] for key in keys): row for row in frame[table]}
+    seen: set[tuple] = set()
+    generated = []
+    for operation in ("deletes", "updates", "inserts"):
+        for index, raw in enumerate(groups[operation]):
+            try:
+                special = (
+                    {"predecessors"}
+                    if table == "m_pod" and operation == "inserts"
+                    else set()
+                )
+                allowed = (
+                    set(keys)
+                    if operation == "deletes"
+                    else {c.name for c in spec.columns if c.ownership == "input"}
+                    | set(keys)
+                    | special
+                )
+                if set(raw) - allowed:
+                    raise ValueError(
+                        "Unknown or read-only fields: "
+                        + ", ".join(sorted(set(raw) - allowed))
+                    )
+                key: tuple[PreparedScalar, ...] = ()
+                if operation != "inserts":
+                    if set(keys) - set(raw):
+                        raise ValueError("All primary-key fields are required")
+                    key = tuple(_value(raw[name], columns[name]) for name in keys)
+                    if key in seen or key not in targets:
+                        raise ValueError(
+                            "Row is missing or changed more than once in this save"
+                        )
+                    seen.add(key)
+                else:
+                    generated_keys = {
+                        name for name in keys if columns[name].ownership != "input"
+                    }
+                    if generated_keys & set(raw):
+                        raise ValueError("Primary keys are assigned by the server")
+                if operation == "deletes":
+                    del targets[key]
+                    frame[table].remove(
+                        next(
+                            row
+                            for row in frame[table]
+                            if tuple(row[k] for k in keys) == key
+                        )
+                    )
+                    continue
+                mutable = {}
+                for name, value in raw.items():
+                    if name in special:
+                        mutable[name] = value
+                    elif operation == "updates" and name in keys:
+                        continue
+                    elif (
+                        operation == "updates"
+                        and table == "m_pod"
+                        and name in _IDENTITY
+                    ):
+                        raise ValueError(
+                            f"Issued identity component {name} cannot be edited"
+                        )
+                    else:
+                        mutable[name] = _value(value, columns[name])
+                if operation == "updates":
+                    row = targets[key]
+                    if "pod_name" in mutable and table == "m_pod":
+                        resolve_revision_number(
+                            [],
+                            explicit_rev_num=row["rev_num"],
+                            pod_name=mutable["pod_name"],
+                        )
+                    row.update(mutable)
+                    _audit(row, created=False)
+                else:
+                    row = _new_row(conn, table, frame, mutable)
+                    key = tuple(row[k] for k in keys)
+                    if key in targets or key in seen:
+                        raise ValueError(
+                            "Duplicate primary key in the final input state"
+                        )
+                    seen.add(key)
+                    targets[key] = row
+                    frame[table].append(row)
+                    generated.append(
+                        {
+                            name: str(value)
+                            if name.endswith("uuid")
+                            or (isinstance(value, int) and abs(value) > 2**53 - 1)
+                            else value
+                            for name, value in row.items()
+                            if name in keys or name in {"pod_id", "pod_uuid"}
+                        }
+                    )
+                affected[key] = (operation.removesuffix("s"), index)
+            except (ValueError, TypeError) as exc:
+                raise _RejectedError(
+                    operation.removesuffix("s"), index, str(exc)
+                ) from exc
+    for row in frame["m_pod"]:
+        row["is_latest"] = row["superseded_by"] is None
+    pod_ids = {row["pod_id_seq"]: row["pod_id"] for row in frame["m_pod"]}
+    for row in frame["pod_monitoring"]:
+        row["pod_id"] = pod_ids.get(row["pod_id_seq"])
     return generated
 
 
-def _apply_updates(conn: sqlite3.Connection, table: str, updates: list[dict]) -> None:
-    if table == "m_pod":
-        for row in updates:
-            fields = {k: v for k, v in row.items() if k != "id"}
-            if not fields:
-                continue
-            set_clause = ", ".join(f"{k} = ?" for k in fields)
-            conn.execute(
-                f"UPDATE m_pod SET {set_clause} WHERE id = ?",
-                (*fields.values(), row["id"]),
-            )
-    elif table in ("r_institution", "r_pod_type"):
-        col = "institution" if table == "r_institution" else "pod_type"
-        for row in updates:
-            fields = {}
-            if "name" in row:
-                fields[col] = row["name"]
-            if "description" in row:
-                fields["description"] = row["description"]
-            if not fields:
-                continue
-            set_clause = ", ".join(f"{k} = ?" for k in fields)
-            conn.execute(
-                f"UPDATE {table} SET {set_clause} WHERE code = ?",
-                (*fields.values(), row["code"]),
-            )
-    # project_pod and pod_revision have no updates (validated to be empty).
-
-
-def _apply_deletes(conn: sqlite3.Connection, table: str, deletes: list[dict]) -> None:
-    if table == "m_pod":
-        for row in deletes:
-            conn.execute("DELETE FROM m_pod WHERE id = ?", (row["id"],))
-    elif table == "project_pod":
-        for row in deletes:
-            conn.execute(
-                "DELETE FROM project_pod WHERE pod_id = ? AND project_id = ?",
-                (row["pod_id"], row["project_id"]),
-            )
-    elif table == "pod_document":
-        for row in deletes:
-            conn.execute(
-                "DELETE FROM pod_document WHERE pod_id = ? AND doc_id = ?",
-                (row["pod_id"], row["doc_id"]),
-            )
-    elif table == "pod_revision":
-        for row in deletes:
-            conn.execute(
-                "DELETE FROM pod_revision"
-                " WHERE successor_id = ? AND predecessor_id = ?",
-                (row["successor_id"], row["predecessor_id"]),
-            )
-    elif table in ("r_institution", "r_pod_type"):
-        for row in deletes:
-            conn.execute(f"DELETE FROM {table} WHERE code = ?", (row["code"],))
-
-
-# ---------------------------------------------------------------------------
-# project_pod
-# ---------------------------------------------------------------------------
-
-
-def _validate_project_pod(
-    conn: sqlite3.Connection,
-    inserts: list[dict],
-    updates: list[dict],
-    deletes: list[dict],
-    known_project_ids: set[str] | None,
-) -> list[RowError]:
-    errors: list[RowError] = []
-
-    if updates:
-        for i, _row in enumerate(updates):
-            errors.append(
-                RowError(
-                    "update",
-                    i,
-                    "project_pod does not support updates; delete and insert instead",
-                )
-            )
-
-    seen_pairs_in_changeset: set[tuple[int, str]] = set()
-    for i, row in enumerate(inserts):
-        pod_id = row.get("pod_id")
-        project_id = row.get("project_id")
-        if not isinstance(pod_id, int):
-            errors.append(RowError("insert", i, "pod_id must be an integer"))
-        else:
-            exists = conn.execute(
-                "SELECT 1 FROM m_pod WHERE id = ?", (pod_id,)
-            ).fetchone()
-            if exists is None:
-                errors.append(
-                    RowError("insert", i, f"pod_id {pod_id} does not exist in m_pod")
-                )
-        if not isinstance(project_id, str) or not project_id.strip():
-            errors.append(
-                RowError("insert", i, "project_id must be a non-empty string")
-            )
-        else:
-            if known_project_ids is not None and project_id not in known_project_ids:
-                errors.append(
-                    RowError(
-                        "insert",
-                        i,
-                        f"project_id {project_id!r} is not a known project id",
-                    )
-                )
-
-        if isinstance(pod_id, int) and isinstance(project_id, str):
-            pair = (pod_id, project_id)
-            if pair in seen_pairs_in_changeset:
-                errors.append(
-                    RowError(
-                        "insert",
-                        i,
-                        f"duplicate pair ({pod_id}, {project_id}) within changeset",
-                    )
-                )
-            seen_pairs_in_changeset.add(pair)
-            existing = conn.execute(
-                "SELECT 1 FROM project_pod WHERE pod_id = ? AND project_id = ?",
-                (pod_id, project_id),
-            ).fetchone()
-            if existing is not None:
-                errors.append(
-                    RowError(
-                        "insert", i, f"pair ({pod_id}, {project_id}) already exists"
-                    )
-                )
-
-    for i, row in enumerate(deletes):
-        pod_id = row.get("pod_id")
-        project_id = row.get("project_id")
-        existing = conn.execute(
-            "SELECT 1 FROM project_pod WHERE pod_id = ? AND project_id = ?",
-            (pod_id, project_id),
-        ).fetchone()
-        if existing is None:
-            errors.append(
-                RowError("delete", i, f"pair ({pod_id}, {project_id}) does not exist")
-            )
-
-    return errors
-
-
-# ---------------------------------------------------------------------------
-# pod_document
-# ---------------------------------------------------------------------------
-
-
-def _validate_pod_document(
-    conn: sqlite3.Connection,
-    inserts: list[dict],
-    updates: list[dict],
-    deletes: list[dict],
-) -> list[RowError]:
-    errors: list[RowError] = []
-
-    if updates:
-        for i, _row in enumerate(updates):
-            errors.append(
-                RowError(
-                    "update",
-                    i,
-                    "pod_document does not support updates; delete and insert instead",
-                )
-            )
-
-    try:
-        docs_available = (
-            conn.execute("SELECT 1 FROM documents LIMIT 1").fetchone() is not None
+def _edit_links(conn: sqlite3.Connection, groups: dict) -> None:
+    if groups["updates"]:
+        raise _RejectedError(
+            "update", 0, "Document link keys are immutable; delete and add the link"
         )
-    except sqlite3.OperationalError:
-        docs_available = False  # corpus never ingested — skip doc checks
-
-    seen_pairs_in_changeset: set[tuple[int, str]] = set()
-    for i, row in enumerate(inserts):
-        pod_id = row.get("pod_id")
-        doc_id = row.get("doc_id")
-        if not isinstance(pod_id, int):
-            errors.append(RowError("insert", i, "pod_id must be an integer"))
-        else:
-            exists = conn.execute(
-                "SELECT 1 FROM m_pod WHERE id = ?", (pod_id,)
-            ).fetchone()
-            if exists is None:
-                errors.append(
-                    RowError("insert", i, f"pod_id {pod_id} does not exist in m_pod")
+    seen = set()
+    for operation in ("deletes", "inserts"):
+        for index, row in enumerate(groups[operation]):
+            if set(row) != {"pod_id_seq", "doc_id"} or not isinstance(
+                row["doc_id"], str
+            ):
+                raise _RejectedError(
+                    operation.removesuffix("s"),
+                    index,
+                    "A POD sequence integer and document ID are required",
                 )
-        if not isinstance(doc_id, str) or not doc_id.strip():
-            errors.append(RowError("insert", i, "doc_id must be a non-empty string"))
-        elif docs_available:
-            exists = conn.execute(
-                "SELECT 1 FROM documents WHERE doc_id = ?", (doc_id,)
-            ).fetchone()
-            if exists is None:
-                errors.append(
-                    RowError(
-                        "insert",
-                        i,
-                        f"doc_id {doc_id!r} is not a known corpus document",
+            column = load_pod_contract().tables["m_pod"].columns[0]
+            pod_sequence = _value(row["pod_id_seq"], column)
+            if (
+                not isinstance(pod_sequence, int)
+                or not -(2**63) <= pod_sequence < 2**63
+            ):
+                raise _RejectedError(
+                    "validation", index, "POD sequence is outside BIGINT range"
+                )
+            key = (pod_sequence, row["doc_id"])
+            if key in seen:
+                raise _RejectedError(
+                    "batch", index, "A document link is changed more than once"
+                )
+            seen.add(key)
+            if operation == "inserts":
+                exists = conn.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='documents'"
+                ).fetchone()
+                if (
+                    exists is None
+                    or conn.execute(
+                        "SELECT 1 FROM documents WHERE doc_id=?", (key[1],)
+                    ).fetchone()
+                    is None
+                ):
+                    raise _RejectedError(
+                        "insert", index, "The selected document does not exist"
                     )
+                conn.execute(
+                    "INSERT INTO pod_document(pod_id_seq,doc_id) VALUES (?,?)", key
                 )
-
-        if isinstance(pod_id, int) and isinstance(doc_id, str):
-            pair = (pod_id, doc_id)
-            if pair in seen_pairs_in_changeset:
-                errors.append(
-                    RowError(
-                        "insert",
-                        i,
-                        f"duplicate pair ({pod_id}, {doc_id}) within changeset",
+            else:
+                deleted = conn.execute(
+                    "DELETE FROM pod_document WHERE pod_id_seq=? AND doc_id=?", key
+                )
+                if deleted.rowcount != 1:
+                    raise _RejectedError(
+                        "delete", index, "The selected document link no longer exists"
                     )
-                )
-            seen_pairs_in_changeset.add(pair)
-            existing = conn.execute(
-                "SELECT 1 FROM pod_document WHERE pod_id = ? AND doc_id = ?",
-                (pod_id, doc_id),
-            ).fetchone()
-            if existing is not None:
-                errors.append(
-                    RowError("insert", i, f"pair ({pod_id}, {doc_id}) already exists")
-                )
 
-    for i, row in enumerate(deletes):
-        pod_id = row.get("pod_id")
-        doc_id = row.get("doc_id")
-        existing = conn.execute(
-            "SELECT 1 FROM pod_document WHERE pod_id = ? AND doc_id = ?",
-            (pod_id, doc_id),
-        ).fetchone()
-        if existing is None:
-            errors.append(
-                RowError("delete", i, f"pair ({pod_id}, {doc_id}) does not exist")
+
+def apply_changeset(
+    table: str, changes: dict, sqlite_path: Path | None = None
+) -> ChangesetResult:
+    """Commit one validated source generation; publish it separately."""
+    if table not in {*INPUT_TABLES, "pod_document"}:
+        raise ValueError(f"Table {table!r} is not an editable POD input")
+    try:
+        expected, groups = _shape(changes)
+        path = Path(sqlite_path) if sqlite_path is not None else get_esdc_sqlite_path()
+        context = read_pod_api_context(path)
+        if context.target_basis.source_generation is None:
+            raise _RejectedError(
+                "source",
+                -1,
+                "POD data is not initialized; fetch or load the current schema first",
             )
-
-    return errors
-
-
-# ---------------------------------------------------------------------------
-# pod_revision
-# ---------------------------------------------------------------------------
-
-
-def _revision_effect_valid(value: object) -> bool:
-    return value in ("unknown", "partial_amendment", "full_replacement")
-
-
-def _previous_remains_valid(value: object) -> bool | None:
-    """Normalize previous_remains_valid to bool/None for validation.
-
-    Accepts None, bool, and integer 0/1. Any other non-null value raises
-    ValueError so an invalid flag can never be coerced to None and silently
-    pass validation (e.g. revision_effect='unknown' then written as NULL).
-    """
-    if value is None or isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in (0, 1):
-        return bool(value)
-    raise ValueError(
-        f"previous_remains_valid {value!r} must be a boolean, 0/1, or None"
-    )
-
-
-def _validate_pod_revision(
-    conn: sqlite3.Connection,
-    inserts: list[dict],
-    updates: list[dict],
-    deletes: list[dict],
-) -> list[RowError]:
-    errors: list[RowError] = []
-
-    if updates:
-        for i, _row in enumerate(updates):
-            errors.append(
-                RowError(
-                    "update",
-                    i,
-                    "pod_revision does not support updates; delete and insert instead",
-                )
-            )
-
-    # A pair that already exists in the db may only be re-inserted when the
-    # same identity is scheduled for deletion in this changeset — that is the
-    # delete+insert replacement idiom for this table.
-    delete_pairs = {
-        (d["successor_id"], d["predecessor_id"])
-        for d in deletes
-        if d.get("successor_id") is not None and d.get("predecessor_id") is not None
-    }
-
-    seen_pairs_in_changeset: set[tuple[str, str]] = set()
-    for i, row in enumerate(inserts):
-        successor_id = row.get("successor_id")
-        predecessor_id = row.get("predecessor_id")
-
-        if successor_id is not None:
-            exists = conn.execute(
-                "SELECT 1 FROM m_pod WHERE pod_id = ?", (successor_id,)
-            ).fetchone()
-            if exists is None:
-                errors.append(
+        if expected != context.target_basis.source_generation:
+            return ChangesetResult(
+                False,
+                errors=[
                     RowError(
-                        "insert",
-                        i,
-                        f"successor_id {successor_id} does not exist in m_pod",
+                        "conflict",
+                        -1,
+                        "POD source changed; keep this draft and reload current data",
                     )
-                )
-        else:
-            errors.append(RowError("insert", i, "missing required field: successor_id"))
-
-        if predecessor_id is not None:
-            exists = conn.execute(
-                "SELECT 1 FROM m_pod WHERE pod_id = ?", (predecessor_id,)
-            ).fetchone()
-            if exists is None:
-                errors.append(
-                    RowError(
-                        "insert",
-                        i,
-                        f"predecessor_id {predecessor_id} does not exist in m_pod",
+                ],
+                source_generation=context.target_basis.source_generation,
+                conflict=True,
+            )
+        if not any(groups.values()):
+            return ChangesetResult(
+                True, source_generation=expected, applied=dict.fromkeys(groups, 0)
+            )
+        frame = {
+            name: [dict(row) for row in context.existing_rows[name]]
+            for name in INPUT_TABLES
+        }
+        conn = open_registry_v2_writer(path)
+        try:
+            with _atomic_writer(conn):
+                current = conn.execute(
+                    "SELECT source_generation FROM pod_registry_state "
+                    "WHERE singleton_id=1"
+                ).fetchone()
+                if (
+                    current is None
+                    or int(current[0]) != expected
+                    or target_protected_state_digest(conn)
+                    != context.target_basis.protected_state_sha256
+                ):
+                    raise _RejectedError(
+                        "conflict",
+                        -1,
+                        "POD source or protected links changed; "
+                        "keep this draft and reload",
                     )
-                )
-        else:
-            errors.append(
-                RowError("insert", i, "missing required field: predecessor_id")
-            )
-
-        if (
-            successor_id is not None
-            and predecessor_id is not None
-            and successor_id == predecessor_id
-        ):
-            errors.append(
-                RowError(
-                    "insert", i, "successor_id and predecessor_id must not be equal"
-                )
-            )
-
-        effect = row.get("revision_effect", "unknown")
-        if not _revision_effect_valid(effect):
-            errors.append(RowError("insert", i, f"unknown revision_effect: {effect!r}"))
-        else:
-            try:
-                validate_revision_effect(
-                    effect, _previous_remains_valid(row.get("previous_remains_valid"))
-                )
-            except ValueError as exc:
-                errors.append(RowError("insert", i, str(exc)))
-
-        effective_date = row.get("effective_date")
-        if effective_date is not None:
-            try:
-                date.fromisoformat(str(effective_date))
-            except (ValueError, TypeError):
-                errors.append(
-                    RowError(
-                        "insert",
-                        i,
-                        f"effective_date {effective_date!r} is not a valid ISO date",
+                generated = []
+                if table == "pod_document":
+                    _edit_links(conn, groups)
+                    refresh_pod_after_source_change(conn, actor=_ACTOR)
+                    state = conn.execute(
+                        "SELECT source_generation FROM pod_registry_state "
+                        "WHERE singleton_id=1"
+                    ).fetchone()
+                    if state is None:
+                        raise RuntimeError("POD registry state disappeared during save")
+                    generation = int(state[0])
+                else:
+                    affected: dict[tuple, tuple[str, int]] = {}
+                    generated = _edit_inputs(conn, table, frame, groups, affected)
+                    contract = load_pod_contract()
+                    batch = PreparedPodBatch(
+                        source="portal",
+                        contract_id=contract.contract_id,
+                        contract_version=contract.contract_version,
+                        dictionary_version=contract.dictionary_version,
+                        headers={
+                            name: tuple(c.name for c in contract.tables[name].columns)
+                            for name in INPUT_TABLES
+                        },
+                        rows=frame,
+                        identity_ledger=read_source_identity_ledger_rows(conn),
+                        target_basis=context.target_basis,
                     )
-                )
-
-        if successor_id is not None and predecessor_id is not None:
-            pair = (successor_id, predecessor_id)
-            if pair in seen_pairs_in_changeset:
-                errors.append(
-                    RowError("insert", i, f"duplicate pair {pair} within changeset")
-                )
-            seen_pairs_in_changeset.add(pair)
-            existing = conn.execute(
-                "SELECT 1 FROM pod_revision"
-                " WHERE successor_id = ? AND predecessor_id = ?",
-                (successor_id, predecessor_id),
-            ).fetchone()
-            if existing is not None and pair not in delete_pairs:
-                errors.append(RowError("insert", i, f"pair {pair} already exists"))
-
-    for i, row in enumerate(deletes):
-        successor_id = row.get("successor_id")
-        predecessor_id = row.get("predecessor_id")
-        existing = conn.execute(
-            "SELECT 1 FROM pod_revision WHERE successor_id = ? AND predecessor_id = ?",
-            (successor_id, predecessor_id),
-        ).fetchone()
-        if existing is None:
-            errors.append(
-                RowError(
-                    "delete",
-                    i,
-                    f"pair ({successor_id}, {predecessor_id}) does not exist",
-                )
-            )
-
-    return errors
-
-
-# ---------------------------------------------------------------------------
-# r_institution / r_pod_type
-# ---------------------------------------------------------------------------
-
-
-def _validate_r_table(
-    conn: sqlite3.Connection,
-    table: str,
-    inserts: list[dict],
-    updates: list[dict],
-    deletes: list[dict],
-) -> list[RowError]:
-    errors: list[RowError] = []
-
-    seen_codes_in_changeset: set[int] = set()
-    for i, row in enumerate(inserts):
-        code = row.get("code")
-        name = row.get("name")
-        if not isinstance(code, int):
-            errors.append(RowError("insert", i, "code must be an integer"))
-        else:
-            if code in seen_codes_in_changeset:
-                errors.append(
-                    RowError("insert", i, f"duplicate code {code} within changeset")
-                )
-            seen_codes_in_changeset.add(code)
-            existing = conn.execute(
-                f"SELECT 1 FROM {table} WHERE code = ?", (code,)
-            ).fetchone()
-            if existing is not None:
-                errors.append(RowError("insert", i, f"code {code} already exists"))
-        if not isinstance(name, str) or not name.strip():
-            errors.append(RowError("insert", i, "name must be a non-empty string"))
-
-    for i, row in enumerate(updates):
-        code = row.get("code")
-        existing = conn.execute(
-            f"SELECT 1 FROM {table} WHERE code = ?", (code,)
-        ).fetchone()
-        if existing is None:
-            errors.append(RowError("update", i, f"code {code} does not exist"))
-            continue
-        if "name" in row and (
-            not isinstance(row["name"], str) or not row["name"].strip()
-        ):
-            errors.append(RowError("update", i, "name must be a non-empty string"))
-
-    for i, row in enumerate(deletes):
-        code = row.get("code")
-        existing = conn.execute(
-            f"SELECT 1 FROM {table} WHERE code = ?", (code,)
-        ).fetchone()
-        if existing is None:
-            errors.append(RowError("delete", i, f"code {code} does not exist"))
-            continue
-        fk_col = "institution_code" if table == "r_institution" else "pod_type_code"
-        ref_count = conn.execute(
-            f"SELECT COUNT(*) FROM m_pod WHERE {fk_col} = ?", (code,)
-        ).fetchone()[0]
-        if ref_count:
-            errors.append(RowError("delete", i, f"code {code} is referenced by m_pod"))
-
-    return errors
+                    issues = validate_pod_batch(batch, contract)
+                    if issues:
+                        errors = []
+                        for issue in issues:
+                            kind, index = "validation", -1
+                            location = issue.table
+                            if issue.row and issue.table in frame:
+                                record = frame[issue.table][issue.row - 1]
+                                keys = contract.tables[issue.table].primary_key
+                                key = tuple(record[name] for name in keys)
+                                location += (
+                                    " ("
+                                    + ", ".join(
+                                        f"{name}={record[name]}" for name in keys
+                                    )
+                                    + ")"
+                                )
+                                if issue.table == table:
+                                    kind, index = affected.get(key, (kind, index))
+                            errors.append(
+                                RowError(
+                                    kind,
+                                    index,
+                                    f"{location}.{issue.column or '*'}: "
+                                    f"{issue.message}",
+                                    issue.column,
+                                )
+                            )
+                        raise _RejectedError(
+                            "validation",
+                            -1,
+                            "POD contract validation failed",
+                            errors=errors,
+                        )
+                    generation = apply_pod_batch_in_transaction(
+                        conn, batch, _ACTOR
+                    ).source_generation
+        finally:
+            conn.close()
+        return ChangesetResult(
+            True,
+            applied={kind: len(group) for kind, group in groups.items()},
+            generated=generated,
+            source_generation=generation,
+            source_committed=True,
+        )
+    except _RejectedError as exc:
+        return ChangesetResult(
+            False, errors=exc.errors, conflict=exc.issue.kind == "conflict"
+        )
+    except (PodImportError, sqlite3.IntegrityError, ValueError) as exc:
+        return ChangesetResult(False, errors=[RowError("validation", -1, str(exc))])

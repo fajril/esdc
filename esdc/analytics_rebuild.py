@@ -26,7 +26,10 @@ from esdc.api_snapshot import (
     iter_project_resources_rows,
 )
 from esdc.dbmanager import _reindex_fts_for_path, get_duckdb_connection
+from esdc.fetching import FetchFailure, FetchPhase
+from esdc.sqlite_runtime import configure_writer, require_wal_runtime
 from esdc.timeseries_projection import (
+    TimeseriesProjectionError,
     _legacy_type_overrides,
     apply_timeseries_stage,
     stage_canonical_timeseries,
@@ -37,17 +40,37 @@ from esdc.timeseries_snapshot import (
     timeseries_fingerprint,
 )
 
+ComponentStatus = Literal[
+    "published", "preserved", "absent", "pending", "error", "stale"
+]
+
+
+@dataclass(frozen=True)
+class ComponentPublication:
+    """One publication component, reported from committed SQLite truth only."""
+
+    name: str
+    status: ComponentStatus
+    rows_written: int
+    revision: str | None = None
+    generation: int | None = None
+    error: str | None = None
+
 
 @dataclass(frozen=True)
 class AnalyticsRebuildReport:
     """Outcome and source markers for an API analytics reconstruction."""
 
     output_path: Path
-    source_revisions: dict[str, str]
-    source_hashes: dict[str, str]
+    source_revisions: dict[str, str | None]
+    source_hashes: dict[str, str | None]
     subsystem_status: dict[str, Literal["restored", "absent"]]
     object_counts: dict[str, int]
     requires_regeneration: tuple[str, ...]
+    # Only the shared v2 publisher fills these; legacy recovery reports are unchanged.
+    components: tuple[ComponentPublication, ...] = ()
+    fresh: bool = False
+    recovery_command: str | None = None
 
 
 class SnapshotStatus(TypedDict):
@@ -74,11 +97,12 @@ class ApiSourceStatus(TypedDict):
 @dataclass(frozen=True)
 class _ApiSources:
     resources: ApiSnapshot
-    timeseries: ApiSnapshot
+    # A partner that was never observed is absent, not an observed zero-row snapshot.
+    timeseries: ApiSnapshot | None
     resource_count: int
     resource_hash: str
     timeseries_count: int
-    timeseries_hash: str
+    timeseries_hash: str | None
 
 
 def _sqlite_readonly(path: Path) -> sqlite3.Connection:
@@ -99,8 +123,68 @@ def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
     )
 
 
-def _validate_sources(connection: sqlite3.Connection) -> _ApiSources:
-    required = {"api_snapshot", "api_project_resources", "api_project_timeseries"}
+def _mirror_row_count(duckdb_path: Path, table: str) -> int | None:
+    """Read the mirror count without writing; None means the target is absent."""
+    connection = duckdb.connect(
+        str(duckdb_path),
+        read_only=True,
+        config={"autoinstall_known_extensions": "false"},
+    )
+    try:
+        exists = connection.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='main' AND table_name=?",
+            (table,),
+        ).fetchone()
+        if exists is None:
+            return None
+        try:
+            row = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            if row is None:
+                raise ValueError(f"the mirrored {table} count returned no row")
+            return int(row[0])
+        except duckdb.Error as exc:
+            raise ValueError(f"cannot read the mirrored {table} row count") from exc
+    finally:
+        connection.close()
+
+
+def _empty_source_guard_decision(
+    *, v2: bool, table: str, source_count: int, target_count: int | None
+) -> bool:
+    """Whether an observed-empty source may write the target mirror table.
+
+    The legacy recovery route may only initialize an absent or empty target, so a
+    populated mirror is defended there. On the v2 route a verified empty canonical
+    observation is the current source truth, so the mirror is cleared instead: the last
+    source wins. Every publication site uses this one decision, so the preflight
+    inspection and the owned Duck transaction cannot disagree.
+    """
+    if source_count > 0:
+        return True
+    if v2:
+        return True
+    if target_count is None:
+        return True
+    return target_count == 0
+
+
+def _pod_generation(connection: sqlite3.Connection) -> int | None:
+    """Read the committed POD source generation from one open SQLite connection."""
+    if not _table_exists(connection, "pod_registry_state"):
+        return None
+    row = connection.execute(
+        "SELECT source_generation FROM pod_registry_state WHERE singleton_id=1"
+    ).fetchone()
+    return None if row is None else int(row[0])
+
+
+def _validate_sources(
+    connection: sqlite3.Connection, *, v2: bool = False
+) -> _ApiSources:
+    required = {"api_snapshot", "api_project_resources"}
+    if not v2:
+        required.add("api_project_timeseries")
     missing = sorted(
         table for table in required if not _table_exists(connection, table)
     )
@@ -111,11 +195,11 @@ def _validate_sources(connection: sqlite3.Connection) -> _ApiSources:
 
     resources = get_project_resources_snapshot(connection)
     timeseries = get_timeseries_snapshot(connection)
-    if resources is None or timeseries is None:
+    if resources is None or (timeseries is None and not v2):
         raise ValueError("both canonical API snapshots are required for pair recovery")
     if resources.publication_state not in {"committed", "published", "analytics_stale"}:
         raise ValueError("project_resources snapshot state is invalid")
-    if timeseries.publication_state not in {
+    if timeseries is not None and timeseries.publication_state not in {
         "committed",
         "published",
         "analytics_stale",
@@ -130,9 +214,22 @@ def _validate_sources(connection: sqlite3.Connection) -> _ApiSources:
         raise ValueError(
             "project_resources snapshot count/hash does not match canonical rows"
         )
-    if resource_count == 0:
+    if resource_count == 0 and not v2:
+        # The legacy recovery guard stays: a v2 route may still publish a legitimate
+        # observed-empty snapshot that this caller would refuse.
         raise ValueError(
             "project_resources recovery requires a verified nonempty source"
+        )
+
+    if timeseries is None:
+        # A partner that was never observed is absent, never a fabricated observation.
+        return _ApiSources(
+            resources=resources,
+            timeseries=None,
+            resource_count=resource_count,
+            resource_hash=resource_hash,
+            timeseries_count=0,
+            timeseries_hash=None,
         )
 
     timeseries_count, timeseries_hash = timeseries_fingerprint(connection)
@@ -273,14 +370,19 @@ def _mark_sources(
     *,
     invalid_geometry_count: int | None = None,
 ) -> None:
+    require_wal_runtime()
     connection = sqlite3.connect(sqlite_path)
     failure: BaseException | None = None
     try:
+        configure_writer(connection)
         connection.execute("BEGIN IMMEDIATE")
         for table, snapshot in (
             ("project_resources", sources.resources),
             ("project_timeseries", sources.timeseries),
         ):
+            if snapshot is None:
+                # An absent partner is not marked: nothing was observed for it.
+                continue
             if table == "project_resources":
                 cursor = connection.execute(
                     "UPDATE api_snapshot SET publication_state=?, "
@@ -326,10 +428,12 @@ def _mark_sources(
                 )
 
 
-def _recheck_sources(sqlite_path: Path, expected: _ApiSources) -> None:
+def _recheck_sources(
+    sqlite_path: Path, expected: _ApiSources, *, v2: bool = False
+) -> None:
     connection = _sqlite_readonly(sqlite_path)
     try:
-        current = _validate_sources(connection)
+        current = _validate_sources(connection, v2=v2)
         if current != expected:
             raise ValueError("canonical API source pair changed before DuckDB commit")
     finally:
@@ -375,13 +479,44 @@ def _record_stale_after_failure(
 
 
 def rebuild_api_analytics(
-    *, duckdb_path: Path, sqlite_path: Path, reindex: bool = True
+    *,
+    duckdb_path: Path,
+    sqlite_path: Path,
+    reindex: bool = True,
+    expected_generation: int | None = None,
 ) -> AnalyticsRebuildReport:
     """Rebuild both API projections from committed SQLite snapshots offline."""
     duckdb_path = Path(duckdb_path)
     sqlite_path = Path(sqlite_path)
+    # The shared v2 publisher passes the captured committed generation; the legacy
+    # recovery route keeps its original validation and error shape.
+    v2_generation = expected_generation
     if _same_file(duckdb_path, sqlite_path):
         raise ValueError("SQLite source and DuckDB target must be different files")
+
+    def _wrapped(
+        error: BaseException, phase: FetchPhase, committed: bool
+    ) -> FetchFailure:
+        if isinstance(error, FetchFailure) and error.sqlite_committed:
+            return error
+        return FetchFailure(
+            f"POD source publication failed: {error}",
+            phase=phase,
+            table="project_timeseries"
+            if isinstance(error, TimeseriesProjectionError)
+            else "pod_registry",
+            report_year=error.report_year
+            if isinstance(error, TimeseriesProjectionError)
+            else None,
+            sqlite_committed=True,
+            duckdb_committed=committed,
+            recovery_command="esdc rebuild-api-analytics",
+        )
+
+    def _phase(committed: bool, sources: _ApiSources | None) -> FetchPhase:
+        if committed:
+            return "post_commit"
+        return "validation" if sources is None else "publication"
 
     source: sqlite3.Connection | None = _sqlite_readonly(sqlite_path)
     writer: duckdb.DuckDBPyConnection | None = None
@@ -392,34 +527,29 @@ def rebuild_api_analytics(
     hnsw_present = False
     try:
         assert source is not None
-        sources = _validate_sources(source)
-        # A verified observed-empty source may only initialize an absent/empty target.
-        if sources.timeseries_count == 0 and duckdb_path.is_file():
-            with duckdb.connect(
-                str(duckdb_path),
-                read_only=True,
-                config={"autoinstall_known_extensions": "false"},
-            ) as inspection:
-                table_exists = (
-                    inspection.execute(
-                        "SELECT 1 FROM information_schema.tables "
-                        "WHERE table_schema='main' "
-                        "AND table_name='project_timeseries'"
-                    ).fetchone()
-                    is not None
-                )
-                target_count = (
-                    inspection.execute(
-                        "SELECT COUNT(*) FROM project_timeseries"
-                    ).fetchone()
-                    if table_exists
-                    else None
-                )
-                if table_exists and (target_count is None or target_count[0] != 0):
-                    raise ValueError(
-                        "verified empty project_timeseries cannot replace "
-                        "a populated target"
-                    )
+        sources = _validate_sources(source, v2=v2_generation is not None)
+        if v2_generation is not None and _pod_generation(source) != v2_generation:
+            raise ValueError(
+                f"committed POD source generation {v2_generation} is no longer "
+                f"current: found {_pod_generation(source)}"
+            )
+        # Generic raw recovery preserves unowned cached data. A current POD fetch's
+        # verified observed-empty source replaces its mirror, including populated data.
+        if (
+            sources.timeseries is not None
+            and sources.timeseries_count == 0
+            and duckdb_path.is_file()
+            and not _empty_source_guard_decision(
+                v2=v2_generation is not None,
+                table="project_timeseries",
+                source_count=sources.timeseries_count,
+                target_count=_mirror_row_count(duckdb_path, "project_timeseries"),
+            )
+        ):
+            raise ValueError(
+                "verified empty project_timeseries cannot replace "
+                "a populated target"
+            )
         _preflight_extensions()
 
         writer = get_duckdb_connection(
@@ -436,20 +566,26 @@ def rebuild_api_analytics(
         writer.execute("BEGIN TRANSACTION")
         try:
             assert source is not None
-            if sources.timeseries_count == 0:
-                target_timeseries = writer.execute(
+            # An absent partner is never staged: unowned cached Duck data stays as it is
+            # instead of being claimed as the current projection.
+            if sources.timeseries is not None and sources.timeseries_count == 0:
+                target_row = writer.execute(
                     "SELECT 1 FROM information_schema.tables "
                     "WHERE table_schema='main' AND table_name='project_timeseries'"
                 ).fetchone()
-                target_count = (
-                    writer.execute(
+                target_count = None
+                if target_row is not None:
+                    count_row = writer.execute(
                         "SELECT COUNT(*) FROM project_timeseries"
                     ).fetchone()
-                    if target_timeseries is not None
-                    else None
-                )
-                if target_timeseries is not None and (
-                    target_count is None or target_count[0] != 0
+                    if count_row is None:
+                        raise ValueError("the mirror timeseries count returned no row")
+                    target_count = int(count_row[0])
+                if not _empty_source_guard_decision(
+                    v2=v2_generation is not None,
+                    table="project_timeseries",
+                    source_count=sources.timeseries_count,
+                    target_count=target_count,
                 ):
                     raise ValueError(
                         "verified empty project_timeseries cannot replace "
@@ -458,23 +594,47 @@ def rebuild_api_analytics(
             resource_stage = _stage_project_resources(
                 writer, iter_project_resources_rows(source)
             )
-            timeseries_stage = stage_canonical_timeseries(writer, source, years=None)
+            timeseries_stage = (
+                None
+                if sources.timeseries is None
+                else stage_canonical_timeseries(writer, source, years=None)
+            )
             if resource_stage.row_count != sources.resource_count:
                 raise ValueError("staged project_resources count differs from SQLite")
-            if timeseries_stage.row_count != sources.timeseries_count:
+            if (
+                timeseries_stage is not None
+                and timeseries_stage.row_count != sources.timeseries_count
+            ):
                 raise ValueError("staged project_timeseries count differs from SQLite")
             _swap_project_resources(writer, resource_stage, allow_install=False)
-            apply_timeseries_stage(writer, timeseries_stage)
+            if timeseries_stage is not None:
+                apply_timeseries_stage(writer, timeseries_stage)
             _record_api_publication(
                 writer,
                 sources.resources,
                 invalid_geometry_count=resource_stage.invalid_geometry_count,
             )
-            _record_api_publication(writer, sources.timeseries)
+            if sources.timeseries is not None:
+                _record_api_publication(writer, sources.timeseries)
             resource_count = resource_stage.row_count
-            timeseries_count = timeseries_stage.row_count
+            timeseries_count = (
+                0 if timeseries_stage is None else timeseries_stage.row_count
+            )
             invalid_geometry_count = resource_stage.invalid_geometry_count
-            _recheck_sources(sqlite_path, sources)
+            _recheck_sources(sqlite_path, sources, v2=v2_generation is not None)
+            # A generation that changed during the pair stage is not this publication's
+            # truth: the transaction is rolled back instead of publishing stale work.
+            if v2_generation is not None:
+                recheck = _sqlite_readonly(sqlite_path)
+                try:
+                    current_generation = _pod_generation(recheck)
+                finally:
+                    recheck.close()
+                if current_generation != v2_generation:
+                    raise ValueError(
+                        f"POD source generation changed from {v2_generation} "
+                        "before commit"
+                    )
             writer.execute("COMMIT")
             c2_committed = True
         except BaseException as exc:
@@ -512,6 +672,12 @@ def rebuild_api_analytics(
                         )
                 source = None
             _record_stale_after_failure(sqlite_path, sources, exc)
+            if v2_generation is not None and not isinstance(
+                exc, (KeyboardInterrupt, SystemExit)
+            ):
+                raise _wrapped(
+                    exc, _phase(c2_committed, sources), c2_committed
+                ) from exc
             raise
         else:
             try:
@@ -558,6 +724,10 @@ def rebuild_api_analytics(
             source = None
         if c2_committed and sources is not None:
             _record_stale_after_failure(sqlite_path, sources, exc)
+        if v2_generation is not None and not isinstance(
+            exc, (KeyboardInterrupt, SystemExit)
+        ):
+            raise _wrapped(exc, _phase(c2_committed, sources), c2_committed) from exc
         raise
     finally:
         if source is not None:
@@ -593,6 +763,8 @@ def rebuild_api_analytics(
                 primary.args = (*primary.args, str(extra))
         if isinstance(primary, (KeyboardInterrupt, SystemExit)):
             raise primary
+        if v2_generation is not None:
+            raise _wrapped(primary, "post_commit", True) from primary
         raise RuntimeError(
             "API analytics committed but post-commit maintenance failed: "
             + "; ".join(str(error) for error in maintenance_errors)
@@ -608,6 +780,10 @@ def rebuild_api_analytics(
         )
     except BaseException as exc:
         _record_stale_after_failure(sqlite_path, sources, exc)
+        if v2_generation is not None and not isinstance(
+            exc, (KeyboardInterrupt, SystemExit)
+        ):
+            raise _wrapped(exc, "post_commit", True) from exc
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             exc.args = (
                 *exc.args,
@@ -621,23 +797,119 @@ def rebuild_api_analytics(
             "canonical publication remains pending or stale. "
             f"Cause: {exc}. Run 'esdc rebuild-api-analytics'."
         ) from exc
+    subsystem_status: dict[str, Literal["restored", "absent"]] = {
+        "api": "restored"
+    }
+    object_counts = {
+        "project_resources": resource_count,
+        "project_timeseries": timeseries_count,
+        "invalid_resource_geometry": invalid_geometry_count,
+    }
+    components: list[ComponentPublication] = [
+        ComponentPublication(
+            "project_resources",
+            "published",
+            resource_count,
+            sources.resources.revision,
+        ),
+        (
+            ComponentPublication("project_timeseries", "absent", 0, None)
+            if sources.timeseries is None
+            else ComponentPublication(
+                "project_timeseries",
+                "published",
+                timeseries_count,
+                sources.timeseries.revision,
+            )
+        ),
+    ]
+    from esdc.pod_registry.publication import has_v2_state, publish_v2_registry
+
+    if has_v2_state(sqlite_path):
+        pod_publication = publish_v2_registry(sqlite_path, duckdb_path)
+        if pod_publication.projection_error is not None:
+            state = "committed" if pod_publication.source_committed else "not committed"
+            message = (
+                "API analytics committed; POD registry source "
+                f"{state}, DuckDB projection failed: "
+                f"{pod_publication.projection_error}. Retry with "
+                "'esdc corpus sync' or 'esdc rebuild-api-analytics'."
+            )
+            if v2_generation is not None:
+                components.append(
+                    ComponentPublication(
+                        name="pod_projection",
+                        status="error",
+                        rows_written=0,
+                        revision=None,
+                        error=pod_publication.projection_error,
+                    )
+                )
+                raise _wrapped(RuntimeError(message), "post_commit", True)
+            raise RuntimeError(message)
+        if v2_generation is not None:
+            # The captured generation must still be the committed truth before any
+            # freshness claim is made; a newer writer cannot be reported as fresh for
+            # the generation this publication started from.
+            recheck = _sqlite_readonly(sqlite_path)
+            try:
+                current_generation = _pod_generation(recheck)
+            finally:
+                recheck.close()
+            if current_generation != v2_generation:
+                raise _wrapped(
+                    ValueError(
+                        f"POD source generation changed from {v2_generation} to "
+                        f"{current_generation} during publication; generation "
+                        f"{v2_generation} cannot be claimed fresh"
+                    ),
+                    "post_commit",
+                    True,
+                )
+        subsystem_status["pod_registry"] = "restored"
+        object_counts.update(
+            {
+                f"pod_registry.{result.table_name}": result.row_count
+                for result in pod_publication.results
+            }
+        )
+        components.append(
+            ComponentPublication(
+                "pod_projection",
+                "published",
+                sum(result.row_count for result in pod_publication.results),
+                None,
+                v2_generation,
+            )
+        )
+    elif v2_generation is not None:
+        # The POD projection is genuinely absent here; nothing is claimed as current.
+        components.append(ComponentPublication("pod_projection", "absent", 0, None))
+
     return AnalyticsRebuildReport(
         output_path=duckdb_path,
         source_revisions={
             "project_resources": sources.resources.revision,
-            "project_timeseries": sources.timeseries.revision,
+            "project_timeseries": (
+                None if sources.timeseries is None else sources.timeseries.revision
+            ),
         },
         source_hashes={
             "project_resources": sources.resource_hash,
             "project_timeseries": sources.timeseries_hash,
         },
-        subsystem_status={"api": "restored"},
-        object_counts={
-            "project_resources": resource_count,
-            "project_timeseries": timeseries_count,
-            "invalid_resource_geometry": invalid_geometry_count,
-        },
+        subsystem_status=subsystem_status,
+        object_counts=object_counts,
         requires_regeneration=("embeddings",) if hnsw_present and reindex else (),
+        components=tuple(components),
+        # POD freshness alone never proves the whole fetch is fresh: every component,
+        # including a partner that was never observed, must be published from the
+        # captured committed generation before the fetch may claim freshness.
+        fresh=v2_generation is not None
+        and all(component.status == "published" for component in components),
+        recovery_command=(
+            "esdc rebuild-api-analytics" if v2_generation is not None else None
+        ),
     )
 
 

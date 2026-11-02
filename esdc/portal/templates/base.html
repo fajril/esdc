@@ -3,6 +3,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} — ESDC POD Portal</title>
   <link rel="stylesheet" href="/static/tabulator.min.css">
   <link rel="stylesheet" href="/static/portal.css?v={{ asset_version }}">
@@ -11,15 +12,21 @@
   <nav>
     <strong>POD Portal</strong>
     <a href="/pods">PODs</a>
+    <a href="/projects">Projects</a>
     <a href="/links">Project Links</a>
-    <a href="/documents">Document Links</a>
-    <a href="/revisions">Revisions</a>
+    <a href="/monitoring">Monitoring</a>
+    <a href="/forecast">Forecast</a>
+    <a href="/results">Results</a>
+    <a href="/documents">Documents</a>
     <a href="/references">References</a>
-    <button id="publish-btn" title="Re-publish registry to DuckDB">Publish</button>
-    <span id="status"></span>
+    <a href="/api/backup">Download workbook</a>
+    <span id="status" role="status" aria-live="polite"></span>
   </nav>
   <main>{% block content %}{% endblock %}</main>
   <script src="/static/tabulator.min.js"></script>
+  <script src="/static/editors.js?v={{ asset_version }}"></script>
+  <script src="/static/chart.js?v={{ asset_version }}"></script>
+  <script src="/static/results.js?v={{ asset_version }}"></script>
   <script src="/static/portal.js?v={{ asset_version }}"></script>
 </body>
 </html>

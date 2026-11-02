@@ -1,18 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
+<header class="page-heading"><h1>{{ title }}</h1><p>Review source records, make changes, and save each table when ready.</p></header>
+{% if chart is defined and chart %}
+<section class="chart-panel workspace" id="results-panel">
+  <h2>Forecast comparison</h2>
+  <div class="mw-controls">
+    <label>POD <select id="result-pod"><option value="">Select a POD</option></select></label>
+    <label>Report date <input id="result-date" type="date"></label>
+    <label>Component <select id="result-component"></select></label>
+    <button id="result-apply" type="button">Show results</button>
+  </div>
+  <p id="result-status" role="status">Select a POD and report date to compare annual sales.</p>
+  <div id="result-chart"></div>
+  <details><summary>Source diagnostics</summary><div id="result-diagnostics"></div></details>
+  <script type="application/json" id="chart-config">{{ chart | tojson }}</script>
+</section>
+{% endif %}
 {% for grid in grids %}
 <section class="grid-section">
   <h2>{{ grid.title }}</h2>
-  {% if not grid.config.readonly %}
-  <div class="toolbar">
-    <button class="add-row" data-table="{{ grid.table }}">+ Add row</button>
-    <button class="save" data-table="{{ grid.table }}">Save</button>
-    <button class="clear-all" data-table="{{ grid.table }}">Clear all</button>
-    <button class="discard" data-table="{{ grid.table }}">Discard</button>
-  </div>
-  {% endif %}
-  <div class="grid-errors" id="errors-{{ grid.table }}" hidden></div>
-  <div id="grid-{{ grid.table }}" class="grid"></div>
+  {% if grid.config.readonly %}<p class="table-kind">Read only</p>{% endif %}
+  <div id="grid-{{ grid.table }}" class="workspace"></div>
   <script type="application/json" id="config-{{ grid.table }}">{{ grid.config | tojson }}</script>
 </section>
 {% endfor %}

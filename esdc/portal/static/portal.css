@@ -1,15 +1,54 @@
-body { font-family: system-ui, sans-serif; margin: 0; }
-nav { display: flex; gap: 1rem; align-items: center; padding: .6rem 1rem;
-      background: #1a2733; color: #fff; }
-nav a { color: #cfe3f5; text-decoration: none; }
-main { padding: 1rem; }
-.toolbar { margin: .5rem 0; display: flex; gap: .5rem; }
-.tabulator-cell.cell-error { background: #ffd7d7 !important; }
-.tabulator-row.row-error .tabulator-cell { background: #ffd7d7; }
-.tabulator-row.row-new { background: #eaf7ea; }
-.tabulator-row.row-deleted { text-decoration: line-through; opacity: .6; }
-.tabulator-cell.cell-readonly { color: #888; background: #f5f5f5; }
-#status { margin-left: auto; font-size: .9rem; }
-.grid-errors { background: #fdecec; border: 1px solid #e5a3a3; color: #8a1f1f;
-               padding: .5rem .75rem; margin: .5rem 0; border-radius: 4px;
-               font-size: .9rem; white-space: pre-line; }
+:root{--navy:#23283a;--canvas:#f7f4ef;--panel:#fffdf8;--teal:#23786d;--ink:#2b2f3c;--line:#d9d4cb;--amber:#f6e6cf;--palered:#f6dedd}
+*{box-sizing:border-box}
+html,body{margin:0;max-width:100%}
+body{background:var(--canvas);color:var(--ink);font:14px/1.45 system-ui,sans-serif}
+h1,h2{font-family:Georgia,"Times New Roman",serif;font-weight:600;margin:0 0 8px}
+nav{background:var(--navy);color:#fff;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 16px}
+nav strong,nav a{white-space:nowrap;color:#fff;text-decoration:none}
+nav a{border-bottom:1px solid transparent}
+nav a:hover{border-bottom-color:#fff}
+nav a[aria-current="page"]{background:#313748;padding:2px 6px}
+#status:empty{display:none}
+main{max-width:1600px;margin:0 auto;padding:20px 24px;width:100%}
+.page-heading p{margin:0;color:#5c616e}
+.grid-section{margin-top:20px}
+.workspace{background:var(--panel);border:1px solid var(--line);padding:16px;min-width:0}
+.mw-toolbar{display:flex;flex-direction:column;align-items:stretch;gap:10px;margin-bottom:12px}
+.mw-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.mw-controls span{display:block;white-space:nowrap}
+button{font:inherit;padding:6px 10px;min-height:32px;background:#fff;border:1px solid var(--line);color:var(--ink);cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--teal);outline-offset:1px}
+button:disabled{color:#8a8f9a;cursor:not-allowed}
+input,select{font:inherit;padding:6px;border:1px solid var(--line);background:#fff;color:var(--ink)}
+.mw-controls select{max-width:min(100%,320px)}
+.mw-controls input{min-width:180px;width:100%}
+details summary{cursor:pointer;font-family:Georgia,serif}
+details[open]{max-height:320px;overflow:auto}
+fieldset{border:1px solid var(--line);padding:8px;margin:8px 0}
+fieldset label{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mw-status{margin:10px 0;padding:8px;border:1px solid var(--line);background:#f2efe9}
+.mw-status.error{color:#8c2b27;background:var(--palered);border-color:#d9b4b2}
+.mw-errors{color:#8c2b27;margin:10px 0}
+.mw-errors:empty{display:none}
+[hidden]{display:none!important}
+.tabulator-host{max-width:100%}
+.tabulator{border:1px solid var(--line);background:var(--panel)}
+.tabulator .tabulator-header{background:#efe9df;border-bottom:1px solid var(--line)}
+.tabulator .tabulator-col{padding:6px 8px;font-family:Georgia,serif;font-size:13px;white-space:nowrap}
+.tabulator-tableholder{max-width:100%;overflow:auto}
+.tabulator-table{background:var(--panel)}
+.tabulator-row{min-height:28px;border-bottom:1px solid var(--line);background:var(--panel)}
+.tabulator-row:nth-child(even){background:#faf7f2}
+.tabulator-cell{padding:5px 8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+.tabulator-row.row-dirty{background:var(--amber)}
+.tabulator-row.row-deleted{color:#7c818b;text-decoration:line-through;background:#f1eee9}
+.tabulator-row.row-error,.tabulator-cell.cell-error{background:var(--palered);color:#8c2b27}
+.tabulator-cell.tabulator-editing input{width:100%;border:1px solid var(--teal);padding:4px}
+.chart-panel label{display:block;margin:6px 0}
+#result-chart{overflow-x:auto;max-width:100%}
+#result-chart svg{width:100%;font-size:12px}
+#result-chart table,#result-diagnostics table{border-collapse:collapse;width:100%}
+#result-chart th,#result-chart td,#result-diagnostics th,#result-diagnostics td{border:1px solid var(--line);padding:6px;text-align:left}
+#result-chart th{background:#efe9df;font-family:Georgia,serif}
+#result-diagnostics p{margin:4px 0}
+@media(max-width:600px){main,nav{padding:12px}.mw-controls input{min-width:0}#result-chart table,#result-chart th,#result-chart td{font-size:13px}}

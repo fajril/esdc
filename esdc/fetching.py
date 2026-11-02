@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from esdc.api_snapshot import ApiProjectResourceRow, JSONScalar
+from esdc.pod_registry.models import PreparedPodBatch
 from esdc.timeseries_snapshot import (
     TIMESERIES_COLUMNS,
     TIMESERIES_SOURCE_TYPES,
@@ -68,6 +69,10 @@ class PreparedFetch:
     timeseries_mode: Literal["replace_years", "replace_all"] = "replace_years"
     timeseries_observed_years: tuple[int, ...] = ()
     timeseries_complete_observation: bool = False
+    # A later publication must distinguish a scope that was never requested from a
+    # requested scope that answered valid-empty, so both stay recorded here.
+    pod_batch: PreparedPodBatch | None = None
+    resources_observed: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,10 @@ class FetchOutcome:
     timeseries_revision: str | None = None
     timeseries_source_sha256: str | None = None
     timeseries_row_count: int = 0
+    # Committed source truth only. A publication is a separate concern, so these
+    # defaults stay unset for callers that did not commit a POD source generation.
+    pod_source_generation: int | None = None
+    sqlite_committed: bool = False
 
 
 def save_payload_atomically(path: Path, payload: bytes) -> None:

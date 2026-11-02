@@ -1,5 +1,6 @@
 """Tests for domain_knowledge module."""
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,10 @@ from esdc.chat.domain_knowledge import (
     get_volume_columns,
     resolve_concept,
 )
+from esdc.configs import Config
+from esdc.loaders import lookup_loaded_schema
+from esdc.pod_registry.migrations import initialize_registry_v2
+from esdc.pod_registry.publication import publish_v2_registry
 
 
 class TestDomainConcepts:
@@ -850,19 +855,11 @@ class TestKsmiRetrieveEntityResolution:
 _SCHEMA_ROOT = Path(__file__).resolve().parents[1]
 
 _KSMI_SCHEMA = "esdc/chat/domain_knowledge/ksmi_schema.yaml"
-_POD_SCHEMA = "esdc/chat/domain_knowledge/pod_schema.yaml"
-_POD_REGISTRY_SCHEMA = "esdc/chat/domain_knowledge/pod_registry_schema.yaml"
 
 
 def _load_schema(relative: str) -> dict:
     with open(_SCHEMA_ROOT / relative, encoding="utf-8") as f:
         return yaml.safe_load(f)
-
-
-def _conceptual_mappings() -> dict:
-    pod = _load_schema(_POD_SCHEMA).get("conceptual_mappings", {})
-    registry = _load_schema(_POD_REGISTRY_SCHEMA).get("conceptual_mappings", {})
-    return {**pod, **registry}
 
 
 class TestSchemaConsistency:
@@ -892,84 +889,24 @@ class TestSchemaConsistency:
         assert ksmi_values.isdisjoint(ptk_values)
         assert ksmi["ProducingLicense"]["classification_scheme"] == "ksmi"
 
-    def test_pod_schema_has_as_of_date_not_analytical_effective_date(self):
-        """pod_schema has as_of_date and no analytical effective_date column."""
-        pod = _load_schema(_POD_SCHEMA)
-        names = {column["name"] for column in pod["columns"]}
-        assert "as_of_date" in names
-        assert "effective_date" not in names
+    def test_published_pod_metadata_is_readable_by_the_shared_consumer(
+        self, isolated_config
+    ):
+        """The domain-knowledge consumer reads published metadata, not a YAML template."""
+        sqlite_path = isolated_config / "registry.sqlite"
+        conn = sqlite3.connect(sqlite_path)
+        try:
+            initialize_registry_v2(conn)
+            conn.commit()
+        finally:
+            conn.close()
 
-    def test_report_date_never_aliases_approval(self):
-        """report_date does not alias/claim approval; approval maps from registry."""
-        pod = _load_schema(_POD_SCHEMA)
-        registry = _load_schema(_POD_REGISTRY_SCHEMA)
-        report_date = next(
-            column for column in pod["columns"] if column["name"] == "report_date"
-        )
-        assert not any(
-            "approval" in alias.lower() for alias in report_date.get("aliases", [])
-        )
-        description = report_date.get("description", "").lower()
-        assert "approval" not in description or "m_pod.approval_date" in description
-        pod_mappings = " ".join(
-            f"{source} {target}"
-            for source, target in pod.get("conceptual_mappings", {}).items()
-        ).lower()
-        registry_mappings = " ".join(
-            f"{source} {target}"
-            for source, target in registry.get("conceptual_mappings", {}).items()
-        ).lower()
-        assert "approval" not in pod_mappings
-        assert "approval" in registry_mappings
+        report = publish_v2_registry(sqlite_path, Config.get_db_file())
+        assert getattr(report, "projection_error", None) is None
 
-    def test_revision_effect_values_match_registry_contract(self):
-        """Registry contract exposes only supported revision effects."""
-        registry = _load_schema(_POD_REGISTRY_SCHEMA)
-        revision_table = next(
-            table
-            for table in registry["tables"]
-            if table["table_name"] == "pod_revision"
-        )
-        effect = next(
-            column
-            for column in revision_table["columns"]
-            if column["name"] == "revision_effect"
-        )
-        allowed = set(effect["allowed_values"])
-        assert allowed == {"unknown", "partial_amendment", "full_replacement"}
-
-    def test_required_physical_mappings_exist(self):
-        """Tracked contracts map each physical temporal field to its concept."""
-        mappings = _conceptual_mappings()
-        assert mappings["m_pod.pod_id"] == "ProducingLicense identity"
-        assert mappings["pod_registry.pod_id"] == "ProducingLicense identity"
-        assert "SUPERSEDES iff full_replacement" in mappings["pod_revision"]
-        assert "HAS_PRODUCING_LICENSE" in mappings["project_pod"]
-        assert "HAS_PRODUCING_LICENSE" in mappings["pod_project"]
-        assert mappings["pod_value_case.as_of_date"] == "observation_time"
-        assert mappings["m_pod.approval_date"] == "approval event_time"
-        assert mappings["pod_revision.effective_date"] == "revision valid_from"
-
-    def test_schema_version_metadata_exists(self):
-        """Schema/version metadata exists and aligns across contracts."""
-        ksmi = _load_schema(_KSMI_SCHEMA)
-        pod = _load_schema(_POD_SCHEMA)
-        registry = _load_schema(_POD_REGISTRY_SCHEMA)
-        assert ksmi["schema_version"]
-        assert "referenced KSMI version" in ksmi["vocabulary_stability"]
-        for key in (
-            "schema_version",
-            "schema_status",
-            "framework_reference",
-            "vocabulary_stability",
-            "ksmi_producing_license_types",
-            "ptk_pod_classifications",
-        ):
-            assert not isinstance(ksmi[key], dict)
-        assert pod["schema_version"] == "2"
-        assert pod["source_of_truth"] == "sqlite"
-        assert pod["truth_table"] == "pod_value_case"
-        assert pod["table_name"] == pod["truth_table"]
-        assert registry["schema_version"]
-        assert registry["source_of_truth"] == "sqlite"
-        assert registry["projection"] == "duckdb"
+        published = lookup_loaded_schema("m_pod")
+        assert published is not None
+        assert "Loaded table: m_pod" in published
+        assert "pod_id_seq" in published
+        # The retired value-case table has no published metadata to answer from.
+        assert lookup_loaded_schema("pod_value_case") is None

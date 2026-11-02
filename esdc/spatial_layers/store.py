@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
+from esdc.sqlite_runtime import configure_writer, require_wal_runtime
+
 from .models import LayerKind, SpatialLayer, SpatialLayerVersion, utc_timestamp
 
 __all__ = [
@@ -26,9 +28,14 @@ class SpatialLayerCapabilityError(RuntimeError):
 
 
 def get_sqlite_connection(path: Path) -> sqlite3.Connection:
-    """Open an ordinary SQLite writer connection with foreign keys enabled."""
+    """Open a SQLite writer after checking runtime and configuring WAL."""
+    require_wal_runtime()
     connection = sqlite3.connect(str(path))
-    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        configure_writer(connection)
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
@@ -101,7 +108,12 @@ class SpatialLayerStore:
         self, path: Path, connection: sqlite3.Connection | None = None
     ) -> None:
         self.path = Path(path)
-        self.connection = connection or get_sqlite_connection(self.path)
+        if connection is None:
+            self.connection = get_sqlite_connection(self.path)
+        else:
+            require_wal_runtime()
+            configure_writer(connection)
+            self.connection = connection
         self.connection.row_factory = sqlite3.Row
         self._transaction_depth = 0
         self._initialize_schema()

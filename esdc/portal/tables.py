@@ -1,239 +1,196 @@
-"""Table/grid configuration for the POD portal."""
+"""Current contract-driven portal grid configuration."""
 
-_M_POD_ROWS_SQL = """
-SELECT m.*,
-    (SELECT group_concat(predecessor_id, '; ') FROM pod_revision
-      WHERE successor_id = m.pod_id) AS preceded_by,
-    (SELECT group_concat(successor_id, '; ') FROM pod_revision
-      WHERE predecessor_id = m.pod_id) AS revised_by,
-    (SELECT group_concat(successor_id, '; ') FROM pod_revision
-      WHERE predecessor_id = m.pod_id
-        AND revision_effect = 'full_replacement') AS superseded_by
-FROM m_pod m ORDER BY m.approval_seq
-"""
+from typing import Any
 
-TABLE_CONFIGS: dict[str, dict] = {
-    "m_pod": {
-        "title": "PODs",
-        "pk": ["id"],
-        "sql": _M_POD_ROWS_SQL,
-        "columns": [
-            {
-                "field": "id",
-                "title": "ID (ITB)",
-                "editableOnNew": True,
-                "required": True,
-            },
-            {
-                "field": "approval_date",
-                "title": "Approval Date",
-                "editableOnNew": True,
-                "editor": "date",
-                "required": True,
-            },
-            {
-                "field": "institution_code",
-                "title": "Institution",
-                "editableOnNew": True,
-                "ref": "institutions",
-                "required": True,
-            },
-            {
-                "field": "pod_type_code",
-                "title": "POD Type",
-                "editableOnNew": True,
-                "ref": "pod_types",
-                "required": True,
-            },
-            {
-                "field": "rev_num",
-                "title": "Rev",
-                "editableOnNew": True,
-                "required": True,
-            },
-            {"field": "pod_name", "title": "Name", "editable": True, "required": True},
-            {"field": "pod_letter_num", "title": "Letter No.", "editable": True},
-            {"field": "approval_seq", "title": "Seq", "readonly": True},
-            {"field": "pod_id", "title": "POD ID", "readonly": True},
-            {"field": "preceded_by", "title": "Preceded By", "readonly": True},
-            {"field": "revised_by", "title": "Revised By", "readonly": True},
-            {"field": "superseded_by", "title": "Superseded By", "readonly": True},
-        ],
-    },
-    "project_pod": {
-        "title": "Project Links",
-        "pk": ["pod_id", "project_id"],
-        "columns": [
-            {
-                "field": "pod_id",
-                "title": "POD",
-                "editableOnNew": True,
-                "ref": "pods",
-                "required": True,
-            },
-            {
-                "field": "project_id",
-                "title": "Project ID",
-                "editableOnNew": True,
-                "autocomplete": "/api/projects",
-                "required": True,
-            },
-        ],
-    },
-    "documents": {
-        "title": "Documents (corpus)",
-        "pk": ["doc_id"],
-        "height": "45vh",
-        "sql": """
-            SELECT d.doc_id, d.file_name, d.doc_type, d.doc_date, d.subject,
-                   d.wk_name, d.field_name, d.project_name,
-                   d.pod_name, d.suggested_pod_ids,
-                   COUNT(pd.pod_id) AS linked_pods
-            FROM documents d
-            LEFT JOIN pod_document pd ON pd.doc_id = d.doc_id
-            GROUP BY d.doc_id
-            ORDER BY d.doc_date
-        """,
-        "columns": [
-            {
-                "field": "doc_id",
-                "title": "Doc ID",
-                "readonly": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "file_name",
-                "title": "File",
-                "readonly": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "doc_type",
-                "title": "Type",
-                "readonly": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "doc_date",
-                "title": "Date",
-                "readonly": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "subject",
-                "title": "Subject",
-                "readonly": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "wk_name",
-                "title": "Working Area",
-                "editable": True,
-                "entityList": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "field_name",
-                "title": "Field",
-                "editable": True,
-                "entityList": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "project_name",
-                "title": "Project",
-                "editable": True,
-                "entityList": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "pod_name",
-                "title": "POD Name",
-                "readonly": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "suggested_pod_ids",
-                "title": "Suggested POD",
-                "readonly": True,
-                "headerFilter": True,
-            },
-            {
-                "field": "linked_pods",
-                "title": "Linked",
-                "readonly": True,
-                "headerFilter": True,
-            },
-        ],
-    },
-    "pod_document": {
-        "title": "Document Links",
-        "pk": ["pod_id", "doc_id"],
-        "height": "40vh",
-        "columns": [
-            {
-                "field": "pod_id",
-                "title": "POD",
-                "editableOnNew": True,
-                "ref": "pods",
-                "required": True,
-            },
-            {
-                "field": "doc_id",
-                "title": "Document",
-                "editableOnNew": True,
-                "autocomplete": True,
-                "autocompleteRef": "documents",
-                "required": True,
-            },
-        ],
-    },
-    "pod_revision": {
-        "title": "Revisions",
-        "pk": ["successor_id", "predecessor_id"],
-        "columns": [
-            {
-                "field": "successor_id",
-                "title": "Successor POD",
-                "editableOnNew": True,
-                "ref": "pod_ids",
-                "required": True,
-            },
-            {
-                "field": "predecessor_id",
-                "title": "Predecessor POD",
-                "editableOnNew": True,
-                "ref": "pod_ids",
-                "required": True,
-            },
-        ],
-    },
-    "r_institution": {
-        "title": "Institutions",
-        "pk": ["code"],
-        "columns": [
-            {"field": "code", "title": "Code", "editableOnNew": True, "required": True},
-            {
-                "field": "institution",
-                "title": "Institution",
-                "editable": True,
-                "required": True,
-            },
-            {"field": "description", "title": "Description", "editable": True},
-        ],
-    },
-    "r_pod_type": {
-        "title": "POD Types",
-        "pk": ["code"],
-        "columns": [
-            {"field": "code", "title": "Code", "editableOnNew": True, "required": True},
-            {
-                "field": "pod_type",
-                "title": "POD Type",
-                "editable": True,
-                "required": True,
-            },
-            {"field": "description", "title": "Description", "editable": True},
-        ],
-    },
+from esdc.pod_registry.contract import ColumnContract, TableContract, load_pod_contract
+
+
+def build_grid(table: dict[str, Any]) -> dict[str, Any]:
+    role = table.get("role", "")
+    key_fields = table.get("key_fields", [])
+    columns = table.get("columns", [])
+    groups = list(dict.fromkeys(c.get("group") for c in columns if c.get("group")))
+
+    return {
+        "title": table.get("title", ""),
+        "role": role,
+        "readonly": role != "input",
+        "pk": key_fields,
+        "columns": [build_column(c, role) for c in columns],
+        "groups": groups,
+        "columnChooser": True,
+    }
+
+
+def build_column(col: dict[str, Any], role: str) -> dict[str, Any]:
+    generated = col.get("generated", False)
+    new_only = col.get("new_only", False)
+    nullable = col.get("nullable", True)
+    ownership = col.get("ownership", "")
+    kind = col.get("kind", "")
+    storage_type = col.get("storage_type", "")
+
+    editable = (
+        role == "input" and ownership == "input" and not generated and not new_only
+    )
+    editable_on_new = role == "input" and ownership == "input" and not generated
+    readonly = not editable and not editable_on_new
+    required = not nullable and editable_on_new
+    editor = pick_editor(storage_type, kind)
+
+    return {
+        "field": col.get("name", ""),
+        "title": col.get("title", ""),
+        "logical_type": kind,
+        "data_type": storage_type,
+        "nullable": nullable,
+        "unit": col.get("unit"),
+        "group": col.get("group"),
+        "description": col.get("description"),
+        "readonly": readonly,
+        "editable": editable,
+        "editableOnNew": editable_on_new,
+        "required": required,
+        "editor": editor,
+        "ref": col.get("ref"),
+    }
+
+
+def pick_editor(storage_type: str, kind: str) -> str:
+    if kind in ("decimal", "integer"):
+        return "text"
+    if kind in ("uuid", "text", "datetime"):
+        return "text"
+    if kind == "date":
+        return "date"
+    if kind == "boolean":
+        return "tickCross"
+    return "text"
+
+
+_NEW_ONLY = {
+    "m_project": {"project_id"},
+    "m_pod": {"approval_date", "institution_id", "pod_type_id", "rev_num"},
 }
+_GRAINS = {
+    "pod_monitoring_api": ["pod_id_seq", "reported_date"],
+    "pod_forecast_api": ["pod_id_seq", "reported_date", "year_frcast"],
+}
+_REFS = {"m_pod": "pods", "m_project": "projects"}
+
+
+def _contract_column(column: ColumnContract, table: TableContract) -> dict[str, Any]:
+    reference = next((r for r in table.references if r.column == column.name), None)
+    return {
+        "name": column.name,
+        "title": column.formal_name,
+        "kind": column.logical_type,
+        "storage_type": column.data_type,
+        "nullable": column.nullable,
+        "unit": column.unit,
+        "group": column.group,
+        "description": column.description,
+        "ownership": column.ownership,
+        "generated": column.ownership != "input",
+        "new_only": column.name in _NEW_ONLY.get(table.name, set()),
+        "ref": None
+        if reference is None
+        else _REFS.get(reference.target_table, reference.target_table),
+    }
+
+
+def _static_column(
+    name: str, kind: str = "text", *, editable: bool = False
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "title": name.replace("_", " ").title(),
+        "kind": kind,
+        "storage_type": "BIGINT" if kind == "integer" else "TEXT",
+        "nullable": True,
+        "ownership": "input" if editable else "derived",
+        "generated": not editable,
+    }
+
+
+def _build_configs() -> dict[str, dict]:
+    configs = {}
+    for table in load_pod_contract().tables.values():
+        configs[table.name] = build_grid(
+            {
+                "title": table.name.replace("_", " ").title(),
+                "role": table.role,
+                "columns": [
+                    _contract_column(column, table) for column in table.columns
+                ],
+                "key_fields": _GRAINS.get(table.name, list(table.primary_key)),
+            }
+        )
+    for name, labels in {
+        "r_institution": ["institution", "description"],
+        "r_pod_type": ["pod_type", "description"],
+        "r_pod_stage": ["stage_name", "stage_definition"],
+    }.items():
+        columns = [_static_column("id", "integer")] + [
+            _static_column(c)
+            for c in [*labels, "created_at", "created_by", "updated_at", "updated_by"]
+        ]
+        for column in columns:
+            column["nullable"] = column["name"] == "description"
+        configs[name] = build_grid(
+            {
+                "title": name,
+                "role": "reference",
+                "columns": columns,
+                "key_fields": ["id"],
+            }
+        )
+    entities = {"wk_name", "field_name", "project_name"}
+    columns = [
+        _static_column(name, editable=name in entities)
+        for name in (
+            "doc_id",
+            "file_name",
+            "doc_type",
+            "doc_date",
+            "subject",
+            "wk_name",
+            "field_name",
+            "project_name",
+            "pod_name",
+            "suggested_pod_ids",
+        )
+    ]
+    configs["documents"] = build_grid(
+        {
+            "title": "Documents",
+            "role": "input",
+            "columns": columns,
+            "key_fields": ["doc_id"],
+        }
+    )
+    for column in configs["documents"]["columns"]:
+        if column["field"] in entities:
+            column["entityList"] = True
+    columns = [
+        _static_column("pod_id_seq", "integer", editable=True),
+        _static_column("doc_id", editable=True),
+    ]
+    for column in columns:
+        column.update(
+            nullable=False,
+            new_only=True,
+            ref="pods" if column["name"] == "pod_id_seq" else "documents",
+        )
+    configs["pod_document"] = build_grid(
+        {
+            "title": "Document Links",
+            "role": "input",
+            "columns": columns,
+            "key_fields": ["pod_id_seq", "doc_id"],
+        }
+    )
+    return configs
+
+
+TABLE_CONFIGS: dict[str, dict] = _build_configs()

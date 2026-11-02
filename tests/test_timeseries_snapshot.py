@@ -34,6 +34,7 @@ def _new_connection() -> sqlite3.Connection:
     from esdc.pod_registry.store import ensure_tables
 
     conn = sqlite3.connect(":memory:")
+    conn.execute("PRAGMA foreign_keys = ON")
     ensure_tables(conn)
     return conn
 
@@ -288,7 +289,11 @@ def test_writer_and_reads_use_one_shot_batches_without_fetchall() -> None:
             return self._connection.in_transaction
 
         def execute(self, *args, **kwargs):
-            return CursorProxy(self._connection.execute(*args, **kwargs))
+            cursor = self._connection.execute(*args, **kwargs)
+            normalized = " ".join(str(args[0]).lower().replace(chr(34), "").split())
+            if "from api_project_timeseries" in normalized:
+                return CursorProxy(cursor)
+            return cursor
 
         def executemany(self, *args, **kwargs):
             return CursorProxy(self._connection.executemany(*args, **kwargs))

@@ -1,7 +1,8 @@
 """Resolve extracted entity mentions to registry-backed canonical ids.
 
 This step is what keeps the auto-built graph clean: LLM mentions never
-become edges unless they land on a registry entity (m_pod, project_resources).
+become edges unless they land on a registry entity (m_pod, m_project, the
+canonical raw API resource rows).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import duckdb
 from esdc.corpus.pod_matcher import PodMatcher
 from esdc.knowledge.extractor import ExtractionResult
 from esdc.knowledge.store import Claim, Edge
+from esdc.pod_registry.migrations import _validate_existing_v2_registry
 
 logger = logging.getLogger(__name__)
 
@@ -30,53 +32,76 @@ class ResolutionResult:
     unresolved: list[dict[str, str]] = field(default_factory=list)
 
 
-def _name_lookup(duck_conn: duckdb.DuckDBPyConnection, sql: str) -> dict[str, str]:
-    """Lowercase name -> canonical id from a 2-column (name, id) query."""
-    rows = duck_conn.execute(sql).fetchall()
+def _unique_name_lookup(rows: list[tuple[Any, Any]]) -> dict[str, str]:
+    """Exact lowercase name to id, excluding ambiguous display names."""
+    candidates: dict[str, set[str]] = {}
+    for name, ident in rows:
+        if name is None or ident is None:
+            continue
+        key = str(name).strip().casefold()
+        if key:
+            candidates.setdefault(key, set()).add(str(ident))
     return {
-        str(name).strip().lower(): str(ident)
-        for name, ident in rows
-        if name is not None and ident is not None
+        name: next(iter(ids)) for name, ids in candidates.items() if len(ids) == 1
     }
 
 
 def _resolve_name(name: str, lookup: dict[str, str]) -> tuple[str | None, float]:
-    key = name.strip().lower()
+    """Resolve field/project names; POD identity uses stricter matcher rules."""
+    key = name.strip().casefold()
     if key in lookup:
         return lookup[key], 0.9
-    close = difflib.get_close_matches(key, list(lookup), n=1, cutoff=_FUZZY_CUTOFF)
+    close = difflib.get_close_matches(
+        key, list(lookup), n=1, cutoff=_FUZZY_CUTOFF
+    )
     if close:
         return lookup[close[0]], 0.75
     return None, 0.0
 
 
+def _sqlite_name_lookup(
+    sqlite_conn: sqlite3.Connection,
+    table: str,
+    name_column: str,
+    id_column: str,
+) -> dict[str, str]:
+    exists = sqlite_conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?",
+        [table],
+    ).fetchone()
+    if exists is None:
+        return {}
+    columns = {
+        str(row[1]) for row in sqlite_conn.execute(f'PRAGMA table_info("{table}")')
+    }
+    if name_column not in columns or id_column not in columns:
+        return {}
+    rows = sqlite_conn.execute(
+        f'SELECT DISTINCT "{name_column}", "{id_column}" FROM "{table}" '
+        f'WHERE "{name_column}" IS NOT NULL AND "{id_column}" IS NOT NULL'
+    ).fetchall()
+    return _unique_name_lookup([tuple(row) for row in rows])
+
+
 class _Resolvers:
-    def __init__(
-        self,
-        sqlite_conn: sqlite3.Connection,
-        duck_conn: duckdb.DuckDBPyConnection,
-    ) -> None:
+    def __init__(self, sqlite_conn: sqlite3.Connection) -> None:
         self.pod_matcher = PodMatcher(sqlite_conn)
-        self.fields = _name_lookup(
-            duck_conn,
-            "SELECT DISTINCT field_name, field_name FROM project_resources "
-            "WHERE field_name IS NOT NULL",
+        # Canonical sources only: m_project owns project identity, and the raw API
+        # resource rows are the only source of field and working-area names.
+        self.fields = _sqlite_name_lookup(
+            sqlite_conn, "api_project_resources", "field_name", "field_name"
         )
-        self.wks = _name_lookup(
-            duck_conn,
-            "SELECT DISTINCT wk_name, wk_name FROM project_resources "
-            "WHERE wk_name IS NOT NULL",
+        self.wks = _sqlite_name_lookup(
+            sqlite_conn, "api_project_resources", "wk_name", "wk_name"
         )
-        self.projects = _name_lookup(
-            duck_conn,
-            "SELECT DISTINCT project_name, project_id FROM project_resources "
-            "WHERE project_name IS NOT NULL",
+        self.projects = _sqlite_name_lookup(
+            sqlite_conn, "m_project", "project_name", "project_id"
         )
 
     def resolve(self, etype: str, name: str) -> tuple[str | None, float]:
         if etype == "pod":
-            suggestions, _ = self.pod_matcher.suggest(None, [name])
-            return (suggestions[0], 0.7) if suggestions else (None, 0.0)
+            ident, _method = self.pod_matcher.resolve_exact(pod_names=[name])
+            return (ident, 0.9) if ident is not None else (None, 0.0)
         if etype == "field":
             return _resolve_name(name, self.fields)
         if etype == "working_area":
@@ -100,7 +125,15 @@ def resolve_extraction(
     sqlite_conn: sqlite3.Connection,
     duck_conn: duckdb.DuckDBPyConnection,
 ) -> ResolutionResult:
-    resolvers = _Resolvers(sqlite_conn, duck_conn)
+    """Resolve mentions against the single current source.
+
+    ``duck_conn`` is accepted for caller compatibility while the instance graph is
+    still on its pending conversion; the disposable dossier cache is never a
+    source of canonical names. A source that is not the current schema is refused
+    before anything is resolved.
+    """
+    _validate_existing_v2_registry(sqlite_conn)
+    resolvers = _Resolvers(sqlite_conn)
     result = ResolutionResult()
     resolved_mentions: dict[tuple[str, str], str] = {}
 

@@ -19,6 +19,7 @@ from langchain_core.tools import StructuredTool
 
 from esdc.chat.domain_knowledge.instance_graph import InstanceGraphManager
 from esdc.knowledge.learn import run_learn
+from tests.knowledge.conftest import POD_DURI_REV1
 
 EXTRACTION = {
     "entities": [{"type": "pod", "name": "POD I Duri"}],
@@ -72,8 +73,14 @@ def test_learn_to_explore_entity_pipeline(
     assert report.docs_failed == 0
     assert report.edges_written > 0
     assert report.claims_written > 0
-    # both linked pods get dossiers (DOC-A -> rev1 pod, DOC-B -> base pod)
-    assert report.dossiers_built >= 2
+    # Dossier scope follows the canonical document link. Only DOC-A matches the
+    # current identity exactly, so exactly one POD has a document and gets a
+    # dossier. Retired assertion: `>= 2` assumed DOC-B's suggested_pod_ids became a
+    # link; under the current model that column is review-only and never an edge,
+    # and no pod_document bridge exists in the fixture (pod_document_added == 0).
+    assert report.dossiers_built == 1
+    assert report.dossiers_skipped == 0
+    assert report.pod_document_added == 0
 
     # run_learn's store/linker calls already commit internally and it
     # CHECKPOINTs duck_conn, but close both explicitly before the chat-tool
@@ -103,13 +110,22 @@ def test_learn_to_explore_entity_pipeline(
 
     assert isinstance(explore_entity, StructuredTool)
     assert explore_entity.func is not None
-    out = json.loads(explore_entity.func(entity="POD Duri", entity_type=None))
+    # The canonical identity name resolves through the real FTS index to the POD
+    # that owns the document link, which is the only POD with a dossier. Retired
+    # assertion: the old fixture had dossiers for both PODs, so the ambiguous short
+    # name "POD Duri" was enough; here it is checked only as a type resolution.
+    out = json.loads(explore_entity.func(entity="POD I Duri Revisi 1", entity_type=None))
     assert out["status"] == "success"
     assert out["entity"]["entity_type"] == "pod"
+    assert out["entity"]["entity_id"] == POD_DURI_REV1
     assert out["dossier"]
     assert "Stub dossier for smoke test" in out["dossier"]
     assert isinstance(out["related"], dict)
     assert isinstance(out["claims"], list)
+
+    ambiguous = json.loads(explore_entity.func(entity="POD Duri", entity_type=None))
+    assert ambiguous["status"] == "success"
+    assert ambiguous["entity"]["entity_type"] == "pod"
 
     # A name that resolves to nothing must be a clean not_found, never an
     # exception -- the brief's "bad name" expectation.

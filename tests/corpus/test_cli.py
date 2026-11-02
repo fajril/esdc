@@ -876,33 +876,50 @@ def test_eval_refresh_prints_delta(monkeypatch, tmp_path, fake_store):
 # --- corpus sync: rebuild the DuckDB mirror from the SQLite truth ----------
 
 
-def test_corpus_sync_reports_refreshed_row_count(monkeypatch):
-    """`esdc corpus sync` rebuilds the mirror and reports what it copied."""
+def test_corpus_sync_reports_refreshed_row_count(monkeypatch, tmp_path):
+    """`esdc corpus sync` reports the direct SQLite-to-DuckDB projection."""
+    from esdc.configs import Config
     from esdc.corpus.mirror import MirrorReport
 
-    class FakeStore:
-        def __init__(self):
-            self.ensure_tables_called = False
+    database_path = tmp_path / "analytics.duckdb"
+    sqlite_path = tmp_path / "esdc.sqlite"
+    expected = MirrorReport(
+        documents=3,
+        orphan_chunks=1,
+        registry={"m_pod": 2, "pod_document": 0},
+        views=["v_document", "v_pod"],
+    )
 
-        def ensure_tables(self):
-            self.ensure_tables_called = True
-
-        def refresh_mirror(self):
-            return MirrorReport(
-                documents=3,
-                orphan_chunks=1,
-                registry={"m_pod": 2, "pod_document": 0},
-                views=["v_document", "v_pod"],
-            )
+    class FakeConnection:
+        closed = False
 
         def close(self):
-            pass
+            self.closed = True
 
-    monkeypatch.setattr("esdc.corpus.store.CorpusStore", lambda **kw: FakeStore())
+    conn = FakeConnection()
+
+    def fake_connection(path, *, read_only, allow_install):
+        assert path == database_path
+        assert read_only is False
+        assert allow_install is False
+        return conn
+
+    def fake_refresh(target, source):
+        assert target is conn
+        assert source == sqlite_path
+        return expected
+
+    monkeypatch.setattr(
+        Config, "get_db_file", classmethod(lambda cls: database_path)
+    )
+    monkeypatch.setattr("esdc.dbmanager.get_duckdb_connection", fake_connection)
+    monkeypatch.setattr("esdc.pod_registry.store.get_esdc_sqlite_path", lambda: sqlite_path)
+    monkeypatch.setattr("esdc.corpus.mirror.refresh_all", fake_refresh)
 
     result = runner.invoke(app, ["corpus", "sync"])
 
     assert result.exit_code == 0, result.output
+    assert conn.closed is True
     assert "documents mirrored: 3" in result.output.lower()
     assert "orphan chunks removed: 1" in result.output.lower()
     assert "m_pod: 2" in result.output
@@ -1092,3 +1109,65 @@ def test_corpus_list_chunks_absent_is_actionable_not_a_traceback(
     assert "document_chunks" in result.output
     assert "esdc corpus commit" in result.output
     assert "Traceback" not in result.output
+
+
+
+def test_corpus_sync_cli_uses_v2_writer_for_default_source(tmp_path, monkeypatch):
+    import sqlite3
+
+    import duckdb
+
+    import esdc.corpus.embedder as embedder_module
+    from esdc.configs import Config
+    from esdc.corpus.store import _SQLITE_DOC_DDL
+    from esdc.pod_registry.migrations import initialize_registry_v2
+
+    class ForbiddenEmbedder:
+        def __init__(self):
+            raise AssertionError("projection sync must not load an embedder")
+
+    monkeypatch.setattr(embedder_module, "InternalEmbedder", ForbiddenEmbedder)
+
+    data_dir = tmp_path / "db"
+    data_dir.mkdir()
+    source_path = data_dir / "esdc.sqlite"
+    source = sqlite3.connect(source_path)
+    initialize_registry_v2(source)
+    source.execute(_SQLITE_DOC_DDL)
+    source.commit()
+    source.close()
+
+    duckdb_path = data_dir / "analytics.duckdb"
+    monkeypatch.setenv("ESDC_DB_DIR", str(data_dir))
+    monkeypatch.setenv("ESDC_DB_FILE", str(duckdb_path))
+    monkeypatch.setattr(Config, "_config_cache", None)
+    monkeypatch.setattr(Config, "get_db_dir", classmethod(lambda cls: data_dir))
+    from esdc.pod_registry.store import get_esdc_sqlite_path
+    assert get_esdc_sqlite_path() == source_path
+
+    result = runner.invoke(app, ["corpus", "sync"])
+
+    assert result.exit_code == 0, result.output
+    assert "pod_registry" in result.output
+    source = sqlite3.connect(source_path)
+    try:
+        tables = {
+            row[0]
+            for row in source.execute(
+                "SELECT name FROM sqlite_master WHERE type=?", ("table",)
+            ).fetchall()
+        }
+        assert "pod_registry_state" in tables
+        assert "project_pod" not in tables
+    finally:
+        source.close()
+
+    mirror = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        assert mirror.execute(
+            "SELECT table_type FROM information_schema.tables "
+            "WHERE table_schema=? AND table_name=?",
+            ("main", "pod_registry"),
+        ).fetchone() == ("VIEW",)
+    finally:
+        mirror.close()

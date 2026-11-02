@@ -346,6 +346,24 @@ esdc/
 
 ## CLI Commands
 
+### POD data and portal
+
+The canonical bundled contract is `esdc/schemas/pod.yaml`, matching dictionary 0.4.0. Five physical SQLite inputs (`m_project`, `m_pod`, `pod_project`, `pod_monitoring`, `pod_forecast`) feed two regenerated physical outputs (`pod_monitoring_api`, `pod_forecast_api`), plus three readonly SQL-seeded references (`r_institution`, `r_pod_type`, `r_pod_stage`). The last successful full API or manual load replaces facts; no parallel old schema remains. Strict schema, value, and relationship validation runs before replacement.
+
+```text
+esdc schema --schema-pod --output pod-template.xlsx
+esdc load --from-excel pod-template.xlsx --schema-pod --dry-run
+esdc load --from-excel pod-template.xlsx --schema-pod
+esdc load --from-sqlite source.sqlite --dry-run
+esdc load --from-sqlite source.sqlite
+esdc fetch
+esdc portal
+```
+
+A full XLSX import requires all five input sheets. `--pod-registry` replaces only the three master tables and preserves monitoring and forecast inputs. Old schema needs explicit validated full replacement; existing document links require reviewed `--pod-crosswalk` JSON, never guessed. Portal recalculates from local resources/timeseries; missing basis remains NULL with diagnostics. Download workbook produces a POD business backup with permanent identity reservations and read-only reference and result sheets. It excludes raw resources, timeseries, and corpus documents. Restoring it regenerates the outputs.
+
+Corpus and POD changes invalidate derived knowledge. Run `esdc corpus learn` to rebuild the knowledge graph and `esdc corpus reembed --stale` to update stale document embeddings. Ordinary metadata saves do not call models. Source commit survives cache failure; portal retry only republishes committed source; `esdc rebuild-api-analytics` provides offline recovery. Writers use WAL/FK ON and validate patched SQLite runtime; GET does not initialize or migrate.
+
 ### `chat`
 Start interactive chat with IRIS.
 

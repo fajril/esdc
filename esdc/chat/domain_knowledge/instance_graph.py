@@ -1,8 +1,10 @@
 """LadybugDB instance graph over learned corpus knowledge.
 
-Disposable in-memory index rebuilt from esdc.sqlite (kg_edge + registry +
-documents) on first access. Source of truth stays relational; this exists
-for Cypher traversal and BM25 entity lookup in chat tools.
+Disposable in-memory index rebuilt from one read-only snapshot of esdc.sqlite
+(kg_edge + current registry masters + documents) on first access, then reused
+only while the committed markers still match the state that snapshot captured.
+Source of truth stays relational; this exists for Cypher traversal and BM25
+entity lookup in chat tools.
 """
 
 from __future__ import annotations
@@ -21,9 +23,13 @@ from typing import Any
 import real_ladybug as lb
 import yaml
 
-from esdc.configs import Config
-from esdc.dbmanager import get_duckdb_connection
-from esdc.pod_registry.store import get_esdc_sqlite_path
+from esdc.knowledge.freshness import (
+    committed_marker_metadata,
+    knowledge_freshness,
+    knowledge_freshness_markers,
+)
+from esdc.pod_registry.migrations import _validate_existing_v2_registry
+from esdc.pod_registry.store import get_esdc_sqlite_path, get_sqlite_readonly_connection
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +67,29 @@ class _RelDef:
 class _InstanceGraphSchema:
     nodes: Mapping[str, _NodeDef]
     relationships: Mapping[str, _RelDef]
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceSnapshot:
+    """Rows captured by one read transaction over the current SQLite source."""
+
+    edge_count: int
+    edges: tuple[sqlite3.Row, ...]
+    pod_nodes: tuple[sqlite3.Row, ...]
+    document_nodes: tuple[sqlite3.Row, ...]
+    entity_nodes: tuple[sqlite3.Row, ...]
+    project_masters: tuple[sqlite3.Row, ...]
+    project_resources: tuple[sqlite3.Row, ...]
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    """Check optional tables without touching the source."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", [table]
+        ).fetchone()
+        is not None
+    )
 
 
 def _load_instance_graph_schema(
@@ -257,6 +286,13 @@ _TYPE_PRIORITY: dict[str, int] = {
     "document": 4,
 }
 
+# One build attempt can only end one of these ways; a moved marker is retried
+# once and then refused, never retried in an unbounded loop.
+_BUILD_PUBLISHED = "published"
+_BUILD_REFUSED = "refused"
+_BUILD_MARKER_MOVED = "marker_moved"
+_BUILD_ATTEMPTS = 2
+
 
 def _cypher_escape(s: str) -> str:
     s = s.replace("\\", "\\\\")
@@ -382,10 +418,29 @@ def _rel_props_literal(row: sqlite3.Row) -> str:
 class InstanceGraphManager:
     """Rebuild and query a disposable LadybugDB instance graph.
 
-    Built lazily from esdc.sqlite's ``kg_edge`` table plus registry and
-    document metadata. When constructed with an explicit ``sqlite_path``
-    (tests), each instance is independent. With no argument (production),
-    callers share a module-level singleton via ``get_instance_graph()``.
+    Built lazily from one read-only snapshot of the current SQLite source
+    (``kg_edge`` plus the current masters and document rows). When constructed
+    with an explicit ``sqlite_path`` (tests), each instance is independent. With
+    no argument (production), callers share a module-level singleton via
+    ``get_instance_graph()``.
+
+    The cache follows the committed source markers, not its own build flag: every
+    public access compares the compact committed marker fingerprint with the basis
+    the current projection was captured from, so a source replacement or a
+    completed rebuild is never answered from an old in-memory graph. A moved,
+    absent, unreadable, incompatible or stale marker is refused without writing,
+    initializing, or creating the source and without falling back to the previous
+    graph, and a later current marker lets the same manager rebuild.
+
+    Singleton initialization happens exactly once: the `_ctor_done` check, the cache
+    state, and the source path resolution are one serialized section, so a second
+    no-arg construction cannot replace the lifecycle lock or discard a cache the
+    first construction already published. Explicit-path instances stay independent.
+
+    ``duckdb_path`` is accepted only for caller compatibility: DuckDB is not read
+    here and no default Duck path is resolved, so project names come from the
+    SQLite source itself and construction cannot trigger Config's legacy default
+    database migration.
     """
 
     _instance: InstanceGraphManager | None = None
@@ -408,128 +463,326 @@ class InstanceGraphManager:
         sqlite_path: Path | None = None,
         duckdb_path: Path | None = None,
     ) -> None:
-        # Narrow benign race: two no-arg constructions could both pass this
-        # check before either sets `_ctor_done` (this runs outside
-        # `_class_lock`, unlike the singleton assignment in __new__). At
-        # worst that re-initializes _build_lock/_built/etc a second time on
-        # the same shared instance; _build() itself is idempotent and
-        # guarded by _build_lock, so a stray re-init is safe, not corrupt.
-        if sqlite_path is None and getattr(self, "_ctor_done", False):
+        # Singleton initialization is one serialized critical section. The
+        # `_ctor_done` check, the cache-state install, and the source path
+        # resolution all happen inside `_class_lock`, so a second no-arg
+        # construction cannot re-initialize an instance whose first construction
+        # already exposed a live cache: it either returns having observed the
+        # completed initialization, or it waits for that section. Before this,
+        # `__new__` protected only allocation and the check ran outside it, so a
+        # constructor paused at path resolution could resume after a later one had
+        # published a graph and replace that cache's lock and connection.
+        #
+        # `_class_lock` is only ever taken before `_lifecycle_lock`, and no path
+        # takes it while holding the lifecycle lock (`reset_for_tests()` closes
+        # outside the class lock), so the two can never invert.
+        if sqlite_path is None:
+            with InstanceGraphManager._class_lock:
+                if getattr(self, "_ctor_done", False):
+                    return
+                self._install_cache_state(get_esdc_sqlite_path())
             return
-        self._sqlite_path = sqlite_path or get_esdc_sqlite_path()
-        self._duckdb_path = (
-            duckdb_path if duckdb_path is not None else Config.get_db_file()
-        )
-        self._build_lock = threading.Lock()
+        # An explicit path keeps this instance independent of the singleton.
+        #
+        # `duckdb_path` is accepted for caller compatibility only: this reader has
+        # no Duck input, so no default is resolved here. Config.get_db_file() is not
+        # a pure getter (it can rename a legacy default database and rewrite
+        # config.yaml), and a graph that only refuses a source must never touch an
+        # unrelated database. The argument is therefore ignored, not stored.
+        self._install_cache_state(sqlite_path)
+
+    def _install_cache_state(self, sqlite_path: Path) -> None:
+        """Install the cache state once, from the caller's initialization section."""
+        self._sqlite_path = sqlite_path
+        # One reentrant critical section covers the marker check, build, query
+        # execution and close, so an automatic invalidation cannot tear down a
+        # Ladybug connection another thread is still using. It is reentrant
+        # because the bounded retry re-enters the same section on the same thread.
+        self._lifecycle_lock = threading.RLock()
         self._built = False
         self._available = False
         self._db: lb.Database | None = None
         self._conn: lb.Connection | None = None
+        # Marker fingerprint the published projection was captured from.
+        self._build_markers: tuple[Any, ...] | None = None
         self._ctor_done = True
 
     @classmethod
     def reset_for_tests(cls) -> None:
+        """Drop the production singleton; close it outside `_class_lock`.
+
+        Closing under the class lock while a public call holds the lifecycle lock
+        would invert the two locks, so the instance is released first and then
+        closed on its own.
+        """
         with cls._class_lock:
-            if cls._instance is not None:
-                cls._instance.close()
-            cls._instance = None
+            instance, cls._instance = cls._instance, None
+        if instance is not None:
+            instance.close()
 
     def close(self) -> None:
-        if self._conn is not None:
-            with contextlib.suppress(Exception):
-                self._conn.close()
-            self._conn = None
-        if self._db is not None:
-            with contextlib.suppress(Exception):
-                self._db.close()
-            self._db = None
-        self._built = False
-        self._available = False
+        with self._lifecycle_lock:
+            if self._conn is not None:
+                with contextlib.suppress(Exception):
+                    self._conn.close()
+                self._conn = None
+            if self._db is not None:
+                with contextlib.suppress(Exception):
+                    self._db.close()
+                self._db = None
+            self._built = False
+            self._available = False
+            self._build_markers = None
 
     # -- build --------------------------------------------------------
 
-    def _ensure_built(self) -> None:
-        with self._build_lock:
-            if self._built:
-                return
-            self._build()
-            self._built = True
+    def _ensure_built(self, *, allow_retry: bool = True) -> None:
+        """Reuse the cache only while the committed markers still match.
 
-    def _build(self) -> None:
-        if not self._sqlite_path.exists():
-            self._available = False
+        The fingerprint is read through an owned short ``mode=ro`` connection in
+        one read transaction. A missing, unreadable, incompatible or stale marker
+        discards the cache and serves nothing. A changed marker discards it and
+        rebuilds from a new snapshot; if the source committed during that build,
+        the projection is discarded and retried once, then refused. The retry is
+        bounded, so there is no unbounded loop and no case where a current marker
+        is answered by an old graph.
+        """
+        markers = self._read_committed_markers()
+        if markers is None:
+            self.close()
             return
-        conn = sqlite3.connect(self._sqlite_path)
-        conn.row_factory = sqlite3.Row
+        if self._built and markers == self._build_markers:
+            return
+        self.close()
+        outcome = self._build_and_publish(markers)
+        if outcome == _BUILD_MARKER_MOVED and allow_retry:
+            self._ensure_built(allow_retry=False)
+
+    def _read_committed_markers(self) -> tuple[Any, ...] | None:
+        """Read the compact committed marker fingerprint through one read snapshot.
+
+        Committed state only: the registry contract, schema and reference-seed
+        versions with its updated marker, the knowledge generations and stored
+        basis, the knowledge state updated marker, the relevant raw snapshot
+        revisions and hashes, and the SQLite schema cookie. The corpus is never
+        hashed here, and the connection comes from the shared read-only policy, so
+        a marker read can never initialize, write, or create the source. Filesystem
+        mtime is not a freshness signal on a WAL source, and a new connection's
+        data_version alone is not a cross-call fingerprint. An absent, unreadable
+        or stale marker is reported as ``None`` so no cached graph is served.
+        """
+        conn: sqlite3.Connection | None = None
         try:
-            has_table = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='kg_edge'"
-            ).fetchone()
-            if not has_table:
-                self._available = False
-                return
-            edge_count = conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()[0]
-            if not edge_count:
-                self._available = False
-                return
+            conn = get_sqlite_readonly_connection(self._sqlite_path)
+            if conn is None:
+                return None
+            conn.execute("BEGIN")
+            markers = knowledge_freshness_markers(conn)
+            if not markers.fresh:
+                return None
+            metadata = committed_marker_metadata(conn)
+            if metadata is None:
+                return None
+            snapshot_rows: tuple[tuple[str, str, str], ...] = ()
+            if _table_exists(conn, "api_snapshot"):
+                snapshot_rows = tuple(
+                    (str(row[0]), str(row[1]), str(row[2]))
+                    for row in conn.execute(
+                        "SELECT source_table, revision, source_sha256 "
+                        "FROM api_snapshot ORDER BY source_table"
+                    ).fetchall()
+                )
+            schema_cookie = int(conn.execute("PRAGMA schema_version").fetchone()[0])
+            return (
+                markers.source_generation,
+                markers.knowledge_generation,
+                markers.stored_basis_sha256,
+                metadata,
+                snapshot_rows,
+                schema_cookie,
+            )
+        except Exception as e:
+            logger.warning("[InstanceGraph] marker_refused | error=%s", e)
+            return None
+        finally:
+            # Read-only by construction: the transaction is ended, never committed
+            # to the source, and the connection is released on every path.
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    conn.commit()
+                with contextlib.suppress(Exception):
+                    conn.close()
 
-            project_names = self._load_project_names()
+    def _build_and_publish(self, markers: tuple[Any, ...]) -> str:
+        """Project one captured read snapshot of the current SQLite source.
 
-            self._db = lb.Database(":memory:")
-            self._conn = lb.Connection(self._db)
-            self._load_extensions()
-            self._create_schema()
-            self._load_nodes(conn, project_names)
-            self._load_edges(conn)
-            self._create_fts_indexes()
-            self._available = True
-            logger.info("[InstanceGraph] graph_built | edges=%d", edge_count)
+        The source is opened through the shared read-only policy and is never
+        written, initialized, or created here: a missing, non-regular, or
+        wrong-shape source is refused as unavailable while its bytes, journal
+        mode, and mtime stay exactly as the caller left them. Validation, the full
+        knowledge freshness check, and every projected row are read inside one read
+        transaction, which stays open until the projection ends, so all loaded
+        fields come from the same captured snapshot even if another connection
+        commits a change mid-build. Stale derived knowledge is not loaded. The
+        projection is published only after that snapshot is closed and the
+        committed markers are re-read: a source that committed during the build
+        discards this projection instead of being published as a mixed state.
+        """
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = get_sqlite_readonly_connection(self._sqlite_path)
+            if conn is None:
+                logger.info(
+                    "[InstanceGraph] source_unavailable | path=%s", self._sqlite_path
+                )
+                self._available = False
+                return _BUILD_REFUSED
+            conn.execute("BEGIN")
+            _validate_existing_v2_registry(conn)
+            freshness = knowledge_freshness(conn)
+            if not freshness.fresh:
+                logger.info(
+                    "[InstanceGraph] build_skipped | stale_knowledge | "
+                    "source_generation=%s knowledge_generation=%s",
+                    freshness.source_generation,
+                    freshness.knowledge_generation,
+                )
+                self._available = False
+                return _BUILD_REFUSED
+            snapshot = self._read_source_snapshot(conn)
+            if snapshot.edge_count == 0:
+                self._available = False
+                return _BUILD_REFUSED
+            self._project_graph(snapshot)
         except Exception as e:
             logger.error("[InstanceGraph] build_failed | error=%s", e)
             self.close()
             self._available = False
-        finally:
-            conn.close()
-
-    def _load_project_names(self) -> dict[str, str]:
-        """Look up project_id -> project_name from duckdb project_resources.
-
-        The instance graph is built from sqlite kg_edge, which only has
-        project_ids; real names live in duckdb. This is a best-effort
-        enrichment: a missing/locked duckdb file must not break graph
-        availability, so any failure here degrades to an empty map (Project
-        nodes then fall back to project_id as their name, same as before
-        this method existed).
-        """
-        if self._duckdb_path is None or not Path(self._duckdb_path).exists():
-            return {}
-        conn = None
-        try:
-            conn = get_duckdb_connection(self._duckdb_path, read_only=True)
-            rows = conn.execute(
-                """
-                SELECT project_id, project_name FROM (
-                    SELECT project_id, project_name,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY project_id
-                               ORDER BY report_year DESC, project_name
-                           ) AS rn
-                    FROM project_resources
-                ) WHERE rn = 1
-                """
-            ).fetchall()
-            return {str(pid): name for pid, name in rows if name}
-        except Exception as e:
-            logger.warning(
-                "[InstanceGraph] project_names_unavailable | path=%s error=%s",
-                self._duckdb_path,
-                e,
-            )
-            return {}
+            return _BUILD_REFUSED
+        except BaseException:
+            # Cancellation must still end the read transaction and release the
+            # source connection rather than leaving a reader holding the source.
+            self.close()
+            self._available = False
+            raise
         finally:
             if conn is not None:
+                # Ends the read transaction; nothing is written by definition.
+                with contextlib.suppress(Exception):
+                    conn.commit()
                 with contextlib.suppress(Exception):
                     conn.close()
+
+        # Snapshot closed: publish only against the current committed markers.
+        current = self._read_committed_markers()
+        if current != markers:
+            self.close()
+            logger.info("[InstanceGraph] build_discarded | markers moved during build")
+            return _BUILD_MARKER_MOVED
+        self._build_markers = markers
+        self._built = True
+        self._available = True
+        logger.info(
+            "[InstanceGraph] graph_published | source_generation=%s",
+            markers[0],
+        )
+        return _BUILD_PUBLISHED
+
+    def _read_source_snapshot(self, conn: sqlite3.Connection) -> _SourceSnapshot:
+        """Read every projected row inside the caller's single read transaction."""
+        if not _table_exists(conn, "kg_edge"):
+            raise _SchemaDriftError("source has no kg_edge table")
+
+        project_masters = tuple(
+            conn.execute(
+                "SELECT project_id, project_name, is_active FROM m_project "
+                "ORDER BY project_id"
+            ).fetchall()
+        )
+        # Generic raw resource rows can name projects outside m_project; they are
+        # an optional input, not a prerequisite for the build.
+        project_resources: tuple[sqlite3.Row, ...] = ()
+        if _table_exists(conn, "api_project_resources"):
+            project_resources = tuple(
+                conn.execute(
+                    "SELECT project_id, report_year, project_name "
+                    "FROM api_project_resources ORDER BY project_id, "
+                    "CAST(report_year AS INTEGER), project_name"
+                ).fetchall()
+            )
+        # Current schema: m_pod owns pod_type_id -> r_pod_type.id. Rows with no
+        # issued pod_id are unissued masters (e.g. the canonical carve-out), so
+        # they are excluded here instead of being invented as a "None" node.
+        pod_nodes = tuple(
+            conn.execute(
+                "SELECT m.pod_id, m.pod_name, m.pod_letter_num, m.approval_date, "
+                "t.pod_type, m.rev_num FROM m_pod m "
+                "JOIN r_pod_type t ON t.id = m.pod_type_id "
+                "WHERE m.pod_id IS NOT NULL ORDER BY m.pod_id_seq"
+            ).fetchall()
+        )
+        document_nodes: tuple[sqlite3.Row, ...] = ()
+        if _table_exists(conn, "documents"):
+            document_nodes = tuple(
+                conn.execute(
+                    "SELECT doc_id, file_name, doc_type, doc_date, subject "
+                    "FROM documents ORDER BY doc_id"
+                ).fetchall()
+            )
+        entity_nodes = tuple(
+            conn.execute(
+                "SELECT DISTINCT dst_type, dst_id FROM kg_edge "
+                "WHERE dst_type IN ('project','field','working_area') "
+                "UNION SELECT DISTINCT src_type, src_id FROM kg_edge "
+                "WHERE src_type IN ('project','field') ORDER BY 1, 2"
+            ).fetchall()
+        )
+        edges = tuple(
+            conn.execute(
+                "SELECT src_type, src_id, rel, dst_type, dst_id, confidence, "
+                "method, valid_from, valid_to, properties_json FROM kg_edge "
+                "ORDER BY src_type, src_id, rel, dst_type, dst_id"
+            ).fetchall()
+        )
+        return _SourceSnapshot(
+            edge_count=len(edges),
+            edges=edges,
+            pod_nodes=pod_nodes,
+            document_nodes=document_nodes,
+            entity_nodes=entity_nodes,
+            project_masters=project_masters,
+            project_resources=project_resources,
+        )
+
+    def _project_graph(self, snapshot: _SourceSnapshot) -> None:
+        """Build the LadybugDB index from captured rows only."""
+        self._db = lb.Database(":memory:")
+        self._conn = lb.Connection(self._db)
+        self._load_extensions()
+        self._create_schema()
+        self._load_nodes(snapshot)
+        self._load_edges(snapshot)
+        self._create_fts_indexes()
+
+    def _load_project_names(self, snapshot: _SourceSnapshot) -> dict[str, str]:
+        """Resolve project_id -> project_name from the same SQLite snapshot.
+
+        ``m_project`` owns project names, including inactive masters and masters
+        with no raw resource row. Generic raw resource rows only fill projects
+        outside the master. No DuckDB input is read here, so a stale mirror can
+        never override the master, and a missing mirror cannot degrade names.
+        """
+        names: dict[str, str] = {}
+        # Rows are ordered oldest report_year first, so the latest generic name
+        # wins for projects the master does not own.
+        for row in snapshot.project_resources:
+            project_id, project_name = row["project_id"], row["project_name"]
+            if project_id and project_name:
+                names[project_id] = project_name
+        for row in snapshot.project_masters:
+            if row["project_name"]:
+                names[row["project_id"]] = row["project_name"]
+        return names
 
     def _load_extensions(self) -> None:
         assert self._conn is not None
@@ -545,18 +798,13 @@ class InstanceGraphManager:
                 if "already exists" not in str(e).lower():
                     logger.warning("[InstanceGraph] schema_error | %s", e)
 
-    def _load_nodes(
-        self, conn: sqlite3.Connection, project_names: dict[str, str]
-    ) -> None:
+    def _load_nodes(self, snapshot: _SourceSnapshot) -> None:
         assert self._conn is not None
+        project_names = self._load_project_names(snapshot)
         pod_label = _TYPE_TO_LABEL["pod"]
         pod_key = _NODE_KEY_COL[pod_label]
 
-        for row in conn.execute(
-            "SELECT m.pod_id, m.pod_name, m.pod_letter_num, m.approval_date, "
-            "t.pod_type, m.rev_num FROM m_pod m "
-            "JOIN r_pod_type t ON t.code = m.pod_type_code"
-        ).fetchall():
+        for row in snapshot.pod_nodes:
             try:
                 pod_id = _cypher_escape(row["pod_id"])
                 pod_name = _cypher_escape(row["pod_name"] or "")
@@ -574,9 +822,7 @@ class InstanceGraphManager:
             except Exception as e:
                 logger.warning("[InstanceGraph] pod_node_error | %s", e)
 
-        for row in conn.execute(
-            "SELECT doc_id, file_name, doc_type, doc_date, subject FROM documents"
-        ).fetchall():
+        for row in snapshot.document_nodes:
             try:
                 doc_label = _TYPE_TO_LABEL["document"]
                 doc_key = _NODE_KEY_COL[doc_label]
@@ -593,13 +839,7 @@ class InstanceGraphManager:
             except Exception as e:
                 logger.warning("[InstanceGraph] document_node_error | %s", e)
 
-        for row in conn.execute(
-            "SELECT DISTINCT dst_type, dst_id FROM kg_edge "
-            "WHERE dst_type IN ('project','field','working_area') "
-            "UNION "
-            "SELECT DISTINCT src_type, src_id FROM kg_edge "
-            "WHERE src_type IN ('project','field')"
-        ).fetchall():
+        for row in snapshot.entity_nodes:
             entity_type, entity_id = row[0], row[1]
             if not isinstance(entity_id, str):
                 continue
@@ -625,12 +865,9 @@ class InstanceGraphManager:
                     e,
                 )
 
-    def _load_edges(self, conn: sqlite3.Connection) -> None:
+    def _load_edges(self, snapshot: _SourceSnapshot) -> None:
         assert self._conn is not None
-        for row in conn.execute(
-            "SELECT src_type, src_id, rel, dst_type, dst_id, confidence, "
-            "method, valid_from, valid_to, properties_json FROM kg_edge"
-        ).fetchall():
+        for row in snapshot.edges:
             rel = row["rel"]
             rel_def = _SCHEMA.relationships.get(rel)
             if rel_def is None:
@@ -713,10 +950,16 @@ class InstanceGraphManager:
         return rows
 
     # -- public API -----------------------------------------------------
+    #
+    # Each public access is one lifecycle section: the committed marker check,
+    # any rebuild, and the execution happen under the same reentrant lock, so an
+    # automatic invalidation cannot close a Ladybug connection while another
+    # thread is executing on it.
 
     def is_available(self) -> bool:
-        self._ensure_built()
-        return self._available
+        with self._lifecycle_lock:
+            self._ensure_built()
+            return self._available
 
     def find(
         self,
@@ -724,142 +967,145 @@ class InstanceGraphManager:
         top_k: int = 5,
         entity_type: str | None = None,
     ) -> list[dict[str, Any]]:
-        self._ensure_built()
-        if not self._available:
-            return []
-        escaped = _cypher_escape(text)
-        all_results: list[dict[str, Any]] = []
-        indexes = _FTS_INDEXES
-        if entity_type is not None:
-            # Restrict to the requested type's index BEFORE the top_k
-            # truncation below, so a valid match of that type is never
-            # lost to higher-priority cross-type hits filling up top_k
-            # first (see explore_entity's entity_type filter).
-            target_label = _TYPE_TO_LABEL.get(entity_type)
-            indexes = [idx for idx in _FTS_INDEXES if idx[0] == target_label]
-        for table, idx_name, _props in indexes:
-            key_col = _NODE_KEY_COL[table]
-            name_col = _NODE_NAME_COL[table]
-            cypher = (
-                f"CALL QUERY_FTS_INDEX('{table}', '{idx_name}', '{escaped}', "
-                f"top := {top_k}) RETURN node.{key_col}, node.{name_col}, score"
-            )
-            try:
-                rows = self._execute_cypher(cypher)
-            except Exception as e:
-                logger.warning(
-                    "[InstanceGraph] find_error | table=%s error=%s", table, e
+        with self._lifecycle_lock:
+            self._ensure_built()
+            if not self._available:
+                return []
+            escaped = _cypher_escape(text)
+            all_results: list[dict[str, Any]] = []
+            indexes = _FTS_INDEXES
+            if entity_type is not None:
+                # Restrict to the requested type's index BEFORE the top_k
+                # truncation below, so a valid match of that type is never
+                # lost to higher-priority cross-type hits filling up top_k
+                # first (see explore_entity's entity_type filter).
+                target_label = _TYPE_TO_LABEL.get(entity_type)
+                indexes = [idx for idx in _FTS_INDEXES if idx[0] == target_label]
+            for table, idx_name, _props in indexes:
+                key_col = _NODE_KEY_COL[table]
+                name_col = _NODE_NAME_COL[table]
+                cypher = (
+                    f"CALL QUERY_FTS_INDEX('{table}', '{idx_name}', '{escaped}', "
+                    f"top := {top_k}) RETURN node.{key_col}, node.{name_col}, score"
                 )
-                continue
-            if not rows:
-                continue
-            for row in rows:
-                all_results.append(
-                    {
-                        "entity_type": _LABEL_TO_TYPE[table],
-                        "entity_id": row[0],
-                        "name": row[1],
-                        "score": row[2],
-                    }
-                )
-        # See _TYPE_PRIORITY docstring: type priority is the primary sort
-        # key (deterministic, intentional entity-resolution policy); raw
-        # score only breaks ties within the same type, where it is
-        # actually comparable.
-        all_results.sort(
-            key=lambda r: (_TYPE_PRIORITY.get(r["entity_type"], 99), -r["score"])
-        )
-        return all_results[:top_k]
-
-    def neighbors(
-        self, entity_type: str, entity_id: str
-    ) -> dict[str, list[dict[str, Any]]]:
-        self._ensure_built()
-        result: dict[str, list[dict[str, Any]]] = {}
-        if not self._available:
-            return result
-        label = _TYPE_TO_LABEL.get(entity_type)
-        if label is None:
-            return result
-        key_col = _NODE_KEY_COL[label]
-        esc_id = _cypher_escape(entity_id)
-
-        for rel, (
-            src_label,
-            src_key,
-            dst_label,
-            dst_key,
-            has_props,
-        ) in _REL_MAP.items():
-            items: list[dict[str, Any]] = []
-            directions: list[tuple[str, str, str, str]] = []
-            # Check both directions independently: self-referential rel
-            # types (e.g. REVISES, POD->POD) have src_label == dst_label,
-            # so an if/elif would miss one direction.
-            if src_label == label:
-                directions.append((dst_label, dst_key, "outbound", ""))
-            if dst_label == label:
-                directions.append((src_label, src_key, "inbound", ""))
-
-            for other_label, other_key, direction, _ in directions:
-                if direction == "outbound":
-                    cols = [f"b.{other_key}", f"b.{_NODE_NAME_COL[other_label]}"]
-                    if has_props:
-                        cols += ["r.confidence", "r.method"]
-                    cypher = (
-                        f"MATCH (a:{label} {{{key_col}: '{esc_id}'}})"
-                        f"-[r:{rel}]->(b:{other_label}) "
-                        f"RETURN {', '.join(cols)}"
-                    )
-                else:
-                    cols = [f"a.{other_key}", f"a.{_NODE_NAME_COL[other_label]}"]
-                    if has_props:
-                        cols += ["r.confidence", "r.method"]
-                    cypher = (
-                        f"MATCH (a:{other_label})-[r:{rel}]->"
-                        f"(b:{label} {{{key_col}: '{esc_id}'}}) "
-                        f"RETURN {', '.join(cols)}"
-                    )
-
                 try:
                     rows = self._execute_cypher(cypher)
                 except Exception as e:
                     logger.warning(
-                        "[InstanceGraph] neighbors_error | rel=%s error=%s", rel, e
+                        "[InstanceGraph] find_error | table=%s error=%s", table, e
                     )
                     continue
+                if not rows:
+                    continue
                 for row in rows:
-                    item: dict[str, Any] = {
-                        "entity_type": _LABEL_TO_TYPE[other_label],
-                        "entity_id": row[0],
-                        "name": row[1],
-                        "confidence": row[2] if has_props else None,
-                        "method": row[3] if has_props else None,
-                        "direction": direction,
-                    }
-                    items.append(item)
-            if items:
-                result[rel] = items
-        return result
+                    all_results.append(
+                        {
+                            "entity_type": _LABEL_TO_TYPE[table],
+                            "entity_id": row[0],
+                            "name": row[1],
+                            "score": row[2],
+                        }
+                    )
+            # See _TYPE_PRIORITY docstring: type priority is the primary sort
+            # key (deterministic, intentional entity-resolution policy); raw
+            # score only breaks ties within the same type, where it is
+            # actually comparable.
+            all_results.sort(
+                key=lambda r: (_TYPE_PRIORITY.get(r["entity_type"], 99), -r["score"])
+            )
+            return all_results[:top_k]
+
+    def neighbors(
+        self, entity_type: str, entity_id: str
+    ) -> dict[str, list[dict[str, Any]]]:
+        with self._lifecycle_lock:
+            self._ensure_built()
+            result: dict[str, list[dict[str, Any]]] = {}
+            if not self._available:
+                return result
+            label = _TYPE_TO_LABEL.get(entity_type)
+            if label is None:
+                return result
+            key_col = _NODE_KEY_COL[label]
+            esc_id = _cypher_escape(entity_id)
+
+            for rel, (
+                src_label,
+                src_key,
+                dst_label,
+                dst_key,
+                has_props,
+            ) in _REL_MAP.items():
+                items: list[dict[str, Any]] = []
+                directions: list[tuple[str, str, str, str]] = []
+                # Check both directions independently: self-referential rel
+                # types (e.g. REVISES, POD->POD) have src_label == dst_label,
+                # so an if/elif would miss one direction.
+                if src_label == label:
+                    directions.append((dst_label, dst_key, "outbound", ""))
+                if dst_label == label:
+                    directions.append((src_label, src_key, "inbound", ""))
+
+                for other_label, other_key, direction, _ in directions:
+                    if direction == "outbound":
+                        cols = [f"b.{other_key}", f"b.{_NODE_NAME_COL[other_label]}"]
+                        if has_props:
+                            cols += ["r.confidence", "r.method"]
+                        cypher = (
+                            f"MATCH (a:{label} {{{key_col}: '{esc_id}'}})"
+                            f"-[r:{rel}]->(b:{other_label}) "
+                            f"RETURN {', '.join(cols)}"
+                        )
+                    else:
+                        cols = [f"a.{other_key}", f"a.{_NODE_NAME_COL[other_label]}"]
+                        if has_props:
+                            cols += ["r.confidence", "r.method"]
+                        cypher = (
+                            f"MATCH (a:{other_label})-[r:{rel}]->"
+                            f"(b:{label} {{{key_col}: '{esc_id}'}}) "
+                            f"RETURN {', '.join(cols)}"
+                        )
+
+                    try:
+                        rows = self._execute_cypher(cypher)
+                    except Exception as e:
+                        logger.warning(
+                            "[InstanceGraph] neighbors_error | rel=%s error=%s", rel, e
+                        )
+                        continue
+                    for row in rows:
+                        item: dict[str, Any] = {
+                            "entity_type": _LABEL_TO_TYPE[other_label],
+                            "entity_id": row[0],
+                            "name": row[1],
+                            "confidence": row[2] if has_props else None,
+                            "method": row[3] if has_props else None,
+                            "direction": direction,
+                        }
+                        items.append(item)
+                if items:
+                    result[rel] = items
+            return result
 
     def query(self, cypher: str) -> list[dict[str, Any]]:
         _validate_read_only(cypher)
-        self._ensure_built()
-        if not self._available:
-            return []
-        assert self._conn is not None
-        try:
-            raw = self._conn.execute(cypher)
-            columns: list[str] = raw.get_column_names()  # type: ignore[union-attr]
-            rows: list[list[Any]] = []
-            while raw.has_next():  # type: ignore[union-attr]
-                rows.append(raw.get_next())  # type: ignore[union-attr]
-        except Exception as e:
-            logger.warning(
-                "[InstanceGraph] query_error | cypher=%s error=%s", cypher[:80], e
-            )
-            return []
-        return [dict(zip(columns, row, strict=True)) for row in rows]
+        with self._lifecycle_lock:
+            self._ensure_built()
+            if not self._available:
+                return []
+            assert self._conn is not None
+            try:
+                raw = self._conn.execute(cypher)
+                columns: list[str] = raw.get_column_names()  # type: ignore[union-attr]
+                rows: list[list[Any]] = []
+                while raw.has_next():  # type: ignore[union-attr]
+                    rows.append(raw.get_next())  # type: ignore[union-attr]
+            except Exception as e:
+                logger.warning(
+                    "[InstanceGraph] query_error | cypher=%s error=%s", cypher[:80], e
+                )
+                return []
+            return [dict(zip(columns, row, strict=True)) for row in rows]
 
 
 def get_instance_graph() -> InstanceGraphManager:

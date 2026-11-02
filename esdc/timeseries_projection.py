@@ -52,6 +52,14 @@ class TimeseriesStage:
     years: tuple[int, ...] | None
 
 
+class TimeseriesProjectionError(ValueError):
+    """A canonical timeseries slice cannot be represented by its SQL types."""
+
+    def __init__(self, message: str, *, report_year: int | None) -> None:
+        super().__init__(message)
+        self.report_year = report_year
+
+
 def _canonical_types() -> dict[str, str]:
     source = _load_sql_script("create_table_project_timeseries.sql")
     start = source.index("CREATE TABLE IF NOT EXISTS project_timeseries")
@@ -190,15 +198,31 @@ def stage_canonical_timeseries(
     insert = f"INSERT INTO {table} VALUES ({placeholders})"
     count = 0
     batch: list[tuple[Any, ...]] = []
+    batch_year: int | None = None
+
+    def insert_batch() -> None:
+        try:
+            conn.executemany(insert, batch)
+        except duckdb.Error as exc:
+            raise TimeseriesProjectionError(
+                f"project_timeseries report year {batch_year}: {exc}",
+                report_year=batch_year,
+            ) from exc
+
     for row in iter_timeseries_rows(source, years=selected):
+        if batch and row.report_year != batch_year:
+            insert_batch()
+            count += len(batch)
+            batch.clear()
+        batch_year = row.report_year
         values = json.loads(row.row_json)
         batch.append(tuple(values[column] for column in TIMESERIES_SOURCE_COLUMNS))
         if len(batch) == 1000:
-            conn.executemany(insert, batch)
+            insert_batch()
             count += len(batch)
             batch.clear()
     if batch:
-        conn.executemany(insert, batch)
+        insert_batch()
         count += len(batch)
     return TimeseriesStage(table, count, selected)
 

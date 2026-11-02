@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,8 +12,10 @@ from typing import Any, Protocol
 import duckdb
 
 from esdc.dbmanager import get_duckdb_connection
-
-from .store import get_sqlite_connection
+from esdc.pod_registry.store import (
+    get_sqlite_readonly_connection,
+    is_missing_table_error,
+)
 
 __all__ = ["PublicationResult", "publish_spatial_layers"]
 
@@ -47,24 +50,29 @@ class _Layer:
         return f"user_spatial_{self.layer_id.replace('-', '')}"
 
 
-def _open_source_reader(path: Path) -> SpatialLayerReader:
+def _open_source_reader(path: Path) -> SpatialLayerReader | None:
     """Open the portable SQLite-backed source."""
-    return get_sqlite_connection(path)
+    return get_sqlite_readonly_connection(path)
 
 
 def _read_layers(reader: SpatialLayerReader) -> list[_Layer]:
-    rows = reader.execute(
-        """SELECT l.id, l.name, v.version, v.source_crs, v.id
-           FROM spatial_layer AS l
-           JOIN spatial_layer_version AS v ON v.layer_id = l.id
-           WHERE l.archived_at IS NULL
-             AND v.version = (
-                 SELECT MAX(v2.version)
-                 FROM spatial_layer_version AS v2
-                 WHERE v2.layer_id = l.id
-             )
-           ORDER BY l.id"""
-    ).fetchall()
+    try:
+        rows = reader.execute(
+            """SELECT l.id, l.name, v.version, v.source_crs, v.id
+               FROM spatial_layer AS l
+               JOIN spatial_layer_version AS v ON v.layer_id = l.id
+               WHERE l.archived_at IS NULL
+                 AND v.version = (
+                     SELECT MAX(v2.version)
+                     FROM spatial_layer_version AS v2
+                     WHERE v2.layer_id = l.id
+                 )
+               ORDER BY l.id"""
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if not is_missing_table_error(exc):
+            raise
+        return []
     return [
         _Layer(str(row[0]), str(row[1]), int(row[2]), row[3], str(row[4]))
         for row in rows
@@ -122,7 +130,7 @@ def publish_spatial_layers(duckdb_path: Path, sqlite_path: Path) -> PublicationR
     conn: duckdb.DuckDBPyConnection | None = None
     try:
         conn = get_duckdb_connection(Path(duckdb_path), read_only=False)
-        layers = _read_layers(reader)
+        layers = _read_layers(reader) if reader is not None else []
         conn.execute("BEGIN")
         feature_count = 0
         stale_tables = conn.execute(
@@ -138,14 +146,15 @@ def publish_spatial_layers(duckdb_path: Path, sqlite_path: Path) -> PublicationR
                 f"CREATE TABLE {table} (feature_id BIGINT, "
                 "properties_json VARCHAR, geometry GEOMETRY)"
             )
-            for feature_id, geometry, properties in _read_features(
-                reader, layer.version_id
-            ):
-                conn.execute(
-                    f"INSERT INTO {table} VALUES (?, ?, ST_GeomFromWKB(?))",
-                    (feature_id, properties, geometry),
-                )
-                feature_count += 1
+            if reader is not None:
+                for feature_id, geometry, properties in _read_features(
+                    reader, layer.version_id
+                ):
+                    conn.execute(
+                        f"INSERT INTO {table} VALUES (?, ?, ST_GeomFromWKB(?))",
+                        (feature_id, properties, geometry),
+                    )
+                    feature_count += 1
         _catalog_view(conn, layers)
         conn.execute("COMMIT")
         return PublicationResult(
@@ -159,6 +168,7 @@ def publish_spatial_layers(duckdb_path: Path, sqlite_path: Path) -> PublicationR
                 conn.execute("ROLLBACK")
         raise
     finally:
-        reader.close()
+        if reader is not None:
+            reader.close()
         if conn is not None:
             conn.close()

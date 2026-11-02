@@ -308,17 +308,22 @@ def compare_resource_projection(
                 scratch.execute(f"CREATE TABLE actual_resources ({ddl})")
                 scratch.execute(f"CREATE TABLE expected_resources ({ddl})")
                 placeholders = ", ".join("?" for _ in columns)
-                scratch.executemany(
-                    f"INSERT INTO actual_resources VALUES ({placeholders})",
-                    actual_values,
-                )
-                scratch.executemany(
-                    f"INSERT INTO expected_resources VALUES ({placeholders})",
-                    [
-                        tuple(_expected_value(row, name) for name in columns)
-                        for row in rows
-                    ],
-                )
+                expected_values = [
+                    tuple(_expected_value(row, name) for name in columns)
+                    for row in rows
+                ]
+                # A verified empty source or projection has nothing to insert, and
+                # DuckDB refuses an empty executemany batch.
+                if actual_values:
+                    scratch.executemany(
+                        f"INSERT INTO actual_resources VALUES ({placeholders})",
+                        actual_values,
+                    )
+                if expected_values:
+                    scratch.executemany(
+                        f"INSERT INTO expected_resources VALUES ({placeholders})",
+                        expected_values,
+                    )
                 identity_difference_count = _difference_count(
                     scratch, ("project_id", "report_year", "uncert_level")
                 )

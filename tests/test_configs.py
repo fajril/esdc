@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from esdc.configs import KEY_DESCRIPTIONS, MODEL_SECTIONS, SETTINGS_SECTIONS, Config
 
 
@@ -108,6 +110,18 @@ class TestCredentials:
 
 class TestDbFile:
     """Tests for database file path."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_database_path_environment(self, monkeypatch):
+        """Path units own their environment conditions.
+
+        ESDC_DB_FILE wins over a configured path, so an ambient value from the calling
+        shell would decide the result for every unit here. Each unit that wants one of
+        these conditions still sets it inside the test; this fixture only guarantees that
+        what a unit asserts is what that unit supplied.
+        """
+        monkeypatch.delenv("ESDC_DB_FILE", raising=False)
+        monkeypatch.delenv("ESDC_DB_DIR", raising=False)
 
     def test_get_db_file_env_override(self, tmp_path):
         """Test ESDC_DB_FILE environment variable overrides all."""

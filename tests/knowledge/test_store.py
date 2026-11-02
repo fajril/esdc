@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from esdc.knowledge.store import Claim, Edge, KnowledgeStore
+from tests.knowledge.conftest import POD_DURI, POD_DURI_REV1, PROJECT_DURI
 
 
 def _store(sqlite_conn):
@@ -18,7 +19,7 @@ def test_upsert_edges_dedupes_and_keeps_best_confidence(sqlite_conn):
         "DOC-B",
         "ABOUT_POD",
         "pod",
-        "PL-2019-0001-2-2-0",
+        POD_DURI,
         confidence=0.8,
         method="suggested_promoted",
     )
@@ -27,7 +28,7 @@ def test_upsert_edges_dedupes_and_keeps_best_confidence(sqlite_conn):
         "DOC-B",
         "ABOUT_POD",
         "pod",
-        "PL-2019-0001-2-2-0",
+        POD_DURI,
         confidence=1.0,
         method="letter_num_exact",
     )
@@ -45,16 +46,16 @@ def test_edges_for_matches_source_and_destination(sqlite_conn):
         [
             Edge(
                 "pod",
-                "PL-2019-0001-2-2-0",
+                POD_DURI,
                 "HAS_PROJECT",
                 "project",
-                "PRJ-001",
+                PROJECT_DURI,
                 method="registry",
             )
         ]
     )
-    assert len(store.edges_for("pod", "PL-2019-0001-2-2-0")) == 1
-    assert len(store.edges_for("project", "PRJ-001")) == 1
+    assert len(store.edges_for("pod", POD_DURI)) == 1
+    assert len(store.edges_for("project", PROJECT_DURI)) == 1
     assert store.edges_for("field", "Duri") == []
 
 
@@ -67,7 +68,7 @@ def test_replace_claims_is_idempotent_per_doc(sqlite_conn):
             "npv_musd",
             100,
             subject_type="pod",
-            subject_id="PL-2022-0002-2-2-1",
+            subject_id=POD_DURI_REV1,
             evidence="NPV 100 MUSD",
         ),
         Claim("DOC-A", "decision", "approval", "approved"),
@@ -75,7 +76,7 @@ def test_replace_claims_is_idempotent_per_doc(sqlite_conn):
     assert store.replace_claims("DOC-A", claims) == 2
     assert store.replace_claims("DOC-A", claims[1:]) == 1
     assert len(store.claims_for_doc("DOC-A")) == 1
-    got = store.claims_for("pod", "PL-2022-0002-2-2-1")
+    got = store.claims_for("pod", POD_DURI_REV1)
     assert got == []  # the remaining claim has no subject
 
 
@@ -90,11 +91,11 @@ def test_claim_value_roundtrips_json(sqlite_conn):
                 "cost_breakdown",
                 {"capex": 1.5, "opex": [1, 2]},
                 subject_type="pod",
-                subject_id="PL-2022-0002-2-2-1",
+                subject_id=POD_DURI_REV1,
             )
         ],
     )
-    claim = store.claims_for("pod", "PL-2022-0002-2-2-1")[0]
+    claim = store.claims_for("pod", POD_DURI_REV1)[0]
     assert claim.value == {"capex": 1.5, "opex": [1, 2]}
 
 
@@ -123,8 +124,8 @@ def test_delete_doc_edges_only_removes_that_docs_edges(sqlite_conn):
     store = _store(sqlite_conn)
     store.upsert_edges(
         [
-            Edge("document", "DOC-A", "ABOUT_POD", "pod", "P1", method="m"),
-            Edge("document", "DOC-B", "ABOUT_POD", "pod", "P1", method="m"),
+            Edge("document", "DOC-A", "ABOUT_POD", "pod", POD_DURI, method="m"),
+            Edge("document", "DOC-B", "ABOUT_POD", "pod", POD_DURI, method="m"),
         ]
     )
     assert store.delete_doc_edges("DOC-A") == 1
