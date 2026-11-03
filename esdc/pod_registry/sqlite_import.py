@@ -962,29 +962,62 @@ def _write_resource_stage(
 ) -> None:
     if stage.resources_path is None:
         return
+    if stage.resources_sha256 is None:
+        raise PodImportError(["Project-resource stage is missing its validated hash"])
+    staged_count, staged_hash = _sorted_resource_hash(
+        stage.resources_path, stage.resources_path.parent
+    )
+    if (staged_count, staged_hash) != (
+        stage.resource_row_count,
+        stage.resources_sha256,
+    ):
+        raise PodImportError(
+            ["Project-resource stage contents changed after validation"]
+        )
     ensure_project_resources_table(conn)
     _ensure_snapshot_metadata_table(conn)
-    from esdc.api_snapshot import _ROW_COLUMNS, _ROW_INSERT_SQL
+    from esdc.api_snapshot import _ROW_COLUMNS, _ROW_INSERT_SQL, _persisted_hash
 
     conn.execute("DELETE FROM api_project_resources")
     sql = _ROW_INSERT_SQL
     values: list[tuple[object, ...]] = []
-    with stage.resources_path.open("r", encoding="utf-8") as source:
-        for line in source:
-            row = _resource_row_from_line(line)
-            values.append(tuple(getattr(row, column) for column in _ROW_COLUMNS))
-            if len(values) == 500:
-                conn.executemany(sql, values)
-                values.clear()
-    if values:
-        conn.executemany(sql, values)
-    if stage.resources_sha256 is None:
-        raise PodImportError(["Project-resource stage is missing its validated hash"])
+    # Keep the exact lines consumed by the writer, so a change after the initial
+    # hash cannot introduce unvalidated values with an otherwise valid row count.
+    with TemporaryDirectory(prefix="resource-consumed-") as temporary_directory:
+        consumed_path = Path(temporary_directory) / "resources.jsonl"
+        with (
+            stage.resources_path.open("r", encoding="utf-8") as source,
+            consumed_path.open("w", encoding="utf-8") as consumed,
+        ):
+            for line in source:
+                row = _resource_row_from_line(line)
+                consumed.write(line)
+                values.append(tuple(getattr(row, column) for column in _ROW_COLUMNS))
+                if len(values) == 500:
+                    conn.executemany(sql, values)
+                    values.clear()
+        if values:
+            conn.executemany(sql, values)
+        consumed_count, consumed_hash = _sorted_resource_hash(
+            consumed_path, Path(temporary_directory)
+        )
+        if (consumed_count, consumed_hash) != (
+            stage.resource_row_count,
+            stage.resources_sha256,
+        ):
+            raise PodImportError(
+                ["Project-resource stage contents changed during import"]
+            )
+    # SQLite affinity can turn staged 1.0 into persisted 1; hash the canonical
+    # values, as the API snapshot writer does, rather than the staging encoding.
+    row_count, source_sha256 = _persisted_hash(conn)
+    if row_count != stage.resource_row_count:
+        raise PodImportError(["Project-resource stage row count changed during import"])
     snapshot = ApiSnapshot(
         "project_resources",
         str(uuid.uuid4()),
-        stage.resource_row_count,
-        stage.resources_sha256,
+        row_count,
+        source_sha256,
         datetime.now(timezone.utc).isoformat(),
         "committed",
         0,

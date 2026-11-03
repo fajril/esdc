@@ -941,9 +941,13 @@ def _checkpoint_path(path: Path) -> None:
 
 
 def get_api_analytics_status(
-    *, duckdb_path: Path, sqlite_path: Path
+    *, duckdb_path: Path, sqlite_path: Path, verify_content: bool = True
 ) -> dict[str, ApiSourceStatus]:
-    """Read API source markers and verify whether each DuckDB projection is current."""
+    """Read publication status; full content verification remains the default.
+
+    Metadata-only reads compare persisted snapshot/lineage markers and do not
+    certify the underlying rows against those markers.
+    """
     from esdc.fetch_publication import (
         ensure_selective_resource_baseline,
         ensure_timeseries_baseline,
@@ -985,13 +989,13 @@ def get_api_analytics_status(
                 snapshots[source_table] = snapshot
                 if snapshot is None:
                     source_errors[source_table] = "canonical snapshot is missing"
-                elif source_table == "project_resources":
+                elif verify_content and source_table == "project_resources":
                     count, digest = _persisted_hash(source)
                     if count != snapshot.row_count or digest != snapshot.source_sha256:
                         source_errors[source_table] = (
                             "canonical snapshot count/hash is stale"
                         )
-                else:
+                elif verify_content:
                     count, digest = timeseries_fingerprint(source)
                     if count != snapshot.row_count or digest != snapshot.source_sha256:
                         source_errors[source_table] = (
@@ -1075,6 +1079,11 @@ def get_api_analytics_status(
         elif snapshot.publication_state != "published":
             state = "pending" if snapshot.publication_state == "committed" else "stale"
             detail = f"SQLite publication state is {snapshot.publication_state}"
+        elif not verify_content:
+            state = "published"
+            detail = (
+                "SQLite snapshot and DuckDB publication markers agree (metadata only)"
+            )
         else:
             try:
                 if table == "project_resources":

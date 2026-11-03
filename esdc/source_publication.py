@@ -124,8 +124,33 @@ def _pair_component(
     )
 
 
+def _raw_source_marker_basis(
+    sqlite_path: Path,
+) -> tuple[tuple[object, ...], ...] | None:
+    """Capture raw-source revisions without reading any business rows."""
+    if not sqlite_path.is_file():
+        return None
+    connection = sqlite3.connect(sqlite_path.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        connection.execute("BEGIN")
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='api_snapshot'"
+        ).fetchone() is None:
+            return ()
+        return tuple(
+            tuple(row)
+            for row in connection.execute(
+                "SELECT source_table, revision, row_count, source_sha256, "
+                "publication_state FROM api_snapshot WHERE source_table IN "
+                "('project_resources', 'project_timeseries') ORDER BY source_table"
+            )
+        )
+    finally:
+        connection.close()
+
+
 def get_fetch_publication_status(
-    *, sqlite_path: Path, duckdb_path: Path
+    *, sqlite_path: Path, duckdb_path: Path, verify_content: bool = True
 ) -> AnalyticsRebuildReport:
     """Read the combined project-pair plus POD gate from committed SQLite truth only.
 
@@ -140,12 +165,20 @@ def get_fetch_publication_status(
     # Bracket the committed generation so a change between the two reads cannot combine
     # a pair read from one generation with a POD read from another.
     generation_before = committed_pod_source_generation(sqlite_path)
+    raw_basis_before = None if verify_content else _raw_source_marker_basis(sqlite_path)
     api_status = analytics_rebuild.get_api_analytics_status(
-        duckdb_path=duckdb_path, sqlite_path=sqlite_path
+        duckdb_path=duckdb_path, sqlite_path=sqlite_path, verify_content=verify_content
     )
     registry = get_pod_registry_status(sqlite_path, duckdb_path)
     generation_after = committed_pod_source_generation(sqlite_path)
-    counts = _projection_counts(duckdb_path)
+    raw_basis_after = None if verify_content else _raw_source_marker_basis(sqlite_path)
+    counts: dict[str, int] = {}
+    if verify_content:
+        counts = _projection_counts(duckdb_path)
+    else:
+        for table, entry in api_status.items():
+            lineage = entry["lineage"]
+            counts[table] = 0 if lineage is None else lineage["source_row_count"]
     components = [
         _pair_component(table, api_status[table], counts.get(table, 0))
         for table in ("project_resources", "project_timeseries")
@@ -173,10 +206,12 @@ def get_fetch_publication_status(
             error=None if pod_status in {"published", "absent"} else registry.message,
         )
     )
-    if generation_after != generation_before:
+    if generation_after != generation_before or raw_basis_after != raw_basis_before:
         detail = (
             f"generation changed from {generation_before} to {generation_after} during "
             "the gate read; the components were measured on different bases"
+            if generation_after != generation_before
+            else "Source snapshot markers changed during the status read; retry"
         )
         components = [
             dataclasses.replace(component, status="stale", error=detail)

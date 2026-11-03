@@ -408,11 +408,26 @@ def create_portal_app() -> FastAPI:
     def status():
         source, cache = get_esdc_sqlite_path(), Path(Config.get_db_file())
         try:
-            return {
-                "fetch": asdict(
-                    get_fetch_publication_status(sqlite_path=source, duckdb_path=cache)
+            fetch = get_fetch_publication_status(
+                sqlite_path=source, duckdb_path=cache, verify_content=False
+            )
+            pod = get_pod_registry_status(source, cache)
+            generation = next(
+                (
+                    part.generation
+                    for part in fetch.components
+                    if part.name == "pod_projection"
                 ),
-                "pod": asdict(get_pod_registry_status(source, cache)),
+                None,
+            )
+            if fetch.fresh and generation != pod.source_generation:
+                raise RuntimeError(
+                    "Source generation changed during status read; retry"
+                )
+            return {
+                "verification_level": "metadata",
+                "fetch": asdict(fetch),
+                "pod": asdict(pod),
             }
         except Exception as exc:
             raise HTTPException(503, str(exc)) from exc
