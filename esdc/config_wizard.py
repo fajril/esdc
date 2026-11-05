@@ -2278,12 +2278,11 @@ _OCR_TEST_TEXT = "ESDC OCR TEST 12345"
 _OCR_TEST_MARKER = "12345"
 
 
-def _short_test_message(error: Exception) -> str:
-    """A safe error type or HTTP status for a failed test.
+def _error_status(error: Exception) -> int | None:
+    """A numeric HTTP status from the exception, its response, or its cause chain.
 
-    Exception text can contain server response bodies, credentials, or request
-    URLs, so it is never read. Walk the cause chain for a numeric status code;
-    otherwise report only the exception type.
+    Never reads exception text: server bodies, credentials, and request URLs are
+    not safe to display.
     """
     seen: set[int] = set()
     current: BaseException | None = error
@@ -2291,12 +2290,25 @@ def _short_test_message(error: Exception) -> str:
         seen.add(id(current))
         status = getattr(current, "status_code", None)
         if isinstance(status, int) and not isinstance(status, bool):
-            return f"HTTP {status}"
+            return status
         response = getattr(current, "response", None)
         status = getattr(response, "status_code", None)
         if isinstance(status, int) and not isinstance(status, bool):
-            return f"HTTP {status}"
+            return status
         current = current.__cause__ or current.__context__
+    return None
+
+
+def _short_test_message(error: Exception) -> str:
+    """A safe error type or HTTP status for a failed test.
+
+    Exception text can contain server response bodies, credentials, or request
+    URLs, so it is never read. A numeric status wins; otherwise only the
+    exception type is reported.
+    """
+    status = _error_status(error)
+    if status is not None:
+        return f"HTTP {status}"
     return type(error).__name__
 
 
@@ -2579,7 +2591,14 @@ def _test_task_selection(role: TaskRole, selection: TaskSelection) -> None:
         except Exception as error:
             # Construction, request, response, and image errors stop this test only:
             # nothing is saved, nothing is enabled, and no other provider is tried.
-            rich_print(f"[{_ERROR_COLOR}]Failed: {_short_test_message(error)}[/]")
+            detail = f"{_short_test_message(error)}."
+            if _error_status(error) == 400:
+                # A 400 on an image request usually means the model is text-only.
+                detail += (
+                    " The gateway rejected the image; the model may not support "
+                    "vision."
+                )
+            rich_print(f"[{_ERROR_COLOR}]Failed: {detail}[/]")
             return
 
         text = str(answer or "").strip()

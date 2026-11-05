@@ -5566,6 +5566,46 @@ class TestOcrTestSendsItsOwnImage:
         assert "Failed:" in printed
         mock_values.assert_not_called()
 
+    @patch("esdc.config_wizard.rich_print")
+    @patch("esdc.config_wizard.Config.set_config_values")
+    def test_a_400_adds_a_safe_vision_hint_without_echoing_the_body(
+        self, mock_values, mock_print
+    ):
+        class _BadRequestError(RuntimeError):
+            status_code = 400
+
+        client = self._client(self._ANSWER)
+        client.query_image.side_effect = _BadRequestError(
+            "SECRET SERVER BODY at http://gpu-box:11434"
+        )
+
+        printed = self._run(mock_print, mock_values, client)
+
+        assert "Failed:" in printed
+        assert "HTTP 400" in printed
+        assert "may not support vision" in printed
+        assert "SECRET" not in printed
+        assert "SERVER BODY" not in printed
+        assert "gpu-box" not in printed
+        mock_values.assert_not_called()
+
+    @patch("esdc.config_wizard.rich_print")
+    @patch("esdc.config_wizard.Config.set_config_values")
+    def test_a_500_does_not_claim_a_vision_failure(self, mock_values, mock_print):
+        class _ServerError(RuntimeError):
+            status_code = 500
+
+        client = self._client(self._ANSWER)
+        client.query_image.side_effect = _ServerError("SECRET SERVER BODY")
+
+        printed = self._run(mock_print, mock_values, client)
+
+        assert "Failed:" in printed
+        assert "HTTP 500" in printed
+        assert "may not support vision" not in printed
+        assert "SECRET" not in printed
+        mock_values.assert_not_called()
+
     @patch("esdc.config_wizard._test_provider")
     @patch("esdc.config_wizard._save_task_selection")
     @patch("esdc.config_wizard.rich_print")
