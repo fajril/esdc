@@ -1,6 +1,7 @@
 """Tests for the LLM provider layer."""
 
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -694,6 +695,79 @@ class TestCreateLlmFromConfigBounds:
         assert len(captured) == 1
         assert "max_completion_tokens" not in captured[0]
         assert "timeout" not in captured[0]
+
+
+class TestOllamaListModelsHost:
+    """The model list goes to the host that was selected, never to localhost."""
+
+    @staticmethod
+    def _listing(names: list[str]):
+        return SimpleNamespace(models=[SimpleNamespace(model=name) for name in names])
+
+    def test_selected_host_is_used_for_the_list(self):
+        import ollama
+
+        from esdc.providers.ollama import OllamaProvider
+
+        hosts: list[str | None] = []
+
+        class _RecordingClient:
+            def __init__(self, host: str | None = None, **kwargs):
+                hosts.append(host)
+
+            def list(self):
+                return TestOllamaListModelsHost._listing(["glm-ocr", "llama3.2"])
+
+        with patch.object(ollama, "Client", _RecordingClient):
+            models = OllamaProvider.list_models("http://gpu-box:11434")
+
+        assert models == ["glm-ocr", "llama3.2"]
+        assert hosts == ["http://gpu-box:11434"]
+
+    def test_no_host_keeps_the_existing_default_list_behavior(self):
+        import ollama
+
+        from esdc.providers.ollama import OllamaProvider
+
+        calls: list[str] = []
+
+        def fake_list():
+            calls.append("default_list")
+            return TestOllamaListModelsHost._listing(["llama3.2"])
+
+        with patch.object(ollama, "list", fake_list):
+            assert OllamaProvider.list_models() == ["llama3.2"]
+
+        assert calls == ["default_list"]
+
+    def test_remote_failure_returns_empty_and_never_reaches_local_host(self):
+        import ollama
+
+        from esdc.providers.ollama import OllamaProvider
+
+        hosts: list[str | None] = []
+
+        class _FailingClient:
+            def __init__(self, host: str | None = None, **kwargs):
+                hosts.append(host)
+
+            def list(self):
+                raise ConnectionError("remote host unreachable")
+
+        with patch.object(ollama, "Client", _FailingClient):
+            assert OllamaProvider.list_models("http://gpu-box:11434") == []
+
+        assert hosts == ["http://gpu-box:11434"]
+
+    def test_public_signature_is_unchanged(self):
+        import inspect
+
+        from esdc.providers.ollama import OllamaProvider
+
+        # Signature as seen through the class: cls is bound, so it is not listed.
+        parameters = inspect.signature(OllamaProvider.list_models).parameters
+        assert list(parameters) == ["base_url", "kwargs"]
+        assert parameters["base_url"].default is None
 
 
 class TestProviderFallbackChatModelMismatch:

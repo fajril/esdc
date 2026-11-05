@@ -41,6 +41,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -1533,20 +1534,24 @@ class CorpusStore:
         merged: list[dict[str, Any]],
         rerank: bool | None,
     ) -> list[dict[str, Any]]:
-        """Reorder the top of the RRF list with the local cross-encoder.
+        """Reorder the top of the RRF list with the active reranker.
 
         rerank=None reads corpus.rerank from config; an explicit bool
         overrides it (the eval harness compares both modes). Any failure
         keeps RRF order — rerank never breaks search.
+
+        The whole score list is validated inside the exception boundary,
+        before any candidate is annotated: a bad list leaves the incoming
+        RRF order with no partial rerank_score fields.
         """
         cfg = Config.get_corpus_config()
         enabled = cfg.get("rerank", False) if rerank is None else rerank
         if not enabled or len(merged) <= 1:
             return merged
 
-        from esdc.corpus.reranker import Reranker
+        from esdc.corpus.reranker import get_reranker
 
-        rr = Reranker.get()
+        rr = get_reranker()
         if rr is None:
             return merged
 
@@ -1556,10 +1561,22 @@ class CorpusStore:
             scores = rr.rerank(
                 query, [r.get("embed_text") or r["chunk_text"] for r in top]
             )
+            # Checked as a whole before anything is written onto a candidate.
+            if not isinstance(scores, list) or len(scores) != len(top):
+                raise ValueError("rerank returned an unexpected number of scores")
+            validated: list[float] = []
+            for score in scores:
+                if isinstance(score, bool) or not isinstance(score, (int, float)):
+                    raise ValueError("rerank score is not numeric")
+                value = float(score)
+                if not math.isfinite(value):
+                    raise ValueError("rerank score is not finite")
+                validated.append(value)
         except Exception as e:
             logger.warning("[Corpus] rerank failed, keeping RRF order | error=%s", e)
             return merged
-        for r, s in zip(top, scores, strict=True):
+
+        for r, s in zip(top, validated, strict=True):
             r["rerank_score"] = s
         top.sort(key=lambda r: r["rerank_score"], reverse=True)
         return top + merged[pool:]

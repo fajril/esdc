@@ -30,7 +30,12 @@ def _build_embedder() -> Any:
 
 
 def run_warmup(rerank: bool | None = None) -> list[WarmupResult]:
-    """Warm the embedder (always) and the reranker (per `rerank`/config)."""
+    """Warm the embedder (always) and the reranker (per `rerank`/config).
+
+    Only the local backend is warmed. A provider backend has no in-process
+    model to download or run, so it is reported as skipped: no GGUF load and
+    no request, whichever non-local value the config holds.
+    """
     results: list[WarmupResult] = []
 
     emb = _build_embedder()
@@ -40,17 +45,24 @@ def run_warmup(rerank: bool | None = None) -> list[WarmupResult]:
     except Exception as e:
         results.append(WarmupResult("embedder", emb.model, False, str(e)))
 
-    want = (
-        rerank
-        if rerank is not None
-        else bool(Config.get_corpus_config().get("rerank", False))
-    )
+    cfg = Config.get_corpus_config()
+    want = rerank if rerank is not None else bool(cfg.get("rerank", False))
+    backend = str(cfg.get("rerank_backend") or "local").strip().lower()
     model_name = _resolve_model_name()
 
     if not want:
         results.append(
             WarmupResult("reranker", model_name, True, "skipped (rerank disabled)")
         )
+        return results
+
+    if backend != "local":
+        detail = (
+            "skipped (provider backend)"
+            if backend == "provider"
+            else "skipped (unsupported rerank backend)"
+        )
+        results.append(WarmupResult("reranker", model_name, True, detail))
         return results
 
     rr = Reranker.get()

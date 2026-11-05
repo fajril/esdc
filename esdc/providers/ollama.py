@@ -59,14 +59,23 @@ class OllamaProvider(Provider):
 
     @classmethod
     def list_models(cls, base_url: str | None = None, **kwargs: Any) -> list[str]:
-        """List available models from Ollama server."""
+        """List available models from Ollama server.
+
+        With an explicit ``base_url`` the request goes to that host through
+        ``ollama.Client(host=base_url)``; without it the existing default
+        ``ollama_list()`` path is used. A failed remote lookup returns an empty
+        list and never falls back to the local host.
+        """
         try:
+            import ollama
             from ollama import list as ollama_list
 
             logger.debug("[INFERENCE] ollama_list_models | base_url=%s", base_url)
             list_start = time.perf_counter()
 
-            result = ollama_list()
+            result = (
+                ollama.Client(host=base_url).list() if base_url else ollama_list()
+            )
 
             elapsed_ms = (time.perf_counter() - list_start) * 1000
             models = [m.model for m in result.models if m.model is not None]

@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 import fitz
-import httpx
 
 from esdc.configs import Config
 from esdc.corpus.extractor import extract_document
@@ -29,7 +28,7 @@ from esdc.corpus.metadata import (
     normalize_metadata,
     parse_llm_json,
 )
-from esdc.corpus.ocr import OllamaVisionOcr
+from esdc.corpus.ocr import create_ocr_client
 from esdc.corpus.pipeline import (
     CorpusReport,
     _collect_sources,
@@ -100,16 +99,12 @@ class _LlmContext:
         self._built = True
         cfg = self._cfg
         host = cfg.get("ollama_host") or None
-        ocr = OllamaVisionOcr(
-            cfg["ocr_model"],
-            num_ctx=cfg.get("num_ctx", 16384),
-            host=host,
-            timeout=httpx.Timeout(
-                float(cfg.get("extract_timeout_seconds") or 300), connect=10.0
-            ),
-        )
+        ocr = create_ocr_client(cfg)
         self.ocr_client = ocr if ocr.health_check() else None
-        self.metadata_caller = _resolve_text_caller(cfg.get("metadata_model"), host)
+        metadata_provider = cfg.get("metadata_provider") or None
+        self.metadata_caller = _resolve_text_caller(
+            cfg.get("metadata_model"), host, provider_name=metadata_provider
+        )
 
     def infer(
         self, src: Path, status: Callable[[str], None] | None = None

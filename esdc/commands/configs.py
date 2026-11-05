@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typer
 
+from esdc.config_fields import format_config_value
 from esdc.config_wizard import run_wizard
 from esdc.configs import Config
 
@@ -92,7 +93,7 @@ def configs(
             typer.echo("No configuration found.")
             return
         for key in sorted(flat.keys()):
-            print(f"  {key} = {flat[key]}")
+            print(f"  {key} = {format_config_value(key, flat[key])}")
         return
 
     run_wizard()

@@ -1,12 +1,20 @@
 """Tests for application configuration."""
 
+import copy
 import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
-from esdc.configs import KEY_DESCRIPTIONS, MODEL_SECTIONS, SETTINGS_SECTIONS, Config
+from esdc.configs import (
+    ENUM_CHOICES,
+    KEY_DESCRIPTIONS,
+    MODEL_SECTIONS,
+    SETTINGS_SECTIONS,
+    Config,
+)
 
 
 class TestConfigDir:
@@ -342,3 +350,193 @@ class TestCorpusExtractionBounds:
     def test_extract_keys_coerce_as_ints(self):
         assert Config._coerce_value("corpus.extract_max_tokens", "0") == 0
         assert Config._coerce_value("corpus.extract_timeout_seconds", "0") == 0
+
+
+ROLE_REFERENCE_KEYS = (
+    "embedding_provider",
+    "corpus.metadata_provider",
+    "corpus.cleanup_provider",
+    "corpus.ocr_provider",
+    "corpus.rerank_provider",
+)
+
+
+class TestOptionalRoleReferences:
+    """The six optional reference keys: defaults, descriptions, one home."""
+
+    def test_role_reference_defaults_are_empty_strings(self):
+        flat = Config._flatten(Config.get_defaults())
+        for key in ROLE_REFERENCE_KEYS:
+            assert flat[key] == "", key
+
+    def test_rerank_backend_defaults_to_local(self):
+        assert Config._flatten(Config.get_defaults())["corpus.rerank_backend"] == "local"
+
+    def test_role_reference_keys_have_descriptions(self):
+        for key in (*ROLE_REFERENCE_KEYS, "corpus.rerank_backend"):
+            assert key in KEY_DESCRIPTIONS, key
+
+    def test_rerank_backend_enum_registered_with_its_default(self):
+        assert ENUM_CHOICES["corpus.rerank_backend"] == ["local", "provider"]
+
+    def test_role_reference_keys_have_exactly_one_menu_location(self):
+        grouped = [
+            key
+            for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
+            for key in keys
+        ]
+        for key in (*ROLE_REFERENCE_KEYS, "corpus.rerank_backend"):
+            assert grouped.count(key) == 1, key
+
+
+class TestExistingConfigWithoutRoleReferences:
+    """A saved config with none of the new keys behaves exactly as before."""
+
+    _CONFIG_TEXT = """
+api_url: https://config.example.com/
+logging:
+  level: INFO
+embedding_host: http://legacy-embed:1234/v1
+embedding_model: legacy-model
+embedding_api_key: legacy-key
+default_provider: opencode
+provider_order:
+  - opencode
+  - engine
+providers:
+  opencode:
+    provider_type: openai_compatible
+    base_url: http://gateway.example:4000/v1
+    model: chat-a
+  engine:
+    provider_type: openai_compatible
+    base_url: http://engine:4000/v1
+    api_key: fixture-key
+    model: chat-a
+unknown_user_key: kept
+"""
+
+    def test_existing_getters_and_saved_values_are_unchanged(self, tmp_path, monkeypatch):
+        for name in (
+            "ESDC_EMBEDDING_BACKEND",
+            "ESDC_EMBEDDING_HOST",
+            "ESDC_EMBEDDING_API_KEY",
+            "ESDC_EMBEDDING_MODEL",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            original = self._CONFIG_TEXT
+            config_file.write_text(original)
+            Config._config_cache = None
+
+            assert Config.get_embedding_backend() == "ollama"
+            assert Config.get_embedding_host() == "http://legacy-embed:1234/v1"
+            assert Config.get_embedding_model() == "legacy-model"
+            assert Config.get_embedding_api_key() == "legacy-key"
+            assert Config.get_default_provider() == "opencode"
+            assert Config.get_provider_order() == ["opencode", "engine"]
+
+            config = Config._load_config()
+            assert config is not None
+            assert config["unknown_user_key"] == "kept"
+            for key in ROLE_REFERENCE_KEYS:
+                assert key not in config, key
+
+            # Reading a config must not rewrite it.
+            assert config_file.read_text() == original
+            assert not [p for p in tmp_path.iterdir() if p.name != "config.yaml"]
+
+
+class TestAtomicConfigSave:
+    """One write per save, cache updated only when the file actually changed."""
+
+    def test_multi_value_save_is_atomic(self, tmp_path):
+        """Several dotted keys are applied to one dict and written once."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text("logging:\n  level: INFO\ncache:\n  sql_ttl: 604800\n")
+            Config._config_cache = None
+
+            replaces = []
+            real_replace = os.replace
+
+            def record_replace(src, dst):
+                replaces.append((src, dst))
+                return real_replace(src, dst)
+
+            with patch.object(os, "replace", side_effect=record_replace):
+                Config.set_config_values(
+                    {
+                        "logging.level": "DEBUG",
+                        "corpus.rerank_backend": "provider",
+                        "corpus.rerank_provider": "engine",
+                    }
+                )
+
+            assert len(replaces) == 1
+            config = yaml.safe_load(config_file.read_text())
+            assert config["logging"]["level"] == "DEBUG"
+            assert config["corpus"]["rerank_backend"] == "provider"
+            assert config["corpus"]["rerank_provider"] == "engine"
+            assert config["cache"]["sql_ttl"] == 604800
+            # Only its own temporary file existed, and it is gone after success.
+            assert [p.name for p in tmp_path.iterdir()] == ["config.yaml"]
+
+    def test_failed_replace_preserves_file_and_cache(self, tmp_path):
+        """A failed move leaves the old file and the pre-save cache intact."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text("logging:\n  level: INFO\n")
+            Config._config_cache = None
+            cache_before = Config._load_config()
+            assert cache_before is not None
+            snapshot = copy.deepcopy(cache_before)
+
+            with (
+                patch.object(os, "replace", side_effect=OSError("replace failed")),
+                pytest.raises(OSError),
+            ):
+                Config.set_config_values({"logging.level": "DEBUG"})
+
+            assert Config._config_cache is cache_before
+            assert Config._config_cache == snapshot
+            assert snapshot["logging"]["level"] == "INFO"
+            assert yaml.safe_load(config_file.read_text())["logging"]["level"] == "INFO"
+            # The temporary file this call created is removed, nothing else.
+            assert [p.name for p in tmp_path.iterdir()] == ["config.yaml"]
+
+    def test_save_preserves_existing_file_mode(self, tmp_path):
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text("logging:\n  level: INFO\n")
+            config_file.chmod(0o640)
+            Config._config_cache = None
+
+            Config.set_config_value("logging.level", "DEBUG")
+
+            assert config_file.stat().st_mode & 0o777 == 0o640
+
+    def test_set_config_value_is_the_single_key_wrapper(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            Config,
+            "set_config_values",
+            classmethod(lambda cls, values: calls.append(values)),
+        )
+        Config.set_config_value("corpus.rerank_backend", "provider")
+        assert calls == [{"corpus.rerank_backend": "provider"}]
+
+    def test_provider_fields_are_not_saved_through_dotted_keys(self, tmp_path):
+        """Provider entries keep their own saves; a dotted path must not reach them."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text("providers:\n  engine:\n    model: chat-a\n")
+            Config._config_cache = None
+
+            with pytest.raises(ValueError, match="dotted keys"):
+                Config.set_config_values({"providers.engine.model": "chat-b"})
+
+            config = yaml.safe_load(config_file.read_text())
+            assert config["providers"]["engine"]["model"] == "chat-a"

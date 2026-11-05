@@ -64,6 +64,7 @@ import threading
 from typing import Any
 
 from esdc.configs import Config
+from esdc.corpus.provider_reranker import ProviderReranker, RerankClient
 
 logger = logging.getLogger(__name__)
 
@@ -216,3 +217,72 @@ class Reranker:
                 out = self._model.embed(_rerank_prompt(query, t))
                 scores.append(float(out[0]))
         return scores
+
+
+def get_reranker() -> RerankClient | None:
+    """Return the reranker for the active corpus config, or None.
+
+    `local` uses the existing GGUF singleton and its score meaning; `provider`
+    builds the HTTP client from the saved reference and the explicit model.
+    Nothing here raises: an inactive or invalid selection warns and returns
+    None, so search keeps its RRF order. Reranking itself stays gated by
+    `corpus.rerank` at the call site — this factory never enables it.
+    """
+    cfg = Config.get_corpus_config()
+    backend = str(cfg.get("rerank_backend") or "local").strip().lower()
+
+    if backend == "local":
+        return Reranker.get()
+
+    if backend != "provider":
+        logger.warning(
+            "[Corpus] rerank backend %s is not supported; keeping RRF order",
+            backend or "unknown",
+        )
+        return None
+
+    name = str(cfg.get("rerank_provider") or "").strip()
+    model = str(cfg.get("rerank_model") or "").strip()
+
+    if not name:
+        logger.warning(
+            "[Corpus] rerank provider is not configured; keeping RRF order"
+        )
+        return None
+    if not model:
+        logger.warning(
+            "[Corpus] rerank model is not configured for provider '%s'; "
+            "keeping RRF order",
+            name,
+        )
+        return None
+
+    try:
+        provider = Config.get_referenced_provider(name)
+    except ValueError:
+        logger.warning(
+            "[Corpus] rerank provider '%s' is not configured; keeping RRF order",
+            name,
+        )
+        return None
+
+    provider_type = str(
+        provider.get("provider_type") or provider.get("type") or ""
+    ).strip().lower()
+    if provider_type != "openai_compatible":
+        logger.warning(
+            "[Corpus] rerank is not supported for provider type %s (%s); "
+            "keeping RRF order",
+            provider_type or "unknown",
+            name,
+        )
+        return None
+
+    if not str(provider.get("base_url") or "").strip():
+        logger.warning(
+            "[Corpus] rerank provider '%s' has no base URL; keeping RRF order",
+            name,
+        )
+        return None
+
+    return ProviderReranker(provider, model)

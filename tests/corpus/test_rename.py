@@ -71,7 +71,7 @@ def _stub_no_llm(monkeypatch):
         def health_check(self):
             return False
 
-    monkeypatch.setattr(rename_mod, "OllamaVisionOcr", _DeadOcr)
+    monkeypatch.setattr(rename_mod, "create_ocr_client", lambda cfg: _DeadOcr())
 
     class _NoStore:
         def __init__(self, *a, **k):
@@ -210,7 +210,7 @@ def test_run_rename_llm_tier_receives_filename(tmp_path, monkeypatch):
         def health_check(self):
             return False
 
-    monkeypatch.setattr(rename_mod, "OllamaVisionOcr", _DeadOcr)
+    monkeypatch.setattr(rename_mod, "create_ocr_client", lambda cfg: _DeadOcr())
 
     class _NoStore:
         def __init__(self, *a, **k):
@@ -245,6 +245,152 @@ def test_run_rename_llm_tier_receives_filename(tmp_path, monkeypatch):
     assert plans[0].source == "llm"
     assert plans[0].new_path is not None
     assert plans[0].new_path.name == "note - 2022.06.30 - Catatan.pdf"
+
+
+def _rename_cfg(**overrides) -> dict:
+    """A corpus config for the LLM tier, with the reference fields as needed."""
+    cfg = {
+        "ocr_model": "x",
+        "metadata_model": "main",
+        "num_ctx": 16384,
+        "min_chars_per_page": 50,
+        "ocr_dpi": 200,
+        "min_image_area": 0.05,
+        "ollama_host": None,
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+def _dead_ocr(monkeypatch) -> None:
+    class _DeadOcr:
+        def __init__(self, *a, **k):
+            pass
+
+        def health_check(self):
+            return False
+
+    monkeypatch.setattr(rename_mod, "create_ocr_client", lambda cfg: _DeadOcr())
+
+
+def test_llm_context_build_passes_the_metadata_provider_reference(monkeypatch):
+    seen = {}
+
+    def fake_caller(spec, host=None, provider_name=None):
+        seen["spec"] = spec
+        seen["provider_name"] = provider_name
+        return None
+
+    monkeypatch.setattr(rename_mod, "_resolve_text_caller", fake_caller)
+    _dead_ocr(monkeypatch)
+
+    ctx = rename_mod._LlmContext(
+        _rename_cfg(metadata_model="meta-b", metadata_provider="engine")
+    )
+    ctx._build()
+
+    assert seen == {"spec": "meta-b", "provider_name": "engine"}
+    # best effort: an unavailable caller leaves rename working, never a raise
+    assert ctx.metadata_caller is None
+
+
+def test_llm_context_reference_model_is_the_wire_model(monkeypatch):
+    import esdc.providers as providers
+
+    saved = {"engine": {"name": "engine", "provider_type": "openai", "model": "chat-a"}}
+    created = []
+
+    monkeypatch.setattr(
+        rename_mod.Config,
+        "get_referenced_provider",
+        classmethod(lambda cls, name: dict(saved[name])),
+    )
+
+    class FakeLLM:
+        def invoke(self, prompt):
+            return type("R", (), {"content": "{}"})()
+
+    monkeypatch.setattr(
+        providers,
+        "create_llm_from_config",
+        lambda cfg: created.append(dict(cfg)) or FakeLLM(),
+    )
+    _dead_ocr(monkeypatch)
+
+    ctx = rename_mod._LlmContext(
+        _rename_cfg(metadata_model="meta-b", metadata_provider="engine")
+    )
+    ctx._build()
+
+    assert ctx.metadata_caller is not None
+    assert created[0]["model"] == "meta-b"
+    # the saved provider keeps its chat model
+    assert saved["engine"]["model"] == "chat-a"
+
+
+def test_llm_context_reference_with_empty_model_keeps_the_saved_chat_model(monkeypatch):
+    import esdc.providers as providers
+
+    saved = {"engine": {"name": "engine", "provider_type": "openai", "model": "chat-a"}}
+    created = []
+
+    monkeypatch.setattr(
+        rename_mod.Config,
+        "get_referenced_provider",
+        classmethod(lambda cls, name: dict(saved[name])),
+    )
+    monkeypatch.setattr(
+        providers,
+        "create_llm_from_config",
+        lambda cfg: created.append(dict(cfg)) or object(),
+    )
+    _dead_ocr(monkeypatch)
+
+    ctx = rename_mod._LlmContext(
+        _rename_cfg(metadata_model="", metadata_provider="engine")
+    )
+    ctx._build()
+
+    assert ctx.metadata_caller is None
+    assert created == []  # no chat-model substitution, no LLM constructed
+    assert saved["engine"]["model"] == "chat-a"
+
+
+def test_llm_context_build_uses_the_ocr_factory_and_keeps_the_health_gate(monkeypatch):
+    seen = {}
+
+    class HealthyOcr:
+        def health_check(self):
+            return True
+
+    healthy = HealthyOcr()
+    monkeypatch.setattr(
+        rename_mod,
+        "create_ocr_client",
+        lambda cfg: seen.update({"cfg": cfg, "client": healthy}) or healthy,
+    )
+    monkeypatch.setattr(rename_mod, "_resolve_text_caller", lambda *a, **k: None)
+
+    cfg = _rename_cfg()
+    ctx = rename_mod._LlmContext(cfg)
+    ctx._build()
+
+    assert seen == {"cfg": cfg, "client": healthy}
+    assert ctx.ocr_client is healthy
+
+    # Unavailable OCR through the factory stays None; rename never raises.
+    seen.clear()
+
+    class UnhealthyOcr:
+        def health_check(self):
+            return False
+
+    monkeypatch.setattr(rename_mod, "create_ocr_client", lambda cfg: UnhealthyOcr())
+    ctx2 = rename_mod._LlmContext(_rename_cfg())
+    ctx2._build()
+
+    assert ctx2.ocr_client is None
+    assert ctx2.metadata_caller is None
 
 
 def test_run_rename_collision_within_batch(tmp_path, monkeypatch):
@@ -367,7 +513,7 @@ def test_run_rename_progress_reports_llm_and_apply(tmp_path, monkeypatch):
         def health_check(self):
             return False
 
-    monkeypatch.setattr(rename_mod, "OllamaVisionOcr", _DeadOcr)
+    monkeypatch.setattr(rename_mod, "create_ocr_client", lambda cfg: _DeadOcr())
 
     class _NoStore:
         def __init__(self, *a, **k):

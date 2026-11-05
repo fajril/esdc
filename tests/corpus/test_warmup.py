@@ -127,3 +127,86 @@ def test_reranker_load_failure_reported(monkeypatch):
 
     reranker_result = next(r for r in results if r.component == "reranker")
     assert reranker_result.ok is False
+
+
+# --------------------------------------------------------------------------
+# Non-local backend: warmup reports skipped, never loads or requests
+# --------------------------------------------------------------------------
+
+
+def _forbid_local_load(monkeypatch) -> None:
+    def forbidden():
+        raise AssertionError("warmup must not load a local GGUF")
+
+    monkeypatch.setattr(reranker_mod, "_load_reranker", forbidden)
+
+
+def _record_requests(monkeypatch) -> list:
+    import esdc.corpus.provider_reranker as provider_reranker
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        provider_reranker.requests, "post", lambda *a, **k: calls.append("post")
+    )
+    monkeypatch.setattr(
+        provider_reranker.requests, "get", lambda *a, **k: calls.append("get")
+    )
+    return calls
+
+
+def test_provider_backend_is_skipped_without_a_local_load(monkeypatch):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        classmethod(
+            lambda cls: {
+                "rerank": True,
+                "rerank_backend": "provider",
+                "rerank_provider": "engine",
+                "rerank_model": "rank-c",
+            }
+        ),
+    )
+
+    get_mock = MagicMock(return_value=None)
+    monkeypatch.setattr(Reranker, "get", get_mock)
+    _forbid_local_load(monkeypatch)
+    requests_made = _record_requests(monkeypatch)
+
+    results = run_warmup()
+    reranker_result = next(r for r in results if r.component == "reranker")
+
+    assert reranker_result.ok is True
+    assert "provider backend" in reranker_result.detail
+    assert reranker_result.model == "rank-c"
+    assert not get_mock.called  # no local singleton, so no GGUF download
+    assert requests_made == []
+
+
+def test_unknown_backend_is_skipped_without_a_local_load(monkeypatch):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(embedder_mod, "_get_model", lambda: FakeTextEmbedding())
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        classmethod(
+            lambda cls: {"rerank": True, "rerank_backend": "bogus", "rerank_model": "rank-c"}
+        ),
+    )
+
+    get_mock = MagicMock(return_value=None)
+    monkeypatch.setattr(Reranker, "get", get_mock)
+    _forbid_local_load(monkeypatch)
+    requests_made = _record_requests(monkeypatch)
+
+    results = run_warmup()
+    reranker_result = next(r for r in results if r.component == "reranker")
+
+    assert reranker_result.ok is True
+    assert "unsupported rerank backend" in reranker_result.detail
+    assert not get_mock.called
+    assert requests_made == []

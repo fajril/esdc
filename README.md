@@ -459,6 +459,63 @@ Interactive configuration wizard.
 esdc configs
 ```
 
+The home menu is Models by task, Providers, Application settings, Advanced,
+View settings, and Exit. Back returns one level, Escape at the top level
+exits, and Control+C ends the run without losing an earlier explicit save.
+
+Models by task holds the six tasks — Chat, Embeddings, Reranking, OCR,
+Metadata extraction, Text cleanup — and each one opens a single searchable
+`provider / model` list built from the saved providers that support that task.
+Choosing a row selects both values, so there is no separate provider level.
+Custom, Retry, and Back are always offered, and the saved pair stays listed
+even when discovery does not return it, marked `saved, unverified`. Custom
+chooses an existing provider and types a model id; it is resolved before Save
+and is never stored as a row label.
+
+Each task keeps its own pair through a saved provider reference:
+`embedding_provider`, `corpus.metadata_provider`, `corpus.cleanup_provider`,
+`corpus.ocr_provider`, `corpus.rerank_provider`. A task edit writes only that
+task's keys; only Chat writes a provider's chat model, and a task that chooses
+to follow the chat model shows that link rather than pretending to be
+independent.
+
+Embeddings has four modes: `local` (the in-process GGUF, which query-time
+similarity always uses), an Ollama provider whose model is the tag pinned in
+code, an OpenAI-compatible provider reference, and a direct endpoint with no
+reference.
+
+Reranking keeps Enabled as its own yes/no field, separate from Source and
+model: disabling writes only `corpus.rerank = false`, enabling validates the
+saved source and model first, and a connection test never turns it on. Source
+is either the local GGUF or `provider`, which calls `/v1/rerank` on the
+connection named by `corpus.rerank_provider`.
+
+OCR is either the local Ollama model or a saved OpenAI-compatible provider
+used for image chat. Vision support comes from reported model metadata only: a
+model is filtered out only when metadata explicitly says it is not vision-
+capable, and an unknown capability stays selectable.
+
+Providers, Application settings, and Advanced keep the fields they already
+own, and every editable key has exactly one menu location.
+
+A task pair or a provider edit is a draft with Save, Test connection, and
+Cancel. Test resolves the draft the same way runtime does and never writes; a
+blank API key keeps the stored key, which is cleared only by the explicit
+Clear API key action. Single fields save on Enter.
+
+Renaming a provider moves every reference to it in one write:
+`default_provider`, `provider_order`, `embedding_provider`, the four corpus
+references, and any legacy `provider:<name>` metadata or cleanup string. Every
+name is checked before anything is written, so a rejected rename leaves the
+file unchanged. A rename that carries the draft writes the key move, the
+references, and the draft fields in that same single write. Removal is blocked
+while a setting still refers to the provider, and the dependent keys are listed
+by name only. Editing an address or key other tasks share warns first and names
+the affected tasks. Secrets are masked in the wizard and in `configs --show`.
+
+Running ESDC services may need restart to read the saved config; the wizard
+states this after a save.
+
 ### `serve`
 Run OpenAI-compatible API server.
 
@@ -486,12 +543,24 @@ ollama pull glm-ocr
 |-----|---------|-------------|
 | `chunk_size` | `3000` | Max characters per chunk (~750 tokens) |
 | `chunk_overlap` | `300` | Characters carried over between consecutive chunks |
+| `rerank_backend` | `local` | Where the rerank stage runs: `local` = the in-process GGUF named by `rerank_model`, `provider` = `/v1/rerank` through `rerank_provider` |
+| `rerank_provider` | `""` | Saved OpenAI-compatible connection used when `rerank_backend` is `provider`; `""` = none |
 | `ocr_model` | `glm-ocr` | Ollama vision model used to OCR scanned pages |
+| `ocr_provider` | `""` | Saved provider reused for OCR while `ocr_model` stays the model id; `""` = the Ollama daemon at `corpus.ollama_host` |
 | `metadata_model` | `"main"` | Text LLM for metadata extraction: `main` (default chat provider), `provider:<name>` (a configured provider from config.yaml), an Ollama model name, or `""` (image-based prefill via `ocr_model`) |
+| `metadata_provider` | `""` | Saved provider whose connection is reused while `metadata_model` names the wire model; `""` = the `metadata_model` string itself (`main` / `provider:<name>` / Ollama name) |
 | `cleanup_model` | `"main"` | LLM for formatting cleanup of native-extracted pages: `main`, `provider:<name>`, an Ollama model name, or `""` (off) |
+| `cleanup_provider` | `""` | Same rule as `metadata_provider`, applied to the cleanup call |
 | `ocr_dpi` | `200` | Page render resolution for OCR; raise to 300 if OCR quality is poor |
 | `num_ctx` | `16384` | Ollama context window; `glm-ocr` fails on page images below this |
 | `min_chars_per_page` | `50` | Text-layer character threshold below which a page counts as scanned |
+
+These keys are what the wizard writes: `esdc configs` → Models by task owns
+the `provider / model` choice for each task, including the reference columns
+above, so this table documents the stored values rather than a place to edit
+them by hand. `embedding_provider` sits with the embedding fields in Embedding
+backends above. An empty reference keeps the behaviour the model string alone
+describes, and saving a source or testing a connection never enables reranking.
 
 ### doc_type vs doc_topic, and doc_level rules
 

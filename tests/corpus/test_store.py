@@ -938,6 +938,127 @@ def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
     Reranker._failed = False
 
 
+def test_maybe_rerank_uses_get_reranker_and_maps_scores_to_input_positions(
+    store_with_doc_factory, monkeypatch
+):
+    """Score candidates in the order the store passed them.
+
+    A remote response arrives in rank order; the client restores input order,
+    so each score lands on the candidate it was computed for.
+    """
+    import esdc.corpus.reranker as reranker_mod
+
+    seen = {}
+
+    class RemoteScores:
+        def rerank(self, query, texts):
+            seen["texts"] = list(texts)
+            # input order, lowest first: a remote rank order must not leak here
+            return [0.2, 0.9]
+
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: RemoteScores())
+
+    store, _ = store_with_doc_factory(
+        chunk_size=20,
+        subject="Pengembangan Merak",
+        markdown="# A\n\nalpha konten\n\n# B\n\nbeta konten",
+    )
+    store.rebuild_indexes()
+    baseline = store.search("konten", limit=2, rerank=False)
+    reranked = store.search("konten", limit=2, rerank=True)
+
+    base_texts = [r["chunk_text"] for r in baseline["results"]]
+    # the client is fed the RRF order (embed_text carries the chunk text), and
+    # each score lands on the candidate it was computed for
+    assert len(seen["texts"]) == len(base_texts)
+    assert all(t.endswith(c) for t, c in zip(seen["texts"], base_texts, strict=True))
+
+    out = [r["chunk_text"] for r in reranked["results"]]
+    assert out == [base_texts[1], base_texts[0]]
+    assert reranked["results"][0]["rerank_score"] == 0.9
+    assert reranked["results"][1]["rerank_score"] == 0.2
+
+
+def test_maybe_rerank_shape_failure_keeps_rrf_order_and_no_partial_scores(
+    store_with_doc_factory, monkeypatch
+):
+    """An unusable score list is rejected as a whole, before any candidate is tagged."""
+    import esdc.corpus.reranker as reranker_mod
+
+    class BadScores:
+        def rerank(self, query, texts):
+            return [0.9, float("nan")]
+
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: BadScores())
+
+    store, _ = store_with_doc_factory(
+        chunk_size=20,
+        subject="Pengembangan Merak",
+        markdown="# A\n\nalpha konten\n\n# B\n\nbeta konten",
+    )
+    store.rebuild_indexes()
+    baseline = store.search("konten", limit=2, rerank=False)
+    reranked = store.search("konten", limit=2, rerank=True)
+
+    assert [r["chunk_text"] for r in reranked["results"]] == [
+        r["chunk_text"] for r in baseline["results"]
+    ]
+    assert all("rerank_score" not in r for r in reranked["results"])
+
+
+def test_maybe_rerank_failure_keeps_rrf_order(store_with_doc_factory, monkeypatch):
+    import esdc.corpus.reranker as reranker_mod
+
+    class Unreachable:
+        def rerank(self, query, texts):
+            raise RuntimeError("connection error")
+
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: Unreachable())
+
+    store, _ = store_with_doc_factory(
+        chunk_size=20,
+        subject="Pengembangan Merak",
+        markdown="# A\n\nalpha konten\n\n# B\n\nbeta konten",
+    )
+    store.rebuild_indexes()
+    baseline = store.search("konten", limit=2, rerank=False)
+    reranked = store.search("konten", limit=2, rerank=True)
+
+    assert [r["chunk_text"] for r in reranked["results"]] == [
+        r["chunk_text"] for r in baseline["results"]
+    ]
+    assert all("rerank_score" not in r for r in reranked["results"])
+
+
+def test_rerank_off_makes_no_client_call(store_with_doc_factory, monkeypatch):
+    """Off is off: no factory call, so no model load and no request."""
+    import esdc.corpus.reranker as reranker_mod
+
+    calls = []
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: calls.append("called"))
+
+    store, doc = store_with_doc_factory(
+        chunk_size=20,
+        subject="Pengembangan Merak",
+        markdown="# A\n\nalpha konten\n\n# B\n\nbeta konten",
+    )
+    store.rebuild_indexes()
+
+    # saving a source never reranks
+    assert doc["doc_id"]
+    assert calls == []
+
+    # explicit off, and the config default (rerank=None reads corpus.rerank=False)
+    out = store.search("konten", limit=2, rerank=False)
+    assert out["status"] == "success"
+    assert calls == []
+    assert all("rerank_score" not in r for r in out["results"])
+
+    out = store.search("konten", limit=2)
+    assert calls == []
+    assert all("rerank_score" not in r for r in out["results"])
+
+
 def test_sample_content_default_is_first_chunk(store_with_doc_factory):
     store, doc = store_with_doc_factory(
         chunk_size=20, markdown="# A\n\nalpha satu\n\n# B\n\nbeta dua"

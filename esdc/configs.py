@@ -1,9 +1,11 @@
 """Provider and application configuration loading."""
 
 import contextlib
+import copy
 import logging
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ SENSITIVE_KEYS = frozenset({"api_key"})
 
 ENUM_CHOICES: dict[str, list[str]] = {
     "embedding_backend": ["local", "ollama", "openai"],
+    "corpus.rerank_backend": ["local", "provider"],
     "tool_format": ["native", "markdown", "auto"],
     "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     "logging.server.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -83,12 +86,27 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "('' = send no Authorization header, which is what LM Studio and a "
         "bare llama-server expect)"
     ),
+    "embedding_provider": (
+        "Saved provider whose address and credential are reused for bulk "
+        "embedding generation ('' = use embedding_host/embedding_api_key). "
+        "Only 'openai_compatible' and 'ollama' provider types can be reused; "
+        "the provider's chat model is never used as the embedding model"
+    ),
     "corpus.ocr_model": "Ollama vision model used for OCR of scanned pages",
+    "corpus.ocr_provider": (
+        "Saved provider reused for OCR while corpus.ocr_model stays the "
+        "selected model id ('' = the Ollama daemon at corpus.ollama_host)"
+    ),
     "corpus.metadata_model": (
         "Text LLM for metadata pre-fill at extract time ('main' = default "
         "chat provider [default], 'provider:<name>' = a configured provider, "
         "an Ollama model name to override, or '' = image-based prefill via "
         "ocr_model)"
+    ),
+    "corpus.metadata_provider": (
+        "Saved provider whose connection is reused for metadata extraction "
+        "while corpus.metadata_model stays the wire model id ('' = the "
+        "current metadata_model string, main / provider:<name> / Ollama name)"
     ),
     "corpus.cleanup_model": (
         "LLM for formatting cleanup of native-extracted pages at extract "
@@ -96,6 +114,11 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "= a configured provider, an Ollama model name to override, or "
         "'' = off); guarded — original text kept if the model invents "
         "numbers or changes length grossly"
+    ),
+    "corpus.cleanup_provider": (
+        "Saved provider whose connection is reused for formatting cleanup "
+        "while corpus.cleanup_model stays the wire model id ('' = the current "
+        "cleanup_model string, main / provider:<name> / Ollama name)"
     ),
     "corpus.ollama_host": (
         "Ollama server URL for corpus OCR and Ollama-named corpus models "
@@ -108,6 +131,16 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "(off by default; first use downloads the model, ~1 GB)"
     ),
     "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
+    "corpus.rerank_backend": (
+        "Where the rerank stage runs ('local' [default] = in-process llama.cpp "
+        "with the GGUF below, 'provider' = an OpenAI-compatible /v1/rerank "
+        "server reached through corpus.rerank_provider)"
+    ),
+    "corpus.rerank_provider": (
+        "Saved OpenAI-compatible connection used when corpus.rerank_backend "
+        "is 'provider' ('' = none; a 'local' backend keeps the value stored "
+        "but unused)"
+    ),
     "corpus.max_chunks_per_doc": (
         "Max chunks of the same document kept in search() results "
         "(0 = no cap, the setting used by the A/B eval run)"
@@ -148,48 +181,57 @@ KEY_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-# Model/endpoint-role groups shown under "Models & endpoints" in the wizard.
-# "Chat providers" is intentionally absent here — it is served by the
-# provider CRUD flows, not by flat key editing.
-MODEL_SECTIONS: dict[str, list[str]] = {
+# One menu location per key: the task screens own the model/reference fields,
+# Application settings owns the basic app keys, Advanced owns the remaining
+# processing, detailed logging, cache and tracing controls.
+TASK_SECTIONS: dict[str, list[str]] = {
     "Embeddings": [
         "embedding_backend",
+        "embedding_provider",
         "embedding_host",
         "embedding_model",
         "embedding_api_key",
-        "semantic_search.embedding_batch_size",
     ],
-    "Corpus models": [
-        "corpus.ocr_model",
-        "corpus.metadata_model",
-        "corpus.cleanup_model",
-        "corpus.ollama_host",
-        "corpus.num_ctx",
+    "Reranking": [
+        "corpus.rerank",
+        "corpus.rerank_backend",
+        "corpus.rerank_provider",
+        "corpus.rerank_model",
+    ],
+    "OCR": ["corpus.ocr_model", "corpus.ocr_provider"],
+    "Metadata extraction": ["corpus.metadata_model", "corpus.metadata_provider"],
+    "Text cleanup": ["corpus.cleanup_model", "corpus.cleanup_provider"],
+}
+
+APPLICATION_SECTIONS: dict[str, list[str]] = {
+    "Application settings": [
+        "api_url",
+        "api.verify_ssl",
+        "database_path",
+        "logging.level",
+        "logging.file.enabled",
     ],
 }
 
-# Non-model settings shown under "Settings" in the wizard.
-SETTINGS_SECTIONS: dict[str, list[str]] = {
-    "Connection": ["api_url", "api.verify_ssl", "database_path"],
-    "Chat behavior": ["tool_format"],
+ADVANCED_SECTIONS: dict[str, list[str]] = {
     "Corpus processing": [
+        "tool_format",
+        "semantic_search.embedding_batch_size",
         "corpus.chunk_size",
         "corpus.chunk_overlap",
-        "corpus.rerank",
         "corpus.rerank_pool",
-        "corpus.rerank_model",
         "corpus.max_chunks_per_doc",
         "corpus.query_instruct",
         "corpus.ocr_dpi",
-        "corpus.min_chars_per_page",
-        "corpus.min_image_area",
-        "corpus.n_gpu_layers",
+        "corpus.num_ctx",
         "corpus.extract_max_tokens",
         "corpus.extract_timeout_seconds",
+        "corpus.min_chars_per_page",
+        "corpus.min_image_area",
+        "corpus.ollama_host",
+        "corpus.n_gpu_layers",
     ],
     "Logging": [
-        "logging.level",
-        "logging.file.enabled",
         "logging.file.path",
         "logging.file.max_size",
         "logging.file.backup_count",
@@ -204,6 +246,12 @@ SETTINGS_SECTIONS: dict[str, list[str]] = {
         "phoenix.project_name",
     ],
 }
+
+# Aliases for the pre-task-first layout: the wizard menus are now driven by
+# TASK_SECTIONS / APPLICATION_SECTIONS / ADVANCED_SECTIONS, and these names
+# keep the same key coverage the section-coverage tests guard.
+MODEL_SECTIONS: dict[str, list[str]] = TASK_SECTIONS
+SETTINGS_SECTIONS: dict[str, list[str]] = {**APPLICATION_SECTIONS, **ADVANCED_SECTIONS}
 
 
 # Note: frozen=True was removed to allow method-based configuration updates
@@ -488,14 +536,39 @@ class Config:
 
     @classmethod
     def _save_config(cls, config: dict[str, Any]) -> None:
-        """Save config to YAML file and update cache."""
-        cls._config_cache = config
-        config_file = cls.get_config_file()
+        """Save config atomically, then update the cache.
+
+        The YAML is written to a temporary file in the same directory and moved
+        into place with ``os.replace``, so a reader never sees a half-written
+        config. The cache is updated only after the replace succeeded: a failed
+        write leaves the old file and the pre-save cache intact, and only this
+        call's own temporary file is removed. An existing file's mode is
+        preserved; the YAML format and key ordering behavior are unchanged.
+        """
         config_dir = cls.get_config_dir()
+        config_file = cls.get_config_file()
         if not config_dir.exists():
             config_dir.mkdir(parents=True, exist_ok=True)
-        with open(config_file, "w") as f:
-            yaml.dump(config, f, default_flow_style=False)
+
+        existing_mode = (
+            config_file.stat().st_mode & 0o777 if config_file.exists() else None
+        )
+
+        fd, tmp_name = tempfile.mkstemp(
+            dir=config_dir, prefix=".config-", suffix=".yaml.tmp"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                yaml.dump(config, f, default_flow_style=False)
+            if existing_mode is not None:
+                os.chmod(tmp_name, existing_mode)
+            os.replace(tmp_name, config_file)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_name)
+            raise
+
+        cls._config_cache = config
 
     @classmethod
     def get_providers(cls) -> dict:
@@ -504,18 +577,61 @@ class Config:
         return config.get("providers", {}) if config else {}
 
     @classmethod
+    def _provider_entry(cls, config: dict[str, Any], name: str) -> dict[str, Any]:
+        """Return the saved provider entry, or raise.
+
+        Internal helper shared by the provider-aware saves; callers that must
+        not mutate the saved entry copy the result.
+
+        Raises:
+            ValueError: the provider is unknown, or its entry is not a mapping.
+        """
+        providers = config.get("providers")
+        entry = providers.get(name) if isinstance(providers, dict) else None
+        if not isinstance(entry, dict):
+            raise ValueError(f"Unknown provider reference: {name!r}")
+        return entry
+
+    @classmethod
+    def get_referenced_provider(cls, name: str) -> dict[str, Any]:
+        """Return a deep copy of one saved provider entry, with ``name`` set.
+
+        A task role gets its own copy so it can set its own wire model without
+        touching the saved chat model or the cached config dict; nothing here
+        ever hands out a reference into the cache.
+
+        Raises:
+            ValueError: the provider is unknown, or its entry is not a mapping.
+        """
+        copied = copy.deepcopy(cls._provider_entry(cls._load_config() or {}, name))
+        copied["name"] = name
+        return copied
+
+    @classmethod
     def save_provider(cls, name: str, provider_config: dict) -> None:
-        """Save a provider configuration."""
-        config = cls._load_config() or {}
+        """Save a provider configuration.
+
+        The cached mapping is never mutated: the write works on a deep copy, so a
+        failed ``os.replace`` leaves the pre-save cache as it was and an unsaved
+        draft cannot be picked up by a later write. The incoming mapping is copied
+        too, so the caller's draft is never the object the saved structure holds.
+        """
+        config = copy.deepcopy(cls._load_config() or {})
         providers = config.get("providers", {})
-        providers[name] = provider_config
+        providers[name] = copy.deepcopy(dict(provider_config))
         config["providers"] = providers
         cls._save_config(config)
 
     @classmethod
     def remove_provider(cls, name: str) -> bool:
-        """Remove a provider configuration. Returns True if removed."""
-        config = cls._load_config() or {}
+        """Remove a provider configuration. Returns True if removed.
+
+        The cached mapping is never mutated, as in `save_provider`: the delete happens
+        on a deep copy, so a failed ``os.replace`` leaves the file, the cache object,
+        and its contents as they were, and an unconfirmed removal cannot be picked up
+        by a later write. The cache is updated only after the move succeeded.
+        """
+        config = copy.deepcopy(cls._load_config() or {})
         providers = config.get("providers", {})
         if name in providers:
             del providers[name]
@@ -523,6 +639,177 @@ class Config:
             cls._save_config(config)
             return True
         return False
+
+    # Config keys that can name a provider, in the order get_provider_references
+    # reports them. The linked-string keys hold a legacy ``provider:<name>`` value
+    # rather than a bare provider name.
+    PROVIDER_REFERENCE_KEYS = (
+        "default_provider",
+        "provider_order",
+        "embedding_provider",
+        "corpus.metadata_provider",
+        "corpus.cleanup_provider",
+        "corpus.ocr_provider",
+        "corpus.rerank_provider",
+        "corpus.metadata_model",
+        "corpus.cleanup_model",
+    )
+
+    PROVIDER_LINKED_MODEL_KEYS = frozenset(
+        {"corpus.metadata_model", "corpus.cleanup_model"}
+    )
+
+    # Each linked model key belongs to one task, and that task's provider key decides
+    # what the model string means: while the role provider is empty the string is the
+    # legacy link, and once the role names a provider the same text is a literal wire
+    # model that must never be rewritten.
+    PROVIDER_LINKED_MODEL_ROLE_KEYS = {
+        "corpus.metadata_model": "corpus.metadata_provider",
+        "corpus.cleanup_model": "corpus.cleanup_provider",
+    }
+
+    @classmethod
+    def get_provider_references(cls, name: str) -> list[str]:
+        """Config keys that currently depend on one provider.
+
+        Reported in this stable order: ``default_provider``, ``provider_order``,
+        ``embedding_provider``, the four corpus references, then the legacy
+        ``provider:<name>`` metadata and cleanup strings. Inactive references are
+        included, because a name stored in the file is still a reference even when
+        its task uses another source; nothing here repairs or removes one. An order
+        that mentions the name is reported once.
+
+        A metadata or cleanup model key is a reference only while its role provider is
+        empty. When that provider names a provider, ``provider:<name>`` is the model
+        that task calls, so the key is not reported even when its text matches: it is a
+        literal wire model, not a link to ``name``.
+
+        Only key names are returned, never a value, so no secret and no display
+        label can reach the caller.
+
+        Returns:
+            The matching keys in the documented order, or ``[]`` when nothing
+            refers to ``name``.
+        """
+        target = str(name or "").strip()
+        if not target:
+            return []
+
+        flat = cls._flatten(cls._load_config() or {})
+        references: list[str] = []
+        for key in cls.PROVIDER_REFERENCE_KEYS:
+            value = flat.get(key)
+            if key == "provider_order":
+                if isinstance(value, list) and target in [str(item) for item in value]:
+                    references.append(key)
+                continue
+            if key in cls.PROVIDER_LINKED_MODEL_KEYS:
+                # The role provider is what makes this string a link or a model id.
+                if str(flat.get(cls.PROVIDER_LINKED_MODEL_ROLE_KEYS[key]) or ""):
+                    continue
+                if str(value or "") == f"provider:{target}":
+                    references.append(key)
+                continue
+            if str(value or "") == target:
+                references.append(key)
+        return references
+
+    @classmethod
+    def rename_provider(
+        cls,
+        old_name: str,
+        new_name: str,
+        provider_config: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Rename one provider and move every reference to it in one write.
+
+        The provider entry keeps its fields, including OAuth and unknown keys.
+        ``default_provider``, ``provider_order`` (list order preserved, and only the
+        duplicate this rename itself creates is removed), ``embedding_provider``, the
+        four corpus references and the legacy ``provider:<old_name>`` metadata and
+        cleanup strings are updated — the model keys only when they are genuine links,
+        which is when their role provider is empty. A model string that a named
+        provider owns is a literal wire model and is left as stored. Every other
+        provider, every task's explicit model and every unknown key is left as it is,
+        and an inactive reference keeps its stored value.
+
+        ``provider_config`` is the optional draft for the renamed key. When it is
+        given, the entry under ``new_name`` becomes a deep copy of that mapping
+        instead of the moved saved entry, so one draft's name change and its field
+        changes are the same single write. Without it the moved entry keeps the
+        saved fields, which is what a rename on its own must do.
+
+        Every name is validated before the first change, so a rejected rename
+        leaves the file completely unchanged. An empty ``new_name`` is rejected, an
+        unknown or non-mapping ``old_name`` is rejected, and only then a
+        ``new_name`` equal to ``old_name`` writes nothing. An existing different
+        ``new_name`` is rejected too.
+
+        Raises:
+            ValueError: ``new_name`` is empty, ``old_name`` is unknown or is not a
+                mapping, or ``new_name`` is already another provider.
+        """
+        target = str(new_name or "").strip()
+        if not target:
+            raise ValueError("Provider name cannot be empty.")
+
+        # Read and validate on a copy: nothing is written until every name is valid.
+        config = copy.deepcopy(cls._load_config() or {})
+        # Validation uses the established provider-entry helper, so a missing
+        # entry and an entry that is not a mapping raise the same way.
+        cls._provider_entry(config, old_name)
+        if target == old_name:
+            return
+
+        providers = config["providers"]
+        if target in providers:
+            raise ValueError(f"Provider name already exists: {target!r}")
+
+        references = cls.get_provider_references(old_name)
+
+        # The key moves in place: only its name changes, every field is the same
+        # entry object. `provider_order` keeps its own list order.
+        renamed: dict[str, Any] = {}
+        for key, value in providers.items():
+            renamed[target if key == old_name else key] = value
+        config["providers"] = renamed
+
+        linked = cls.PROVIDER_LINKED_MODEL_KEYS
+        for key in references:
+            if key == "provider_order":
+                configured = config.get("provider_order")
+                updated = [
+                    target if str(item) == old_name else item
+                    for item in configured or []
+                ]
+                # Only the duplicate this rename itself creates is removed; a
+                # duplicate already in the file is left as the user stored it.
+                # The key is reported only when the order held `old_name`, so
+                # after the replacement it holds `target` at least once.
+                first = updated.index(target)
+                updated = [
+                    item
+                    for index, item in enumerate(updated)
+                    if index == first or item != target
+                ]
+                config["provider_order"] = updated
+                continue
+            # Only keys that get_provider_references reported reach this loop, so a
+            # linked model key here is a genuine link and keeps its legacy shape: only
+            # the name inside ``provider:<old_name>`` changes. A literal wire model was
+            # never reported, so it is never rewritten.
+            cls._set_flat_value(
+                config, key, f"provider:{target}" if key in linked else target
+            )
+
+        if provider_config is not None:
+            # The draft replaces the moved entry in this same write, so the name
+            # change and the draft's field changes can never be split by a failure
+            # between two writes. The copy keeps the caller's mapping out of the
+            # saved structure.
+            config["providers"][target] = copy.deepcopy(dict(provider_config))
+
+        cls._save_config(config)
 
     @classmethod
     def set_default_provider(cls, name: str) -> None:
@@ -592,6 +879,36 @@ class Config:
         config["provider_order"] = deduped
         if deduped:
             config["default_provider"] = deduped[0]
+        cls._save_config(config)
+
+    @classmethod
+    def set_chat_selection(cls, provider_name: str, model_id: str) -> None:
+        """Save one Chat provider/model choice as a single atomic write.
+
+        Chat owns the provider's chat model: ``default_provider``, the front of
+        ``provider_order`` and ``providers[provider_name].model`` change
+        together. Every other provider field, every unknown user key and the
+        remaining failover order are preserved. ``provider_order`` is written
+        even when the file had none, and provider names may contain dots, so the
+        provider entry is merged directly instead of being addressed through a
+        dotted-key path.
+
+        Raises:
+            ValueError: the provider is unknown, or its entry is not a mapping.
+        """
+        config = copy.deepcopy(cls._load_config() or {})
+        entry = cls._provider_entry(config, provider_name)
+
+        config["default_provider"] = provider_name
+        configured_order = config.get("provider_order")
+        rest = (
+            [name for name in configured_order if name != provider_name]
+            if isinstance(configured_order, list)
+            else []
+        )
+        config["provider_order"] = [provider_name] + list(dict.fromkeys(rest))
+
+        entry["model"] = model_id
         cls._save_config(config)
 
     @classmethod
@@ -813,11 +1130,18 @@ class Config:
 
     @classmethod
     def update_provider_config(cls, name: str, config_data: dict[str, Any]) -> None:
-        """Update a provider configuration."""
-        config = cls._load_config() or {}
+        """Update a provider configuration.
+
+        The cached mapping is never mutated, as in `save_provider`: the write works
+        on a deep copy of the loaded config and of the incoming mapping, so a failed
+        ``os.replace`` leaves the pre-save cache as it was and an unsaved change
+        cannot be picked up by a later write. The cache is updated only after the
+        move succeeded, and the saved structure never holds the caller's mapping.
+        """
+        config = copy.deepcopy(cls._load_config() or {})
         if "providers" not in config:
             config["providers"] = {}
-        config["providers"][name] = config_data
+        config["providers"][name] = copy.deepcopy(dict(config_data))
         cls._save_config(config)
 
     @classmethod
@@ -949,24 +1273,106 @@ class Config:
         semantic_config = config.get("semantic_search", {})
         return semantic_config.get("embedding_batch_size", 100)
 
+    # Provider types whose saved connection can be reused for bulk embedding
+    # generation in this phase. A reference decides which backend talks to it:
+    # an openai_compatible provider is reached through the 'openai' backend, an
+    # ollama provider through the 'ollama' backend, and the 'local' backend
+    # ignores references entirely. Written without a type annotation so the
+    # dataclass does not turn it into a field.
+    EMBEDDING_PROVIDER_BACKENDS = {
+        "openai_compatible": "openai",
+        "ollama": "ollama",
+    }
+
+    @classmethod
+    def _resolve_embedding_source(cls) -> tuple[str, dict[str, Any] | None]:
+        """Return ``(effective backend, active provider reference copy or None)``.
+
+        An empty ``embedding_provider`` keeps the current behavior. A ``local``
+        backend ignores the stored reference, which is not repaired or cleared.
+        An unknown reference, a provider type that cannot serve embeddings, or a
+        provider type that disagrees with ``embedding_backend`` raises: the
+        resolution never switches source silently.
+
+        Raises:
+            ValueError: the active reference is unknown or mismatched.
+        """
+        config = cls._load_config() or {}
+        env_backend = os.environ.get("ESDC_EMBEDDING_BACKEND")
+        raw = env_backend or config.get("embedding_backend")
+        backend = str(raw or "ollama").strip().lower()
+        name = str(config.get("embedding_provider") or "").strip()
+        if not name:
+            return backend, None
+        if backend == "local":
+            # A local backend ignores an inactive reference; its stored value
+            # is neither validated nor cleared.
+            return backend, None
+
+        try:
+            provider = cls.get_referenced_provider(name)
+        except ValueError as err:
+            raise ValueError(f"`embedding_provider`: {err}") from err
+
+        provider_type = (
+            str(provider.get("provider_type") or provider.get("type") or "")
+            .strip()
+            .lower()
+        )
+        expected = cls.EMBEDDING_PROVIDER_BACKENDS.get(provider_type)
+        if expected is None:
+            raise ValueError(
+                f"`embedding_provider` refers to provider {name!r} (type "
+                f"{provider_type or 'unknown'!r}); only 'openai_compatible' and "
+                "'ollama' providers can be reused for embeddings."
+            )
+        if backend != expected:
+            raise ValueError(
+                f"`embedding_backend` '{backend}' does not match "
+                f"`embedding_provider` {name!r} (type {provider_type}), which "
+                f"needs backend '{expected}'."
+            )
+        return backend, provider
+
     @classmethod
     def get_embedding_host(cls) -> str | None:
         """Get embedding service host URL from config.
 
-        Priority:
+        Priority with no provider reference:
         1. ESDC_EMBEDDING_HOST environment variable
         2. config.yaml: embedding_host
         3. None (uses localhost Ollama default)
 
+        With an active reference the referenced provider's address comes first:
+        env > provider base_url > embedding_host. An active reference with no
+        address at all raises rather than falling back to a default source.
+
         Returns:
             Host URL string or None for localhost default
+
+        Raises:
+            ValueError: the active reference is unknown, mismatched, or has no
+                address and no configured host.
         """
         env_host = os.environ.get("ESDC_EMBEDDING_HOST")
         if env_host:
             return env_host
 
         config = cls._load_config() or {}
-        return config.get("embedding_host") or None
+        _, provider = cls._resolve_embedding_source()
+        if provider is None:
+            return config.get("embedding_host") or None
+
+        base_url = str(provider.get("base_url") or "").strip()
+        if base_url:
+            return base_url
+        if config.get("embedding_host"):
+            return str(config["embedding_host"])
+        raise ValueError(
+            f"`embedding_provider`: provider {provider['name']!r} has no "
+            "base_url and `embedding_host` is empty; set one of them, or use "
+            "the 'local' backend."
+        )
 
     @classmethod
     def get_embedding_backend(cls) -> str:
@@ -977,16 +1383,19 @@ class Config:
         2. config.yaml: embedding_backend
         3. "ollama" (default)
 
+        An active `embedding_provider` reference must agree with it:
+        an openai_compatible provider means "openai", an ollama provider means
+        "ollama", and "local" ignores the reference.
+
         Query-time similarity ignores this and always runs locally.
 
         Returns:
             One of "local", "ollama", "openai" (lowercased, stripped).
+
+        Raises:
+            ValueError: the active reference is unknown or mismatched.
         """
-        raw = os.environ.get("ESDC_EMBEDDING_BACKEND")
-        if not raw:
-            config = cls._load_config() or {}
-            raw = config.get("embedding_backend") or "ollama"
-        return str(raw).strip().lower()
+        return cls._resolve_embedding_source()[0]
 
     @classmethod
     def get_embedding_model(cls) -> str:
@@ -997,28 +1406,47 @@ class Config:
         2. config.yaml: embedding_model
         3. "" (empty — the openai backend rejects this at construction)
 
-        Ignored by the 'local' and 'ollama' backends, which pin their model.
+        Ignored by the 'local' and 'ollama' backends, which pin their model. A
+        referenced provider never supplies the embedding model: its `model`
+        field is that provider's chat model, owned by Chat.
+
+        Raises:
+            ValueError: the active reference is unknown or mismatched.
         """
         env_model = os.environ.get("ESDC_EMBEDDING_MODEL")
         if env_model:
             return env_model
         config = cls._load_config() or {}
+        # Validate the reference so a mismatched one is reported rather than
+        # silently used; the model itself still comes from `embedding_model`.
+        cls._resolve_embedding_source()
         return str(config.get("embedding_model") or "")
 
     @classmethod
     def get_embedding_api_key(cls) -> str:
         """Get the bearer token for the 'openai' embedding backend.
 
-        Priority:
+        Priority with no provider reference:
         1. ESDC_EMBEDDING_API_KEY environment variable
         2. config.yaml: embedding_api_key
         3. "" (no Authorization header sent)
+
+        With an active reference the credential is the referenced provider's
+        own key, and an empty one means send no authentication — a key saved for
+        another source is never substituted.
+
+        Raises:
+            ValueError: the active reference is unknown or mismatched.
         """
         env_key = os.environ.get("ESDC_EMBEDDING_API_KEY")
         if env_key:
             return env_key
-        config = cls._load_config() or {}
-        return str(config.get("embedding_api_key") or "")
+
+        _, provider = cls._resolve_embedding_source()
+        if provider is None:
+            config = cls._load_config() or {}
+            return str(config.get("embedding_api_key") or "")
+        return str(provider.get("api_key") or "")
 
     CORPUS_DEFAULTS = {
         "chunk_size": 3000,  # max chars per chunk (~750 tokens)
@@ -1053,13 +1481,28 @@ class Config:
         # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
+        # rerank_backend: "local" runs the GGUF above in-process; "provider"
+        # calls /v1/rerank on the saved connection named by rerank_provider.
+        "rerank_backend": "local",
+        # rerank_provider: saved openai_compatible provider used when
+        # rerank_backend is "provider"; "" = none. An inactive reference is
+        # kept as stored, never repaired.
+        "rerank_provider": "",
         "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
+        # ocr_provider: saved provider reused for OCR; "" = Ollama daemon at
+        # corpus.ollama_host. The provider's chat model is never the OCR model.
+        "ocr_provider": "",
         # metadata_model: text LLM for metadata extraction; "main" = default
         # chat provider, "" = use ocr_model on the rendered first page
         "metadata_model": "main",
+        # metadata_provider: saved provider whose connection is reused while
+        # metadata_model names the wire model; "" = current string behavior.
+        "metadata_provider": "",
         # cleanup_model: reformats native-extracted pages before review;
         # "main" = default chat provider, "" = off
         "cleanup_model": "main",
+        # cleanup_provider: same rule as metadata_provider for the cleanup call.
+        "cleanup_provider": "",
         "ocr_dpi": 200,  # page render resolution; raise to 300 if OCR quality poor
         "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
         # extract_max_tokens / extract_timeout_seconds: bounds applied ONLY to
@@ -1240,6 +1683,7 @@ class Config:
             },
             "embedding_host": None,
             "embedding_backend": "ollama",
+            "embedding_provider": "",
             "embedding_model": "",
             "embedding_api_key": "",
             "corpus": dict(cls.CORPUS_DEFAULTS),
@@ -1262,24 +1706,61 @@ class Config:
         return cls._flatten(merged)
 
     @classmethod
+    def _set_flat_value(cls, config: dict[str, Any], key: str, value: Any) -> None:
+        """Write one already-coerced dot-notation key into ``config``.
+
+        Provider entries are not addressed through dotted keys: a provider name
+        may itself contain a dot, so provider fields are saved through the
+        provider-aware methods (`save_provider`, `update_provider_config`,
+        `set_chat_selection`).
+
+        Raises:
+            ValueError: the key targets a provider entry.
+        """
+        parts = key.split(".")
+        if parts[0] == "providers":
+            raise ValueError(
+                f"Provider fields are not saved through dotted keys: {key!r}. "
+                "Use save_provider/update_provider_config, or "
+                "set_chat_selection for a chat model change."
+            )
+        d = config
+        for part in parts[:-1]:
+            if part not in d or not isinstance(d[part], dict):
+                d[part] = {}
+            d = d[part]
+        d[parts[-1]] = value
+
+    @classmethod
+    def set_config_values(cls, values: dict[str, Any]) -> None:
+        """Set several dot-notation keys and save them in one write.
+
+        Every value is coerced with the same rules as `set_config_value`, all
+        keys are applied to one config dict, and the file is written once. An
+        empty mapping writes nothing. Unrelated keys, unknown user keys, saved
+        provider fields and the existing key order are preserved.
+
+        Raises:
+            ValueError: a key targets a provider entry.
+        """
+        if not values:
+            return
+
+        config = copy.deepcopy(cls._load_config() or {})
+        for key, value in values.items():
+            cls._set_flat_value(config, key, cls._coerce_value(key, value))
+        cls._save_config(config)
+
+    @classmethod
     def set_config_value(cls, key: str, value: Any) -> None:
-        """Set a config value by dot-notation key and save.
+        """Set a single config value by dot-notation key and save.
 
         Args:
             key: Dot-notation key (e.g. 'logging.level', 'api.verify_ssl')
             value: New value. Strings 'true'/'false' are converted to bool
                    for known boolean keys. Numeric strings are converted to int.
         """
-        config = cls._load_config() or {}
-        value = cls._coerce_value(key, value)
-        keys = key.split(".")
-        d = config
-        for k in keys[:-1]:
-            if k not in d or not isinstance(d[k], dict):
-                d[k] = {}
-            d = d[k]
-        d[keys[-1]] = value
-        cls._save_config(config)
+        cls.set_config_values({key: value})
 
     @classmethod
     def reset_config(cls, key: str | None = None) -> None:
@@ -1364,6 +1845,13 @@ class Config:
         }
     )
 
+    FLOAT_KEYS = frozenset(
+        {
+            # Decimal fractions of a page area; stored as float, not int.
+            "corpus.min_image_area",
+        }
+    )
+
     @classmethod
     def _coerce_value(cls, key: str, value: Any) -> Any:
         """Coerce string values to appropriate types based on key."""
@@ -1377,6 +1865,11 @@ class Config:
         if key in cls.INT_KEYS:
             try:
                 return int(value)
+            except ValueError:
+                pass
+        if key in cls.FLOAT_KEYS:
+            try:
+                return float(value)
             except ValueError:
                 pass
         return value

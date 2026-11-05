@@ -164,3 +164,87 @@ class TestKeyDescriptions:
         """Boolean keys use their own Select, so must not overlap with ENUM_CHOICES."""
         overlap = Config.BOOLEAN_KEYS & set(ENUM_CHOICES.keys())
         assert not overlap, f"Boolean keys should not be in ENUM_CHOICES: {overlap}"
+
+    def test_six_optional_role_keys_are_described(self, tmp_path):
+        """The six new keys default empty/local, are described, and show in --show."""
+        optional = (
+            "embedding_provider",
+            "corpus.metadata_provider",
+            "corpus.cleanup_provider",
+            "corpus.ocr_provider",
+            "corpus.rerank_backend",
+            "corpus.rerank_provider",
+        )
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            Config._config_cache = None
+            flat = Config.get_all_config_flat()
+            for key in optional:
+                assert key in flat, key
+                assert key in KEY_DESCRIPTIONS, key
+            assert flat["corpus.rerank_backend"] == "local"
+            for key in optional:
+                if key != "corpus.rerank_backend":
+                    assert flat[key] == "", key
+
+    def test_reading_flat_config_does_not_rewrite_the_file(self, tmp_path):
+        """Opening the config (here: --show) must not write defaults into it."""
+        with patch.object(Config, "get_config_dir", return_value=tmp_path):
+            config_file = tmp_path / "config.yaml"
+            original = "api_url: https://custom.example.com/\n"
+            config_file.write_text(original)
+            Config._config_cache = None
+
+            flat = Config.get_all_config_flat()
+            assert flat["embedding_provider"] == ""
+            assert config_file.read_text() == original
+            assert not [p for p in tmp_path.iterdir() if p.name != "config.yaml"]
+
+
+class TestShowConfigOutput:
+    """`configs --show` prints masked secrets with the shared formatter."""
+
+    def test_show_masks_secrets_and_keeps_non_secrets_visible(self, runner, isolated_config):
+        from esdc.commands.configs import configs_app
+
+        api_key = "sk-synthetic-fixture-key"
+        access_token = "synthetic-fixture-access-token"
+        refresh_token = "synthetic-fixture-refresh-token"
+        original = (
+            "api_url: https://engine.example/v1\n"
+            "providers:\n"
+            "  engine:\n"
+            "    provider_type: openai_compatible\n"
+            "    base_url: http://engine:4000/v1\n"
+            "    model: chat-a\n"
+            f"    api_key: {api_key}\n"
+            "    oauth:\n"
+            f"      access_token: {access_token}\n"
+            f"      refresh_token: {refresh_token}\n"
+        )
+        config_dir = isolated_config / ".esdc"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(original)
+        Config._config_cache = None
+
+        result = runner.invoke(configs_app, ["--show"])
+
+        assert result.exit_code == 0
+        output = result.output
+
+        # The secrets themselves never reach the terminal.
+        for secret in (api_key, access_token, refresh_token):
+            assert secret not in output
+            # Only the first two and last two characters may appear.
+            assert secret[2:-2] not in output
+
+        assert "providers.engine.api_key = sk****ey" in output
+        assert "providers.engine.oauth.access_token = sy****en" in output
+        assert "providers.engine.oauth.refresh_token = sy****en" in output
+
+        # Non-secret values stay readable.
+        assert "api_url = https://engine.example/v1" in output
+        assert "providers.engine.model = chat-a" in output
+
+        # Showing the config is a read, not a write.
+        assert config_file.read_text() == original
