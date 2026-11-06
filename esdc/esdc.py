@@ -1007,9 +1007,8 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
     """Generate semantic embeddings for project_remarks with progress bar.
 
     ``embed_backend`` overrides the ``embedding_backend`` config key for
-    this run only. Query-time similarity uses the same client. A value with
-    no implementation, the retired in-process backend, is reported as an
-    error rather than repaired.
+    this run only. A value with no implementation, the retired in-process
+    backend, is reported as an error rather than repaired.
     """
     from esdc.configs import Config
     from esdc.embedders import get_build_embedder

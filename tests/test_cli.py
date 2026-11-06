@@ -1,6 +1,7 @@
 """Tests for the esdc CLI."""
 
 import os
+import re
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -563,18 +564,21 @@ class TestEmbeddingsOnlyHealthCheck:
         monkeypatch.setattr("esdc.esdc.console", CapturingConsole())
         runner.invoke(app, ["reload", "--embeddings-only"])
 
-        # The diagnosis the check produced is what the user sees, and the
-        # retired in-process backend is no longer offered as an alternative.
+        # The diagnosis the check produced is what the user sees, as it is worded:
+        # no generic label replaces it, and the retired in-process backend is no
+        # longer offered as an alternative.
         assert any("503" in line for line in printed)
         assert not any("Ollama not available" in line for line in printed)
         assert not any("in-process" in line for line in printed)
+        assert not any(line.startswith("Warning:") for line in printed)
 
-    def test_the_help_lists_only_services_as_backends(self):
+    def test_the_embed_backend_option_lists_only_services(self):
         """A value with no implementation is not offered as an option."""
-        import re
-
-        result = runner.invoke(app, ["reload", "--help"])
-        # The help is drawn in a bordered table, so compare on flattened text.
-        text = re.sub(r"[│╭╰─]|\s+", " ", result.output)
-        assert "ollama or openai" in text
-        assert "local" not in text.lower()
+        for command in (["reload"], ["corpus", "reembed"]):
+            result = runner.invoke(app, command + ["--help"])
+            # The help is drawn in a bordered table: read this option's own text,
+            # with the borders taken out and the wrap flattened back into words.
+            flat = " ".join(re.sub(r"[│╭╰─]", " ", result.output).split())
+            option = flat.split("--embed-backend")[-1].split("--help")[0]
+            assert "ollama or openai" in option, command
+            assert "local" not in option.lower(), command
