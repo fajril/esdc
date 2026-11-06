@@ -557,7 +557,8 @@ class TestEmbeddingsOnlyHealthCheck:
                 printed.append(str(text))
 
         monkeypatch.setattr(
-            "esdc.embedders.get_build_embedder", lambda backend=None: UnhealthyEmbedder()
+            "esdc.embedders.get_build_embedder",
+            lambda backend=None: UnhealthyEmbedder(),
         )
         monkeypatch.setattr("esdc.esdc.console", CapturingConsole())
         runner.invoke(app, ["reload", "--embeddings-only"])
@@ -567,3 +568,13 @@ class TestEmbeddingsOnlyHealthCheck:
         assert any("503" in line for line in printed)
         assert not any("Ollama not available" in line for line in printed)
         assert not any("in-process" in line for line in printed)
+
+    def test_the_help_lists_only_services_as_backends(self):
+        """A value with no implementation is not offered as an option."""
+        import re
+
+        result = runner.invoke(app, ["reload", "--help"])
+        # The help is drawn in a bordered table, so compare on flattened text.
+        text = re.sub(r"[│╭╰─]|\s+", " ", result.output)
+        assert "ollama or openai" in text
+        assert "local" not in text.lower()

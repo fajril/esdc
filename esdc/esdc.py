@@ -858,7 +858,7 @@ def reload(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: local, ollama or openai.",
+            help="Override embedding_backend for this run: ollama or openai.",
         ),
     ] = None,
 ) -> None:
@@ -875,7 +875,7 @@ def reload(
         no_embeddings: If True, skip semantic embeddings generation.
         embeddings_only: If True, only regenerate embeddings without reloading data.
         embed_backend: Override embedding_backend for this run
-        (local, ollama or openai).
+        (ollama or openai).
 
     Returns:
         None
@@ -1007,7 +1007,9 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
     """Generate semantic embeddings for project_remarks with progress bar.
 
     ``embed_backend`` overrides the ``embedding_backend`` config key for
-    this run only. Query-time similarity always runs locally regardless.
+    this run only. Query-time similarity uses the same client. A value with
+    no implementation, the retired in-process backend, is reported as an
+    error rather than repaired.
     """
     from esdc.configs import Config
     from esdc.embedders import get_build_embedder
@@ -1042,8 +1044,9 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
     # vector. The message is the diagnosis, so it is what the user sees.
     message = embedder.check_available()
     if message:
+        # The message already names the failure, so it is printed as it is.
         logger.warning(message)
-        console.print(f"[yellow]Warning: {message}[/yellow]")
+        console.print(f"[yellow]{message}[/yellow]")
         console.print(
             "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"  # noqa: E501
         )
@@ -3793,7 +3796,7 @@ def commit(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: local, ollama or openai.",
+            help="Override embedding_backend for this run: ollama or openai.",
         ),
     ] = None,
 ) -> None:
@@ -4344,7 +4347,7 @@ def reembed(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: local, ollama or openai.",
+            help="Override embedding_backend for this run: ollama or openai.",
         ),
     ] = None,
     stale: Annotated[
