@@ -12,6 +12,7 @@ from typing import Any
 import ollama
 
 from esdc.configs import Config
+from esdc.embedders import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,9 @@ class EmbeddingManager:
             return list(embedding)
 
         except Exception as e:
-            logger.error("[Embedding] failed | error=%s", e)
+            # The ollama SDK's ResponseError text is the server's body, which
+            # can echo the credential: log the status, not the body.
+            logger.error("[Embedding] failed | error=%s", error_text(e))
             raise
 
     def generate_embeddings_batch(
@@ -129,7 +132,7 @@ class EmbeddingManager:
             )
             return results
         except Exception as e:
-            logger.error("[Embedding] batch failed | error=%s", e)
+            logger.error("[Embedding] batch failed | error=%s", error_text(e))
             raise
 
     def health_check(self) -> bool:

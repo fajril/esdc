@@ -549,6 +549,73 @@ def test_ollama_check_available_reports_a_bad_response_as_a_response(monkeypatch
     assert "empty vector" in message
 
 
+def test_response_that_is_not_a_vector_list_is_rejected(monkeypatch):
+    """A row must be a sequence before its length is taken."""
+    payload = {"data": [{"index": 0, "embedding": None}]}
+    post = MagicMock(return_value=_http_ok(payload))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", batch_size=10)
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embeddings_batch(["t0"])
+    assert "instead of a vector" in str(exc.value)
+
+
+class _StatusError(Exception):
+    """Stand-in for the ollama SDK's ResponseError, whose text is the body."""
+
+    def __init__(self, body: str, status_code: int) -> None:
+        super().__init__(f"{body} (status code: {status_code})")
+        self.status_code = status_code
+
+
+def test_service_error_reports_status_without_the_body(monkeypatch):
+    """The body can echo the credential, so only the status is reported."""
+    mgr = MagicMock()
+    mgr.generate_embedding.side_effect = _StatusError("Bearer sk-secret rejected", 401)
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embedding("x")
+    msg = str(exc.value)
+    assert "401" in msg
+    assert "sk-secret" not in msg
+    # An answering service is not described as unreachable.
+    assert "could not reach" not in msg
+    # No hint of the retired in-process backend.
+    assert "local" not in msg
+
+
+def test_transport_error_is_reported_as_unreachable(monkeypatch):
+    """A failure with no response body has nothing to withhold."""
+    mgr = MagicMock()
+    mgr.generate_embedding.side_effect = ConnectionError("connection refused")
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embedding("x")
+    msg = str(exc.value)
+    assert "could not reach" in msg
+    assert "connection refused" in msg
+    assert "local" not in msg
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [_StatusError("server said sk-secret", 500), ConnectionError("connection refused")],
+)
+def test_check_available_returns_a_message_for_any_failure(monkeypatch, failure):
+    """A caller asking whether a service answers should not have to catch."""
+    mgr = MagicMock()
+    mgr.generate_embedding.side_effect = failure
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    message = e.check_available()
+    assert message is not None
+    assert "http://box:11434" in message
+    if getattr(failure, "status_code", None):
+        assert "sk-secret" not in message
+
+
 def test_valid_response_passes_shape_validation(monkeypatch):
     payload = {"data": [{"index": 0, "embedding": [1.0, 0.5]}]}
     post = MagicMock(return_value=_http_ok(payload))

@@ -94,6 +94,12 @@ def _validate_vectors(
     if not vectors:
         return []
 
+    if not isinstance(vectors[0], (list, tuple)):
+        raise RuntimeError(
+            f"[Embedding] {source} returned a {type(vectors[0]).__name__} "
+            "instead of a vector at position 0; the response is malformed."
+        )
+
     dim = len(vectors[0])
     if dim == 0:
         raise RuntimeError(
@@ -103,6 +109,12 @@ def _validate_vectors(
 
     numbers: list[list[float]] = []
     for position, vector in enumerate(vectors):
+        if not isinstance(vector, (list, tuple)):
+            raise RuntimeError(
+                f"[Embedding] {source} returned a {type(vector).__name__} "
+                f"instead of a vector at position {position}; the response is "
+                "malformed."
+            )
         if len(vector) != dim:
             raise RuntimeError(
                 f"[Embedding] {source} returned a vector of dimension "
@@ -244,16 +256,40 @@ class InternalEmbedder:
             return [[float(x) for x in vec] for vec in model.embed(texts)]
 
 
-def _unreachable(backend: str, target: str, err: Exception) -> str:
-    """Actionable message for a service that could not be reached.
+def error_text(err: Exception) -> str:
+    """Describe a service failure without quoting the response body.
 
-    The message names the requirement and the failure; it never quotes the
-    response body and never suggests the retired in-process backend.
+    An error that carries a status code means the service answered: its body
+    can echo the credential or the request (the ollama SDK's ResponseError text
+    is the server's body), so only the status is reported. A connection error
+    has no body and its text is what the user needs.
     """
+    status = getattr(err, "status_code", None)
+    if status:
+        return f"HTTP {status}"
+    return str(err)
+
+
+def _service_error(backend: str, target: str, err: Exception) -> str:
+    """Actionable message for a service that failed.
+
+    A service that answered with an error status is named as an error status,
+    not as unreachable; a service that did not answer is named as unreachable.
+    Neither message quotes the response body or suggests the retired
+    in-process backend.
+    """
+    if getattr(err, "status_code", None):
+        return (
+            f"[Embedding] backend '{backend}' service at {target} returned "
+            f"{error_text(err)}. Check `embedding_model` matches a model the "
+            "service has loaded, and that the endpoint is an embeddings "
+            "endpoint."
+        )
     return (
         f"[Embedding] backend '{backend}' could not reach the embedding "
-        f"service at {target}: {err}. Check the service is running and "
-        "reachable, and that `embedding_host`/`embedding_provider` point at it."
+        f"service at {target}: {error_text(err)}. Check the service is running "
+        "and reachable, and that `embedding_host`/`embedding_provider` point "
+        "at it."
     )
 
 
@@ -292,7 +328,7 @@ class OllamaEmbedder:
         try:
             raw = self._query_mgr.generate_embedding(text)
         except Exception as e:
-            raise RuntimeError(_unreachable("ollama", self.host, e)) from e
+            raise RuntimeError(_service_error("ollama", self.host, e)) from e
         # The response is validated as it arrived, so a bad value is reported
         # as a bad response rather than as a connection failure.
         return _validate_vectors([raw], 1, self.host)[0]
@@ -307,19 +343,20 @@ class OllamaEmbedder:
         try:
             raw = self._batch_mgr.generate_embeddings_batch(texts)
         except Exception as e:
-            raise RuntimeError(_unreachable("ollama", self.host, e)) from e
+            raise RuntimeError(_service_error("ollama", self.host, e)) from e
         return _validate_vectors(raw, len(texts), self.host)
 
     def check_available(self) -> str | None:
         """Ask the embedding endpoint only; None when it answers.
 
         A response that is not a usable vector is reported as a bad response,
-        not as an unreachable service.
+        not as an unreachable service, and nothing is raised: a caller asking
+        whether the service answers should get a message, not an exception.
         """
         try:
             raw = self._query_mgr.generate_embedding("availability check")
         except Exception as e:
-            return _unreachable("ollama", self.host, e)
+            return _service_error("ollama", self.host, e)
         try:
             _validate_vectors([raw], 1, self.host)
         except RuntimeError as e:
@@ -396,7 +433,7 @@ class OpenAIEmbedder:
                 timeout=timeout,
             )
         except Exception as e:
-            raise RuntimeError(_unreachable("openai", self.url, e)) from e
+            raise RuntimeError(_service_error("openai", self.url, e)) from e
 
         if resp.status_code >= 300:
             # The response body is not quoted: it can echo the request or the
@@ -547,10 +584,7 @@ def probe_mismatch(stored: list[float], current: list[float]) -> str | None:
         )
     sim = cosine(current, stored)
     if sim < PROBE_TOLERANCE:
-        return (
-            f"stored probe cosine {sim:.6f} is below the required "
-            f"{PROBE_TOLERANCE}"
-        )
+        return f"stored probe cosine {sim:.6f} is below the required {PROBE_TOLERANCE}"
     return None
 
 
