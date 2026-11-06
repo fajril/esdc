@@ -527,3 +527,43 @@ def test_portal_command_invokes_run_portal(monkeypatch):
     result = CliRunner().invoke(app, ["portal"])
     assert result.exit_code == 0
     assert called == {"host": "127.0.0.1", "port": 13334, "log_level": "info"}
+
+
+class TestEmbeddingsOnlyHealthCheck:
+    """The reload path reports what the embedding service said, not a fixed label."""
+
+    def test_the_service_message_is_what_the_cli_prints(
+        self, isolated_config, monkeypatch
+    ):
+        import duckdb
+
+        from esdc.configs import Config
+
+        Config.init_config()
+        db_file = Config.get_db_file()
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        duckdb.connect(str(db_file)).close()
+
+        class UnhealthyEmbedder:
+            model = "qwen3-embedding-0.6b-q8_0"
+
+            def check_available(self):
+                return "[Embedding] service at http://box returned HTTP 503."
+
+        printed: list[str] = []
+
+        class CapturingConsole:
+            def print(self, text: str) -> None:
+                printed.append(str(text))
+
+        monkeypatch.setattr(
+            "esdc.embedders.get_build_embedder", lambda backend=None: UnhealthyEmbedder()
+        )
+        monkeypatch.setattr("esdc.esdc.console", CapturingConsole())
+        runner.invoke(app, ["reload", "--embeddings-only"])
+
+        # The diagnosis the check produced is what the user sees, and the
+        # retired in-process backend is no longer offered as an alternative.
+        assert any("503" in line for line in printed)
+        assert not any("Ollama not available" in line for line in printed)
+        assert not any("in-process" in line for line in printed)
