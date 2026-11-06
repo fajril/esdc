@@ -15,9 +15,9 @@ from typing import Any
 
 import duckdb
 
+from esdc import embedders
 from esdc.configs import Config
 from esdc.dbmanager import get_duckdb_connection
-from esdc.embedders import InternalEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -66,20 +66,41 @@ class SemanticResolver:
         self._db_path = Path(db_path)
         self._read_only = read_only
         self._conn: duckdb.DuckDBPyConnection | None = None
-        self._embedder = embedder if embedder is not None else InternalEmbedder()
-        self._pin_verified_sig: tuple[int, int] | None = None
+        # Resolved on the first operation that actually asks for a vector, not here.
+        self._embedder = embedder
+        self._injected = embedder is not None
+        self._resolved_signature: tuple | None = None
+        # Keys of (config, DB file, stored pin, stored dimension, stored probe) this
+        # client was proven to share a vector space with. Only a validation that
+        # succeeded is recorded, so a refused read is checked again rather than
+        # remembered as verified.
+        self._probe_verified: set[tuple[Any, ...]] = set()
 
-    def _db_signature(self) -> tuple[int, int] | None:
-        """Identity of the DB file: (mtime_ns, size). None if it does not exist.
+    @property
+    def embedder(self) -> Any:
+        """The client this resolver embeds with, resolved through the factory.
 
-        Changes when esdc fetch/reload replaces or rewrites esdc.duckdb, which is
-        exactly when a memoized pin check must be re-run.
+        An injected client is kept as it is (tests inject one). A client the resolver
+        resolved itself is rebuilt when the effective config changes, because it was
+        built for a config that no longer applies.
         """
-        try:
-            st = self._db_path.stat()
-        except OSError:
-            return None
-        return (st.st_mtime_ns, st.st_size)
+        if self._injected:
+            return self._embedder
+
+        signature = embedders.config_signature()
+        if self._embedder is None or signature != self._resolved_signature:
+            self._embedder = embedders.get_embedder()
+            self._resolved_signature = signature
+        return self._embedder
+
+    def _db_signature(self) -> int | None:
+        """Identity of the DB file: its inode, None if it does not exist.
+
+        Changes when esdc fetch/reload replaces esdc.duckdb, which is exactly when a
+        memoized pin check must be re-run. It is stable across the resolver's own
+        writes, so a validation is not thrown away by the write it protects.
+        """
+        return embedders.db_signature(self._db_path)
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
         """Get or create DuckDB connection with VSS extension loaded.
@@ -107,30 +128,38 @@ class SemanticResolver:
         return {"status": "not_available", "message": message, "results": []}
 
     def _ensure_semantic_meta(self) -> dict[str, Any] | None:
-        """Validate the stored embedding pin against the active embedder.
+        """Validate the stored embedding pin against the active client.
 
-        Pure read in both access modes: semantic_meta is never created,
-        seeded or updated here. Verifies the table exists with the required
-        columns, holds a usable dimension and a non-null probe, then
-        regenerates PROBE_TEXT and compares dimension and cosine within
-        PROBE_TOLERANCE. A missing/legacy schema or an incompatible embedder
-        degrades to ``not_available`` with the maintenance command; an
-        unexpected database failure surfaces as ``error`` rather than a
-        clean result.
+        Pure read in both access modes: semantic_meta is never created, seeded or
+        updated here. Verifies the table exists with the required columns, holds a
+        usable dimension and a non-null probe, then regenerates PROBE_TEXT and compares
+        dimension and cosine within PROBE_TOLERANCE. A missing/legacy schema or an
+        incompatible client degrades to ``not_available`` with the maintenance command;
+        an unexpected database failure surfaces as ``error`` rather than a clean result.
+
+        The check is memoized under (config signature, DB file, stored pin, stored
+        dimension, stored probe), so a query on a space already proven for that state
+        does not pay for a probe request again, while a rewrite of the metadata row
+        underneath the cache — the same file, different facts — re-validates. A
+        validation that did not succeed is never recorded, so the next call checks
+        again rather than trusting a stale answer.
 
         Returns:
-            The ``not_available``/``error`` response dict when the active
-            embedder cannot be verified, else None. Query paths must degrade
-            rather than raise, matching _embeddings_available.
+            The ``not_available``/``error`` response dict when the active client cannot
+            be verified, else None. Query paths must degrade rather than raise,
+            matching _embeddings_available.
         """
-        sig = self._db_signature()
-        if sig is not None and sig == self._pin_verified_sig:
-            return None
-
-        from esdc.embedders import PROBE_TEXT, probe_mismatch
-
         try:
             conn = self._get_connection()
+            # The key is the state this check would be computed from, read from the row
+            # rather than from the file alone: a fetch or reload publishes in place, so
+            # the same inode can hold a different pin, dimension or probe.
+            key = embedders.probe_memo_key(conn, self.SEMANTIC_META, self._db_path)
+            if key in self._probe_verified:
+                return None
+
+            from esdc.embedders import PROBE_TEXT, probe_mismatch
+
             columns = conn.execute(
                 "SELECT column_name FROM information_schema.columns "
                 "WHERE table_name = ?",
@@ -143,7 +172,7 @@ class SemanticResolver:
                     "'esdc reload --embeddings-only' to rebuild it."
                 )
             row = conn.execute(
-                f"SELECT dim, probe_vec, content_version "
+                f"SELECT dim, probe_vec, content_version, embedding_model "
                 f"FROM {self.SEMANTIC_META} LIMIT 1"
             ).fetchone()
             if row is None:
@@ -151,16 +180,26 @@ class SemanticResolver:
                     "Embedding metadata is empty. Run "
                     "'esdc reload --embeddings-only' to rebuild it."
                 )
-            dim, probe, content_version = row
-            if not isinstance(dim, int) or dim <= 0 or probe is None:
+            dim, probe, content_version, stored_model = row
+            if not isinstance(dim, int) or dim <= 0:
                 return self._not_available(
-                    "Embedding metadata has no usable dimension or probe. Run "
+                    "Embedding metadata has no usable dimension. Run "
                     "'esdc reload --embeddings-only' to rebuild it."
                 )
             if content_version != self.NARRATIVE_CONTENT_VERSION:
                 return self._not_available(
                     "Stored embeddings do not include the current project narrative "
                     "fields. Run 'esdc reload --embeddings-only' to rebuild them."
+                )
+            if probe is None:
+                # A reader cannot certify a space it did not produce: with vectors
+                # already stored, seeding the pin here would solemnize them as this
+                # client's work. The writer path is the only one that may seed.
+                return self._not_available(
+                    f"Stored embeddings pinned to {stored_model!r} have no parity "
+                    "probe to compare against, so this client "
+                    f"({self.embedder.model!r}) cannot be trusted against them. Run "
+                    "'esdc reload --embeddings-only' to rebuild them."
                 )
             try:
                 stored = json.loads(probe) if isinstance(probe, str) else list(probe)
@@ -175,15 +214,19 @@ class SemanticResolver:
                     f"records dim={dim}. Run 'esdc reload --embeddings-only' "
                     "to rebuild it."
                 )
-            current = self._embedder.generate_embedding(PROBE_TEXT)
+            current = self.embedder.generate_embedding(PROBE_TEXT)
             mismatch = probe_mismatch(stored, current)
             if mismatch is not None:
                 return self._not_available(
                     "Stored embeddings were built with a different embedding "
-                    f"space ({mismatch}). Run 'esdc reload --embeddings-only' "
+                    f"space ({mismatch}). This client reports "
+                    f"{self.embedder.model!r}; the stored probe is pinned to "
+                    f"{stored_model!r}. Run 'esdc reload --embeddings-only' "
                     "to rebuild them."
                 )
-            self._pin_verified_sig = sig
+            # This path writes nothing, so the key as read is the state as it stands
+            # after a successful check.
+            self._probe_verified.add(key)
         except Exception as e:  # pragma: no cover - DB-level failure
             logger.warning("[Semantic] pin check failed | %s", e)
             return {
@@ -231,7 +274,7 @@ class SemanticResolver:
 
             # Detect embedding dimension by generating a test embedding
             logger.info("[Semantic] detecting embedding dimension from model")
-            test_embedding = self._embedder.generate_embedding("test")
+            test_embedding = self.embedder.generate_embedding("test")
             embedding_dim = len(test_embedding)
             logger.info(f"[Semantic] detected embedding dimension: {embedding_dim}")
 
@@ -286,14 +329,14 @@ class SemanticResolver:
                 f"ALTER TABLE {self.SEMANTIC_META} "
                 "ADD COLUMN IF NOT EXISTS content_version INTEGER"
             )
-            probe = self._embedder.generate_embedding(PROBE_TEXT)
+            probe = self.embedder.generate_embedding(PROBE_TEXT)
             conn.execute(f"DELETE FROM {self.SEMANTIC_META}")
             conn.execute(
                 f"INSERT INTO {self.SEMANTIC_META} "
                 "(embedding_model, dim, probe_vec, content_version) "
                 "VALUES (?, ?, ?, ?)",
                 [
-                    self._embedder.model,
+                    self.embedder.model,
                     embedding_dim,
                     json.dumps(probe),
                     self.NARRATIVE_CONTENT_VERSION,
@@ -397,64 +440,95 @@ class SemanticResolver:
 
             logger.info("[Semantic] generating embeddings | count=%d", total)
 
-            # Process in batches
-            for i in range(0, total, batch_size):
-                batch = result[i : i + batch_size]
-                texts = [self._compose_search_text(row[16], row[17]) for row in batch]
+            # One transaction for the whole run: a batch that fails partway must not
+            # leave half of the index rewritten, so nothing is published until the run
+            # completes. The space is checked before writing, and a probe is never
+            # seeded onto an index that already holds vectors.
+            refused = embedders.probe_status(
+                conn,
+                self.SEMANTIC_META,
+                self.embedder,
+                vector_table=self.EMBEDDING_TABLE,
+            )
+            if refused["status"] == "error":
+                return {"status": "error", "message": refused["message"]}
 
-                # Generate embeddings
-                embeddings = self._embedder.generate_embeddings_batch(texts)
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                for i in range(0, total, batch_size):
+                    batch = result[i : i + batch_size]
+                    texts = [
+                        self._compose_search_text(row[16], row[17]) for row in batch
+                    ]
 
-                # Store in DuckDB with all contextual columns using bulk insert
-                data_to_insert = []
-                for row, embedding in zip(batch, embeddings, strict=True):
-                    data_to_insert.append(
-                        [
-                            row[0],  # project_id
-                            row[1],  # report_year
-                            table_name,
-                            row[2],  # field_name
-                            row[3],  # project_name
-                            row[4],  # pod_name
-                            row[5],  # wk_name
-                            row[6],  # province
-                            row[7],  # basin128
-                            row[8],  # project_class
-                            row[9],  # project_stage
-                            row[10],  # project_level
-                            row[11],  # operator_name
-                            row[12],  # operator_group
-                            row[13],  # wk_subgroup
-                            row[14],  # wk_regionisasi_ngi
-                            row[15],  # wk_area_perwakilan_skkmigas
-                            row[16],  # project_remarks
-                            row[17],  # groovy_report
-                            embedding,
-                        ]
+                    # Generate embeddings
+                    embeddings = self.embedder.generate_embeddings_batch(texts)
+                    if len(embeddings) != len(texts):
+                        raise ValueError(
+                            "[Semantic] the service returned a partial batch: "
+                            f"{len(embeddings)} vectors for {len(texts)} texts. "
+                            "Nothing is written from a batch whose texts and vectors "
+                            "cannot be paired."
+                        )
+
+                    # Store in DuckDB with all contextual columns using bulk insert
+                    data_to_insert = []
+                    for row, embedding in zip(batch, embeddings, strict=True):
+                        data_to_insert.append(
+                            [
+                                row[0],  # project_id
+                                row[1],  # report_year
+                                table_name,
+                                row[2],  # field_name
+                                row[3],  # project_name
+                                row[4],  # pod_name
+                                row[5],  # wk_name
+                                row[6],  # province
+                                row[7],  # basin128
+                                row[8],  # project_class
+                                row[9],  # project_stage
+                                row[10],  # project_level
+                                row[11],  # operator_name
+                                row[12],  # operator_group
+                                row[13],  # wk_subgroup
+                                row[14],  # wk_regionisasi_ngi
+                                row[15],  # wk_area_perwakilan_skkmigas
+                                row[16],  # project_remarks
+                                row[17],  # groovy_report
+                                embedding,
+                            ]
+                        )
+                    conn.executemany(
+                        f"""
+                        INSERT OR REPLACE INTO {self.EMBEDDING_TABLE}
+                        (project_id, report_year, table_name, field_name, project_name,
+                         pod_name, wk_name, province, basin128, project_class,
+                         project_stage, project_level, operator_name, operator_group,
+                         wk_subgroup, wk_regionisasi_ngi,
+                         wk_area_perwakilan_skkmigas, project_remarks, groovy_report,
+                         embedding)
+                        VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?
+                        )
+                        """,
+                        data_to_insert,
                     )
-                conn.executemany(
-                    f"""
-                    INSERT OR REPLACE INTO {self.EMBEDDING_TABLE}
-                    (project_id, report_year, table_name, field_name, project_name,
-                     pod_name, wk_name, province, basin128, project_class,
-                     project_stage, project_level, operator_name, operator_group,
-                     wk_subgroup, wk_regionisasi_ngi,
-                     wk_area_perwakilan_skkmigas, project_remarks, groovy_report,
-                     embedding)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    data_to_insert,
-                )
 
-                logger.debug(
-                    "[Semantic] batch %d/%d processed",
-                    i // batch_size + 1,
-                    (total + batch_size - 1) // batch_size,
-                )
+                    logger.debug(
+                        "[Semantic] batch %d/%d processed",
+                        i // batch_size + 1,
+                        (total + batch_size - 1) // batch_size,
+                    )
 
-                # Call progress callback if provided
-                if progress_callback:
-                    progress_callback(min(i + batch_size, total), total)
+                    # Call progress callback if provided
+                    if progress_callback:
+                        progress_callback(min(i + batch_size, total), total)
+
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
             # Create HNSW index
             self._create_hnsw_index()
@@ -563,7 +637,7 @@ class SemanticResolver:
             return mismatch
 
         # Generate query embedding
-        query_embedding = self._embedder.generate_embedding(query)
+        query_embedding = self.embedder.generate_embedding(query)
 
         return self.search_by_embedding(query_embedding, limit, filters)
 
@@ -987,7 +1061,7 @@ class SemanticResolver:
         if mismatch is not None:
             return mismatch
 
-        query_embedding = self._embedder.generate_embedding(query)
+        query_embedding = self.embedder.generate_embedding(query)
 
         semantic_results_raw = self.search_by_embedding(
             query_embedding, limit * 2, filters

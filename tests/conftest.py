@@ -45,6 +45,38 @@ def runner():
     return CliRunner()
 
 
+class FakeEmbeddingClient:
+    """Offline stand-in for one HTTP embedding service."""
+
+    def __init__(self, vector: list[float] | None = None) -> None:
+        self.vector = vector or [1.0, 0.0, 0.0]
+        self.requests = 0
+
+    @property
+    def model(self) -> str:
+        from esdc.embedders import MODEL_ID
+
+        return MODEL_ID
+
+    def generate_embedding(self, text: str) -> list[float]:
+        self.requests += 1
+        return list(self.vector)
+
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        self.requests += 1
+        return [list(self.vector) for _ in texts]
+
+    def check_available(self) -> str | None:
+        return None
+
+
+@pytest.fixture
+def embedding_client():
+    return FakeEmbeddingClient()
+
+
 @pytest.fixture
 def offline_tiktoken(
     monkeypatch: pytest.MonkeyPatch,

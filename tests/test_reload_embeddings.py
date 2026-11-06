@@ -56,7 +56,7 @@ def test_unhealthy_service_reports_its_own_message_and_skips(tmp_path, monkeypat
     )
     monkeypatch.setattr("esdc.esdc.console", CapturingConsole())
     with (
-        patch("esdc.embedders.get_build_embedder", return_value=fake),
+        patch("esdc.embedders.get_embedder", return_value=fake),
         patch("esdc.search.semantic_resolver.SemanticResolver") as res_cls,
     ):
         cli._generate_embeddings(embed_backend="ollama")
@@ -77,7 +77,7 @@ def test_a_service_that_answers_runs_the_writer(tmp_path, monkeypatch):
     fake.model = "qwen3-embedding-0.6b-q8_0"
     fake.check_available.return_value = None
     with (
-        patch("esdc.embedders.get_build_embedder", return_value=fake),
+        patch("esdc.embedders.get_embedder", return_value=fake),
         patch("esdc.search.semantic_resolver.SemanticResolver") as res_cls,
     ):
         res_cls.return_value.count_documents_with_remarks.return_value = 0

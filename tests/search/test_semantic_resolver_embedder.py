@@ -12,7 +12,9 @@ from typing import cast
 import duckdb
 import pytest
 
-from esdc.embedders import InternalEmbedder
+from esdc import embedders
+from esdc.configs import Config
+from esdc.embedders import EmbeddingError
 from esdc.search.semantic_resolver import SemanticResolver
 
 
@@ -29,11 +31,6 @@ class _FixedEmbedder:
 
     def generate_embeddings_batch(self, texts):
         return [list(self._vec) for _ in texts]
-
-
-def test_defaults_to_internal_embedder(tmp_path):
-    r = SemanticResolver(db_path=tmp_path / "x.duckdb")
-    assert isinstance(r._embedder, InternalEmbedder)
 
 
 def test_accepts_injected_embedder(tmp_path):
@@ -132,10 +129,14 @@ def test_legacy_space_without_meta_degrades_then_writable_repair(tmp_path):
     assert out["status"] == "not_available"
     assert "esdc reload --embeddings-only" in out["message"]
     # Reader never seeded the pin: the table was not created.
-    present = r._get_connection().execute(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_name = 'semantic_meta'"
-    ).fetchall()
+    present = (
+        r._get_connection()
+        .execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'semantic_meta'"
+        )
+        .fetchall()
+    )
     assert present == []
     r.close()
 
@@ -164,9 +165,7 @@ def test_legacy_meta_missing_probe_column_repairable_by_reload(tmp_path):
         db_path=db_path, embedder=_FixedEmbedder([1.0, 0.0]), read_only=False
     )
     conn = legacy._get_connection()
-    conn.execute(
-        "CREATE TABLE semantic_meta (embedding_model VARCHAR, dim INTEGER)"
-    )
+    conn.execute("CREATE TABLE semantic_meta (embedding_model VARCHAR, dim INTEGER)")
     conn.execute(
         "INSERT INTO semantic_meta (embedding_model, dim) VALUES (?, ?)",
         ["qwen3-embedding-0.6b-q8_0", 2],
@@ -239,14 +238,19 @@ def test_unavailable_content_version_preserves_read_only_database(
 
 
 def test_pin_check_embeds_probe_only_once(tmp_path):
-    """A stable DB file signature means the memo hits on the second call."""
+    """A stable (config signature, db signature) pair means the memo hits again.
+
+    Repointed for Task 2 (D2): the memo is keyed by the effective config and the facts
+    the check was computed from — the DB file plus the stored pin, dimension and probe —
+    and the proof is the request count, not an inspection of the cache.
+    """
     r = _seeded(tmp_path, [1.0, 0.0])
     assert r._ensure_semantic_meta() is None
-    assert r._pin_verified_sig == r._db_signature()
     embedder = cast(_FixedEmbedder, r._embedder)
     embedder.calls = 0
     assert r._ensure_semantic_meta() is None
     r.close()
+    # The second check hit the memo: no probe request was made for the same state.
     assert embedder.calls == 0
 
 
@@ -292,10 +296,12 @@ def test_pin_recheck_on_db_signature_change(tmp_path):
     embedder = cast(_FixedEmbedder, r._embedder)
     embedder.calls = 0
 
-    # Simulate the DB file changing underneath the cached resolver by
-    # bumping its mtime, so the recorded signature no longer matches.
-    st = r._db_path.stat()
-    os.utime(r._db_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1))
+    # Simulate esdc fetch/reload replacing the file underneath the cached
+    # resolver: same path, a different file. The recorded signature no longer
+    # matches, so the pin is read again rather than trusted from the memo.
+    replacement = r._db_path.parent / "replaced.duckdb"
+    duckdb.connect(str(replacement)).close()
+    os.replace(replacement, r._db_path)
 
     assert r._ensure_semantic_meta() is None
     r.close()
@@ -318,3 +324,393 @@ def test_build_writes_the_pin(tmp_path):
     r.close()
     assert row[0] == "qwen3-embedding-0.6b-q8_0"
     assert row[1] == 2
+
+
+# --- Task 2: lazy resolution, cached probe validation, transactional generation ---
+
+
+def test_defaults_to_internal_embedder(tmp_path, monkeypatch):
+    """The default is whatever the factory resolves, not a class named in the resolver.
+
+    Repointed for Task 2: the resolver no longer carries an in-process default of its
+    own — it asks the factory, and the factory is what the config decides.
+    """
+    _patch_config(monkeypatch, "service-a")
+    client = _CountingEmbedder([1.0, 0.0], "service-a")
+    monkeypatch.setattr(embedders, "get_embedder", lambda backend=None: client)
+
+    r = SemanticResolver(db_path=tmp_path / "x.duckdb")
+    assert r.embedder is client
+    assert client.calls == []
+    r.close()
+
+
+class _CountingEmbedder:
+    """Fixed-vector client that records what it was asked to embed."""
+
+    def __init__(self, vec, name="qwen3-embedding-0.6b-q8_0"):
+        self._vec = list(vec)
+        self.model = name
+        self.calls: list[tuple[str, str]] = []
+
+    def generate_embedding(self, text):
+        self.calls.append(
+            ("probe", text) if text == embedders.PROBE_TEXT else ("query", text)
+        )
+        return list(self._vec)
+
+    def generate_embeddings_batch(self, texts):
+        if not texts:
+            return []
+        self.calls.append(("batch", texts[0]))
+        return [list(self._vec) for _ in texts]
+
+    def check_available(self) -> str | None:
+        return None
+
+
+class _FailingBatchClient(_CountingEmbedder):
+    """Answers for the first batch, then fails for the next one."""
+
+    def __init__(self, vec, name="qwen3-embedding-0.6b-q8_0", fail_after=1):
+        super().__init__(vec, name)
+        self.fail_after = fail_after
+
+    def generate_embeddings_batch(self, texts):
+        if not texts:
+            return []
+        self.calls.append(("batch", texts[0]))
+        if len([kind for kind, _ in self.calls if kind == "batch"]) > self.fail_after:
+            raise EmbeddingError("[Embedding] service at fake failed")
+        return [list(self._vec) for _ in texts]
+
+
+def _patch_config(monkeypatch, model, api_key=""):
+    state = {"model": model, "api_key": api_key}
+    monkeypatch.setattr(
+        Config, "get_embedding_backend", classmethod(lambda cls: "ollama")
+    )
+    monkeypatch.setattr(
+        Config, "get_embedding_host", classmethod(lambda cls: "http://localhost:11434")
+    )
+    monkeypatch.setattr(
+        Config, "get_embedding_model", classmethod(lambda cls: state["model"])
+    )
+    monkeypatch.setattr(
+        Config, "get_embedding_api_key", classmethod(lambda cls: state["api_key"])
+    )
+    return state
+
+
+def _pinned_space(tmp_path, model, db_name="pinned.duckdb"):
+    """A resolver space pinned to `model` with one stored vector and its probe.
+
+    Built through a writer so the schema is the one a reader expects, then the pin is
+    renamed: the pin, the probe and the vector are simply what a reader finds.
+    """
+    db_path = tmp_path / db_name
+    writer = SemanticResolver(
+        db_path=db_path, embedder=_FixedEmbedder([1.0, 0.0]), read_only=False
+    )
+    assert writer.build_embeddings_table() is True
+    conn = writer._get_connection()
+    conn.execute(
+        "INSERT INTO project_embeddings "
+        "(project_id, report_year, table_name, project_remarks, embedding) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ["P1", 2024, "project_resources", "masalah teknis sumur", [1.0, 0.0]],
+    )
+    conn.execute("UPDATE semantic_meta SET embedding_model = ?", [model])
+    writer.close()
+    return db_path
+
+
+def test_constructor_does_not_call_the_service(tmp_path, monkeypatch):
+    """Constructing the resolver resolves nothing; the first vector op does."""
+    _patch_config(monkeypatch, "service-a")
+    resolved: list = []
+    client = _CountingEmbedder([1.0, 0.0])
+
+    def factory(backend=None):
+        resolved.append(client)
+        return client
+
+    monkeypatch.setattr(embedders, "get_embedder", factory)
+
+    db_path = tmp_path / "x.duckdb"
+    space = _pinned_space(tmp_path, "service-a", db_name="x.duckdb")
+    assert space == db_path
+
+    r = SemanticResolver(db_path=db_path)
+    assert resolved == []
+    assert client.calls == []
+
+    out = r.search_by_text("anything")
+    assert out["status"] == "success", out
+    assert resolved == [client]  # resolved on the operation that needed a vector
+    assert client.calls == [
+        ("probe", embedders.PROBE_TEXT),
+        ("query", "anything"),
+    ]
+    r.close()
+
+
+def test_client_replaced_when_effective_config_changes(tmp_path, monkeypatch):
+    """A superseded config (including its credential) must not keep its client."""
+    state = _patch_config(monkeypatch, "service-a")
+    clients = {"service-a": _CountingEmbedder([1.0, 0.0], "service-a")}
+    resolved: list[tuple] = []
+
+    def factory(backend=None):
+        sig = embedders.config_signature()
+        resolved.append(sig)
+        return clients[sig[2]]
+
+    monkeypatch.setattr(embedders, "get_embedder", factory)
+
+    r = SemanticResolver(db_path=tmp_path / "x.duckdb")
+    assert r.embedder is clients["service-a"]
+    assert r.embedder is clients["service-a"]
+    assert len(resolved) == 1
+
+    state["model"] = "service-b"
+    clients["service-b"] = _CountingEmbedder([1.0, 0.0], "service-b")
+    assert r.embedder is clients["service-b"]
+    assert len(resolved) == 2
+
+    state["api_key"] = "sk-test"
+    assert r.embedder is clients["service-b"]
+    assert len(resolved) == 3
+    r.close()
+
+
+def test_query_does_not_write_probe_metadata(tmp_path, monkeypatch):
+    """A read validates the stored probe without writing anything to the DB."""
+    _patch_config(monkeypatch, "service-a")
+    db_path = tmp_path / "s.duckdb"
+    writer = SemanticResolver(
+        db_path=db_path,
+        embedder=_CountingEmbedder([1.0, 0.0], "space-a"),
+        read_only=False,
+    )
+    assert writer.build_embeddings_table() is True
+    writer._get_connection().execute(
+        "INSERT INTO project_embeddings (project_id, report_year, table_name, "
+        "project_remarks, embedding) VALUES (?, ?, ?, ?, ?)",
+        ["P1", 2024, "project_resources", "masalah teknis sumur", [1.0, 0.0]],
+    )
+    writer.close()
+
+    before = hashlib.sha256(db_path.read_bytes()).hexdigest()
+    client = _CountingEmbedder([1.0, 0.0], "space-b")
+    reader = SemanticResolver(db_path=db_path, embedder=client, read_only=True)
+    out = reader.search_by_text("masalah teknis", limit=5)
+    reader.close()
+
+    assert out["status"] == "success", out
+    assert client.calls == [
+        ("probe", embedders.PROBE_TEXT),
+        ("query", "masalah teknis"),
+    ]
+    assert hashlib.sha256(db_path.read_bytes()).hexdigest() == before
+
+
+def test_validation_runs_once_per_config_signature_and_db_signature(
+    tmp_path, monkeypatch
+):
+    """The pin is validated once per (config signature, db signature), not per query."""
+    state = _patch_config(monkeypatch, "service-a")
+    db_path = tmp_path / "s.duckdb"
+    writer = SemanticResolver(
+        db_path=db_path,
+        embedder=_CountingEmbedder([1.0, 0.0], "service-a"),
+        read_only=False,
+    )
+    assert writer.build_embeddings_table() is True
+    writer._get_connection().execute(
+        "INSERT INTO project_embeddings (project_id, report_year, table_name, "
+        "project_remarks, embedding) VALUES (?, ?, ?, ?, ?)",
+        ["P1", 2024, "project_resources", "masalah teknis sumur", [1.0, 0.0]],
+    )
+    writer.close()
+
+    client = _CountingEmbedder([1.0, 0.0], "service-a")
+    reader = SemanticResolver(db_path=db_path, embedder=client, read_only=True)
+    reader.search_by_text("first query", limit=5)
+    reader.search_by_text("second query", limit=5)
+    assert client.calls == [
+        ("probe", embedders.PROBE_TEXT),
+        ("query", "first query"),
+        ("query", "second query"),
+    ]
+    # The memo hit is proved by the count above: the second query embedded only what it
+    # was asked about, so the state it validated is the state it recorded.
+
+    # A different effective config is a different space: validate again, once.
+    state["model"] = "service-b"
+    reader.search_by_text("third query", limit=5)
+    assert [text for kind, text in client.calls if kind == "probe"] == [
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+    ]
+    reader.search_by_text("fourth query", limit=5)
+    assert [text for kind, text in client.calls if kind == "probe"] == [
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+    ]
+
+    # A validation that never succeeded is not memoized as verified.
+    reader.close()
+    drifted = _CountingEmbedder([0.0, 1.0], "service-b")
+    second = SemanticResolver(db_path=db_path, embedder=drifted, read_only=True)
+    out = second.search_by_text("flare", limit=5)
+    assert out is not None and out["status"] == "not_available", out
+    second.search_by_text("flare", limit=5)
+    assert [text for kind, text in drifted.calls if kind == "probe"] == [
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+    ]
+    second.close()
+
+
+def test_index_without_probe_is_not_solemnized_by_seeding_from_new_service(tmp_path):
+    """A probe from a new service cannot certify vectors produced elsewhere.
+
+    The reader must not seed the pin as a side effect of a query: seeding is only the
+    migration path for a space that is still empty.
+    """
+    new_service = _CountingEmbedder([1.0, 0.0], "new-service")
+    db_path = _pinned_space(tmp_path, "stored-service", db_name="s.duckdb")
+    # The space holds vectors from another service and no probe to compare against.
+    conn = duckdb.connect(str(db_path))
+    conn.execute("UPDATE semantic_meta SET probe_vec = NULL")
+    conn.close()
+
+    resolver = SemanticResolver(db_path=db_path, embedder=new_service)
+    result = resolver._ensure_semantic_meta()
+    assert result is not None
+    assert result["status"] == "not_available", result
+    assert "stored-service" in result["message"]
+    reader = resolver._get_connection()
+    probe_row = reader.execute("SELECT probe_vec FROM semantic_meta").fetchone()
+    count_row = reader.execute("SELECT COUNT(*) FROM project_embeddings").fetchone()
+    assert probe_row is not None and count_row is not None
+    assert probe_row[0] is None
+    assert count_row[0] == 1
+    resolver.close()
+
+
+def test_mid_batch_failure_leaves_index_and_source_intact(tmp_path, monkeypatch):
+    """A generation run that fails partway writes nothing: the old index survives."""
+    _patch_config(monkeypatch, "service-a")
+    client = _FailingBatchClient([1.0, 0.0], "service-a", fail_after=1)
+    db_path = tmp_path / "s.duckdb"
+    resolver = SemanticResolver(db_path=db_path, embedder=client, read_only=False)
+    conn = resolver._get_connection()
+    conn.execute(
+        "CREATE TABLE project_resources (project_id VARCHAR, report_year INTEGER, "
+        "field_name VARCHAR, project_name VARCHAR, pod_name VARCHAR, wk_name VARCHAR, "
+        "province VARCHAR, basin128 VARCHAR, project_class VARCHAR, project_stage VARCHAR, "
+        "project_level VARCHAR, operator_name VARCHAR, operator_group VARCHAR, "
+        "wk_subgroup VARCHAR, wk_regionisasi_ngi VARCHAR, wk_area_perwakilan_skkmigas VARCHAR, "
+        "project_remarks TEXT, groovy_report TEXT)"
+    )
+    assert resolver.build_embeddings_table() is True
+    conn.execute(
+        "INSERT INTO project_embeddings (project_id, report_year, table_name, project_remarks, "
+        "embedding) VALUES (?, ?, ?, ?, ?)",
+        ["P0", 2024, "project_resources", "row already indexed", [1.0, 0.0]],
+    )
+    for i in range(4):
+        conn.execute(
+            "INSERT INTO project_resources (project_id, report_year, project_remarks) "
+            "VALUES (?, ?, ?)",
+            [f"P{i + 1}", 2024, f"remarks {i + 1}"],
+        )
+
+    out = resolver.generate_and_store_embeddings(batch_size=2)
+    resolver.close()
+
+    assert out["status"] == "error", out
+    conn = duckdb.connect(str(db_path), read_only=True)
+    rows = conn.execute(
+        "SELECT project_id, embedding FROM project_embeddings ORDER BY project_id"
+    ).fetchall()
+    conn.close()
+    # Only the row that existed before the run is still in the index.
+    assert [row[0] for row in rows] == ["P0"], rows
+
+
+def test_memo_invalidated_when_the_stored_pin_or_probe_changes_without_replacing_the_file(
+    tmp_path,
+):
+    """A metadata row rewritten underneath a cached client re-validates the space.
+
+    The DB half of the memo key is the file's inode, and `esdc fetch`/`esdc reload`
+    publish in place: the same inode can hold a different pin, dimension or probe. So
+    the key carries the facts the validation was computed from, read from the row, and
+    the entry is recorded as the state stands after a successful check. Request counts
+    are the proof; nothing here looks inside the cache.
+    """
+    db_path = _pinned_space(tmp_path, "space-a", db_name="in-place.duckdb")
+    client = _CountingEmbedder([1.0, 0.0], "space-a")
+    # Writable so the rewrite underneath comes from a second connection with the same
+    # configuration this process already has open; the memo behaviour is the same in
+    # either mode, and the resolver still never writes the pin itself.
+    reader = SemanticResolver(db_path=db_path, embedder=client, read_only=False)
+
+    out = reader.search_by_text("first query", limit=5)
+    assert out["status"] == "success", out
+    assert [text for kind, text in client.calls if kind == "probe"] == [
+        embedders.PROBE_TEXT
+    ]
+    inode = os.stat(db_path).st_ino
+
+    # Same file, same inode: the pin and the stored probe were rewritten underneath the
+    # cached client, and the new probe still agrees, so the next query checks again.
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        "UPDATE semantic_meta SET embedding_model = ?, probe_vec = ?",
+        ["space-b", json.dumps([0.999, 0.001])],
+    )
+    conn.close()
+
+    out = reader.search_by_text("second query", limit=5)
+    assert out["status"] == "success", out
+    assert os.stat(db_path).st_ino == inode, "the row was changed by replacing the file"
+    assert [text for kind, text in client.calls if kind == "probe"] == [
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+    ]
+
+    # The recorded key is the state after the successful check, so operations on that
+    # state do not pay for the probe again.
+    reader.search_by_text("third query", limit=5)
+    assert [text for kind, text in client.calls if kind == "probe"] == [
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+    ]
+
+    # A probe that no longer agrees is caught the same way, and a check that did not
+    # succeed is not remembered as verified: each refused read checks again.
+    conn = duckdb.connect(str(db_path))
+    conn.execute("UPDATE semantic_meta SET probe_vec = ?", [json.dumps([0.0, 1.0])])
+    conn.close()
+
+    out = reader.search_by_text("fourth query", limit=5)
+    assert out["status"] == "not_available", out
+    assert "space-b" in out["message"]
+    assert [text for kind, text in client.calls if kind == "probe"] == [
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+    ]
+
+    reader.search_by_text("fifth query", limit=5)
+    assert [text for kind, text in client.calls if kind == "probe"] == [
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+        embedders.PROBE_TEXT,
+    ]
+    reader.close()

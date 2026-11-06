@@ -10,7 +10,7 @@ import pytest
 
 from esdc.corpus.chunker import Chunk, chunk_markdown
 from esdc.corpus.store import CorpusNotReadyError, CorpusStore
-from esdc.embedders import MODEL_ID
+from esdc.embedders import MODEL_ID, EmbeddingError
 
 
 def _fake_vector(text: str) -> list[float]:
@@ -790,17 +790,234 @@ def test_get_document_readers_return_same_row_shape(store):
     assert by_id == by_hash
 
 
-def test_default_embedder_is_internal(monkeypatch, tmp_path):
-    from esdc.corpus.embedder import MODEL_ID
+def test_constructor_does_not_call_the_service(embedding_client, monkeypatch, tmp_path):
+    """Construction resolves nothing; the client is built on the first vector operation.
+
+    The store used to build an in-process embedder in the constructor, so a store
+    opened for a read that needs no vector still paid for a model nobody asked
+    for. Construction now resolves nothing, and the first operation that actually
+    asks for a vector is what builds the client.
+    """
+    import esdc.embedders as emb
+
+    resolved: list = []
+
+    def factory(backend=None):
+        resolved.append(embedding_client)
+        return embedding_client
+
+    monkeypatch.setattr(emb, "get_embedder", factory)
 
     store = CorpusStore(
         read_only=False,
         db_path=tmp_path / "corpus.duckdb",
         sqlite_path=tmp_path / "esdc.sqlite",
     )
-    assert store._embedder.model == MODEL_ID
-    assert type(store._embedder).__name__ == "InternalEmbedder"
+
+    # A read that needs no vector must not build a client either.
     assert store.get_document_by_hash("deadbeef") is None
+    assert resolved == []
+    assert embedding_client.requests == 0
+
+    store.ensure_tables()  # dimension detection is the first vector operation
+    assert resolved == [embedding_client]
+    # D1: the client reports the canonical identity, never the wire name.
+    assert getattr(store.embedder, "model", None) == MODEL_ID
+    assert embedding_client.requests == 1
+    store.close()
+
+
+class FailingBatchClient:
+    """Answers the first batch, then fails on the next one.
+
+    Batches are counted apart from the probe request, so the failure is the batch
+    that comes halfway through a run rather than the validation before it.
+    """
+
+    def __init__(self, vector: list[float] | None = None) -> None:
+        self.vector = vector or [1.0, 0.0, 0.0]
+        self.requests = 0
+        self.batches = 0
+        self.fail_after = 0
+
+    model = MODEL_ID
+
+    def generate_embedding(self, text: str) -> list[float]:
+        self.requests += 1
+        return list(self.vector)
+
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        self.requests += 1
+        self.batches += 1
+        if self.batches > self.fail_after:
+            raise EmbeddingError("[Embedding] service at fake failed")
+        return [list(self.vector) for _ in texts]
+
+
+class ShortBatchClient:
+    """Returns fewer vectors than the texts it was given (a truncated answer)."""
+
+    model = MODEL_ID
+
+    def __init__(self, vector: list[float] | None = None) -> None:
+        self.vector = vector or [1.0, 0.0, 0.0]
+        self.requests = 0
+
+    def generate_embedding(self, text: str) -> list[float]:
+        self.requests += 1
+        return list(self.vector)
+
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        self.requests += 1
+        return [list(self.vector) for _ in texts[:1]]
+
+
+def test_no_http_call_for_empty_batch(embedding_client, tmp_path):
+    """An empty batch makes no request, and the source row is still written."""
+    store = CorpusStore(
+        read_only=False,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=embedding_client,
+    )
+    store.ensure_tables()
+    embedding_client.requests = 0
+
+    store.insert_document(DOC, [])
+
+    assert embedding_client.requests == 0
+    assert store.counts()["documents"] == 1
+    store.close()
+
+
+def test_mid_batch_failure_leaves_index_and_source_intact(tmp_path):
+    """A batch that fails partway writes nothing: the old vectors and the source row survive."""
+    client = FailingBatchClient()
+    store = CorpusStore(
+        read_only=False,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=client,
+    )
+    store.ensure_tables()
+    client.requests = 0
+    client.fail_after = 1  # the first batch answers, the next one fails partway
+    chunks = [Chunk(0, "Surat", "isi pertama"), Chunk(1, "Surat", "isi kedua")]
+    store.insert_document(DOC, chunks)
+
+    stored_before = (
+        store._get_connection()
+        .execute(
+            "SELECT chunk_id, embedding FROM document_chunks WHERE doc_id = ? ORDER BY chunk_id",
+            [DOC["doc_id"]],
+        )
+        .fetchall()
+    )
+    source_before = store.get_document_by_id(DOC["doc_id"])
+    assert stored_before and source_before is not None
+
+    with pytest.raises(EmbeddingError):
+        store.replace_chunks(DOC, chunks)
+
+    assert (
+        store._get_connection()
+        .execute(
+            "SELECT chunk_id, embedding FROM document_chunks "
+            "WHERE doc_id = ? ORDER BY chunk_id",
+            [DOC["doc_id"]],
+        )
+        .fetchall()
+        == stored_before
+    )
+    assert store.get_document_by_id(DOC["doc_id"]) == source_before
+    store.close()
+
+
+def test_short_batch_is_refused_before_any_write(tmp_path):
+    """A truncated answer is rejected whole: no chunk is written from a partial batch."""
+    client = ShortBatchClient()
+    store = CorpusStore(
+        read_only=False,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=client,
+    )
+    store.ensure_tables()
+    store.insert_document(DOC, [Chunk(0, "Surat", "isi pertama")])
+
+    stored_before = (
+        store._get_connection()
+        .execute(
+            "SELECT chunk_id, embedding FROM document_chunks WHERE doc_id = ? ORDER BY chunk_id",
+            [DOC["doc_id"]],
+        )
+        .fetchall()
+    )
+
+    with pytest.raises(ValueError, match="partial batch"):
+        store.replace_chunks(
+            DOC, [Chunk(0, "Surat", "isi pertama"), Chunk(1, "Surat", "isi kedua")]
+        )
+
+    assert (
+        store._get_connection()
+        .execute(
+            "SELECT chunk_id, embedding FROM document_chunks "
+            "WHERE doc_id = ? ORDER BY chunk_id",
+            [DOC["doc_id"]],
+        )
+        .fetchall()
+        == stored_before
+    )
+    store.close()
+
+
+def test_search_reports_service_failure_as_structured_error(embedding_client, tmp_path):
+    """An unreachable service is an error envelope, not an exception out of search()."""
+
+    class UnreachableClient:
+        model = MODEL_ID
+
+        def generate_embedding(self, text: str) -> list[float]:
+            raise EmbeddingError(
+                "[Embedding] backend 'ollama' could not reach the service"
+            )
+
+        def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+            raise EmbeddingError(
+                "[Embedding] backend 'ollama' could not reach the service"
+            )
+
+        def check_available(self) -> str | None:
+            return "[Embedding] backend 'ollama' could not reach the service"
+
+    store = CorpusStore(
+        read_only=False,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=embedding_client,
+    )
+    store.ensure_tables()
+    store.insert_document(DOC, [Chunk(0, "Surat", "isi surat persetujuan")])
+    store.refresh_mirror()
+    store.close()
+
+    reader = CorpusStore(
+        read_only=True,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=UnreachableClient(),
+    )
+    out = reader.search("persetujuan")
+    reader.close()
+
+    assert out["status"] == "error"
+    assert out["results"] == []
+    assert "could not reach" in out["message"]
 
 
 # --------------------------------------------------------------------------

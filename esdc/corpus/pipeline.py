@@ -66,7 +66,7 @@ from esdc.corpus.sidecar import (
     write_sidecar_file,
 )
 from esdc.corpus.store import CorpusStore
-from esdc.embedders import get_build_embedder
+from esdc.embedders import get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -1032,7 +1032,7 @@ def run_commit(
     cfg = Config.get_corpus_config()
     sidecars = _collect_sidecars(paths)
 
-    store = CorpusStore(embedder=get_build_embedder(embed_backend), read_only=False)
+    store = CorpusStore(embedder=get_embedder(embed_backend), read_only=False)
     any_processed = False
     merged_doc_ids: list[str] = []
     try:
@@ -1152,7 +1152,7 @@ def run_commit(
                         "metadata": json.dumps(meta.get("extras") or {}),
                         "markdown": body,
                         "extraction_method": meta.get("extraction_method"),
-                        "embedding_model": store._embedder.model,
+                        "embedding_model": store.embedder.model,
                         "page_count": meta.get("page_count"),
                     }
 
@@ -1523,12 +1523,12 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
     this run only; None uses the configured default.
     """
     report = CorpusReport()
-    store = CorpusStore(embedder=get_build_embedder(embed_backend), read_only=False)
+    store = CorpusStore(embedder=get_embedder(embed_backend), read_only=False)
     try:
         store.ensure_tables()
 
-        new_model = store._embedder.model
-        new_dim = len(store._embedder.generate_embedding("test"))
+        new_model = store.embedder.model
+        new_dim = len(store.embedder.generate_embedding("test"))
         store.set_meta(new_model, new_dim)
         report.embedding_model = new_model
 
@@ -1613,7 +1613,7 @@ def run_reembed_documents(
     try:
         if owned:
             store.ensure_tables()
-        report.embedding_model = store._embedder.model
+        report.embedding_model = store.embedder.model
         cfg = Config.get_corpus_config()
         with (
             _progress_with_status("reembed", len(doc_ids), "docs")

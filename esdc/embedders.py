@@ -18,10 +18,12 @@ chooses the request, the probe proves the space.
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
 import math
 import threading
+from pathlib import Path
 from typing import Any, NoReturn, Protocol
 
 import requests
@@ -669,38 +671,238 @@ def probe_mismatch(stored: list[float], current: list[float]) -> str | None:
     return None
 
 
-def check_or_seed_probe(conn: Any, meta_table: str, embedder: Any) -> None:
+def config_signature(backend: str | None = None) -> tuple[str, str, str, str]:
+    """Identity of the effective config a client was resolved from.
+
+    Which service answers, and with which weights, is decided by backend, host, wire
+    model and credential together. A probe validation is only good for that exact
+    combination: changing the wire model or the credential can point at a different
+    deployment, so a validation recorded under the old one must not be reused.
+
+    The credential is carried as a digest, never in the clear, so a signature can be
+    compared or logged without exposing it.
+    """
+    from esdc.configs import Config
+
+    name = (backend or Config.get_embedding_backend()).strip().lower()
+    host = str(Config.get_embedding_host() or "").strip()
+    wire = str(Config.get_embedding_model() or "").strip()
+    credential = hashlib.sha256(
+        str(Config.get_embedding_api_key() or "").encode()
+    ).hexdigest()
+    return (name, host, wire, credential)
+
+
+def db_signature(path: Any) -> int | None:
+    """Identity of a database file: its inode; None when it does not exist.
+
+    The inode says which file a memo key belongs to, and it is stable across our own
+    writes, so a validation is not thrown away by the write it is protecting. It is not
+    enough on its own: `esdc fetch` and `esdc reload` publish into the same file, so the
+    inode usually does not change. That is why the key also carries the stored pin,
+    dimension and probe, which an in-place publish can change.
+    """
+    try:
+        return Path(str(path)).stat().st_ino
+    except OSError:
+        return None
+
+
+def probe_digest(value: Any) -> str | None:
+    """Canonical hash of a stored probe, so a memo key can carry it cheaply.
+
+    None when there is no probe to carry. An unreadable probe hashes to None as well:
+    the check that reads it cannot succeed against it, so the difference never reaches
+    the memo.
+    """
+    if value is None:
+        return None
+    try:
+        vector = json.loads(value) if isinstance(value, str) else list(value)
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(json.dumps([float(x) for x in vector]).encode()).hexdigest()
+
+
+def probe_memo_key(
+    conn: Any,
+    meta_table: str,
+    path: Any,
+    config_sig: tuple[str, str, str, str] | None = None,
+) -> tuple[Any, ...]:
+    """The key a probe validation is memoized under.
+
+    `(effective config, DB file, stored pin, stored dimension, stored probe)` — the
+    facts a validation was computed from. Reading the row costs nothing beyond a SELECT;
+    the service is not asked. A rewrite that changes any of them re-validates, which is
+    what a file identity alone could not catch: `esdc fetch` and `esdc reload` publish
+    in place, so the same inode can hold a different pin, dimension or probe. A
+    writer's own writes change vectors, not the pin, the dimension or the probe, so
+    they cannot invalidate the memo that protects them.
+
+    Recorded by the caller as the state stands *after* a successful check, and only
+    for a check that succeeded.
+    """
+    try:
+        row = conn.execute(
+            f"SELECT embedding_model, dim, probe_vec FROM {meta_table} LIMIT 1"
+        ).fetchone()
+    except Exception:
+        # A legacy or absent metadata table has no stored facts to key on; the caller's
+        # check reports that as a degradation rather than memoizing it.
+        row = None
+    stored_model, stored_dim, stored_probe = row if row else (None, None, None)
+    return (
+        config_sig if config_sig is not None else config_signature(),
+        db_signature(path),
+        stored_model,
+        stored_dim,
+        probe_digest(stored_probe),
+    )
+
+
+def _row_count(conn: Any, table: str) -> int:
+    """Rows in a vector table; 0 when it does not exist yet."""
+    try:
+        row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+    except Exception:
+        return 0
+    return int(row[0]) if row else 0
+
+
+def _probe_message(
+    meta_table: str,
+    stored_model: str | None,
+    current_model: str | None,
+    detail: str,
+) -> str:
+    """Refusal that names both spaces being compared, never a credential."""
+    return (
+        f"[Embedding] parity probe failed for {meta_table}: {detail}. "
+        f"The client reporting model={current_model!r} cannot be trusted against "
+        f"vectors pinned to {stored_model!r}."
+    )
+
+
+def probe_status(
+    conn: Any, meta_table: str, embedder: Any, vector_table: str | None = None
+) -> dict[str, Any]:
+    """Read the stored probe and say whether `embedder` can be honoured against it.
+
+    Reads only: a query must not repair the pin as a side effect of asking for a
+    vector. Three readings come back:
+
+    * ``match`` — the stored probe agrees with this client.
+    * ``unverified`` — nothing is pinned yet. With the index behind the pin still
+      empty there is no vector space to protect, so a writer may seed it.
+    * ``error`` — the stored probe disagrees, or an index that already holds
+      vectors has no probe to compare against. A probe from a new service cannot
+      solemnize vectors it did not produce.
+
+    Returns:
+        ``status``, the two model names being compared, and the detail behind the
+        reading. The message names both models; a model name is not proof of a space,
+        but it is what tells a reader which two are being compared.
+    """
+    current_model = getattr(embedder, "model", None)
+    row = conn.execute(
+        f"SELECT embedding_model, probe_vec FROM {meta_table} LIMIT 1"
+    ).fetchone()
+
+    if row is None:
+        return {
+            "status": "unverified",
+            "stored_model": None,
+            "current_model": current_model,
+            "detail": None,
+            "message": None,
+        }
+
+    stored_model, stored = row[0], row[1]
+
+    if stored is None:
+        # Nothing to compare against. The pin can still be honoured when it names this
+        # same client: that is the legacy repair path, where a genuine writer writes the
+        # probe on its first write. Behind an index that already holds vectors, a pin
+        # naming another model — or no pin at all — cannot be certified by a probe this
+        # client just made.
+        if not vector_table or _row_count(conn, vector_table) == 0:
+            return {
+                "status": "unverified",
+                "stored_model": stored_model,
+                "current_model": current_model,
+                "detail": None,
+                "message": None,
+            }
+        if current_model is not None and stored_model == current_model:
+            return {
+                "status": "unverified",
+                "stored_model": stored_model,
+                "current_model": current_model,
+                "detail": None,
+                "message": None,
+            }
+        detail = (
+            f"no stored probe for {meta_table} while {vector_table} already "
+            "holds vectors — a probe from this service cannot certify vectors "
+            "produced elsewhere"
+        )
+        return {
+            "status": "error",
+            "stored_model": stored_model,
+            "current_model": current_model,
+            "detail": detail,
+            "message": _probe_message(meta_table, stored_model, current_model, detail),
+        }
+
+    ref = json.loads(stored) if isinstance(stored, str) else list(stored)
+    detail = probe_mismatch(ref, embedder.generate_embedding(PROBE_TEXT))
+    if detail is None:
+        return {
+            "status": "match",
+            "stored_model": stored_model,
+            "current_model": current_model,
+            "detail": None,
+            "message": None,
+        }
+    return {
+        "status": "error",
+        "stored_model": stored_model,
+        "current_model": current_model,
+        "detail": detail,
+        "message": _probe_message(meta_table, stored_model, current_model, detail),
+    }
+
+
+def check_or_seed_probe(
+    conn: Any, meta_table: str, embedder: Any, vector_table: str | None = None
+) -> None:
     """Verify `embedder` writes into the same space as the stored vectors.
 
     Seeds the probe when the column is NULL — that is the migration path
-    for vector spaces created before probes existed. No-op when the meta
-    table has no row yet; the caller seeds the pin first.
+    for vector spaces created before probes existed, and only for a space that
+    is still empty. Seeding an index that already holds vectors would certify
+    them as this client's work, which is why it is refused instead. No-op when
+    the meta table has no row yet; the caller seeds the pin first.
 
     Raises:
         ValueError: the embedder's dimension or direction disagrees with
-            the stored probe beyond PROBE_TOLERANCE.
+            the stored probe beyond PROBE_TOLERANCE, or a non-empty index
+            has no probe to compare against.
     """
-    row = conn.execute(f"SELECT probe_vec FROM {meta_table} LIMIT 1").fetchone()
-    if row is None:
+    status = probe_status(conn, meta_table, embedder, vector_table)
+
+    if status["status"] == "match":
+        logger.debug("[Embedding] parity probe ok | table=%s", meta_table)
         return
 
-    current = embedder.generate_embedding(PROBE_TEXT)
-    stored = row[0]
-
-    if stored is None:
-        conn.execute(f"UPDATE {meta_table} SET probe_vec = ?", [json.dumps(current)])
-        logger.info("[Embedding] parity probe seeded | table=%s", meta_table)
+    if status["status"] == "unverified":
+        if status["detail"] is None and status["stored_model"] is not None:
+            current = embedder.generate_embedding(PROBE_TEXT)
+            conn.execute(
+                f"UPDATE {meta_table} SET probe_vec = ?", [json.dumps(current)]
+            )
+            logger.info("[Embedding] parity probe seeded | table=%s", meta_table)
         return
 
-    ref = json.loads(stored) if isinstance(stored, str) else list(stored)
-
-    mismatch = probe_mismatch(ref, current)
-    if mismatch is not None:
-        raise ValueError(
-            f"[Embedding] parity probe failed for {meta_table}: {mismatch}. "
-            f"The backend reporting model={embedder.model!r} is not producing "
-            "vectors in the same space as the stored ones — likely a "
-            "different quantization, pooling mode or model entirely. Check "
-            "`embedding_model`/`embedding_host`, or rebuild this space."
-        )
-    logger.debug("[Embedding] parity probe ok | table=%s", meta_table)
+    raise ValueError(status["message"])

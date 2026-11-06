@@ -16,6 +16,7 @@ import duckdb
 from langchain.tools import tool
 
 # First-party (no circular deps — doc_schema.py only imports yaml/stdlib)
+from esdc import embedders
 from esdc.chat.domain_knowledge.doc_schema import enum_values, render_tool_context
 
 logger = logging.getLogger("esdc.chat.tools")
@@ -170,21 +171,24 @@ def _get_tool_cache() -> diskcache.Cache:
 
 
 _corpus_embedder = None
+_corpus_embedder_signature: tuple | None = None
 
 
 def _get_corpus_embedder():
-    """Lazily create and reuse one InternalEmbedder for corpus tools.
+    """Resolve one service client for corpus tools, reused while the config stands.
 
-    The embedder loads an in-process llama.cpp Qwen3 embedding model; recreating it per
-    tool call wasted setup time. The CorpusStore/DuckDB connection is
-    deliberately NOT cached (short-lived connections avoid file-lock
-    conflicts with the corpus CLI).
+    Corpus tools embed through the configured HTTP service, so this goes through the
+    factory rather than constructing an in-process model. The client is cached for the
+    process because a chat turn should not rebuild it per tool call, and it is rebuilt
+    as soon as the effective config changes — backend, host, wire model or credential —
+    because the client on hand was built for a config that no longer applies.
     """
-    global _corpus_embedder
-    if _corpus_embedder is None:
-        from esdc.corpus.embedder import InternalEmbedder
+    global _corpus_embedder, _corpus_embedder_signature
 
-        _corpus_embedder = InternalEmbedder()
+    signature = embedders.config_signature()
+    if _corpus_embedder is None or signature != _corpus_embedder_signature:
+        _corpus_embedder = embedders.get_embedder()
+        _corpus_embedder_signature = signature
     return _corpus_embedder
 
 

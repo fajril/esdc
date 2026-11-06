@@ -557,8 +557,11 @@ class TestEmbeddingsOnlyHealthCheck:
             def print(self, text: str) -> None:
                 printed.append(str(text))
 
+        # Repointed for Task 2: the reload path resolves through `get_embedder`
+        # (`get_build_embedder` is only the D6 alias, so patching it no longer reaches
+        # the CLI). Patching the factory is also what keeps this test offline.
         monkeypatch.setattr(
-            "esdc.embedders.get_build_embedder",
+            "esdc.embedders.get_embedder",
             lambda backend=None: UnhealthyEmbedder(),
         )
         monkeypatch.setattr("esdc.esdc.console", CapturingConsole())

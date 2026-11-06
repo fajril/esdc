@@ -1011,7 +1011,7 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
     backend, is reported as an error rather than repaired.
     """
     from esdc.configs import Config
-    from esdc.embedders import get_build_embedder
+    from esdc.embedders import get_embedder
     from esdc.search.semantic_resolver import SemanticResolver
 
     logger = logging.getLogger(__name__)
@@ -1030,7 +1030,7 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
         return
 
     try:
-        embedder = get_build_embedder(embed_backend)
+        embedder = get_embedder(embed_backend)
     except ValueError as e:
         # A stored value that has no implementation is reported, not repaired.
         typer.echo(f"Error: {e}")
