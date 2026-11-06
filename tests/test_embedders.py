@@ -523,16 +523,56 @@ def test_response_shape_validation_rejects_unusable_vectors(
     assert "http://h:1/v1/embeddings" in str(exc.value)
 
 
+def test_index_mismatch_survives_the_availability_check(monkeypatch):
+    """The count and indexes are what say the pairing is wrong, so they are kept."""
+    payload = {"data": [{"index": 1, "embedding": [1.0]}]}
+    monkeypatch.setattr(emb.requests, "post", MagicMock(return_value=_http_ok(payload)))
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    message = e.check_available()
+    assert message is not None
+    assert "indexes" in message
+    assert "did not return an embedding" not in message
+
+
+def test_an_answer_that_is_not_json_is_a_bad_answer(monkeypatch):
+    """A server that answers with anything else is not read as an unclassified failure."""
+    response = MagicMock()
+    response.status_code = 200
+    response.json.side_effect = ValueError("Unexpected UTF-8 BOM")
+    monkeypatch.setattr(emb.requests, "post", MagicMock(return_value=response))
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    message = e.check_available()
+    assert message is not None
+    assert "instead of a JSON" in message
+    assert "could not reach" not in message
+    assert "did not return an embedding" not in message
+
+
+def test_an_answer_that_is_not_the_embeddings_schema_is_a_bad_answer(monkeypatch):
+    payload = {"object": "list", "data": None}
+    monkeypatch.setattr(emb.requests, "post", MagicMock(return_value=_http_ok(payload)))
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    message = e.check_available()
+    assert message is not None
+    assert "did not return a 'data' list" in message
+    # A row without the key is reported by the validator, not as a KeyError.
+    assert "KeyError" not in message
+
+
 def test_ollama_path_rejects_a_bad_response_as_a_response(monkeypatch):
-    """Values are checked as they arrived, so a bool is not read as a connection failure."""
+    """Values are checked as they arrived, so a bad answer is not a connection failure.
+
+    The SDK's response model narrows a component to float before the adapter
+    sees it, so what can still arrive unusable on this path is a non-finite value.
+    """
     mgr = MagicMock()
-    mgr.generate_embedding.return_value = [True, 1.0]
+    mgr.generate_embedding.return_value = [1.0, float("nan")]
     _patched_manager(monkeypatch, mgr)
     e = emb.OllamaEmbedder(host="http://box:11434")
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(emb.EmbeddingResponseError) as exc:
         e.generate_embedding("x")
     msg = str(exc.value)
-    assert "not a number" in msg
+    assert "not finite" in msg
     assert "could not reach" not in msg
     assert "http://box:11434" in msg
 
@@ -626,17 +666,12 @@ def test_an_answer_that_is_not_a_known_failure_kind_stays_undiagnosed(monkeypatc
     """A failure that is neither a status nor a connection error is not called unreachable.
 
     The ollama SDK uses httpx, whose timeout is not an OSError, so the message
-    lists both checks instead of guessing which one it was.
+    lists both checks instead of guessing which one it was. The SDK's own error
+    defaults `status_code` to -1, which is not a status, so the guard is pinned
+    here: its text is the body and must not be shown.
     """
-
-    class SdkResponseError(Exception):
-        """Stand-in for an SDK error whose text is the server body."""
-
-        def __init__(self, body: str) -> None:
-            super().__init__(f"{body} (status code: -1)")
-
     mgr = MagicMock()
-    mgr.generate_embedding.side_effect = SdkResponseError("sk-secret in the body")
+    mgr.generate_embedding.side_effect = _StatusError("sk-secret in the body", -1)
     _patched_manager(monkeypatch, mgr)
     e = emb.OllamaEmbedder(host="http://box:11434")
     with pytest.raises(RuntimeError) as exc:
@@ -647,8 +682,8 @@ def test_an_answer_that_is_not_a_known_failure_kind_stays_undiagnosed(monkeypatc
     # A printed traceback shows the cause, so a body-bearing one is dropped.
     assert exc.value.__cause__ is None
     assert "sk-secret" not in msg
-    # The two kinds of failure stay distinguishable: this one is a bad answer.
-    assert isinstance(exc.value, emb.EmbeddingResponseError) is False
+    # The two kinds of failure stay distinguishable: this one is not a bad answer.
+    assert not isinstance(exc.value, emb.EmbeddingResponseError)
 
 
 def test_httpx_timeout_is_not_reported_as_a_bad_answer(monkeypatch):

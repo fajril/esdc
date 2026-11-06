@@ -49,6 +49,18 @@ class EmbeddingConfigError(ValueError):
     """
 
 
+class EmbeddingError(RuntimeError):
+    """A failure this module has already worded, so its message is body-free."""
+
+
+class EmbeddingResponseError(EmbeddingError):
+    """A service answered with something that cannot be a vector space.
+
+    It is kept apart from a service failure so a caller can tell "the server is
+    up but the answer is not a vector" from "the server did not answer".
+    """
+
+
 class EmbeddingClient(Protocol):
     """One service connection in, one vector space out."""
 
@@ -78,6 +90,11 @@ def _validate_vectors(
     dimension, numeric type, finiteness and a non-zero direction. A response
     that fails here fails entirely, so no partial set of vectors can be written
     into the index.
+
+    The numeric-type checks guard the JSON path. The ollama SDK's response model
+    already narrows a component to float before the adapter sees it, so a `true`
+    or a `"1.0"` arrives as a number there; count, dimension, finiteness and
+    direction are what can still fail on that path.
 
     Returns:
         The response as floats.
@@ -265,18 +282,6 @@ _TRANSPORT_ERRORS = (
 )
 
 
-class EmbeddingError(RuntimeError):
-    """A failure this module has already worded, so its message is body-free."""
-
-
-class EmbeddingResponseError(EmbeddingError):
-    """A service answered with something that cannot be a vector space.
-
-    It is kept apart from a service failure so a caller can tell "the server is
-    up but the answer is not a vector" from "the server did not answer".
-    """
-
-
 def _status_message(backend: str, target: str, status: int) -> str:
     """Actionable message for a service that answered with an error status.
 
@@ -427,10 +432,6 @@ class OllamaEmbedder:
             return _failure_message("ollama", self.host, e)
         return None
 
-    def health_check(self) -> bool:
-        """True when the service answers on its embedding endpoint."""
-        return self.check_available() is None
-
 
 def _normalize_openai_url(host: str | None) -> str:
     """Build the /v1/embeddings URL from a base host.
@@ -502,20 +503,40 @@ class OpenAIEmbedder:
         if resp.status_code >= 300:
             raise EmbeddingError(_status_message("openai", self.url, resp.status_code))
 
-        data = resp.json()["data"]
+        # Everything past here is an answer that is not a vector space, so it is
+        # reported as a bad response, never as a service that failed.
+        try:
+            body = resp.json()
+        except ValueError as e:
+            raise EmbeddingResponseError(
+                f"[Embedding] {self.url} answered with {type(e).__name__} instead "
+                "of a JSON embedding response."
+            ) from None
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list):
+            raise EmbeddingResponseError(
+                f"[Embedding] {self.url} did not return a 'data' list; the answer "
+                "is not the embeddings schema this client expects."
+            )
+        if any(not isinstance(entry, dict) for entry in data):
+            raise EmbeddingResponseError(
+                f"[Embedding] {self.url} returned a row that is not an object; "
+                "the answer is not the embeddings schema this client expects."
+            )
         # The OpenAI schema does not guarantee response order; each entry
         # carries its request index. Sorting is not optional — unsorted
         # results silently pair each text with another text's vector.
         ordered = sorted(data, key=lambda e: e.get("index", 0))
         n = len(batch)
         if len(ordered) != n or [e.get("index") for e in ordered] != list(range(n)):
-            raise RuntimeError(
+            raise EmbeddingResponseError(
                 f"[Embedding] {self.url} returned {len(ordered)} embeddings for a "
                 f"batch of {n} with indexes {[e.get('index') for e in ordered]}; "
-                f"expected exactly 0..{n - 1}. The server response is malformed or "
+                "expected exactly 0..{n - 1}. The response is malformed or "
                 "truncated."
             )
-        raw = [e["embedding"] for e in ordered]
+        # A missing key is reported as a bad row by the validator, not as a KeyError.
+        raw = [entry.get("embedding") for entry in ordered]
         return _validate_vectors(raw, n, self.url)
 
     def generate_embedding(self, text: str) -> list[float]:
