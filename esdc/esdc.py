@@ -1031,18 +1031,16 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
     embedder = get_build_embedder(embed_backend)
     logger.info(f"Initialized embedder with model: {embedder.model}")
 
-    # Only daemon-backed backends can be health-checked; the in-process one
-    # has nothing to check and the OpenAI-compatible one fails loudly on use.
-    health_check = getattr(embedder, "health_check", None)
-    if health_check is not None and not health_check():
-        logger.warning("Ollama not available, cannot generate embeddings")
-        console.print(
-            "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"  # noqa: E501
-        )
+    # Every client is an HTTP service now, so the check reports what that
+    # service said: a status, a connection failure, or a response that is not a
+    # vector. The message is the diagnosis, so it is what the user sees.
+    message = embedder.check_available()
+    if message:
+        logger.warning(message)
+        console.print(f"[yellow]Warning: {message}[/yellow]")
         console.print(
             "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"  # noqa: E501
         )
-        console.print("[dim]Or set embedding_backend: local to embed in-process.[/dim]")
         return
 
     resolver = SemanticResolver(db_path=db_path, embedder=embedder, read_only=False)
