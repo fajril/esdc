@@ -289,7 +289,7 @@ def test_zero_irr_and_null_risked_reserve_are_valid_values():
     load_pod_contract, validate, batch_type = _api()
     contract = load_pod_contract()
     row = _row(contract, "m_pod")
-    row["irr_pf_ctr_pod"] = Decimal("0")
+    row["irr_ctr_pod"] = Decimal("0")
     row["res_oil_2p_risked_pod"] = None
     batch = _batch_with_rows(contract, batch_type, {"m_pod": [row]})
 

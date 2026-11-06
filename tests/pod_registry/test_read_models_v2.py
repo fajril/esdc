@@ -49,7 +49,7 @@ def _insert_pod(
     conn.execute(
         "INSERT INTO m_pod (pod_id_seq, pod_uuid, approval_date, institution_id, "
         "pod_type_id, rev_num, pod_order_no, pod_id, pod_name, pod_letter_num, "
-        "is_latest, capital_drilling_pod, irr_pf_ctr_pod) "
+        "is_latest, capital_drilling_pod, irr_ctr_pod) "
         "VALUES (?, ?, ?, 1, 1, 0, ?, ?, ?, 'Letter one', 1, '1.235', '0.123456')",
         (
             issued.pod_id_seq,
@@ -62,7 +62,7 @@ def _insert_pod(
     )
     conn.execute(
         "INSERT INTO pod_monitoring (monpod_uuid, pod_id_seq, pod_id, reported_date, "
-        "is_completed, pod_stage_id, capital_drilling_real, irr_pf_ctr_real) "
+        "is_completed, pod_stage_id, capital_drilling_real, irr_ctr_real) "
         "VALUES (?, ?, ?, ?, 0, 1, '2.345', '0.987654')",
         (f"monitor-{issued.pod_id_seq}", issued.pod_id_seq, issued.pod_id, reported_date),
     )
@@ -210,7 +210,7 @@ def test_rebuild_uses_caller_transaction_and_keeps_exact_inputs() -> None:
         assert report.source_generation == 0
         assert conn.execute(
             "SELECT pod_id_seq, reported_date, monpod_id, capital_drilling_pod, "
-            "irr_pf_ctr_pod, capital_drilling_real, irr_pf_ctr_real "
+            "irr_ctr_pod, capital_drilling_real, irr_ctr_real "
             "FROM pod_monitoring_api"
         ).fetchone() == (
             pod_id_seq,
@@ -222,7 +222,7 @@ def test_rebuild_uses_caller_transaction_and_keeps_exact_inputs() -> None:
             "0.987654",
         )
         assert conn.execute(
-            "SELECT capital_drilling_pod, irr_pf_ctr_pod FROM m_pod WHERE pod_id_seq=?",
+            "SELECT capital_drilling_pod, irr_ctr_pod FROM m_pod WHERE pod_id_seq=?",
             (pod_id_seq,),
         ).fetchone() == ("1.235", "0.123456")
         assert conn.execute(
@@ -591,11 +591,11 @@ def test_scoped_rebuild_preserves_unselected_pod_outputs() -> None:
         conn.commit()
 
         before = conn.execute(
-            "SELECT pod_id_seq, irr_pf_ctr_pod FROM pod_monitoring_api "
+            "SELECT pod_id_seq, irr_ctr_pod FROM pod_monitoring_api "
             "ORDER BY pod_id_seq"
         ).fetchall()
         conn.execute(
-            "UPDATE m_pod SET irr_pf_ctr_pod='0.222222' WHERE pod_id_seq=?",
+            "UPDATE m_pod SET irr_ctr_pod='0.222222' WHERE pod_id_seq=?",
             (first,),
         )
         conn.commit()
@@ -604,7 +604,7 @@ def test_scoped_rebuild_preserves_unselected_pod_outputs() -> None:
 
         assert before == [(first, "0.123456"), (second, "0.123456")]
         assert conn.execute(
-            "SELECT pod_id_seq, irr_pf_ctr_pod FROM pod_monitoring_api "
+            "SELECT pod_id_seq, irr_ctr_pod FROM pod_monitoring_api "
             "ORDER BY pod_id_seq"
         ).fetchall() == [(first, "0.222222"), (second, "0.123456")]
         conn.rollback()

@@ -1316,8 +1316,8 @@ tables:
     group: economics
     source: null
     aliases: []
-  - name: npv_pf_ctr_pod
-    formal_name: Point-Forward Contractor NPV
+  - name: npv_ctr_pod
+    formal_name: Contractor NPV
     logical_type: decimal
     data_type: NUMERIC(20,3)
     nullable: true
@@ -1332,8 +1332,8 @@ tables:
     group: economics
     source: null
     aliases: []
-  - name: irr_pf_ctr_pod
-    formal_name: Point-Forward Contractor IRR
+  - name: irr_ctr_pod
+    formal_name: Contractor IRR
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -1343,9 +1343,9 @@ tables:
     precision: 18
     scale: 8
     max_length: null
-    constraint: NULL; store mathematically undefined IRR as NULL; analytical views may use COALESCE(irr_pf_ctr_pod,
+    constraint: NULL; store mathematically undefined IRR as NULL; analytical views may use COALESCE(irr_ctr_pod,
       0) only with an explicit undefined-status flag
-    description: Internal Rate of Return Point Forward stored as a decimal fraction (for example, 0.15
+    description: Internal Rate of Return stored as a decimal fraction (for example, 0.15
       = 15%). A valid IRR can be exactly 0%; for example, periodic cash flows [-100, +100] have NPV =
       0 at r = 0. NULL means IRR is mathematically undefined or no valid result is produced. Analytical
       views may map NULL to 0 only for presentation/ranking and must retain an explicit 'IRR undefined'
@@ -1365,12 +1365,12 @@ tables:
     scale: 4
     max_length: null
     constraint: NOT NULL; DEFAULT 0; CHECK (pot_pod >= 0)
-    description: Payout time in years from the defined point-forward start date.
+    description: Payout time in years from the valuation start date defined for the record.
     group: economics
     source: null
     aliases: []
-  - name: pv_ratio_pf_ctr_pod
-    formal_name: Point-Forward Contractor PV Ratio
+  - name: pv_ratio_ctr_pod
+    formal_name: Contractor PV Ratio
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -1385,8 +1385,8 @@ tables:
     group: economics
     source: null
     aliases: []
-  - name: pi_pf_ctr_pod
-    formal_name: Point-Forward Contractor Profitability Index
+  - name: pi_ctr_pod
+    formal_name: Contractor Profitability Index
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -2441,8 +2441,8 @@ tables:
     group: economics
     source: null
     aliases: []
-  - name: npv_pf_ctr_real
-    formal_name: NPV Point Forward Contractor Realization
+  - name: npv_ctr_real
+    formal_name: Contractor NPV Realization
     logical_type: decimal
     data_type: NUMERIC(20,3)
     nullable: true
@@ -2453,12 +2453,12 @@ tables:
     scale: 3
     max_length: null
     constraint: NOT NULL; DEFAULT 0
-    description: Net Present Value Point Forward
+    description: Net Present Value
     group: economics
     source: null
     aliases: []
-  - name: irr_pf_ctr_real
-    formal_name: IRR Point Forward Contractor Realization
+  - name: irr_ctr_real
+    formal_name: Contractor IRR Realization
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -2469,12 +2469,12 @@ tables:
     scale: 8
     max_length: null
     constraint: NULL; store mathematically undefined IRR as NULL; valid 0% is permitted
-    description: Internal Rate of Return Point Forward
+    description: Internal Rate of Return
     group: economics
     source: null
     aliases: []
-  - name: pv_ratio_pf_ctr_real
-    formal_name: PV Ratio Point Forward Contractor Realization
+  - name: pv_ratio_ctr_real
+    formal_name: Contractor PV Ratio Realization
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -2485,12 +2485,12 @@ tables:
     scale: 8
     max_length: null
     constraint: NOT NULL; DEFAULT 0
-    description: PV Ratio Point Forward
+    description: PV Ratio
     group: economics
     source: null
     aliases: []
-  - name: pi_pf_ctr_real
-    formal_name: PI Point Forward Contractor Realization
+  - name: pi_ctr_real
+    formal_name: Contractor PI Realization
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -2501,7 +2501,7 @@ tables:
     scale: 8
     max_length: null
     constraint: NOT NULL; DEFAULT 0
-    description: Profitability Index Point Forward
+    description: Profitability Index
     group: economics
     source: null
     aliases: []
@@ -3062,8 +3062,8 @@ tables:
     group: economics
     source: null
     aliases: []
-  - name: npv_pf_ctr_otlk
-    formal_name: NPV Point Forward Contractor Outlook
+  - name: npv_ctr_otlk
+    formal_name: Contractor NPV Outlook
     logical_type: decimal
     data_type: NUMERIC(20,3)
     nullable: true
@@ -3074,12 +3074,12 @@ tables:
     scale: 3
     max_length: null
     constraint: NOT NULL; DEFAULT 0
-    description: Net Present Value Point Forward
+    description: Net Present Value
     group: economics
     source: null
     aliases: []
-  - name: irr_pf_ctr_otlk
-    formal_name: IRR Point Forward Contractor Outlook
+  - name: irr_ctr_otlk
+    formal_name: Contractor IRR Outlook
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -3090,7 +3090,7 @@ tables:
     scale: 8
     max_length: null
     constraint: NULL; store mathematically undefined IRR as NULL; valid 0% is permitted
-    description: Internal Rate of Return Point Forward
+    description: Internal Rate of Return
     group: economics
     source: null
     aliases: []
@@ -3111,8 +3111,8 @@ tables:
     group: economics
     source: null
     aliases: []
-  - name: pv_ratio_pf_ctr_otlk
-    formal_name: PV Ratio Point Forward Contractor Outlook
+  - name: pv_ratio_ctr_otlk
+    formal_name: Contractor PV Ratio Outlook
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -3123,12 +3123,12 @@ tables:
     scale: 8
     max_length: null
     constraint: NOT NULL; DEFAULT 0
-    description: PV Ratio Point Forward
+    description: PV Ratio
     group: economics
     source: null
     aliases: []
-  - name: pi_pf_ctr_otlk
-    formal_name: PI Point Forward Contractor Outlook
+  - name: pi_ctr_otlk
+    formal_name: Contractor PI Outlook
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -3139,7 +3139,7 @@ tables:
     scale: 8
     max_length: null
     constraint: NOT NULL; DEFAULT 0
-    description: Profitability Index Point Forward
+    description: Profitability Index
     group: economics
     source: null
     aliases: []
@@ -4959,8 +4959,8 @@ tables:
     group: economics
     source: m_pod
     aliases: []
-  - name: npv_pf_ctr_pod
-    formal_name: Point-Forward Contractor NPV
+  - name: npv_ctr_pod
+    formal_name: Contractor NPV
     logical_type: decimal
     data_type: NUMERIC(20,3)
     nullable: true
@@ -4975,8 +4975,8 @@ tables:
     group: economics
     source: m_pod
     aliases: []
-  - name: irr_pf_ctr_pod
-    formal_name: Point-Forward Contractor IRR
+  - name: irr_ctr_pod
+    formal_name: Contractor IRR
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -4987,7 +4987,7 @@ tables:
     scale: 8
     max_length: null
     constraint: null
-    description: Internal Rate of Return Point Forward stored as a decimal fraction (for example, 0.15
+    description: Internal Rate of Return stored as a decimal fraction (for example, 0.15
       = 15%). A valid IRR can be exactly 0%; for example, periodic cash flows [-100, +100] have NPV =
       0 at r = 0. NULL means IRR is mathematically undefined or no valid result is produced. Analytical
       views may map NULL to 0 only for presentation/ranking and must retain an explicit 'IRR undefined'
@@ -5007,12 +5007,12 @@ tables:
     scale: 4
     max_length: null
     constraint: null
-    description: Payout time in years from the defined point-forward start date.
+    description: Payout time in years from the valuation start date defined for the record.
     group: economics
     source: m_pod
     aliases: []
-  - name: pv_ratio_pf_ctr_pod
-    formal_name: Point-Forward Contractor PV Ratio
+  - name: pv_ratio_ctr_pod
+    formal_name: Contractor PV Ratio
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -5027,8 +5027,8 @@ tables:
     group: economics
     source: m_pod
     aliases: []
-  - name: pi_pf_ctr_pod
-    formal_name: Point-Forward Contractor Profitability Index
+  - name: pi_ctr_pod
+    formal_name: Contractor Profitability Index
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -5625,8 +5625,8 @@ tables:
     group: economics
     source: pod_monitoring
     aliases: []
-  - name: npv_pf_ctr_real
-    formal_name: NPV Point Forward Contractor Realization
+  - name: npv_ctr_real
+    formal_name: Contractor NPV Realization
     logical_type: decimal
     data_type: NUMERIC(20,3)
     nullable: true
@@ -5641,8 +5641,8 @@ tables:
     group: economics
     source: pod_monitoring
     aliases: []
-  - name: irr_pf_ctr_real
-    formal_name: IRR Point Forward Contractor Realization
+  - name: irr_ctr_real
+    formal_name: Contractor IRR Realization
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -5653,13 +5653,13 @@ tables:
     scale: 8
     max_length: null
     constraint: null
-    description: Internal Rate of Return Point Forward stored as a decimal fraction (for example, 0.15
+    description: Internal Rate of Return stored as a decimal fraction (for example, 0.15
       = 15%).
     group: economics
     source: pod_monitoring
     aliases: []
-  - name: pv_ratio_pf_ctr_real
-    formal_name: PV Ratio Point Forward Contractor Realization
+  - name: pv_ratio_ctr_real
+    formal_name: Contractor PV Ratio Realization
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -5674,8 +5674,8 @@ tables:
     group: economics
     source: pod_monitoring
     aliases: []
-  - name: pi_pf_ctr_real
-    formal_name: PI Point Forward Contractor Realization
+  - name: pi_ctr_real
+    formal_name: Contractor PI Realization
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -6240,8 +6240,8 @@ tables:
     group: economics
     source: pod_monitoring
     aliases: []
-  - name: npv_pf_ctr_otlk
-    formal_name: NPV Point Forward Contractor Outlook
+  - name: npv_ctr_otlk
+    formal_name: Contractor NPV Outlook
     logical_type: decimal
     data_type: NUMERIC(20,3)
     nullable: true
@@ -6256,8 +6256,8 @@ tables:
     group: economics
     source: pod_monitoring
     aliases: []
-  - name: irr_pf_ctr_otlk
-    formal_name: IRR Point Forward Contractor Outlook
+  - name: irr_ctr_otlk
+    formal_name: Contractor IRR Outlook
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -6268,7 +6268,7 @@ tables:
     scale: 8
     max_length: null
     constraint: null
-    description: Internal Rate of Return Point Forward stored as a decimal fraction (for example, 0.15
+    description: Internal Rate of Return stored as a decimal fraction (for example, 0.15
       = 15%).
     group: economics
     source: pod_monitoring
@@ -6290,8 +6290,8 @@ tables:
     group: economics
     source: pod_monitoring
     aliases: []
-  - name: pv_ratio_pf_ctr_otlk
-    formal_name: PV Ratio Point Forward Contractor Outlook
+  - name: pv_ratio_ctr_otlk
+    formal_name: Contractor PV Ratio Outlook
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true
@@ -6306,8 +6306,8 @@ tables:
     group: economics
     source: pod_monitoring
     aliases: []
-  - name: pi_pf_ctr_otlk
-    formal_name: PI Point Forward Contractor Outlook
+  - name: pi_ctr_otlk
+    formal_name: Contractor PI Outlook
     logical_type: decimal
     data_type: NUMERIC(18,8)
     nullable: true

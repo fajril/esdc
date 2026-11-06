@@ -20,15 +20,15 @@ _MIDDLE_CASE = "2. Middle Value"
 _CENT = Decimal("0.01")
 _NO_ROUND_MONITORING = frozenset(
     {
-        "irr_pf_ctr_pod",
-        "pv_ratio_pf_ctr_pod",
-        "pi_pf_ctr_pod",
-        "irr_pf_ctr_real",
-        "pv_ratio_pf_ctr_real",
-        "pi_pf_ctr_real",
-        "irr_pf_ctr_otlk",
-        "pv_ratio_pf_ctr_otlk",
-        "pi_pf_ctr_otlk",
+        "irr_ctr_pod",
+        "pv_ratio_ctr_pod",
+        "pi_ctr_pod",
+        "irr_ctr_real",
+        "pv_ratio_ctr_real",
+        "pi_ctr_real",
+        "irr_ctr_otlk",
+        "pv_ratio_ctr_otlk",
+        "pi_ctr_otlk",
     }
 )
 _FORECAST_INPUT_DECIMALS = frozenset(
