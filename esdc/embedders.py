@@ -1,15 +1,18 @@
 # esdc/embedders.py
-"""Embedding backends shared by every vector space in esdc.
+"""Embedding clients shared by every vector space in esdc.
 
-Similarity (query embedding) always runs on InternalEmbedder — llama.cpp
-on the pinned Qwen3-Embedding-0.6B GGUF, in-process, offline. Generation
-(bulk embedding) runs on whichever backend `embedding_backend` selects.
+Query-time similarity and bulk generation both resolve through
+`get_embedder()`, which builds a client for the configured HTTP service
+(Ollama or any OpenAI-compatible `/v1/embeddings` server, localhost
+included). `InternalEmbedder` remains only while its last callers move; it
+is removed once nothing constructs it.
 
-Every backend reports MODEL_ID as its `.model`, never a backend-specific
+Every client reports MODEL_ID as its `.model`, never a service-specific
 wire name: that value is the vector-space identity written into
 corpus_meta/semantic_meta and into per-row embedding_model columns.
-Measured cross-backend cosine is >= 0.9986, so all backends write into one
-cosine space; check_or_seed_probe enforces that at runtime.
+Measured cross-backend cosine is >= 0.9986, so all clients write into one
+cosine space; check_or_seed_probe enforces that at runtime. The wire name
+chooses the request, the probe proves the space.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import json
 import logging
 import math
 import threading
-from typing import Any
+from typing import Any, Protocol
 
 import requests
 
@@ -31,6 +34,82 @@ logger = logging.getLogger(__name__)
 # EMBED_FILE in llama_backend; changing the GGUF means changing this +
 # reembedding.
 MODEL_ID = "qwen3-embedding-0.6b-q8_0"
+
+# An interactive query must not inherit the bulk-generation bound: a service
+# that hangs would hold one chat turn for the whole batch timeout.
+QUERY_TIMEOUT_SECONDS = 20.0
+BATCH_TIMEOUT_SECONDS = 120.0
+
+
+class EmbeddingConfigError(ValueError):
+    """A stored backend value that no longer has an implementation.
+
+    Raised when a client is asked for, never when a config file is read: a
+    legacy value is reported, not repaired.
+    """
+
+
+class EmbeddingClient(Protocol):
+    """One service connection in, one vector space out."""
+
+    model: str
+
+    def generate_embedding(self, text: str) -> list[float]: ...
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]: ...
+    def check_available(self) -> str | None: ...
+
+
+def _service_required(backend: str) -> str:
+    """Actionable message for a retired in-process backend."""
+    return (
+        f"[Embedding] backend '{backend}' needs an HTTP embedding service. "
+        "Run Ollama, omlx, or llama-server and set `embedding_backend` and "
+        "`embedding_host`/`embedding_provider` to that service. The in-process "
+        "backend was removed in this version."
+    )
+
+
+def _validate_vectors(vectors: list[list[float]], expected: int, source: str) -> None:
+    """Reject a response that cannot be used as a vector space, as a whole.
+
+    Count, dimension, numeric type, finiteness and a non-zero direction are
+    all checked before anything is returned: a response that fails here fails
+    entirely, so no partial set of vectors can be written into the index.
+    """
+    if len(vectors) != expected:
+        raise RuntimeError(
+            f"[Embedding] {source} returned {len(vectors)} embeddings for a "
+            f"batch of {expected}. The response is malformed or truncated."
+        )
+    if not vectors:
+        return
+
+    dim = len(vectors[0])
+    for position, vector in enumerate(vectors):
+        if len(vector) != dim:
+            raise RuntimeError(
+                f"[Embedding] {source} returned a vector of dimension "
+                f"{len(vector)} at position {position}; expected {dim}."
+            )
+        for value in vector:
+            if isinstance(value, bool):
+                raise RuntimeError(
+                    f"[Embedding] {source} returned a bool component at "
+                    f"position {position}; a vector holds numbers."
+                )
+            if not math.isfinite(float(value)):
+                raise RuntimeError(
+                    f"[Embedding] {source} returned a component that is not "
+                    f"finite at position {position}; the response cannot be a "
+                    "vector."
+                )
+        if all(float(value) == 0.0 for value in vector):
+            raise RuntimeError(
+                f"[Embedding] {source} returned a vector that is all zero at "
+                f"position {position}; it carries no direction and cannot be "
+                "compared."
+            )
+
 
 _load_lock = threading.Lock()
 # Llama contexts are not thread-safe; every embed() call serializes on
@@ -143,59 +222,85 @@ class InternalEmbedder:
 
 
 def _unreachable(backend: str, target: str, err: Exception) -> str:
-    """Actionable message for a generation backend that could not be reached."""
+    """Actionable message for a service that could not be reached.
+
+    The message names the requirement and the failure; it never quotes the
+    response body and never suggests the retired in-process backend.
+    """
     return (
-        f"[Embedding] backend '{backend}' could not reach {target}: {err}. "
-        "Check the server is running and reachable, or set "
-        "`embedding_backend: local` in ~/.esdc/config.yaml to embed "
-        "in-process with no daemon."
+        f"[Embedding] backend '{backend}' could not reach the embedding "
+        f"service at {target}: {err}. Check the service is running and "
+        "reachable, and that `embedding_host`/`embedding_provider` point at it."
     )
 
 
 class OllamaEmbedder:
-    """Generation backend over an Ollama daemon.
+    """Client for an Ollama service, used for query and for generation.
 
-    Wraps EmbeddingManager rather than being handed to callers directly:
-    EmbeddingManager.model doubles as the Ollama wire tag AND, under the
-    CorpusStore embedder contract, the vector-space identity. Reporting the
-    wire tag would repin corpus_meta on every backend switch and force a
-    reembed for vectors that are 0.9995 identical.
+    The wire model is the configured one; an empty value falls back to the
+    tag the current index was built against. `.model` stays MODEL_ID so a
+    service alias change does not repin corpus_meta — the probe is what
+    proves the space.
+
+    The ollama SDK binds a timeout to the client rather than to a request,
+    so the query path and the batch path hold separate clients.
     """
 
     OLLAMA_TAG = "qwen3-embedding:0.6b"
 
-    def __init__(self, host: str | None = None) -> None:
+    def __init__(self, host: str | None = None, model: str | None = None) -> None:
         # Lazy import: esdc/search/__init__.py imports semantic_resolver,
         # which imports this module. A module-level import here would be a
         # circular import.
         from esdc.search.embedding_manager import EmbeddingManager
 
-        self.host = host or "local ollama daemon"
+        self.host = host or "local Ollama service"
+        self.wire_model = str(model or "").strip() or self.OLLAMA_TAG
         self.model = MODEL_ID
-        self._mgr = EmbeddingManager(model=self.OLLAMA_TAG, host=host)
+        self._query_mgr = EmbeddingManager(
+            model=self.wire_model, host=host, timeout=QUERY_TIMEOUT_SECONDS
+        )
+        self._batch_mgr = EmbeddingManager(
+            model=self.wire_model, host=host, timeout=BATCH_TIMEOUT_SECONDS
+        )
 
     def generate_embedding(self, text: str) -> list[float]:
         """Generate an embedding for a single text."""
         try:
-            return [float(x) for x in self._mgr.generate_embedding(text)]
+            vector = [float(x) for x in self._query_mgr.generate_embedding(text)]
         except Exception as e:
             raise RuntimeError(_unreachable("ollama", self.host, e)) from e
+        _validate_vectors([vector], 1, self.host)
+        return vector
 
     def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings for a batch of texts."""
+        """Generate embeddings for a batch of texts.
+
+        An empty batch makes no request.
+        """
         if not texts:
             return []
         try:
-            return [
+            vectors = [
                 [float(x) for x in v]
-                for v in self._mgr.generate_embeddings_batch(texts)
+                for v in self._batch_mgr.generate_embeddings_batch(texts)
             ]
         except Exception as e:
             raise RuntimeError(_unreachable("ollama", self.host, e)) from e
+        _validate_vectors(vectors, len(texts), self.host)
+        return vectors
+
+    def check_available(self) -> str | None:
+        """Ask the embedding endpoint only; None when it answers."""
+        try:
+            self._query_mgr.generate_embedding("availability check")
+        except Exception as e:
+            return _unreachable("ollama", self.host, e)
+        return None
 
     def health_check(self) -> bool:
-        """True when the daemon is reachable and the model is present."""
-        return bool(self._mgr.health_check())
+        """True when the service answers on its embedding endpoint."""
+        return self.check_available() is None
 
 
 def _normalize_openai_url(host: str | None) -> str:
@@ -212,13 +317,16 @@ def _normalize_openai_url(host: str | None) -> str:
 
 
 class OpenAIEmbedder:
-    """Generation backend over any OpenAI-compatible /v1/embeddings server.
+    """Client for any OpenAI-compatible /v1/embeddings server.
 
     Verified against omlx; the same shape covers LM Studio, llama-server,
-    vLLM and TEI. Unlike the other backends the wire model name cannot be
-    pinned here — it depends on what the operator loaded — which is why
-    check_or_seed_probe is the only guarantee that this server is serving
-    the model the stored vectors came from.
+    vLLM and TEI. The wire model name cannot be pinned here — it depends on
+    what the operator loaded — which is why check_or_seed_probe is the only
+    guarantee that this server is serving the model the stored vectors came
+    from.
+
+    One attempt per request, no retry: a service that fails is reported, not
+    hammered. Query calls use the query timeout, batch calls the batch one.
     """
 
     def __init__(
@@ -227,7 +335,8 @@ class OpenAIEmbedder:
         model: str,
         api_key: str | None = None,
         batch_size: int | None = None,
-        timeout: int = 120,
+        query_timeout: float = QUERY_TIMEOUT_SECONDS,
+        batch_timeout: float = BATCH_TIMEOUT_SECONDS,
     ) -> None:
         if not model:
             raise ValueError(
@@ -244,9 +353,10 @@ class OpenAIEmbedder:
         self.host = host or self.url
         self._api_key = api_key or None
         self._batch = int(batch_size or Config.get_embedding_batch_size())
-        self._timeout = timeout
+        self._query_timeout = query_timeout
+        self._batch_timeout = batch_timeout
 
-    def _post(self, batch: list[str]) -> list[list[float]]:
+    def _post(self, batch: list[str], timeout: float) -> list[list[float]]:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -255,17 +365,18 @@ class OpenAIEmbedder:
                 self.url,
                 json={"model": self.wire_model, "input": batch},
                 headers=headers,
-                timeout=self._timeout,
+                timeout=timeout,
             )
         except Exception as e:
             raise RuntimeError(_unreachable("openai", self.url, e)) from e
 
         if resp.status_code >= 300:
+            # The response body is not quoted: it can echo the request or the
+            # credential, and it is not needed to act on a status code.
             raise RuntimeError(
-                f"[Embedding] {self.url} returned HTTP {resp.status_code}: "
-                f"{str(resp.text)[:200]}. Check `embedding_model` matches a "
-                "model the server has loaded, or set "
-                "`embedding_backend: local` in ~/.esdc/config.yaml."
+                f"[Embedding] {self.url} returned HTTP {resp.status_code}. "
+                "Check `embedding_model` matches a model the server has "
+                "loaded, and that the service is an embeddings endpoint."
             )
 
         data = resp.json()["data"]
@@ -279,50 +390,76 @@ class OpenAIEmbedder:
                 f"[Embedding] {self.url} returned {len(ordered)} embeddings for a "
                 f"batch of {n} with indexes {[e.get('index') for e in ordered]}; "
                 f"expected exactly 0..{n - 1}. The server response is malformed or "
-                "truncated. Check `embedding_model`/the server, or set "
-                "`embedding_backend: local`."
+                "truncated."
             )
-        return [[float(x) for x in e["embedding"]] for e in ordered]
+        raw = [e["embedding"] for e in ordered]
+        _validate_vectors(raw, n, self.url)
+        return [[float(x) for x in vector] for vector in raw]
 
     def generate_embedding(self, text: str) -> list[float]:
-        """Generate an embedding for a single text."""
-        return self._post([text])[0]
+        """Generate a single embedding on the query timeout."""
+        return self._post([text], self._query_timeout)[0]
 
     def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings for a batch of texts, chunked by batch size."""
+        """Generate embeddings for a batch of texts, chunked by batch size.
+
+        An empty batch makes no request.
+        """
         if not texts:
             return []
         out: list[list[float]] = []
         for start in range(0, len(texts), self._batch):
-            out.extend(self._post(texts[start : start + self._batch]))
+            out.extend(
+                self._post(texts[start : start + self._batch], self._batch_timeout)
+            )
         return out
 
+    def check_available(self) -> str | None:
+        """Ask the embedding endpoint only; None when it answers.
 
-def get_build_embedder(backend: str | None = None) -> Any:
-    """Construct the embedder used for BULK GENERATION.
+        Warm-up here means reachability, not a loaded model: the first real
+        request can still pay a cold-start cost on the service.
+        """
+        try:
+            self._post(["availability check"], self._query_timeout)
+        except Exception as e:
+            return str(e)
+        return None
 
-    Never call this from a query path: similarity always runs on
-    InternalEmbedder so search stays local, fast and offline.
+
+def get_embedder(backend: str | None = None) -> EmbeddingClient:
+    """Construct the client for the configured HTTP embedding service.
+
+    Query-time similarity and bulk generation resolve through the same
+    factory: there is no in-process backend to fall back to. Construction
+    makes no request — a client is built from config shape, and connectivity
+    is only proven when a vector is asked for or `check_available()` runs.
 
     Args:
-        backend: "local", "ollama" or "openai". None reads the
-            `embedding_backend` config key (default "ollama").
+        backend: "ollama" or "openai". None reads the `embedding_backend`
+            config key (default "ollama").
 
     Returns:
-        An embedder exposing generate_embedding, generate_embeddings_batch
-        and a `.model` attribute equal to MODEL_ID.
+        An EmbeddingClient exposing generate_embedding,
+        generate_embeddings_batch, check_available and a `.model` attribute
+        equal to MODEL_ID.
 
     Raises:
-        ValueError: the backend name is not one of the three known values.
+        EmbeddingConfigError: the stored value has no implementation any more
+            ("local"). A stored value is reported, never rewritten.
+        ValueError: the backend name is not a known one.
     """
     from esdc.configs import Config
 
     name = (backend or Config.get_embedding_backend()).strip().lower()
 
     if name == "local":
-        return InternalEmbedder()
+        raise EmbeddingConfigError(_service_required(name))
     if name == "ollama":
-        return OllamaEmbedder(host=Config.get_embedding_host())
+        return OllamaEmbedder(
+            host=Config.get_embedding_host(),
+            model=Config.get_embedding_model(),
+        )
     if name == "openai":
         return OpenAIEmbedder(
             host=Config.get_embedding_host(),
@@ -330,9 +467,20 @@ def get_build_embedder(backend: str | None = None) -> Any:
             api_key=Config.get_embedding_api_key(),
         )
     raise ValueError(
-        f"[Embedding] unknown embedding_backend {name!r}; "
-        "expected one of: local, ollama, openai"
+        f"[Embedding] unknown embedding_backend {name!r}; expected one of: "
+        "ollama, openai. 'local' is retired: it needs an HTTP service."
     )
+
+
+def get_build_embedder(backend: str | None = None) -> EmbeddingClient:
+    """Compatibility alias for `get_embedder` (D6).
+
+    The old contract — "similarity always runs on InternalEmbedder, never
+    call this from a query path" — no longer holds: query and generation now
+    resolve through the same factory. The name stays because existing callers
+    and tests patch it.
+    """
+    return get_embedder(backend)
 
 
 # Fixed sentence embedded by every backend to prove they share one cosine

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 SENSITIVE_KEYS = frozenset({"api_key"})
 
 ENUM_CHOICES: dict[str, list[str]] = {
-    "embedding_backend": ["local", "ollama", "openai"],
+    "embedding_backend": ["ollama", "openai"],
     "corpus.rerank_backend": ["local", "provider"],
     "tool_format": ["native", "markdown", "auto"],
     "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -70,16 +70,19 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "semantic_search.embedding_batch_size": ("Number of embeddings per batch (10-500)"),
     "embedding_host": "Ollama host URL for embeddings (default: localhost)",
     "embedding_backend": (
-        "Where bulk embedding generation runs for every vector space "
-        "('ollama' [default] = Ollama daemon at embedding_host, 'local' = "
-        "in-process llama.cpp with no daemon, 'openai' = any "
-        "OpenAI-compatible /v1/embeddings server). Query-time similarity "
-        "always runs locally regardless of this setting."
+        "HTTP embedding service used for every vector space ('ollama' [default] "
+        "= Ollama service at embedding_host, 'openai' = any OpenAI-compatible "
+        "/v1/embeddings server, localhost included). Query-time similarity and "
+        "bulk generation both use it. The in-process backend was removed: a "
+        "stored 'local' value is reported when a client is asked for, and is "
+        "never rewritten."
     ),
     "embedding_model": (
-        "Wire model id for the 'openai' embedding backend, as that server "
-        "names it (e.g. Qwen3-Embedding-0.6B-8bit); ignored by the 'local' "
-        "and 'ollama' backends, which pin their model in code"
+        "Wire model id for the embedding service, as that server names it "
+        "(e.g. Qwen3-Embedding-0.6B-8bit); for the 'ollama' backend an empty "
+        "value falls back to the tag the current index was built against. The "
+        "vector-space identity is MODEL_ID, not this name — the probe is what "
+        "proves a server serves the model the stored vectors came from"
     ),
     "embedding_api_key": (
         "Bearer token for the 'openai' embedding backend "
@@ -1370,13 +1373,12 @@ class Config:
             return str(config["embedding_host"])
         raise ValueError(
             f"`embedding_provider`: provider {provider['name']!r} has no "
-            "base_url and `embedding_host` is empty; set one of them, or use "
-            "the 'local' backend."
+            "base_url and `embedding_host` is empty; set one of them."
         )
 
     @classmethod
     def get_embedding_backend(cls) -> str:
-        """Get the bulk-generation embedding backend.
+        """Get the embedding service backend.
 
         Priority:
         1. ESDC_EMBEDDING_BACKEND environment variable
@@ -1385,12 +1387,15 @@ class Config:
 
         An active `embedding_provider` reference must agree with it:
         an openai_compatible provider means "openai", an ollama provider means
-        "ollama", and "local" ignores the reference.
+        "ollama", and a stored "local" value ignores the reference.
 
-        Query-time similarity ignores this and always runs locally.
+        Reading config is not validation: a stored "local" value is returned
+        as it is stored, and `esdc.embedders.get_embedder()` reports it as a
+        retired value when a client is asked for. Nothing here writes config.
 
         Returns:
-            One of "local", "ollama", "openai" (lowercased, stripped).
+            One of "ollama", "openai", or a stored retired value such as
+            "local" (lowercased, stripped).
 
         Raises:
             ValueError: the active reference is unknown or mismatched.
@@ -1399,16 +1404,19 @@ class Config:
 
     @classmethod
     def get_embedding_model(cls) -> str:
-        """Get the wire model id for the 'openai' embedding backend.
+        """Get the wire model id for the embedding service.
 
         Priority:
         1. ESDC_EMBEDDING_MODEL environment variable
         2. config.yaml: embedding_model
-        3. "" (empty — the openai backend rejects this at construction)
+        3. "" (empty — the openai backend rejects this at construction, and the
+        ollama backend falls back to the tag the current index was built against)
 
-        Ignored by the 'local' and 'ollama' backends, which pin their model. A
-        referenced provider never supplies the embedding model: its `model`
-        field is that provider's chat model, owned by Chat.
+        This is the name the service is asked for, not the vector-space
+        identity: `esdc.embedders.MODEL_ID` stays the pin written into
+        corpus_meta/semantic_meta. A referenced provider never supplies the
+        embedding model: its `model` field is that provider's chat model, owned
+        by Chat.
 
         Raises:
             ValueError: the active reference is unknown or mismatched.

@@ -1,5 +1,9 @@
 # tests/test_embedders.py
-"""Shared embedder backends: internal (llama.cpp), Ollama, OpenAI-compatible."""
+"""Shared embedding clients: HTTP services, plus the loader its last callers use.
+
+The in-process loader and its tests are removed in Task 5, once nothing
+constructs it.
+"""
 
 from __future__ import annotations
 
@@ -81,13 +85,21 @@ def test_ollama_reports_model_id_not_wire_tag(monkeypatch):
     assert e.model != e.OLLAMA_TAG
 
 
-def test_ollama_pins_wire_tag_ignoring_config(monkeypatch):
+def test_ollama_uses_the_configured_wire_model(monkeypatch):
+    """D7: the configured model is what the service is asked for."""
     mgr = MagicMock()
     factory = _patched_manager(monkeypatch, mgr)
-    emb.OllamaEmbedder(host=None)
-    # model= passed explicitly, so EmbeddingManager never falls back to the
-    # embedding_model config key.
-    assert factory.call_args.kwargs["model"] == "qwen3-embedding:0.6b"
+    e = emb.OllamaEmbedder(host=None, model="Qwen3-Embedding-0.6B")
+    assert factory.call_args.kwargs["model"] == "Qwen3-Embedding-0.6B"
+    # D1: the wire name is for the request only; identity stays MODEL_ID.
+    assert e.model == emb.MODEL_ID
+
+
+def test_ollama_falls_back_to_the_legacy_tag_when_model_is_empty(monkeypatch):
+    mgr = MagicMock()
+    factory = _patched_manager(monkeypatch, mgr)
+    emb.OllamaEmbedder(host=None, model="")
+    assert factory.call_args.kwargs["model"] == emb.OllamaEmbedder.OLLAMA_TAG
 
 
 def test_ollama_delegates_batch(monkeypatch):
@@ -107,7 +119,7 @@ def test_ollama_batch_empty_short_circuits(monkeypatch):
     mgr.generate_embeddings_batch.assert_not_called()
 
 
-def test_ollama_error_names_host_and_local_escape_hatch(monkeypatch):
+def test_ollama_error_names_host_and_the_service_requirement(monkeypatch):
     mgr = MagicMock()
     mgr.generate_embedding.side_effect = ConnectionError("refused")
     _patched_manager(monkeypatch, mgr)
@@ -119,7 +131,11 @@ def test_ollama_error_names_host_and_local_escape_hatch(monkeypatch):
     else:
         raise AssertionError("expected RuntimeError")
     assert "http://box:11434" in msg
-    assert "embedding_backend: local" in msg
+    assert "embedding service" in msg
+    # The in-process escape hatch no longer exists, so a message must not
+    # suggest it.
+    assert "local" not in msg
+    assert "refused" in msg
 
 
 @pytest.mark.parametrize(
@@ -247,15 +263,19 @@ def test_openai_non_2xx_raises_with_status_and_url(monkeypatch):
     assert "http://h:1/v1/embeddings" in str(exc.value)
 
 
-def test_openai_transport_error_names_local_escape_hatch(monkeypatch):
+def test_openai_transport_error_names_the_service_requirement(monkeypatch):
     import requests as rq
 
     monkeypatch.setattr(
         emb.requests, "post", MagicMock(side_effect=rq.ConnectionError("refused"))
     )
     e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
-    with pytest.raises(RuntimeError, match="embedding_backend: local"):
+    with pytest.raises(RuntimeError) as exc:
         e.generate_embedding("x")
+    msg = str(exc.value)
+    assert "embedding service" in msg
+    assert "local" not in msg
+    assert "refused" in msg
 
 
 def test_openai_reports_model_id(monkeypatch):
@@ -264,8 +284,20 @@ def test_openai_reports_model_id(monkeypatch):
     assert e.wire_model == "Qwen3-Embedding-0.6B-8bit"
 
 
-def test_factory_local_returns_internal(monkeypatch):
-    assert isinstance(emb.get_build_embedder("local"), emb.InternalEmbedder)
+def test_factory_local_is_a_config_error(monkeypatch):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(
+        Config, "get_embedding_backend", classmethod(lambda cls: "local")
+    )
+    with pytest.raises(emb.EmbeddingConfigError) as exc:
+        emb.get_embedder("local")
+    msg = str(exc.value)
+    assert "in-process" in msg
+    assert "Ollama" in msg or "llama-server" in msg
+    assert "embedding_backend" in msg
+    # A stored value is reported, never repaired.
+    assert Config.get_embedding_backend() == "local"
 
 
 def test_factory_ollama_uses_configured_host(monkeypatch):
@@ -276,9 +308,13 @@ def test_factory_ollama_uses_configured_host(monkeypatch):
     monkeypatch.setattr(
         Config, "get_embedding_host", classmethod(lambda cls: "http://box:11434")
     )
-    e = emb.get_build_embedder("ollama")
+    monkeypatch.setattr(
+        Config, "get_embedding_model", classmethod(lambda cls: "Qwen3-Embedding-0.6B")
+    )
+    e = emb.get_embedder("ollama")
     assert isinstance(e, emb.OllamaEmbedder)
     assert e.host == "http://box:11434"
+    assert e.wire_model == "Qwen3-Embedding-0.6B"
 
 
 def test_factory_openai_passes_model_and_key(monkeypatch):
@@ -289,19 +325,20 @@ def test_factory_openai_passes_model_and_key(monkeypatch):
     )
     monkeypatch.setattr(Config, "get_embedding_model", classmethod(lambda cls: "M"))
     monkeypatch.setattr(Config, "get_embedding_api_key", classmethod(lambda cls: "K"))
-    e = emb.get_build_embedder("openai")
+    e = emb.get_embedder("openai")
     assert isinstance(e, emb.OpenAIEmbedder)
     assert e.wire_model == "M"
     assert e.url == "http://h:8889/v1/embeddings"
 
 
-def test_factory_none_falls_through_to_config(monkeypatch):
+def test_factory_none_resolves_through_config(monkeypatch):
     from esdc.configs import Config
 
     monkeypatch.setattr(
-        Config, "get_embedding_backend", classmethod(lambda cls: "local")
+        Config, "get_embedding_backend", classmethod(lambda cls: "openai")
     )
-    assert isinstance(emb.get_build_embedder(None), emb.InternalEmbedder)
+    monkeypatch.setattr(Config, "get_embedding_model", classmethod(lambda cls: "M"))
+    assert isinstance(emb.get_embedder(None), emb.OpenAIEmbedder)
 
 
 def test_factory_explicit_arg_beats_config(monkeypatch):
@@ -310,16 +347,29 @@ def test_factory_explicit_arg_beats_config(monkeypatch):
     monkeypatch.setattr(
         Config, "get_embedding_backend", classmethod(lambda cls: "ollama")
     )
-    assert isinstance(emb.get_build_embedder("local"), emb.InternalEmbedder)
+    # D6: the compatibility wrapper behaves like the factory, including for the
+    # retired value.
+    with pytest.raises(emb.EmbeddingConfigError):
+        emb.get_build_embedder("local")
+    # Pinned so the assertion does not depend on the machine's own config.
+    monkeypatch.setattr(
+        Config, "get_embedding_host", classmethod(lambda cls: "http://h:1/v1")
+    )
+    monkeypatch.setattr(Config, "get_embedding_model", classmethod(lambda cls: "M"))
+    mgr = MagicMock()
+    _patched_manager(monkeypatch, mgr)
+    assert isinstance(emb.get_build_embedder("openai"), emb.OpenAIEmbedder)
 
 
 def test_factory_unknown_backend_lists_valid_ones():
     with pytest.raises(ValueError) as exc:
-        emb.get_build_embedder("lmstudio")
+        emb.get_embedder("lmstudio")
     msg = str(exc.value)
     assert "lmstudio" in msg
-    for name in ("local", "ollama", "openai"):
+    for name in ("ollama", "openai"):
         assert name in msg
+    # The retired value is named as retired, not as a valid choice.
+    assert "local" in msg
 
 
 def _meta_conn(probe=None, dim=3):
@@ -389,3 +439,131 @@ def test_probe_noop_when_meta_empty():
         "CREATE TABLE m (embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
     )
     emb.check_or_seed_probe(conn, "m", _FixedEmbedder([1.0]))  # must not raise
+
+
+# --- Shared HTTP client contract ---
+
+
+def test_construction_does_not_make_a_request(monkeypatch):
+    post = MagicMock()
+    monkeypatch.setattr(emb.requests, "post", post)
+    mgr = MagicMock()
+    _patched_manager(monkeypatch, mgr)
+    emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    emb.OllamaEmbedder(host=None, model="m")
+    post.assert_not_called()
+    mgr.generate_embedding.assert_not_called()
+    mgr.generate_embeddings_batch.assert_not_called()
+    mgr.health_check.assert_not_called()
+
+
+def test_empty_batch_makes_no_http_request(monkeypatch):
+    post = MagicMock()
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    assert e.generate_embeddings_batch([]) == []
+    post.assert_not_called()
+
+
+def test_query_and_batch_use_separate_timeouts(monkeypatch):
+    """D3: an interactive query must not inherit the batch timeout."""
+    post = MagicMock(
+        return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]})
+    )
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", batch_size=1)
+    e.generate_embedding("x")
+    assert post.call_args.kwargs["timeout"] == emb.QUERY_TIMEOUT_SECONDS
+    e.generate_embeddings_batch(["x"])
+    assert post.call_args.kwargs["timeout"] == emb.BATCH_TIMEOUT_SECONDS
+    # One attempt per request: no retry wrapper around the post call.
+    assert post.call_count == 2
+
+
+def test_ollama_clients_carry_the_query_and_batch_timeouts(monkeypatch):
+    """The ollama SDK binds a timeout per client, so the paths hold separate ones."""
+    mgr = MagicMock()
+    factory = _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host=None, model="m")
+    kwargs = [call.kwargs for call in factory.call_args_list]
+    assert emb.QUERY_TIMEOUT_SECONDS in [k.get("timeout") for k in kwargs]
+    assert emb.BATCH_TIMEOUT_SECONDS in [k.get("timeout") for k in kwargs]
+    assert all(k.get("model") == "m" for k in kwargs)
+    # D1: two clients, one vector space.
+    assert e.model == emb.MODEL_ID
+
+
+@pytest.mark.parametrize(
+    "vectors,expected",
+    [
+        ([[1.0, float("inf")]], "not finite"),
+        ([[1.0, float("nan")]], "not finite"),
+        ([[True, 1.0]], "bool"),
+        ([[0.0, 0.0]], "all zero"),
+        ([[1.0, 0.0], [1.0]], "dimension"),
+    ],
+)
+def test_response_shape_validation_rejects_unusable_vectors(
+    monkeypatch, vectors, expected
+):
+    payload = {"data": [{"index": i, "embedding": v} for i, v in enumerate(vectors)]}
+    post = MagicMock(return_value=_http_ok(payload))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", batch_size=10)
+    texts = [f"t{i}" for i in range(len(vectors))]
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embeddings_batch(texts)
+    assert expected in str(exc.value)
+    # A rejected response is rejected whole: no partial vector set escapes.
+    assert "http://h:1/v1/embeddings" in str(exc.value)
+
+
+def test_valid_response_passes_shape_validation(monkeypatch):
+    payload = {"data": [{"index": 0, "embedding": [1.0, 0.5]}]}
+    post = MagicMock(return_value=_http_ok(payload))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", batch_size=10)
+    assert e.generate_embeddings_batch(["t0"]) == [[1.0, 0.5]]
+
+
+def test_check_available_uses_the_embedding_endpoint_only(monkeypatch):
+    post = MagicMock(
+        return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+    )
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", api_key="secret")
+    assert e.check_available() is None
+    assert "/embeddings" in post.call_args.args[0]
+    message = str(post.call_args.kwargs["json"])
+    assert "secret" not in message
+
+
+def test_check_available_reports_failure_without_leaking_the_credential(monkeypatch):
+    import requests as rq
+
+    monkeypatch.setattr(
+        emb.requests, "post", MagicMock(side_effect=rq.ConnectionError("refused"))
+    )
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", api_key="secret")
+    message = e.check_available()
+    assert message is not None
+    assert "secret" not in message
+    assert "refused" in message
+
+
+def test_legacy_local_config_is_read_without_writing_and_cli_still_imports(
+    monkeypatch, tmp_path
+):
+    from esdc.configs import Config
+
+    monkeypatch.setattr(Config, "get_config_dir", classmethod(lambda cls: tmp_path))
+    config_file = tmp_path / "config.yaml"
+    original = "embedding_backend: local\n"
+    config_file.write_text(original)
+    Config._config_cache = None
+
+    assert Config.get_embedding_backend() == "local"
+    assert config_file.read_text() == original
+    assert not [p for p in tmp_path.iterdir() if p.name != "config.yaml"]
+
+    import esdc.esdc  # noqa: F401  - importing the CLI must not need a service

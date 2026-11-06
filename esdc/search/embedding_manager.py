@@ -7,6 +7,7 @@ using Ollama's embedding models.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import ollama
 
@@ -30,6 +31,7 @@ class EmbeddingManager:
         model: str | None = None,
         host: str | None = None,
         batch_size: int | None = None,
+        timeout: float | None = None,
     ) -> None:
         """Initialize EmbeddingManager.
 
@@ -37,6 +39,10 @@ class EmbeddingManager:
             model: Ollama model name (default from config or qwen3-embedding:0.6b)
             host: Ollama host URL (default: None, uses localhost)
             batch_size: Max texts per embed request (default from config or 100)
+            timeout: Request timeout in seconds (default: the ollama SDK's own).
+                The ollama client binds a timeout to the connection, so a
+                caller that wants a different bound for query and for batch
+                holds one manager per bound.
         """
         if model is None:
             config = Config._load_config()
@@ -55,7 +61,14 @@ class EmbeddingManager:
         if host is None:
             host = Config.get_embedding_host()
         self.model: str = resolved_model
-        self._client = ollama.Client(host=host) if host else ollama.Client()
+        self.timeout: float | None = timeout
+        client_kwargs: dict[str, Any] = {}
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        if host:
+            self._client = ollama.Client(host=host, **client_kwargs)
+        else:
+            self._client = ollama.Client(**client_kwargs)
 
         logger.info(
             "[Embedding] initialized | model=%s",

@@ -111,7 +111,22 @@ def test_api_key_defaults_empty(monkeypatch):
 
 
 def test_backend_enum_choices_registered():
-    assert ENUM_CHOICES["embedding_backend"] == ["local", "ollama", "openai"]
+    """The wizard offers services only: the retired in-process value is not a choice."""
+    assert ENUM_CHOICES["embedding_backend"] == ["ollama", "openai"]
+    assert "local" not in ENUM_CHOICES["embedding_backend"]
+
+
+def test_retired_backend_description_names_a_service(monkeypatch):
+    """A stored legacy value is described as needing a service, not repaired."""
+    description = KEY_DESCRIPTIONS["embedding_backend"]
+    assert "HTTP" in description
+    assert "in-process" in description.lower() or "removed" in description.lower()
+    for choice in ENUM_CHOICES["embedding_backend"]:
+        assert choice in description
+    _no_config(monkeypatch, {"embedding_backend": "local"})
+    monkeypatch.delenv("ESDC_EMBEDDING_BACKEND", raising=False)
+    # Reading is not validation: the stored value is returned as it is stored.
+    assert Config.get_embedding_backend() == "local"
 
 
 def test_new_keys_described():
@@ -177,7 +192,9 @@ class TestEmbeddingProviderReference:
         )
         assert Config.get_embedding_api_key() == ""
 
-        post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]}))
+        post = MagicMock(
+            return_value=_http_ok({"data": [{"index": 0, "embedding": [1.0]}]})
+        )
         monkeypatch.setattr(emb.requests, "post", post)
         emb.get_build_embedder().generate_embedding("x")
         assert "Authorization" not in post.call_args.kwargs["headers"]
@@ -227,7 +244,9 @@ class TestEmbeddingProviderReference:
         # The inactive reference is left exactly as stored.
         assert data["embedding_provider"] == "engine"
 
-    def test_ollama_reference_uses_provider_host_and_keeps_pinned_model(self, monkeypatch):
+    def test_ollama_reference_uses_provider_host_and_keeps_pinned_model(
+        self, monkeypatch
+    ):
         ollama_provider = {
             "provider_type": "ollama",
             "base_url": "http://ollama-box:11434",
@@ -250,8 +269,38 @@ class TestEmbeddingProviderReference:
         embedder = emb.get_build_embedder()
         assert isinstance(embedder, emb.OllamaEmbedder)
         assert embedder.host == "http://ollama-box:11434"
-        # Pinned in code, never taken from the provider's chat model.
+        # D7: the configured embedding model is what the service is asked for.
+        # A provider reference supplies the address, never its chat model.
+        assert factory.call_args.kwargs["model"] == "embed-b"
+        # D1: identity stays the index pin, so a service alias change does not
+        # repin corpus_meta.
+        assert embedder.model == emb.MODEL_ID
+
+    def test_ollama_reference_with_no_configured_model_uses_the_legacy_tag(
+        self, monkeypatch
+    ):
+        ollama_provider = {
+            "provider_type": "ollama",
+            "base_url": "http://ollama-box:11434",
+            "model": "chat-a",
+        }
+        _no_config(
+            monkeypatch,
+            _embedding_config(
+                embedding_backend="ollama",
+                embedding_model="",
+                providers={"engine": ollama_provider},
+            ),
+        )
+        manager = MagicMock()
+        import esdc.search.embedding_manager as em
+
+        factory = MagicMock(return_value=manager)
+        monkeypatch.setattr(em, "EmbeddingManager", factory)
+        embedder = emb.get_build_embedder()
+        # The tag the current index was built against is the fallback.
         assert factory.call_args.kwargs["model"] == emb.OllamaEmbedder.OLLAMA_TAG
+        assert embedder.model == emb.MODEL_ID
 
     def test_get_build_embedder_uses_referenced_provider(self, monkeypatch):
         """Integration: the constructed embedder carries the reference values."""
