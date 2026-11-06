@@ -531,6 +531,9 @@ def test_index_mismatch_survives_the_availability_check(monkeypatch):
     message = e.check_available()
     assert message is not None
     assert "indexes" in message
+    # The range is interpolated, so the message says what the pairing should have been.
+    assert "expected exactly 0..0" in message
+    assert "{n - 1}" not in message
     assert "did not return an embedding" not in message
 
 

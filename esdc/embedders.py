@@ -532,7 +532,7 @@ class OpenAIEmbedder:
             raise EmbeddingResponseError(
                 f"[Embedding] {self.url} returned {len(ordered)} embeddings for a "
                 f"batch of {n} with indexes {[e.get('index') for e in ordered]}; "
-                "expected exactly 0..{n - 1}. The response is malformed or "
+                f"expected exactly 0..{n - 1}. The response is malformed or "
                 "truncated."
             )
         # A missing key is reported as a bad row by the validator, not as a KeyError.
