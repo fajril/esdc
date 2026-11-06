@@ -1028,7 +1028,13 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
         )
         return
 
-    embedder = get_build_embedder(embed_backend)
+    try:
+        embedder = get_build_embedder(embed_backend)
+    except ValueError as e:
+        # A stored value that has no implementation is reported, not repaired.
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+
     logger.info(f"Initialized embedder with model: {embedder.model}")
 
     # Every client is an HTTP service now, so the check reports what that
