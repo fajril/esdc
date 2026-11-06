@@ -22,7 +22,7 @@ import json
 import logging
 import math
 import threading
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 import requests
 
@@ -256,41 +256,73 @@ class InternalEmbedder:
             return [[float(x) for x in vec] for vec in model.embed(texts)]
 
 
+# Exceptions that mean the service did not answer. Their text is the failure
+# itself, not a response body, so it is safe to show.
+_TRANSPORT_ERRORS = (
+    OSError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+)
+
+
 def error_text(err: Exception) -> str:
     """Describe a service failure without quoting the response body.
 
-    An error that carries a status code means the service answered: its body
-    can echo the credential or the request (the ollama SDK's ResponseError text
-    is the server's body), so only the status is reported. A connection error
-    has no body and its text is what the user needs.
+    An error with a status code means the service answered, and its text is the
+    server's body (the ollama SDK builds ResponseError from it), so only the
+    status is reported. A connection or timeout error has no body and its text
+    is what the user needs. Any other error may carry the body in its text, so
+    only its type is reported.
     """
     status = getattr(err, "status_code", None)
-    if status:
+    if status and status > 0:
         return f"HTTP {status}"
-    return str(err)
+    if isinstance(err, _TRANSPORT_ERRORS):
+        return str(err)
+    return type(err).__name__
 
 
 def _service_error(backend: str, target: str, err: Exception) -> str:
     """Actionable message for a service that failed.
 
-    A service that answered with an error status is named as an error status,
-    not as unreachable; a service that did not answer is named as unreachable.
-    Neither message quotes the response body or suggests the retired
-    in-process backend.
+    Three kinds of failure are named as what they are: a service that answered
+    with an error status, a service that did not answer, and a service that
+    answered with something that is not an embedding. No message quotes the
+    response body or suggests the retired in-process backend.
     """
-    if getattr(err, "status_code", None):
+    status = getattr(err, "status_code", None)
+    if status and status > 0:
         return (
             f"[Embedding] backend '{backend}' service at {target} returned "
-            f"{error_text(err)}. Check `embedding_model` matches a model the "
-            "service has loaded, and that the endpoint is an embeddings "
-            "endpoint."
+            f"{error_text(err)}. Check that `embedding_model` matches a model "
+            "the service has loaded, that the endpoint is an embeddings "
+            "endpoint, and that the credential is accepted."
+        )
+    if isinstance(err, _TRANSPORT_ERRORS):
+        return (
+            f"[Embedding] backend '{backend}' could not reach the embedding "
+            f"service at {target}: {error_text(err)}. Check the service is "
+            "running and reachable, and that "
+            "`embedding_host`/`embedding_provider` point at it."
         )
     return (
-        f"[Embedding] backend '{backend}' could not reach the embedding "
-        f"service at {target}: {error_text(err)}. Check the service is running "
-        "and reachable, and that `embedding_host`/`embedding_provider` point "
-        "at it."
+        f"[Embedding] backend '{backend}' service at {target} answered with "
+        f"{error_text(err)} instead of an embedding. Check that "
+        "`embedding_model` matches a model the service has loaded and that the "
+        "endpoint is an embeddings endpoint."
     )
+
+
+def _raise_service_error(backend: str, target: str, err: Exception) -> NoReturn:
+    """Report a failure without attaching a cause whose text is the body.
+
+    A traceback prints `__cause__`, and a status error's text is the server's
+    response body, which can echo the credential. The cause is kept only when
+    its text is safe to print.
+    """
+    if isinstance(err, _TRANSPORT_ERRORS) and not getattr(err, "status_code", None):
+        raise RuntimeError(_service_error(backend, target, err)) from err
+    raise RuntimeError(_service_error(backend, target, err)) from None
 
 
 class OllamaEmbedder:
@@ -328,7 +360,7 @@ class OllamaEmbedder:
         try:
             raw = self._query_mgr.generate_embedding(text)
         except Exception as e:
-            raise RuntimeError(_service_error("ollama", self.host, e)) from e
+            _raise_service_error("ollama", self.host, e)
         # The response is validated as it arrived, so a bad value is reported
         # as a bad response rather than as a connection failure.
         return _validate_vectors([raw], 1, self.host)[0]
@@ -343,7 +375,7 @@ class OllamaEmbedder:
         try:
             raw = self._batch_mgr.generate_embeddings_batch(texts)
         except Exception as e:
-            raise RuntimeError(_service_error("ollama", self.host, e)) from e
+            _raise_service_error("ollama", self.host, e)
         return _validate_vectors(raw, len(texts), self.host)
 
     def check_available(self) -> str | None:
@@ -433,7 +465,7 @@ class OpenAIEmbedder:
                 timeout=timeout,
             )
         except Exception as e:
-            raise RuntimeError(_service_error("openai", self.url, e)) from e
+            _raise_service_error("openai", self.url, e)
 
         if resp.status_code >= 300:
             # The response body is not quoted: it can echo the request or the

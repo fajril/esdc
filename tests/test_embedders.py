@@ -588,7 +588,8 @@ def test_service_error_reports_status_without_the_body(monkeypatch):
 def test_transport_error_is_reported_as_unreachable(monkeypatch):
     """A failure with no response body has nothing to withhold."""
     mgr = MagicMock()
-    mgr.generate_embedding.side_effect = ConnectionError("connection refused")
+    failure = ConnectionError("connection refused")
+    mgr.generate_embedding.side_effect = failure
     _patched_manager(monkeypatch, mgr)
     e = emb.OllamaEmbedder(host="http://box:11434")
     with pytest.raises(RuntimeError) as exc:
@@ -597,13 +598,43 @@ def test_transport_error_is_reported_as_unreachable(monkeypatch):
     assert "could not reach" in msg
     assert "connection refused" in msg
     assert "local" not in msg
+    # A connection failure has no body, so the cause is safe to print.
+    assert exc.value.__cause__ is failure
+
+
+def test_an_answer_that_is_not_an_embedding_is_not_called_unreachable(monkeypatch):
+    """The ollama SDK validates the response before the client sees it."""
+
+    class SdkResponseError(Exception):
+        """Stand-in for an SDK error whose text is the server body."""
+
+        def __init__(self, body: str) -> None:
+            super().__init__(f"{body} (status code: -1)")
+
+    mgr = MagicMock()
+    mgr.generate_embedding.side_effect = SdkResponseError("sk-secret in the body")
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embedding("x")
+    msg = str(exc.value)
+    assert "instead of an embedding" in msg
+    assert "could not reach" not in msg
+    # A printed traceback shows the cause, so a body-bearing one is dropped.
+    assert exc.value.__cause__ is None
+    assert "sk-secret" not in msg
 
 
 @pytest.mark.parametrize(
-    "failure",
-    [_StatusError("server said sk-secret", 500), ConnectionError("connection refused")],
+    "failure,expected",
+    [
+        (_StatusError("server said sk-secret", 500), "returned HTTP 500"),
+        (ConnectionError("connection refused"), "could not reach"),
+    ],
 )
-def test_check_available_returns_a_message_for_any_failure(monkeypatch, failure):
+def test_check_available_returns_a_message_for_any_failure(
+    monkeypatch, failure, expected
+):
     """A caller asking whether a service answers should not have to catch."""
     mgr = MagicMock()
     mgr.generate_embedding.side_effect = failure
@@ -612,8 +643,8 @@ def test_check_available_returns_a_message_for_any_failure(monkeypatch, failure)
     message = e.check_available()
     assert message is not None
     assert "http://box:11434" in message
-    if getattr(failure, "status_code", None):
-        assert "sk-secret" not in message
+    assert expected in message
+    assert "sk-secret" not in message
 
 
 def test_valid_response_passes_shape_validation(monkeypatch):
