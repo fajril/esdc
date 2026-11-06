@@ -83,11 +83,11 @@ def _validate_vectors(
         The response as floats.
 
     Raises:
-        RuntimeError: the response cannot be a vector space. The message names
-            the source and the position, never the response body.
+        EmbeddingResponseError: the response cannot be a vector space. The
+            message names the source and the position, never the response body.
     """
     if len(vectors) != expected:
-        raise RuntimeError(
+        raise EmbeddingResponseError(
             f"[Embedding] {source} returned {len(vectors)} embeddings for a "
             f"batch of {expected}. The response is malformed or truncated."
         )
@@ -95,14 +95,14 @@ def _validate_vectors(
         return []
 
     if not isinstance(vectors[0], (list, tuple)):
-        raise RuntimeError(
+        raise EmbeddingResponseError(
             f"[Embedding] {source} returned a {type(vectors[0]).__name__} "
             "instead of a vector at position 0; the response is malformed."
         )
 
     dim = len(vectors[0])
     if dim == 0:
-        raise RuntimeError(
+        raise EmbeddingResponseError(
             f"[Embedding] {source} returned an empty vector at position 0; "
             "it carries no direction and cannot be compared."
         )
@@ -110,34 +110,34 @@ def _validate_vectors(
     numbers: list[list[float]] = []
     for position, vector in enumerate(vectors):
         if not isinstance(vector, (list, tuple)):
-            raise RuntimeError(
+            raise EmbeddingResponseError(
                 f"[Embedding] {source} returned a {type(vector).__name__} "
                 f"instead of a vector at position {position}; the response is "
                 "malformed."
             )
         if len(vector) != dim:
-            raise RuntimeError(
+            raise EmbeddingResponseError(
                 f"[Embedding] {source} returned a vector of dimension "
                 f"{len(vector)} at position {position}; expected {dim}."
             )
         row: list[float] = []
         for value in vector:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise RuntimeError(
+                raise EmbeddingResponseError(
                     f"[Embedding] {source} returned a component that is not a "
                     f"number ({type(value).__name__}) at position {position}; "
                     "a vector holds numbers."
                 )
             number = float(value)
             if not math.isfinite(number):
-                raise RuntimeError(
+                raise EmbeddingResponseError(
                     f"[Embedding] {source} returned a component that is not "
                     f"finite at position {position}; the response cannot be a "
                     "vector."
                 )
             row.append(number)
         if all(number == 0.0 for number in row):
-            raise RuntimeError(
+            raise EmbeddingResponseError(
                 f"[Embedding] {source} returned a vector that is all zero at "
                 f"position {position}; it carries no direction and cannot be "
                 "compared."
@@ -265,6 +265,32 @@ _TRANSPORT_ERRORS = (
 )
 
 
+class EmbeddingError(RuntimeError):
+    """A failure this module has already worded, so its message is body-free."""
+
+
+class EmbeddingResponseError(EmbeddingError):
+    """A service answered with something that cannot be a vector space.
+
+    It is kept apart from a service failure so a caller can tell "the server is
+    up but the answer is not a vector" from "the server did not answer".
+    """
+
+
+def _status_message(backend: str, target: str, status: int) -> str:
+    """Actionable message for a service that answered with an error status.
+
+    The response body is not quoted: it can echo the request or the credential,
+    and a status code is enough to act on.
+    """
+    return (
+        f"[Embedding] backend '{backend}' service at {target} returned "
+        f"HTTP {status}. Check that `embedding_model` matches a model the "
+        "service has loaded, that the endpoint is an embeddings endpoint, and "
+        "that the credential is accepted."
+    )
+
+
 def error_text(err: Exception) -> str:
     """Describe a service failure without quoting the response body.
 
@@ -286,18 +312,13 @@ def _service_error(backend: str, target: str, err: Exception) -> str:
     """Actionable message for a service that failed.
 
     Three kinds of failure are named as what they are: a service that answered
-    with an error status, a service that did not answer, and a service that
-    answered with something that is not an embedding. No message quotes the
-    response body or suggests the retired in-process backend.
+    with an error status, a service that did not answer, and a service whose
+    failure is neither, which is left undiagnosed rather than guessed at. No
+    message quotes the response body or suggests the retired in-process backend.
     """
     status = getattr(err, "status_code", None)
     if status and status > 0:
-        return (
-            f"[Embedding] backend '{backend}' service at {target} returned "
-            f"{error_text(err)}. Check that `embedding_model` matches a model "
-            "the service has loaded, that the endpoint is an embeddings "
-            "endpoint, and that the credential is accepted."
-        )
+        return _status_message(backend, target, status)
     if isinstance(err, _TRANSPORT_ERRORS):
         return (
             f"[Embedding] backend '{backend}' could not reach the embedding "
@@ -305,12 +326,25 @@ def _service_error(backend: str, target: str, err: Exception) -> str:
             "running and reachable, and that "
             "`embedding_host`/`embedding_provider` point at it."
         )
+    # The request completed or failed for a reason this module cannot name. The
+    # checks for both readings are listed instead of picking one.
     return (
-        f"[Embedding] backend '{backend}' service at {target} answered with "
-        f"{error_text(err)} instead of an embedding. Check that "
-        "`embedding_model` matches a model the service has loaded and that the "
-        "endpoint is an embeddings endpoint."
+        f"[Embedding] backend '{backend}' service at {target} did not return "
+        f"an embedding ({error_text(err)}). Check that the service is running "
+        "and reachable, that `embedding_model` matches a model it has loaded, "
+        "and that the endpoint is an embeddings endpoint."
     )
+
+
+def _failure_message(backend: str, target: str, err: Exception) -> str:
+    """Report a failure the way it happened.
+
+    A failure this module worded keeps its own message; anything else is
+    classified as a service failure. Both forms are body-free.
+    """
+    if isinstance(err, EmbeddingError):
+        return str(err)
+    return _service_error(backend, target, err)
 
 
 def _raise_service_error(backend: str, target: str, err: Exception) -> NoReturn:
@@ -321,8 +355,8 @@ def _raise_service_error(backend: str, target: str, err: Exception) -> NoReturn:
     its text is safe to print.
     """
     if isinstance(err, _TRANSPORT_ERRORS) and not getattr(err, "status_code", None):
-        raise RuntimeError(_service_error(backend, target, err)) from err
-    raise RuntimeError(_service_error(backend, target, err)) from None
+        raise EmbeddingError(_failure_message(backend, target, err)) from err
+    raise EmbeddingError(_failure_message(backend, target, err)) from None
 
 
 class OllamaEmbedder:
@@ -381,18 +415,16 @@ class OllamaEmbedder:
     def check_available(self) -> str | None:
         """Ask the embedding endpoint only; None when it answers.
 
-        A response that is not a usable vector is reported as a bad response,
-        not as an unreachable service, and nothing is raised: a caller asking
-        whether the service answers should get a message, not an exception.
+        Nothing is raised: a caller asking whether a service answers should get a
+        message, not an exception. A response that is not a usable vector is
+        reported as a bad response, and the two kinds of failure are named
+        through the same classifier as the request paths.
         """
         try:
             raw = self._query_mgr.generate_embedding("availability check")
-        except Exception as e:
-            return _service_error("ollama", self.host, e)
-        try:
             _validate_vectors([raw], 1, self.host)
-        except RuntimeError as e:
-            return str(e)
+        except Exception as e:
+            return _failure_message("ollama", self.host, e)
         return None
 
     def health_check(self) -> bool:
@@ -468,13 +500,7 @@ class OpenAIEmbedder:
             _raise_service_error("openai", self.url, e)
 
         if resp.status_code >= 300:
-            # The response body is not quoted: it can echo the request or the
-            # credential, and it is not needed to act on a status code.
-            raise RuntimeError(
-                f"[Embedding] {self.url} returned HTTP {resp.status_code}. "
-                "Check `embedding_model` matches a model the server has "
-                "loaded, and that the service is an embeddings endpoint."
-            )
+            raise EmbeddingError(_status_message("openai", self.url, resp.status_code))
 
         data = resp.json()["data"]
         # The OpenAI schema does not guarantee response order; each entry
@@ -514,12 +540,14 @@ class OpenAIEmbedder:
         """Ask the embedding endpoint only; None when it answers.
 
         Warm-up here means reachability, not a loaded model: the first real
-        request can still pay a cold-start cost on the service.
+        request can still pay a cold-start cost on the service. Nothing is
+        raised, and a bad response is classified the same way as on the request
+        path.
         """
         try:
             self._post(["availability check"], self._query_timeout)
         except Exception as e:
-            return str(e)
+            return _failure_message("openai", self.url, e)
         return None
 
 

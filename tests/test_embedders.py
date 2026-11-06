@@ -602,8 +602,32 @@ def test_transport_error_is_reported_as_unreachable(monkeypatch):
     assert exc.value.__cause__ is failure
 
 
-def test_an_answer_that_is_not_an_embedding_is_not_called_unreachable(monkeypatch):
-    """The ollama SDK validates the response before the client sees it."""
+def test_a_bad_answer_stays_a_bad_answer(monkeypatch):
+    """A caller can tell a service that answered badly from one that did not answer."""
+    post = MagicMock(return_value=_http_ok({"data": [{"index": 0, "embedding": None}]}))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
+    with pytest.raises(emb.EmbeddingResponseError) as exc:
+        e.generate_embedding("x")
+    assert "instead of a vector" in str(exc.value)
+    assert "could not reach" not in str(exc.value)
+
+    r = MagicMock()
+    r.status_code = 503
+    r.text = "model not loaded"
+    monkeypatch.setattr(emb.requests, "post", MagicMock(return_value=r))
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embedding("x")
+    assert not isinstance(exc.value, emb.EmbeddingResponseError)
+    assert "returned HTTP 503" in str(exc.value)
+
+
+def test_an_answer_that_is_not_a_known_failure_kind_stays_undiagnosed(monkeypatch):
+    """A failure that is neither a status nor a connection error is not called unreachable.
+
+    The ollama SDK uses httpx, whose timeout is not an OSError, so the message
+    lists both checks instead of guessing which one it was.
+    """
 
     class SdkResponseError(Exception):
         """Stand-in for an SDK error whose text is the server body."""
@@ -618,11 +642,28 @@ def test_an_answer_that_is_not_an_embedding_is_not_called_unreachable(monkeypatc
     with pytest.raises(RuntimeError) as exc:
         e.generate_embedding("x")
     msg = str(exc.value)
-    assert "instead of an embedding" in msg
+    assert "did not return an embedding" in msg
     assert "could not reach" not in msg
     # A printed traceback shows the cause, so a body-bearing one is dropped.
     assert exc.value.__cause__ is None
     assert "sk-secret" not in msg
+    # The two kinds of failure stay distinguishable: this one is a bad answer.
+    assert isinstance(exc.value, emb.EmbeddingResponseError) is False
+
+
+def test_httpx_timeout_is_not_reported_as_a_bad_answer(monkeypatch):
+    """The most likely real failure keeps both checks in its message."""
+    import httpx
+
+    mgr = MagicMock()
+    mgr.generate_embedding.side_effect = httpx.ReadTimeout("timed out")
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embedding("x")
+    msg = str(exc.value)
+    assert "did not return an embedding" in msg
+    assert "reachable" in msg
 
 
 @pytest.mark.parametrize(
