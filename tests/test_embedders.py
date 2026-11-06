@@ -259,8 +259,11 @@ def test_openai_non_2xx_raises_with_status_and_url(monkeypatch):
     e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m")
     with pytest.raises(RuntimeError) as exc:
         e.generate_embedding("x")
-    assert "503" in str(exc.value)
-    assert "http://h:1/v1/embeddings" in str(exc.value)
+    msg = str(exc.value)
+    assert "503" in msg
+    assert "http://h:1/v1/embeddings" in msg
+    # The response body is never quoted: it can echo the credential.
+    assert "model not loaded" not in msg
 
 
 def test_openai_transport_error_names_the_service_requirement(monkeypatch):
@@ -499,6 +502,8 @@ def test_ollama_clients_carry_the_query_and_batch_timeouts(monkeypatch):
         ([[1.0, float("inf")]], "not finite"),
         ([[1.0, float("nan")]], "not finite"),
         ([[True, 1.0]], "bool"),
+        ([["1.0", None]], "not a number"),
+        ([[]], "empty vector"),
         ([[0.0, 0.0]], "all zero"),
         ([[1.0, 0.0], [1.0]], "dimension"),
     ],
@@ -516,6 +521,32 @@ def test_response_shape_validation_rejects_unusable_vectors(
     assert expected in str(exc.value)
     # A rejected response is rejected whole: no partial vector set escapes.
     assert "http://h:1/v1/embeddings" in str(exc.value)
+
+
+def test_ollama_path_rejects_a_bad_response_as_a_response(monkeypatch):
+    """Values are checked as they arrived, so a bool is not read as a connection failure."""
+    mgr = MagicMock()
+    mgr.generate_embedding.return_value = [True, 1.0]
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    with pytest.raises(RuntimeError) as exc:
+        e.generate_embedding("x")
+    msg = str(exc.value)
+    assert "not a number" in msg
+    assert "could not reach" not in msg
+    assert "http://box:11434" in msg
+
+
+def test_ollama_check_available_reports_a_bad_response_as_a_response(monkeypatch):
+    mgr = MagicMock()
+    mgr.generate_embedding.return_value = []
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    message = e.check_available()
+    assert message is not None
+    # A response that answers but is not a vector is not an unreachable service.
+    assert "could not reach" not in message
+    assert "empty vector" in message
 
 
 def test_valid_response_passes_shape_validation(monkeypatch):

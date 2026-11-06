@@ -61,14 +61,10 @@ class EmbeddingManager:
         if host is None:
             host = Config.get_embedding_host()
         self.model: str = resolved_model
-        self.timeout: float | None = timeout
         client_kwargs: dict[str, Any] = {}
         if timeout is not None:
             client_kwargs["timeout"] = timeout
-        if host:
-            self._client = ollama.Client(host=host, **client_kwargs)
-        else:
-            self._client = ollama.Client(**client_kwargs)
+        self._client = ollama.Client(host=host, **client_kwargs)
 
         logger.info(
             "[Embedding] initialized | model=%s",

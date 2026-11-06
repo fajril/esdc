@@ -69,12 +69,22 @@ def _service_required(backend: str) -> str:
     )
 
 
-def _validate_vectors(vectors: list[list[float]], expected: int, source: str) -> None:
+def _validate_vectors(
+    vectors: list[list[Any]], expected: int, source: str
+) -> list[list[float]]:
     """Reject a response that cannot be used as a vector space, as a whole.
 
-    Count, dimension, numeric type, finiteness and a non-zero direction are
-    all checked before anything is returned: a response that fails here fails
-    entirely, so no partial set of vectors can be written into the index.
+    The values are checked as they arrived, before any conversion: count,
+    dimension, numeric type, finiteness and a non-zero direction. A response
+    that fails here fails entirely, so no partial set of vectors can be written
+    into the index.
+
+    Returns:
+        The response as floats.
+
+    Raises:
+        RuntimeError: the response cannot be a vector space. The message names
+            the source and the position, never the response body.
     """
     if len(vectors) != expected:
         raise RuntimeError(
@@ -82,33 +92,46 @@ def _validate_vectors(vectors: list[list[float]], expected: int, source: str) ->
             f"batch of {expected}. The response is malformed or truncated."
         )
     if not vectors:
-        return
+        return []
 
     dim = len(vectors[0])
+    if dim == 0:
+        raise RuntimeError(
+            f"[Embedding] {source} returned an empty vector at position 0; "
+            "it carries no direction and cannot be compared."
+        )
+
+    numbers: list[list[float]] = []
     for position, vector in enumerate(vectors):
         if len(vector) != dim:
             raise RuntimeError(
                 f"[Embedding] {source} returned a vector of dimension "
                 f"{len(vector)} at position {position}; expected {dim}."
             )
+        row: list[float] = []
         for value in vector:
-            if isinstance(value, bool):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise RuntimeError(
-                    f"[Embedding] {source} returned a bool component at "
-                    f"position {position}; a vector holds numbers."
+                    f"[Embedding] {source} returned a component that is not a "
+                    f"number ({type(value).__name__}) at position {position}; "
+                    "a vector holds numbers."
                 )
-            if not math.isfinite(float(value)):
+            number = float(value)
+            if not math.isfinite(number):
                 raise RuntimeError(
                     f"[Embedding] {source} returned a component that is not "
                     f"finite at position {position}; the response cannot be a "
                     "vector."
                 )
-        if all(float(value) == 0.0 for value in vector):
+            row.append(number)
+        if all(number == 0.0 for number in row):
             raise RuntimeError(
                 f"[Embedding] {source} returned a vector that is all zero at "
                 f"position {position}; it carries no direction and cannot be "
                 "compared."
             )
+        numbers.append(row)
+    return numbers
 
 
 _load_lock = threading.Lock()
@@ -267,11 +290,12 @@ class OllamaEmbedder:
     def generate_embedding(self, text: str) -> list[float]:
         """Generate an embedding for a single text."""
         try:
-            vector = [float(x) for x in self._query_mgr.generate_embedding(text)]
+            raw = self._query_mgr.generate_embedding(text)
         except Exception as e:
             raise RuntimeError(_unreachable("ollama", self.host, e)) from e
-        _validate_vectors([vector], 1, self.host)
-        return vector
+        # The response is validated as it arrived, so a bad value is reported
+        # as a bad response rather than as a connection failure.
+        return _validate_vectors([raw], 1, self.host)[0]
 
     def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for a batch of texts.
@@ -281,21 +305,25 @@ class OllamaEmbedder:
         if not texts:
             return []
         try:
-            vectors = [
-                [float(x) for x in v]
-                for v in self._batch_mgr.generate_embeddings_batch(texts)
-            ]
+            raw = self._batch_mgr.generate_embeddings_batch(texts)
         except Exception as e:
             raise RuntimeError(_unreachable("ollama", self.host, e)) from e
-        _validate_vectors(vectors, len(texts), self.host)
-        return vectors
+        return _validate_vectors(raw, len(texts), self.host)
 
     def check_available(self) -> str | None:
-        """Ask the embedding endpoint only; None when it answers."""
+        """Ask the embedding endpoint only; None when it answers.
+
+        A response that is not a usable vector is reported as a bad response,
+        not as an unreachable service.
+        """
         try:
-            self._query_mgr.generate_embedding("availability check")
+            raw = self._query_mgr.generate_embedding("availability check")
         except Exception as e:
             return _unreachable("ollama", self.host, e)
+        try:
+            _validate_vectors([raw], 1, self.host)
+        except RuntimeError as e:
+            return str(e)
         return None
 
     def health_check(self) -> bool:
@@ -393,8 +421,7 @@ class OpenAIEmbedder:
                 "truncated."
             )
         raw = [e["embedding"] for e in ordered]
-        _validate_vectors(raw, n, self.url)
-        return [[float(x) for x in vector] for vector in raw]
+        return _validate_vectors(raw, n, self.url)
 
     def generate_embedding(self, text: str) -> list[float]:
         """Generate a single embedding on the query timeout."""
