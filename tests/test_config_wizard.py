@@ -8,14 +8,18 @@ from unittest.mock import MagicMock, patch
 import ollama
 import pytest
 
+from esdc.config_fields import field_hint
 from esdc.config_wizard import (
     _DIRECT_SETTINGS_VALUE,
-    _LOCAL_CUSTOM_VALUE,
+    _RETIRED_EMBEDDING_REASON,
+    _RETIRED_RERANK_REASON,
+    _SAVEABLE_SELECTIONS,
     ChatDefaultSelection,
     CustomSelection,
     DirectSelection,
     LinkedProviderSelection,
     LocalSelection,
+    NeedsConfigurationSelection,
     OffSelection,
     PairSelection,
     TaskRole,
@@ -27,13 +31,13 @@ from esdc.config_wizard import (
     _edit_provider_flow,
     _edit_task,
     _fetch_models,
-    _local_custom_rerank_flow,
     _mask_value,
     _prompt_for_config_value,
     _remove_provider_flow,
     _run_task_action,
     _save_task_selection,
     _selectable,
+    _selection_label,
     _short_test_message,
     _task_summary,
     _test_task_selection,
@@ -47,8 +51,7 @@ from esdc.configs import (
     Config,
 )
 from esdc.corpus.ocr import OllamaVisionOcr
-from esdc.corpus.reranker import DEFAULT_RERANKER
-from esdc.embedders import MODEL_ID, OllamaEmbedder
+from esdc.embedders import OllamaEmbedder
 from esdc.model_catalog import ModelCatalog, ModelEntry
 
 
@@ -1145,39 +1148,110 @@ class TestRerankKeyWidgets:
     def test_rerank_in_boolean_keys(self):
         assert "corpus.rerank" in Config.BOOLEAN_KEYS
 
-    @patch("esdc.config_wizard.questionary.select")
-    def test_rerank_model_offers_curated_choices(self, mock_select):
-        mock_select.return_value.unsafe_ask.return_value = (
-            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-        )
-        result = _prompt_for_config_value(
-            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-        )
-        choices = mock_select.call_args.kwargs["choices"]
-        values = [c.value for c in choices]
-        assert "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF" in values
-        assert "__custom__" in values
-        assert result == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+    @patch("esdc.config_wizard.questionary.text")
+    def test_rerank_model_is_a_plain_text_prompt(self, mock_text):
+        """No curated GGUF list.
 
-    @patch("esdc.config_wizard.questionary.select")
-    def test_rerank_model_selecting_default(self, mock_select):
-        mock_select.return_value.unsafe_ask.return_value = (
-            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-        )
-        result = _prompt_for_config_value(
-            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-        )
-        assert result == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        A service model id is typed, and any nonempty value is accepted unchanged.
+        """
+        mock_text.return_value.unsafe_ask.return_value = "my-custom-reranker"
+        result = _prompt_for_config_value("corpus.rerank_model", "previous-model")
+        assert result == "my-custom-reranker"
+        assert mock_text.return_value.unsafe_ask.call_count == 1
 
     @patch("esdc.config_wizard.questionary.text")
+    def test_legacy_gguf_rerank_model_is_accepted_unchanged(self, mock_text):
+        """A stored GGUF id is the default and comes back exactly as stored."""
+        stored = "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        mock_text.return_value.unsafe_ask.return_value = stored
+        result = _prompt_for_config_value("corpus.rerank_model", stored)
+        assert result == stored
+        assert mock_text.call_args.kwargs["default"] == stored
+
+    @patch("esdc.config_wizard.questionary.text")
+    def test_gguf_rerank_model_prompt_carries_the_hint(self, mock_text):
+        """The prompt shows the hint for the stored value it is reading."""
+        stored = "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        flat = {"corpus.rerank_model": stored}
+        mock_text.return_value.unsafe_ask.return_value = stored
+        _prompt_for_config_value("corpus.rerank_model", stored, flat)
+        instruction = mock_text.call_args.kwargs["instruction"]
+        assert "needs configuring" in instruction.lower()
+        assert "preserved" in instruction
+
     @patch("esdc.config_wizard.questionary.select")
-    def test_rerank_model_custom_falls_through_to_text(self, mock_select, mock_text):
-        mock_select.return_value.unsafe_ask.return_value = "__custom__"
-        mock_text.return_value.unsafe_ask.return_value = "my-custom-reranker"
-        result = _prompt_for_config_value(
-            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+    def test_rerank_backend_offers_only_a_service_choice(self, mock_select):
+        """A stored `local` is never offered as a working choice."""
+        mock_select.return_value.unsafe_ask.return_value = "provider"
+        result = _prompt_for_config_value("corpus.rerank_backend", "provider")
+        choices = mock_select.call_args.kwargs["choices"]
+        values = [c.value for c in choices]
+        assert values == ["provider"]
+        assert [str(c.title) for c in choices] == ["HTTP rerank service"]
+        assert result == "provider"
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_retired_rerank_backend_shows_only_the_retired_row(self, mock_select):
+        stored = "local"
+        mock_select.return_value.unsafe_ask.return_value = stored
+        result = _prompt_for_config_value("corpus.rerank_backend", stored)
+        choices = mock_select.call_args.kwargs["choices"]
+        titles = [str(c.title) for c in choices]
+        # The retired row is shown once, and no plain `local` row duplicates it.
+        assert titles.count("local (retired — choose a rerank service)") == 1
+        assert "local" not in titles
+        assert result == stored
+        assert mock_select.call_args.kwargs["default"] == titles[0]
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_retired_rerank_backend_choice_resolves_normally(self, mock_select):
+        mock_select.return_value.unsafe_ask.return_value = "provider"
+        result = _prompt_for_config_value("corpus.rerank_backend", "local")
+        assert result == "provider"
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_retired_embedding_backend_shows_only_service_rows(self, mock_select):
+        stored = "local"
+        mock_select.return_value.unsafe_ask.return_value = stored
+        result = _prompt_for_config_value("embedding_backend", stored)
+        choices = mock_select.call_args.kwargs["choices"]
+        titles = [str(c.title) for c in choices]
+        assert titles == [
+            "local (retired — choose an HTTP service)",
+            "Ollama HTTP service",
+            "OpenAI-compatible HTTP service",
+        ]
+        assert result == stored
+        assert mock_select.call_args.kwargs["default"] == titles[0]
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_retired_embedding_backend_choice_resolves_normally(self, mock_select):
+        mock_select.return_value.unsafe_ask.return_value = "openai"
+        result = _prompt_for_config_value("embedding_backend", "local")
+        assert result == "openai"
+
+    @patch("esdc.config_wizard.questionary.select")
+    def test_retired_field_prompts_write_nothing(self, mock_select):
+        """The prompt is a read: the field hint never changes the stored value.
+
+        Choosing the retired row returns the stored value as it is, so the wizard has
+        nothing to write; the draft it read is left untouched.
+        """
+        flat = {
+            "embedding_backend": "local",
+            "corpus.rerank_backend": "local",
+            "corpus.rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
+        }
+        mock_select.return_value.unsafe_ask.side_effect = ["local", "local"]
+        assert _prompt_for_config_value("embedding_backend", "local", flat) == "local"
+        assert (
+            _prompt_for_config_value("corpus.rerank_backend", "local", flat) == "local"
         )
-        assert result == "my-custom-reranker"
+        assert flat == {
+            "embedding_backend": "local",
+            "corpus.rerank_backend": "local",
+            "corpus.rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
+        }
 
     def test_coerce_rerank_pool_to_int(self):
         assert Config._coerce_value("corpus.rerank_pool", "30") == 30
@@ -1348,14 +1422,15 @@ class TestTaskPicker:
         "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
     )
     @patch("esdc.config_wizard.questionary.select")
-    def test_embedding_local_and_direct_rows(
+    def test_embedding_rows_are_service_rows(
         self, mock_select, mock_providers, mock_flat, mock_discover
     ):
-
+        """No in-process row: the Ollama service row and a direct endpoint row."""
         mock_select.return_value.unsafe_ask.side_effect = [None]
         _choose_provider_model("embedding", None)
         labels = _row_labels(mock_select)
-        assert f"Local / {MODEL_ID}" in labels
+        assert f"Ollama (local) / {OllamaEmbedder.OLLAMA_TAG}" in labels
+        assert not any("GGUF" in label or "in-process" in label for label in labels)
 
         # A saved direct endpoint with no reference shows its own row.
         flat = {
@@ -1378,22 +1453,20 @@ class TestTaskPicker:
             )
 
     @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
-    @patch(
-        "esdc.config_wizard.Config.get_all_config_flat",
-        return_value={"corpus.rerank_model": DEFAULT_RERANKER},
-    )
+    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
     @patch(
         "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
     )
     @patch("esdc.config_wizard.questionary.select")
-    def test_rerank_and_ocr_local_rows(
+    def test_rerank_has_no_local_rows_and_ocr_keeps_its_ollama_row(
         self, mock_select, mock_providers, mock_flat, mock_discover
     ):
-        from esdc.config_wizard import _choose_provider_model
-
+        # Rerank rows are saved provider pairs only; OCR keeps its Ollama service row.
         mock_select.return_value.unsafe_ask.side_effect = [None]
         _choose_provider_model("rerank", None)
-        assert f"Local / {DEFAULT_RERANKER}" in _row_labels(mock_select)
+        labels = _row_labels(mock_select)
+        assert not any(label.startswith("Local /") for label in labels)
+        assert "engine / m1" in labels
 
         flat = {"corpus.ocr_model": "vision-x", "corpus.ocr_provider": ""}
         with patch("esdc.config_wizard.Config.get_all_config_flat", return_value=flat):
@@ -1636,8 +1709,16 @@ class TestCurrentTaskSelection:
             "embedding_model": "embed-1",
         },
     )
-    def test_embedding_local_keeps_the_pinned_model(self, mock_flat, mock_providers):
-        assert _current_task_selection("embedding") == LocalSelection(MODEL_ID)
+    def test_embedding_local_is_reported_as_needing_configuration(
+        self, mock_flat, mock_providers
+    ):
+        """A retired stored backend is a status, and reading it writes nothing."""
+        selection = _current_task_selection("embedding")
+        assert isinstance(selection, NeedsConfigurationSelection)
+        assert selection.reason == _RETIRED_EMBEDDING_REASON
+        assert not _selectable(selection)
+        assert mock_flat.return_value["embedding_backend"] == "local"
+        assert mock_flat.return_value["embedding_model"] == "embed-1"
 
     @patch(
         "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
@@ -1695,8 +1776,15 @@ class TestCurrentTaskSelection:
             "corpus.rerank_model": "gguf-x",
         },
     )
-    def test_rerank_local(self, mock_flat, mock_providers):
-        assert _current_task_selection("rerank") == LocalSelection("gguf-x")
+    def test_rerank_local_is_reported_as_needing_configuration(
+        self, mock_flat, mock_providers
+    ):
+        selection = _current_task_selection("rerank")
+        assert selection == NeedsConfigurationSelection(_RETIRED_RERANK_REASON)
+        assert isinstance(selection, NeedsConfigurationSelection)
+        assert not _selectable(selection)
+        # The legacy GGUF id is not read as a model file and is not rewritten.
+        assert mock_flat.return_value["corpus.rerank_model"] == "gguf-x"
 
     @patch(
         "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
@@ -1822,19 +1910,49 @@ class TestSaveMappings:
         return_value=dict(_FAKE_PROVIDERS["gpu"]),
     )
     @patch("esdc.config_wizard.Config.set_config_values")
-    def test_embedding_ollama_pair_preserves_the_saved_model(
+    def test_embedding_ollama_pair_saves_the_selected_model(
         self, mock_values, mock_ref
     ):
+        """D7: the model the row shows is the model written."""
         _save_task_selection("embedding", PairSelection("gpu", "embed-1"))
         assert mock_values.call_args.args[0] == {
             "embedding_backend": "ollama",
             "embedding_provider": "gpu",
+            "embedding_model": "embed-1",
         }
 
     @patch("esdc.config_wizard.Config.set_config_values")
-    def test_embedding_local_preserves_the_service_fields(self, mock_values):
-        _save_task_selection("embedding", LocalSelection(MODEL_ID))
-        assert mock_values.call_args.args[0] == {"embedding_backend": "local"}
+    def test_embedding_needs_configuration_selection_is_never_saved(self, mock_values):
+        """A retired stored value is a status: it is refused and writes nothing."""
+        with pytest.raises(ValueError):
+            _save_task_selection(
+                "embedding",
+                NeedsConfigurationSelection(_RETIRED_EMBEDDING_REASON),
+            )
+        mock_values.assert_not_called()
+
+    @patch("esdc.config_wizard.Config.set_config_values")
+    def test_embedding_ollama_direct_saves_the_selected_model(self, mock_values):
+        _save_task_selection(
+            "embedding",
+            DirectSelection("ollama", "http://direct-box:1234", "embed-1"),
+        )
+        assert mock_values.call_args.args[0] == {
+            "embedding_backend": "ollama",
+            "embedding_provider": "",
+            "embedding_host": "http://direct-box:1234",
+            "embedding_model": "embed-1",
+        }
+
+    @patch("esdc.config_wizard.Config.set_config_values")
+    def test_embedding_needs_configuration_selection_is_not_a_saveable_row(
+        self, mock_values
+    ):
+        assert NeedsConfigurationSelection("retired") not in _SAVEABLE_SELECTIONS[
+            "embedding"
+        ]
+        assert LocalSelection("model") not in _SAVEABLE_SELECTIONS["embedding"]
+        assert LocalSelection("model") not in _SAVEABLE_SELECTIONS["rerank"]
 
     @patch("esdc.config_wizard.Config.set_config_values")
     def test_embedding_direct_endpoint_preserves_the_key(self, mock_values):
@@ -1927,9 +2045,7 @@ class TestSaveMappings:
         return_value=dict(_FAKE_PROVIDERS["engine"]),
     )
     @patch("esdc.config_wizard.Config.set_config_values")
-    def test_rerank_pair_and_local_exclude_the_enable_switch(
-        self, mock_values, mock_ref
-    ):
+    def test_rerank_pair_excludes_the_enable_switch(self, mock_values, mock_ref):
         _save_task_selection("rerank", PairSelection("engine", "rerank-model"))
         assert mock_values.call_args.args[0] == {
             "corpus.rerank_backend": "provider",
@@ -1937,12 +2053,27 @@ class TestSaveMappings:
             "corpus.rerank_model": "rerank-model",
         }
 
-        _save_task_selection("rerank", LocalSelection("rerank-model"))
+    @patch(
+        "esdc.config_wizard.Config.get_referenced_provider",
+        return_value=dict(_FAKE_PROVIDERS["engine"]),
+    )
+    @patch("esdc.config_wizard.Config.set_config_values")
+    def test_rerank_pair_preserves_a_legacy_gguf_value(self, mock_values, mock_ref):
+        """A stored GGUF id is saved as it was selected; nothing is rewritten."""
+        _save_task_selection("rerank", PairSelection("engine", "gguf-x"))
         assert mock_values.call_args.args[0] == {
-            "corpus.rerank_backend": "local",
-            "corpus.rerank_provider": "",
-            "corpus.rerank_model": "rerank-model",
+            "corpus.rerank_backend": "provider",
+            "corpus.rerank_provider": "engine",
+            "corpus.rerank_model": "gguf-x",
         }
+
+    @patch("esdc.config_wizard.Config.set_config_values")
+    def test_rerank_needs_configuration_selection_is_never_saved(self, mock_values):
+        with pytest.raises(ValueError):
+            _save_task_selection(
+                "rerank", NeedsConfigurationSelection(_RETIRED_RERANK_REASON)
+            )
+        mock_values.assert_not_called()
 
     def test_a_selection_from_another_task_is_rejected(self):
         with pytest.raises(ValueError):
@@ -1958,6 +2089,13 @@ class TestRerankEnabledIsSeparate:
 
     _FLAT = {
         "corpus.rerank": True,
+        "corpus.rerank_backend": "provider",
+        "corpus.rerank_provider": "engine",
+        "corpus.rerank_model": "rerank-model",
+    }
+
+    _RETIRED_FLAT = {
+        "corpus.rerank": False,
         "corpus.rerank_backend": "local",
         "corpus.rerank_provider": "",
         "corpus.rerank_model": "gguf-x",
@@ -2054,6 +2192,41 @@ class TestRerankEnabledIsSeparate:
 
         mock_single.assert_not_called()
         mock_values.assert_not_called()
+
+    @patch("esdc.config_wizard.rich_print")
+    @patch("esdc.config_wizard.Config.set_config_value")
+    @patch("esdc.config_wizard.Config.set_config_values")
+    @patch(
+        "esdc.config_wizard.Config.get_all_config_flat",
+        return_value=dict(_RETIRED_FLAT),
+    )
+    @patch(
+        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
+    )
+    @patch("esdc.config_wizard.questionary.confirm")
+    @patch("esdc.config_wizard.questionary.select")
+    def test_enable_refuses_a_retired_local_backend_and_writes_nothing(
+        self,
+        mock_select,
+        mock_confirm,
+        mock_providers,
+        mock_flat,
+        mock_values,
+        mock_single,
+        mock_print,
+    ):
+        """The stored `local` is reported, not switched; the switch is not written."""
+        mock_select.return_value.unsafe_ask.side_effect = ["enabled", "__back__"]
+        mock_confirm.return_value.unsafe_ask.return_value = True
+
+        _edit_task("rerank")
+
+        mock_single.assert_not_called()
+        mock_values.assert_not_called()
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        assert "Needs configuring (retired local rerank backend" in printed
+        assert "Choose a rerank provider and model first" in printed
+        assert mock_flat.return_value["corpus.rerank_model"] == "gguf-x"
 
     @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
     @patch("esdc.config_wizard.rich_print")
@@ -2217,10 +2390,31 @@ class TestTaskSummaryLine:
 
         os.environ["ESDC_EMBEDDING_MODEL"] = "env-model"
         try:
-            summary = _task_summary("embedding", LocalSelection(MODEL_ID))
+            summary = _task_summary(
+                "embedding", DirectSelection("ollama", "", OllamaEmbedder.OLLAMA_TAG)
+            )
             assert "environment override: ESDC_EMBEDDING_MODEL" in summary
         finally:
             del os.environ["ESDC_EMBEDDING_MODEL"]
+
+    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
+    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
+    @patch(
+        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
+    )
+    def test_summary_carries_the_retired_reason(
+        self, mock_providers, mock_flat, mock_discover
+    ):
+        """The label carries the reason: the summary needs no extra status word."""
+        from esdc.config_wizard import _task_summary
+
+        summary = _task_summary(
+            "embedding", NeedsConfigurationSelection(_RETIRED_EMBEDDING_REASON)
+        )
+        assert summary == (
+            "  Embeddings: Needs configuring (retired in-process embedding backend "
+            "— choose an HTTP service)"
+        )
 
 
 class TestProviderFlowKeepsDefaultsAndOrder:
@@ -2342,8 +2536,26 @@ class TestMenuKeyCoverage:
             **ADVANCED_SECTIONS,
         }
         keys = [key for keys in sections.values() for key in keys]
-        assert len(keys) == 45
-        assert len(set(keys)) == 45
+        # `corpus.n_gpu_layers` is no longer offered: a legacy value still parses and
+        # is preserved, but it is not part of the menu.
+        assert len(keys) == 44
+        assert len(set(keys)) == 44
+
+    def test_the_gpu_layers_key_is_not_offered_but_still_parses(self):
+        """Config keeps a stored value; only the menu no longer offers the key."""
+        sections = {
+            **TASK_SECTIONS,
+            **APPLICATION_SECTIONS,
+            **ADVANCED_SECTIONS,
+        }
+        for keys in sections.values():
+            assert "corpus.n_gpu_layers" not in keys
+
+        assert "corpus.n_gpu_layers" in Config.INT_KEYS
+        assert "n_gpu_layers" in Config.CORPUS_DEFAULTS
+        assert "corpus.n_gpu_layers" in KEY_DESCRIPTIONS
+        # Reading it is a pure parse: the stored value comes back unchanged.
+        assert Config._coerce_value("corpus.n_gpu_layers", "6") == 6
 
     def test_every_key_has_a_description(self):
         for keys in {
@@ -2532,10 +2744,10 @@ class TestTestActionNeverSaves:
     @patch("esdc.config_wizard.rich_print")
     @patch("esdc.config_wizard.Config.set_config_values")
     @patch("esdc.config_wizard.questionary.select")
-    def test_local_and_off_rows_report_nothing_to_test(
+    def test_retired_and_off_rows_report_nothing_to_test(
         self, mock_select, mock_values, mock_print
     ):
-        # Two action menus: one for the local row, one for the off row.
+        # Two action menus: one for the retired rerank status, one for the off row.
         mock_select.return_value.unsafe_ask.side_effect = [
             "test",
             "cancel",
@@ -2543,13 +2755,19 @@ class TestTestActionNeverSaves:
             "cancel",
         ]
 
-        # A local reranker is a model file, not an endpoint, so a test never loads it.
-        _run_task_action("rerank", LocalSelection("gguf-x"))
+        # A retired stored value has no implementation any more: nothing is loaded,
+        # no request is made, and the stored value is left as it is.
+        _run_task_action(
+            "rerank", NeedsConfigurationSelection(_RETIRED_RERANK_REASON)
+        )
         # An off row has no source to reach at all.
         _run_task_action("metadata", OffSelection())
 
         printed = " ".join(str(call) for call in mock_print.call_args_list)
-        assert "Local reranker; no remote endpoint to test." in printed
+        assert (
+            "Nothing to test: retired local rerank backend "
+            "— choose a rerank service." in printed
+        )
         assert "Nothing to test" in printed
         mock_values.assert_not_called()
 
@@ -2718,12 +2936,20 @@ class TestLinkedRowsNeedASavedModel:
 
 
 class TestPinnedEmbeddingModel:
-    """An Ollama embedding reference shows the pinned tag, never the inactive model."""
+    """An Ollama embedding reference shows the configured model (D7).
+
+    The legacy tag is only the fallback when nothing is configured.
+    """
 
     _FLAT = {
         "embedding_backend": "ollama",
         "embedding_provider": "gpu",
         "embedding_model": "inactive-model",
+    }
+    _EMPTY_FLAT = {
+        "embedding_backend": "ollama",
+        "embedding_provider": "gpu",
+        "embedding_model": "",
     }
     _PROVIDERS = {"gpu": _FAKE_PROVIDERS["gpu"]}
 
@@ -2735,7 +2961,25 @@ class TestPinnedEmbeddingModel:
     @patch("esdc.config_wizard.Config.get_all_config_flat", return_value=dict(_FLAT))
     @patch("esdc.config_wizard.Config.get_providers", return_value=dict(_PROVIDERS))
     @patch("esdc.config_wizard.questionary.select")
-    def test_saved_selection_is_the_pinned_tag(
+    def test_saved_selection_is_the_configured_model(
+        self, mock_select, mock_providers, mock_flat, mock_discover
+    ):
+        assert _current_task_selection("embedding") == PairSelection(
+            "gpu", "inactive-model"
+        )
+
+        mock_select.return_value.unsafe_ask.side_effect = [None]
+        _choose_provider_model("embedding", None)
+        labels = self._labels(mock_select)
+        assert "gpu / inactive-model" in labels
+
+    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
+    @patch(
+        "esdc.config_wizard.Config.get_all_config_flat", return_value=dict(_EMPTY_FLAT)
+    )
+    @patch("esdc.config_wizard.Config.get_providers", return_value=dict(_PROVIDERS))
+    @patch("esdc.config_wizard.questionary.select")
+    def test_empty_model_falls_back_to_the_legacy_tag(
         self, mock_select, mock_providers, mock_flat, mock_discover
     ):
         assert _current_task_selection("embedding") == PairSelection(
@@ -2744,18 +2988,16 @@ class TestPinnedEmbeddingModel:
 
         mock_select.return_value.unsafe_ask.side_effect = [None]
         _choose_provider_model("embedding", None)
-        labels = self._labels(mock_select)
-        assert f"gpu / {OllamaEmbedder.OLLAMA_TAG}" in labels
-        assert "gpu / inactive-model" not in labels
+        assert f"gpu / {OllamaEmbedder.OLLAMA_TAG}" in self._labels(mock_select)
 
     @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
     @patch("esdc.config_wizard.Config.get_all_config_flat", return_value=dict(_FLAT))
     @patch("esdc.config_wizard.Config.get_providers", return_value=dict(_PROVIDERS))
-    def test_summary_shows_the_pinned_tag(
+    def test_summary_shows_the_configured_model(
         self, mock_providers, mock_flat, mock_discover
     ):
         assert _task_summary("embedding", _current_task_selection("embedding")) == (
-            f"  Embeddings: gpu / {OllamaEmbedder.OLLAMA_TAG}"
+            "  Embeddings: gpu / inactive-model"
         )
 
     @patch(
@@ -2763,13 +3005,14 @@ class TestPinnedEmbeddingModel:
         return_value=dict(_FAKE_PROVIDERS["gpu"]),
     )
     @patch("esdc.config_wizard.Config.set_config_values")
-    def test_save_still_writes_backend_and_reference_only(self, mock_values, mock_ref):
+    def test_save_writes_backend_reference_and_model(self, mock_values, mock_ref):
         _save_task_selection(
             "embedding", PairSelection("gpu", OllamaEmbedder.OLLAMA_TAG)
         )
         assert mock_values.call_args.args[0] == {
             "embedding_backend": "ollama",
             "embedding_provider": "gpu",
+            "embedding_model": OllamaEmbedder.OLLAMA_TAG,
         }
 
 
@@ -3116,9 +3359,15 @@ class TestIncompleteSelectionsAreNotSaved:
         }
 
     @patch("esdc.config_wizard.Config.set_config_values")
-    def test_rerank_local_needs_a_model(self, mock_values):
-        with pytest.raises(ValueError):
-            _save_task_selection("rerank", LocalSelection("  "))
+    def test_rerank_needs_a_model_and_a_provider_reference(self, mock_values):
+        """A status selection is never saved, and an empty pair is refused."""
+        for selection in (
+            NeedsConfigurationSelection(_RETIRED_RERANK_REASON),
+            PairSelection("engine", "  "),
+            PairSelection("", "rerank-model"),
+        ):
+            with pytest.raises(ValueError):
+                _save_task_selection("rerank", selection)
         mock_values.assert_not_called()
 
     @patch(
@@ -4112,9 +4361,12 @@ class TestEmbeddingTestUsesTheEmbeddingEndpoint:
 
         _test_task_selection("embedding", PairSelection("gpu", "qwen3-embedding:0.6b"))
 
-        # The provider address is used, and the model tag stays pinned by the
-        # embedder instead of the provider's chat model.
-        assert mock_ollama.call_args.kwargs == {"host": "http://gpu-box:11434"}
+        # The provider address is used, and the model asked for is the pair's own
+        # model rather than the provider's chat model.
+        assert mock_ollama.call_args.kwargs == {
+            "host": "http://gpu-box:11434",
+            "model": "qwen3-embedding:0.6b",
+        }
         mock_ollama.return_value.generate_embedding.assert_called_once_with(
             "esdc embedding connection test"
         )
@@ -4139,8 +4391,12 @@ class TestEmbeddingTestUsesTheEmbeddingEndpoint:
         _test_task_selection("embedding", PairSelection("gpu", "qwen3-embedding:0.6b"))
 
         # A provider with no saved address still names one endpoint to test: the
-        # runtime embedding host, not the corpus Ollama host that OCR uses.
-        assert mock_ollama.call_args.kwargs == {"host": "http://embedding-box:11434"}
+        # runtime embedding host, not the corpus Ollama host that OCR uses. The model
+        # is the one the selection names.
+        assert mock_ollama.call_args.kwargs == {
+            "host": "http://embedding-box:11434",
+            "model": "qwen3-embedding:0.6b",
+        }
 
     @patch("esdc.config_wizard._test_provider")
     @patch("esdc.config_wizard.OpenAIEmbedder")
@@ -4211,37 +4467,59 @@ class TestEmbeddingTestUsesTheEmbeddingEndpoint:
         )
 
         # A direct row names its own address, so the corpus Ollama host does not
-        # replace it, and the embedding route is the one asked.
-        assert mock_ollama.call_args.kwargs == {"host": "http://ollama-box:11434"}
+        # replace it, and the embedding route is the one asked. The model asked for is
+        # the one runtime will use.
+        assert mock_ollama.call_args.kwargs == {
+            "host": "http://ollama-box:11434",
+            "model": OllamaEmbedder.OLLAMA_TAG,
+        }
         mock_ollama.return_value.generate_embedding.assert_called_once_with(
             "esdc embedding connection test"
         )
         mock_openai.assert_not_called()
         mock_test_provider.assert_not_called()
 
-    @patch("esdc.embedders._get_model")
     @patch("esdc.config_wizard._test_provider")
     @patch("esdc.config_wizard.OpenAIEmbedder")
     @patch("esdc.config_wizard.OllamaEmbedder")
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
+    @patch(
+        "esdc.config_wizard.Config.get_all_config_flat",
+        return_value={
+            "embedding_backend": "local",
+            "embedding_model": "embed-1",
+        },
+    )
+    @patch("esdc.config_wizard.Config.set_config_values")
     @patch("esdc.config_wizard.rich_print")
-    def test_local_embedding_test_does_not_load_a_model(
+    def test_retired_embedding_backend_test_loads_nothing_and_writes_nothing(
         self,
         mock_print,
+        mock_values,
         mock_flat,
         mock_ollama,
         mock_openai,
         mock_test_provider,
-        mock_get_model,
     ):
-        _test_task_selection("embedding", LocalSelection(MODEL_ID))
+        """A retired stored backend is a status, so there is nothing to reach.
+
+        The test reports it and stops: no embedder is built, no request is made,
+        nothing is written, and the stored value is left as it is.
+        """
+        _test_task_selection(
+            "embedding", NeedsConfigurationSelection(_RETIRED_EMBEDDING_REASON)
+        )
 
         printed = " ".join(str(call) for call in mock_print.call_args_list)
-        assert "Local embedding model; no remote endpoint to test." in printed
-        mock_get_model.assert_not_called()
+        assert (
+            "Nothing to test: retired in-process embedding backend "
+            "— choose an HTTP service." in printed
+        )
         mock_ollama.assert_not_called()
         mock_openai.assert_not_called()
         mock_test_provider.assert_not_called()
+        mock_values.assert_not_called()
+        assert mock_flat.return_value["embedding_backend"] == "local"
+        assert mock_flat.return_value["embedding_model"] == "embed-1"
 
 
 _DIRECT_FLAT = {
@@ -4506,36 +4784,32 @@ class TestDirectEmbeddingEditor:
     )
     @patch("esdc.config_wizard.rich_print")
     @patch("esdc.config_wizard.questionary.select")
-    def test_direct_ollama_row_is_distinct_from_the_local_row(
+    def test_the_embedding_local_row_is_the_ollama_service_row(
         self, mock_select, mock_print, mock_providers, mock_flat, mock_discover
     ):
         mock_select.return_value.unsafe_ask.side_effect = [None]
         _choose_provider_model("embedding", None)
 
-        local_row = f"Local / {MODEL_ID}"
-        ollama_row = f"Ollama (local) / {OllamaEmbedder.OLLAMA_TAG}"
-        assert local_row != ollama_row
         labels = _row_labels(mock_select)
-        assert local_row in labels
-        assert ollama_row in labels
+        # No in-process row is offered any more: the Ollama service row names the
+        # configured model, and a retired stored backend is a status, not a row.
+        assert "Ollama (local) / embed-1" in labels
+        assert not any(label.startswith("Local /") for label in labels)
+        assert not any("GGUF" in label or "in-process" in label for label in labels)
 
-        # The two rows carry different selections: the Ollama backend is a direct
-        # endpoint, not the local GGUF model.
+        # The row carries the direct endpoint selection, not a local model selection.
         values = self._values(mock_select, 0)
-        assert LocalSelection(MODEL_ID) in values
+        assert not any(isinstance(value, LocalSelection) for value in values)
         assert (
-            DirectSelection(
-                "ollama", "http://ollama-box:11434", OllamaEmbedder.OLLAMA_TAG
-            )
-            in values
+            DirectSelection("ollama", "http://ollama-box:11434", "embed-1") in values
         )
 
         assert _current_task_selection("embedding") == DirectSelection(
-            "ollama", "http://ollama-box:11434", OllamaEmbedder.OLLAMA_TAG
+            "ollama", "http://ollama-box:11434", "embed-1"
         )
 
     @patch("esdc.config_wizard.Config.set_config_values")
-    def test_direct_ollama_save_writes_backend_and_host_and_preserves_the_rest(
+    def test_direct_ollama_save_writes_backend_host_and_the_selected_model(
         self, mock_values
     ):
         _save_task_selection(
@@ -4543,17 +4817,18 @@ class TestDirectEmbeddingEditor:
             DirectSelection(
                 "ollama",
                 "http://ollama-box:11434",
-                OllamaEmbedder.OLLAMA_TAG,
+                "embed-1",
                 api_key="sk-new",
             ),
         )
 
-        # The Ollama model tag is pinned by the embedder and the saved key is left
-        # alone, so only the backend, the cleared reference, and the host are written.
+        # The model the row shows is the model written, and an Ollama endpoint carries
+        # no key, so the saved `embedding_api_key` is left alone.
         assert mock_values.call_args.args[0] == {
             "embedding_backend": "ollama",
             "embedding_provider": "",
             "embedding_host": "http://ollama-box:11434",
+            "embedding_model": "embed-1",
         }
 
 
@@ -4572,20 +4847,26 @@ _RERANK_LOCAL_FLAT = {
 }
 
 
-class TestRerankLocalRows:
-    """The Local rerank row is a local GGUF, never a remote gateway alias.
+class TestRerankRowsAreProviderPairs:
+    """Every rerank row is a saved provider pair; a retired stored value is a status.
 
-    `corpus.rerank_model` holds the model of whichever source is saved, so a row is
-    read as local only while the saved backend is local. The registry default is always
-    offered, a saved local model keeps its own row, and a GGUF outside the registry is
-    typed through the Local custom row at the same list level.
+    `corpus.rerank_backend` = `local` has no implementation any more, so it is reported
+    as needing configuring and stays stored: showing it writes nothing and does not
+    switch it. A legacy GGUF id saved on a provider pair keeps its row, stays
+    selectable, and is saved exactly as it was stored or typed.
     """
+
+    _LEGACY_MODEL = "my-org/my-model:file.gguf"
 
     @staticmethod
     def _values(mock_select, index: int = -1) -> list:
         choices = mock_select.call_args_list[index].kwargs["choices"]
         return [choice.value for choice in choices]
 
+    @patch(
+        "esdc.config_wizard.Config.get_referenced_provider",
+        return_value=dict(_FAKE_PROVIDERS["engine"]),
+    )
     @patch("esdc.config_wizard.discover_models", return_value=_catalog("remote-alias"))
     @patch(
         "esdc.config_wizard.Config.get_all_config_flat",
@@ -4597,7 +4878,7 @@ class TestRerankLocalRows:
     @patch("esdc.config_wizard.Config.set_config_values")
     @patch("esdc.config_wizard.rich_print")
     @patch("esdc.config_wizard.questionary.select")
-    def test_provider_source_does_not_offer_its_alias_as_a_local_row(
+    def test_only_provider_pair_rows_are_offered(
         self,
         mock_select,
         mock_print,
@@ -4605,96 +4886,144 @@ class TestRerankLocalRows:
         mock_providers,
         mock_flat,
         mock_discover,
+        mock_ref,
     ):
         mock_select.return_value.unsafe_ask.side_effect = [None]
         _choose_provider_model("rerank", None)
 
         labels = _row_labels(mock_select)
-        assert f"Local / {DEFAULT_RERANKER}" in labels
-        # The remote alias is a provider model id, not a GGUF name the loader can read.
-        assert "Local / remote-alias" not in labels
-        # The provider source keeps its own pair row.
+        # The stored model keeps its pair row; there is no in-process row to offer and
+        # no typed-GGUF row, because a GGUF file is not a service model id.
         assert "engine / remote-alias" in labels
+        assert not any(label.startswith("Local /") for label in labels)
+        assert "Local custom model…" not in labels
+        assert not any("GGUF" in label or "in-process" in label for label in labels)
 
-        # Choosing the local default row saves the default, not the alias.
         mock_select.return_value.unsafe_ask.side_effect = [
-            LocalSelection(DEFAULT_RERANKER)
+            PairSelection("engine", "remote-alias")
         ]
         selection = _choose_provider_model("rerank", None)
+        assert selection == PairSelection("engine", "remote-alias")
         assert selection is not None
-        assert selection == LocalSelection(DEFAULT_RERANKER)
 
-        _save_task_selection("rerank", selection)
-        assert mock_values.call_args.args[0] == {
-            "corpus.rerank_backend": "local",
-            "corpus.rerank_provider": "",
-            "corpus.rerank_model": DEFAULT_RERANKER,
-        }
-
-    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
-    @patch(
-        "esdc.config_wizard.Config.get_all_config_flat",
-        return_value=dict(_RERANK_LOCAL_FLAT),
-    )
-    @patch(
-        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
-    )
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_saved_local_model_and_the_default_are_both_rows(
-        self, mock_select, mock_print, mock_providers, mock_flat, mock_discover
-    ):
-        mock_select.return_value.unsafe_ask.side_effect = [None]
-        _choose_provider_model("rerank", None)
-
-        labels = _row_labels(mock_select)
-        assert f"Local / {DEFAULT_RERANKER}" in labels
-        assert "Local / my-org/my-model:file.gguf" in labels
-        assert labels.count(f"Local / {DEFAULT_RERANKER}") == 1
-        assert "Local custom model…" in labels
-        # The custom entry is a row of the same searchable list, not a submenu.
-        assert _LOCAL_CUSTOM_VALUE in self._values(mock_select, 0)
-
-        assert _current_task_selection("rerank") == LocalSelection(
-            "my-org/my-model:file.gguf"
-        )
-
-    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
-    @patch(
-        "esdc.config_wizard.Config.get_all_config_flat",
-        return_value=dict(_RERANK_LOCAL_FLAT),
-    )
-    @patch(
-        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
-    )
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch("esdc.config_wizard.questionary.text")
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_local_custom_row_resolves_a_gguf_id_and_save_writes_it(
-        self,
-        mock_select,
-        mock_print,
-        mock_text,
-        mock_values,
-        mock_providers,
-        mock_flat,
-        mock_discover,
-    ):
-        mock_select.return_value.unsafe_ask.side_effect = [_LOCAL_CUSTOM_VALUE]
-        mock_text.return_value.unsafe_ask.return_value = "my-org/my-model:file.gguf"
-
-        selection = _choose_provider_model("rerank", None)
-        assert selection is not None
-        assert selection == LocalSelection("my-org/my-model:file.gguf")
-
-        # The row writes nothing by itself; Save is the task action menu.
+        # The row writes nothing by itself; Save is the task action menu, and it writes
+        # the model exactly as stored.
         mock_values.assert_not_called()
         _save_task_selection("rerank", selection)
         assert mock_values.call_args.args[0] == {
-            "corpus.rerank_backend": "local",
-            "corpus.rerank_provider": "",
-            "corpus.rerank_model": "my-org/my-model:file.gguf",
+            "corpus.rerank_backend": "provider",
+            "corpus.rerank_provider": "engine",
+            "corpus.rerank_model": "remote-alias",
+        }
+
+    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
+    @patch(
+        "esdc.config_wizard.Config.get_all_config_flat",
+        return_value=dict(_RERANK_LOCAL_FLAT),
+    )
+    @patch(
+        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
+    )
+    @patch("esdc.config_wizard.Config.set_config_values")
+    @patch("esdc.config_wizard.rich_print")
+    @patch("esdc.config_wizard.questionary.select")
+    def test_retired_local_backend_is_a_status_and_never_a_row(
+        self,
+        mock_select,
+        mock_print,
+        mock_values,
+        mock_providers,
+        mock_flat,
+        mock_discover,
+    ):
+        mock_select.return_value.unsafe_ask.side_effect = [None]
+        _choose_provider_model("rerank", None)
+
+        labels = _row_labels(mock_select)
+        # A retired stored backend is reported by the summary, not offered as a row, so
+        # the stored GGUF id is not shown as a choice and never read as a model file.
+        assert not any(label.startswith("Local /") for label in labels)
+        assert not any("Local custom model…" in label for label in labels)
+        assert not any("needs configuring" in label for label in labels)
+        assert not any(
+            isinstance(value, NeedsConfigurationSelection)
+            for value in self._values(mock_select, 0)
+        )
+
+        current = _current_task_selection("rerank")
+        assert current == NeedsConfigurationSelection(_RETIRED_RERANK_REASON)
+        assert isinstance(current, NeedsConfigurationSelection)
+        assert not _selectable(current)
+        assert _selection_label("rerank", current) == (
+            "Needs configuring (retired local rerank backend — choose a rerank service)"
+        )
+
+        # Reading the state writes nothing and the stored value is preserved.
+        mock_values.assert_not_called()
+        assert mock_flat.return_value["corpus.rerank_model"] == self._LEGACY_MODEL
+        assert mock_flat.return_value["corpus.rerank_provider"] == ""
+
+    @patch(
+        "esdc.config_wizard.Config.get_referenced_provider",
+        return_value=dict(_FAKE_PROVIDERS["engine"]),
+    )
+    @patch("esdc.config_wizard.discover_models", return_value=_catalog(_LEGACY_MODEL))
+    @patch(
+        "esdc.config_wizard.Config.get_all_config_flat",
+        return_value={
+            "corpus.rerank": True,
+            "corpus.rerank_backend": "provider",
+            "corpus.rerank_provider": "engine",
+            "corpus.rerank_model": _LEGACY_MODEL,
+        },
+    )
+    @patch(
+        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
+    )
+    @patch("esdc.config_wizard.Config.set_config_values")
+    @patch("esdc.config_wizard.questionary.text")
+    @patch("esdc.config_wizard.rich_print")
+    @patch("esdc.config_wizard.questionary.select")
+    def test_a_legacy_gguf_pair_row_stays_selectable_and_is_saved_unchanged(
+        self,
+        mock_select,
+        mock_print,
+        mock_text,
+        mock_values,
+        mock_providers,
+        mock_flat,
+        mock_discover,
+        mock_ref,
+    ):
+        mock_select.return_value.unsafe_ask.side_effect = [None]
+        _choose_provider_model("rerank", None)
+
+        # The label says the value needs configuring, but the row is still a pair row
+        # and the stored value is not rewritten to make it one.
+        labels = _row_labels(mock_select)
+        assert f"engine / {self._LEGACY_MODEL} (needs configuring)" in labels
+        assert not any(label.startswith("Local /") for label in labels)
+
+        saved = _current_task_selection("rerank")
+        assert saved == PairSelection("engine", self._LEGACY_MODEL)
+        assert isinstance(saved, PairSelection)
+        assert _selectable(saved)
+        assert isinstance(saved, PairSelection)
+        assert saved in self._values(mock_select, 0)
+
+        # Typing the same id through the custom pair flow returns it unchanged.
+        mock_select.return_value.unsafe_ask.side_effect = ["engine"]
+        mock_text.return_value.unsafe_ask.return_value = self._LEGACY_MODEL
+        selection = _custom_pair_flow("rerank", None)
+        assert selection == PairSelection("engine", self._LEGACY_MODEL)
+        assert isinstance(selection, PairSelection)
+
+        mock_values.assert_not_called()
+        _save_task_selection("rerank", selection)
+        assert mock_values.call_args.args[0] == {
+            "corpus.rerank_backend": "provider",
+            "corpus.rerank_provider": "engine",
+            "corpus.rerank_model": self._LEGACY_MODEL,
         }
 
     @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
@@ -4709,7 +5038,7 @@ class TestRerankLocalRows:
     @patch("esdc.config_wizard.questionary.text")
     @patch("esdc.config_wizard.rich_print")
     @patch("esdc.config_wizard.questionary.select")
-    def test_empty_local_custom_input_is_refused_and_returns_to_the_picker(
+    def test_an_empty_custom_model_is_refused_and_writes_nothing(
         self,
         mock_select,
         mock_print,
@@ -4719,43 +5048,137 @@ class TestRerankLocalRows:
         mock_flat,
         mock_discover,
     ):
-        # A blank value is refused, the picker reopens, and Escape there leaves.
-        mock_text.return_value.unsafe_ask.side_effect = ["   ", "   "]
-        mock_select.return_value.unsafe_ask.side_effect = [
-            _LOCAL_CUSTOM_VALUE,
-            _LOCAL_CUSTOM_VALUE,
-            None,
-        ]
+        # A blank model is refused and returns to the picker, where Escape leaves.
+        mock_text.return_value.unsafe_ask.side_effect = ["   "]
+        mock_select.return_value.unsafe_ask.side_effect = ["engine", None]
 
-        assert _choose_provider_model("rerank", None) is None
+        assert _custom_pair_flow("rerank", None) is None
         printed = " ".join(str(call) for call in mock_print.call_args_list)
-        assert printed.count("needs a GGUF id") == 2
+        assert "needs a model id" in printed
         mock_values.assert_not_called()
 
         # Escape at the prompt is a cancel, not an empty model.
         mock_text.return_value.unsafe_ask.side_effect = [None]
-        assert _local_custom_rerank_flow() is None
+        assert _custom_pair_flow("rerank", None) is None
         mock_values.assert_not_called()
 
+    @patch(
+        "esdc.config_wizard.Config.get_referenced_provider",
+        return_value=dict(_FAKE_PROVIDERS["engine"]),
+    )
     @patch("esdc.config_wizard.Config.set_config_values")
-    def test_local_save_keeps_the_enable_switch(self, mock_values):
-        _save_task_selection("rerank", LocalSelection("my-org/my-model:file.gguf"))
+    def test_pair_save_keeps_the_enable_switch(self, mock_values, mock_ref):
+        _save_task_selection("rerank", PairSelection("engine", self._LEGACY_MODEL))
 
         written = mock_values.call_args.args[0]
         # The Enabled switch is its own field and is never part of a source save.
         assert "corpus.rerank" not in written
         assert written == {
-            "corpus.rerank_backend": "local",
-            "corpus.rerank_provider": "",
-            "corpus.rerank_model": "my-org/my-model:file.gguf",
+            "corpus.rerank_backend": "provider",
+            "corpus.rerank_provider": "engine",
+            "corpus.rerank_model": self._LEGACY_MODEL,
         }
 
-    def test_the_sentinel_row_is_never_saved(self):
-        # A sentinel row is an input action, so it is never a selection Save accepts.
-        row_value: Any = _LOCAL_CUSTOM_VALUE
+    @patch("esdc.config_wizard.Config.set_config_values")
+    def test_the_retired_status_is_never_saved(self, mock_values):
+        # A status is not a selection Save accepts: it carries no reference or model.
         with pytest.raises(ValueError):
-            _save_task_selection("rerank", row_value)
+            _save_task_selection(
+                "rerank", NeedsConfigurationSelection(_RETIRED_RERANK_REASON)
+            )
+        mock_values.assert_not_called()
+_NO_IN_PROCESS_FLAT = {
+    "embedding_backend": "ollama",
+    "embedding_provider": "gpu",
+    "embedding_model": "embed-1",
+    "corpus.rerank_backend": "provider",
+    "corpus.rerank_provider": "engine",
+    "corpus.rerank_model": "rerank-model",
+}
 
+
+class TestNoInProcessChoiceIsOffered:
+    """Nothing the wizard offers for embedding or rerank is an in-process GGUF.
+
+    Both the picker rows and the raw field prompts are checked: a retired stored value
+    has its own row that reports it, and every offered choice is an HTTP service.
+    """
+
+    @staticmethod
+    def _rows(mock_select, index: int) -> tuple[list[str], list[Any]]:
+        choices = mock_select.call_args_list[index].kwargs["choices"]
+        return (
+            [str(choice.title) for choice in choices],
+            [choice.value for choice in choices],
+        )
+
+    @patch("esdc.config_wizard.discover_models", return_value=_catalog("embed-1"))
+    @patch(
+        "esdc.config_wizard.Config.get_all_config_flat",
+        return_value=dict(_NO_IN_PROCESS_FLAT),
+    )
+    @patch(
+        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
+    )
+    @patch("esdc.config_wizard.questionary.select")
+    def test_no_in_process_choice_is_offered(
+        self, mock_select, mock_providers, mock_flat, mock_discover
+    ):
+        # The picker rows for both tasks.
+        mock_select.return_value.unsafe_ask.side_effect = [None, None]
+        _choose_provider_model("embedding", None)
+        embedding_labels, embedding_values = self._rows(mock_select, 0)
+        _choose_provider_model("rerank", None)
+        rerank_labels, rerank_values = self._rows(mock_select, 1)
+
+        # The backend prompts, the other place an inference choice is offered.
+        mock_select.return_value.unsafe_ask.side_effect = ["ollama", "provider"]
+        flat = dict(_NO_IN_PROCESS_FLAT)
+        _prompt_for_config_value("embedding_backend", "ollama", flat)
+        embedding_prompt_labels = self._rows(mock_select, 2)[0]
+        _prompt_for_config_value("corpus.rerank_backend", "provider", flat)
+        rerank_prompt_labels = self._rows(mock_select, 3)[0]
+
+        labels = (
+            embedding_labels
+            + rerank_labels
+            + embedding_prompt_labels
+            + rerank_prompt_labels
+        )
+
+        assert not [
+            label for label in labels if "GGUF" in label or "in-process" in label
+        ]
+        assert any("HTTP service" in label for label in labels)
+        assert any("HTTP rerank service" in label for label in labels)
+
+        # A retired stored value is not offered as a working choice, and a status is
+        # never a row: the picker has no row that reports it.
+        assert "local" not in labels
+        assert not any(
+            isinstance(value, NeedsConfigurationSelection)
+            for value in embedding_values + rerank_values
+        )
+
+    def test_legacy_gguf_value_is_shown_as_needing_configuration(self):
+        """The hint is a read: it reports the stored value and leaves it alone."""
+        stored = "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+        flat = {"corpus.rerank_model": stored}
+        hint = field_hint("corpus.rerank_model", flat)
+        assert hint is not None
+        assert "needs configuring" in hint.lower()
+        assert "preserved" in hint
+        assert flat["corpus.rerank_model"] == stored
+
+        # The same holds for the two retired backends.
+        for key in ("embedding_backend", "corpus.rerank_backend"):
+            values = {key: "local"}
+            hint = field_hint(key, values)
+            assert hint is not None
+            assert "needs configuring" in hint.lower()
+            assert values[key] == "local"
+        service = {"corpus.rerank_model": "rerank-model"}
+        assert field_hint("corpus.rerank_model", service) is None
 
 class TestRerankTestUsesTheRerankEndpoint:
     """A chat greeting is not a connection test for a rerank source."""
@@ -4910,29 +5333,29 @@ class TestRerankTestUsesTheRerankEndpoint:
         mock_test_provider.assert_not_called()
         mock_values.assert_not_called()
 
-    @patch("esdc.corpus.llama_backend.load_llama")
-    @patch("esdc.corpus.reranker.Reranker")
     @patch("esdc.config_wizard._test_provider")
     @patch("esdc.config_wizard.ProviderReranker")
     @patch("esdc.config_wizard.Config.set_config_values")
     @patch("esdc.config_wizard.rich_print")
-    def test_local_rerank_test_does_not_load_a_gguf(
+    def test_retired_rerank_status_test_loads_nothing_and_writes_nothing(
         self,
         mock_print,
         mock_values,
         mock_reranker,
         mock_test_provider,
-        mock_gguf_cls,
-        mock_load_llama,
     ):
-        _test_task_selection("rerank", LocalSelection("gguf-x"))
+        """A status has no endpoint: the test reports it and stops."""
+        _test_task_selection(
+            "rerank", NeedsConfigurationSelection(_RETIRED_RERANK_REASON)
+        )
 
         printed = " ".join(str(call) for call in mock_print.call_args_list)
-        assert "Local reranker; no remote endpoint to test." in printed
-        # A local reranker is a file: a test must not load it, build a client,
-        # make a chat request, or write anything.
-        mock_gguf_cls.get.assert_not_called()
-        mock_load_llama.assert_not_called()
+        assert (
+            "Nothing to test: retired local rerank backend "
+            "— choose a rerank service." in printed
+        )
+        # No client is built, no chat request is made, nothing is written, and the
+        # stored value is left as it is.
         mock_reranker.assert_not_called()
         mock_test_provider.assert_not_called()
         mock_values.assert_not_called()
@@ -5741,7 +6164,10 @@ class TestEmbeddingTestFollowsRuntimeHostPrecedence:
         _test_task_selection("embedding", self._PAIR)
 
         # The saved embedding host, not the corpus Ollama host.
-        assert mock_ollama.call_args.kwargs == {"host": "http://embed-host:11434"}
+        assert mock_ollama.call_args.kwargs == {
+            "host": "http://embed-host:11434",
+            "model": "qwen3-embedding:0.6b",
+        }
         mock_openai.assert_not_called()
         mock_test_provider.assert_not_called()
 
@@ -5789,7 +6215,10 @@ class TestEmbeddingTestFollowsRuntimeHostPrecedence:
 
         # Precedence: environment host, then this provider's address, then the
         # saved embedding host.
-        assert mock_ollama.call_args.kwargs == {"host": "http://gpu-box:11434"}
+        assert mock_ollama.call_args.kwargs == {
+            "host": "http://gpu-box:11434",
+            "model": "qwen3-embedding:0.6b",
+        }
 
     @patch("esdc.config_wizard._test_provider")
     @patch("esdc.config_wizard.OpenAIEmbedder")
@@ -5815,7 +6244,11 @@ class TestEmbeddingTestFollowsRuntimeHostPrecedence:
 
         _test_task_selection("embedding", self._PAIR)
 
-        assert mock_ollama.call_args.kwargs == {"host": "http://env-host:11434"}
+        # The host is the environment override; the model is the one runtime will use.
+        assert mock_ollama.call_args.kwargs == {
+            "host": "http://env-host:11434",
+            "model": "qwen3-embedding:0.6b",
+        }
 
     @patch("esdc.config_wizard._test_provider")
     @patch("esdc.config_wizard.OpenAIEmbedder")
@@ -5865,7 +6298,10 @@ class TestEmbeddingTestFollowsRuntimeHostPrecedence:
 
         # A direct row names its own endpoint: neither embedding_host nor a provider
         # stands behind it, and the test still runs.
-        assert mock_ollama.call_args.kwargs == {"host": "http://direct-box:1234"}
+        assert mock_ollama.call_args.kwargs == {
+            "host": "http://direct-box:1234",
+            "model": OllamaEmbedder.OLLAMA_TAG,
+        }
         assert "Failed:" not in self._printed(mock_print)
         mock_openai.assert_not_called()
         mock_test_provider.assert_not_called()
@@ -5893,8 +6329,11 @@ class TestEmbeddingTestFollowsRuntimeHostPrecedence:
 
         # Nothing to fall back to here: the embedder keeps its own local default, so
         # neither embedding_host nor corpus.ollama_host is borrowed, and the row is not
-        # reported as missing an address.
-        assert mock_ollama.call_args.kwargs == {"host": None}
+        # reported as missing an address. The model asked for is the row's own.
+        assert mock_ollama.call_args.kwargs == {
+            "host": None,
+            "model": OllamaEmbedder.OLLAMA_TAG,
+        }
         mock_ollama.return_value.generate_embedding.assert_called_once_with(
             "esdc embedding connection test"
         )
@@ -5946,4 +6385,8 @@ class TestEmbeddingTestFollowsRuntimeHostPrecedence:
 
         _test_task_selection("embedding", self._DIRECT)
 
-        assert mock_ollama.call_args.kwargs == {"host": "http://env-host:11434"}
+        # The environment host wins, and the model is the one the row names.
+        assert mock_ollama.call_args.kwargs == {
+            "host": "http://env-host:11434",
+            "model": OllamaEmbedder.OLLAMA_TAG,
+        }

@@ -233,7 +233,6 @@ ADVANCED_SECTIONS: dict[str, list[str]] = {
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
         "corpus.ollama_host",
-        "corpus.n_gpu_layers",
     ],
     "Logging": [
         "logging.file.path",

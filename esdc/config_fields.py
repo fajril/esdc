@@ -6,7 +6,8 @@ is validated before anything is written.
 
 Nothing in this module saves config. Validation is a pure function of the key,
 the input, and the flat merged config (the draft) used for fields that depend
-on each other. A message never contains a secret value.
+on each other. A message never contains a secret value. `field_hint` is likewise
+pure: it reports a stored value that needs configuring without changing it.
 """
 
 from __future__ import annotations
@@ -30,6 +31,47 @@ OPTIONAL_HOST_KEYS = frozenset({"embedding_host", "corpus.ollama_host"})
 def is_secret_key(key: str) -> bool:
     """True when a key holds a secret that must not be displayed in full."""
     return any(key.endswith(suffix) for suffix in SECRET_SUFFIXES)
+
+
+def looks_like_gguf_id(value: Any) -> bool:
+    """True when a stored value has the shape of a GGUF model file id.
+
+    This is a shape check only. A value of this form is a legacy stored value:
+    nothing here reads it as a model file or rewrites it.
+    """
+    text = str(value or "").strip()
+    return "gguf" in text.casefold() or text.casefold().startswith("ggml-org/")
+
+
+def field_hint(key: str, values: Mapping[str, Any]) -> str | None:
+    """A short read-only hint for a stored value that needs configuring.
+
+    Pure: nothing is written and `values` is not modified. A retired or legacy
+    stored value keeps its value until the user chooses a service, so the hint
+    only reports the state; it never switches or rewrites it.
+    """
+    stored = str(values.get(key) or "").strip()
+
+    if key == "embedding_backend" and stored == "local":
+        return (
+            "The stored in-process embedding backend is retired; needs configuring "
+            "with an HTTP embedding service. The saved value is preserved until you "
+            "choose one."
+        )
+
+    if key == "corpus.rerank_backend" and stored == "local":
+        return (
+            "The stored local rerank backend is retired; needs configuring with a "
+            "rerank service. The saved value is preserved until you choose one."
+        )
+
+    if key == "corpus.rerank_model" and looks_like_gguf_id(stored):
+        return (
+            "The stored rerank model is a legacy GGUF id; needs configuring with a "
+            "service model id. It is preserved until you change it."
+        )
+
+    return None
 
 
 def format_config_value(key: str, value: Any) -> str:
