@@ -369,8 +369,10 @@ class TestOptionalRoleReferences:
         for key in ROLE_REFERENCE_KEYS:
             assert flat[key] == "", key
 
-    def test_rerank_backend_defaults_to_local(self):
-        assert Config._flatten(Config.get_defaults())["corpus.rerank_backend"] == "local"
+    def test_rerank_backend_defaults_to_provider(self):
+        assert (
+            Config._flatten(Config.get_defaults())["corpus.rerank_backend"] == "provider"
+        )
 
     def test_role_reference_keys_have_descriptions(self):
         for key in (*ROLE_REFERENCE_KEYS, "corpus.rerank_backend"):

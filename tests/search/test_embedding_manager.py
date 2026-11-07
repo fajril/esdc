@@ -136,7 +136,7 @@ def test_timeout_is_passed_to_the_client():
         client_cls.assert_called_with(host="http://remote:11434", timeout=20.0)
 
 
-def test_failure_logs_the_status_not_the_response_body(caplog):
+def test_failure_logs_and_raises_without_the_response_body(caplog):
     """The ollama SDK's error text is the server body, which can echo a credential."""
 
     class StatusError(Exception):
@@ -153,11 +153,16 @@ def test_failure_logs_the_status_not_the_response_body(caplog):
         client_cls.return_value = client
 
         manager = EmbeddingManager(model="test")
-        with pytest.raises(StatusError):
+        with pytest.raises(Exception) as exc:
             manager.generate_embedding("x")
 
+    # The re-raised error is body-free too: a caller printing a traceback must
+    # not be shown the server body or the credential.
     assert "401" in caplog.text
+    assert "401" in str(exc.value)
     assert "sk-secret" not in caplog.text
+    assert "sk-secret" not in str(exc.value)
+    assert exc.value.__cause__ is None
 
 
 def test_embedding_manager_explicit_host_overrides_config():

@@ -12,7 +12,7 @@ from typing import Any
 import ollama
 
 from esdc.configs import Config
-from esdc.embedders import error_text
+from esdc.embedders import _raise_service_error, error_text
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ class EmbeddingManager:
 
         if host is None:
             host = Config.get_embedding_host()
+        self._host = host or "local Ollama service"
         self.model: str = resolved_model
         client_kwargs: dict[str, Any] = {}
         if timeout is not None:
@@ -101,9 +102,9 @@ class EmbeddingManager:
 
         except Exception as e:
             # The ollama SDK's ResponseError text is the server's body, which
-            # can echo the credential: log the status, not the body.
+            # can echo the credential: log and re-raise the status, not the body.
             logger.error("[Embedding] failed | error=%s", error_text(e))
-            raise
+            _raise_service_error("ollama", self._host, e)
 
     def generate_embeddings_batch(
         self,
@@ -133,7 +134,7 @@ class EmbeddingManager:
             return results
         except Exception as e:
             logger.error("[Embedding] batch failed | error=%s", error_text(e))
-            raise
+            _raise_service_error("ollama", self._host, e)
 
     def health_check(self) -> bool:
         """Check if Ollama is available and model is loaded."""

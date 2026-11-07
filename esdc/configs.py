@@ -130,14 +130,15 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "corpus.chunk_size": "Max characters per corpus chunk",
     "corpus.chunk_overlap": "Characters carried over between corpus chunks",
     "corpus.rerank": (
-        "Enable local cross-encoder rerank stage over RRF search results "
-        "(off by default; first use downloads the model, ~1 GB)"
+        "Enable the cross-encoder rerank stage over RRF search results "
+        "(off by default; scores come from the configured rerank service)"
     ),
     "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
     "corpus.rerank_backend": (
-        "Where the rerank stage runs ('local' [default] = in-process llama.cpp "
-        "with the GGUF below, 'provider' = an OpenAI-compatible /v1/rerank "
-        "server reached through corpus.rerank_provider)"
+        "Where the rerank stage runs ('provider' [default] = an "
+        "OpenAI-compatible /v1/rerank server reached through "
+        "corpus.rerank_provider; a stored 'local' value is retired and falls "
+        "back to RRF order)"
     ),
     "corpus.rerank_provider": (
         "Saved OpenAI-compatible connection used when corpus.rerank_backend "
@@ -154,8 +155,8 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "stay raw, so toggling this never needs a re-embed)"
     ),
     "corpus.rerank_model": (
-        "Reranker GGUF id run in-process via llama.cpp "
-        "(default ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
+        "Rerank model id sent to the service; a stored legacy GGUF id is "
+        "passed through unchanged"
     ),
     "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
     "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
@@ -1489,9 +1490,10 @@ class Config:
         # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
-        # rerank_backend: "local" runs the GGUF above in-process; "provider"
-        # calls /v1/rerank on the saved connection named by rerank_provider.
-        "rerank_backend": "local",
+        # rerank_backend: "provider" calls /v1/rerank on the saved connection
+        # named by rerank_provider. A stored "local" value is retired: it warns
+        # once per process and search keeps RRF order.
+        "rerank_backend": "provider",
         # rerank_provider: saved openai_compatible provider used when
         # rerank_backend is "provider"; "" = none. An inactive reference is
         # kept as stored, never repaired.

@@ -4650,10 +4650,10 @@ def corpus_warmup(
     rerank: bool | None = typer.Option(
         None,
         "--rerank/--no-rerank",
-        help="Also warm the reranker (default: corpus.rerank config)",
+        help="Also check the reranker service (default: corpus.rerank config)",
     ),
 ) -> None:
-    """Pre-download corpus models (embedder + optional reranker) for offline use."""
+    """Check the corpus embedding service and the optional reranking service."""
     from esdc.corpus.warmup import run_warmup
 
     results = run_warmup(rerank=rerank)

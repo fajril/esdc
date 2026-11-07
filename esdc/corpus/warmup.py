@@ -1,17 +1,16 @@
-"""Pre-fetch corpus models (embedder + optional reranker) for offline use.
+"""Check the corpus embedding and reranking services.
 
-Forces a GGUF download + first-inference pass through the llama.cpp
-embedder/reranker seams, so a later air-gapped run doesn't hit the
-network.
+No model is downloaded or loaded: each role's configured HTTP service is asked
+with a synthetic input, so a later query does not discover a dead service.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from esdc.configs import Config
-from esdc.corpus.reranker import Reranker, _resolve_model_name
+from esdc.corpus.reranker import get_reranker
+from esdc.embedders import MODEL_ID, get_embedder
 
 
 @dataclass
@@ -22,59 +21,54 @@ class WarmupResult:
     detail: str  # "ready" or an error/skip message
 
 
-def _build_embedder() -> Any:
-    """Construct the corpus embedder (patchable seam for tests)."""
-    from esdc.corpus.embedder import InternalEmbedder
-
-    return InternalEmbedder()
-
-
 def run_warmup(rerank: bool | None = None) -> list[WarmupResult]:
-    """Warm the embedder (always) and the reranker (per `rerank`/config).
+    """Check the embedder (always) and the reranker (per `rerank`/config).
 
-    Only the local backend is warmed. A provider backend has no in-process
-    model to download or run, so it is reported as skipped: no GGUF load and
-    no request, whichever non-local value the config holds.
+    The embedder role uses the client's availability check. The reranker role
+    sends a synthetic query and one synthetic document to the rerank endpoint;
+    it never calls chat completions. Nothing here downloads a model.
     """
     results: list[WarmupResult] = []
 
-    emb = _build_embedder()
+    model_name = MODEL_ID
     try:
-        emb.generate_embedding("warmup")
-        results.append(WarmupResult("embedder", emb.model, True, "ready"))
+        emb = get_embedder()
+        model_name = emb.model
+        message = emb.check_available()
     except Exception as e:
-        results.append(WarmupResult("embedder", emb.model, False, str(e)))
+        results.append(WarmupResult("embedder", model_name, False, str(e)))
+    else:
+        results.append(
+            WarmupResult("embedder", model_name, message is None, message or "ready")
+        )
 
     cfg = Config.get_corpus_config()
     want = rerank if rerank is not None else bool(cfg.get("rerank", False))
-    backend = str(cfg.get("rerank_backend") or "local").strip().lower()
-    model_name = _resolve_model_name()
+    rerank_model = str(cfg.get("rerank_model") or "").strip() or "(not configured)"
 
     if not want:
         results.append(
-            WarmupResult("reranker", model_name, True, "skipped (rerank disabled)")
+            WarmupResult("reranker", rerank_model, True, "skipped (rerank disabled)")
         )
         return results
 
-    if backend != "local":
-        detail = (
-            "skipped (provider backend)"
-            if backend == "provider"
-            else "skipped (unsupported rerank backend)"
-        )
-        results.append(WarmupResult("reranker", model_name, True, detail))
+    try:
+        rr = get_reranker()
+    except Exception as e:
+        results.append(WarmupResult("reranker", rerank_model, False, str(e)))
         return results
 
-    rr = Reranker.get()
     if rr is None:
         results.append(
-            WarmupResult("reranker", model_name, False, "load failed (see logs)")
+            WarmupResult("reranker", rerank_model, False, "unavailable (see logs)")
         )
+        return results
+
+    try:
+        rr.rerank("warmup", ["warmup"])
+    except Exception as e:
+        results.append(WarmupResult("reranker", rerank_model, False, str(e)))
     else:
-        try:
-            rr.rerank("warmup", ["a", "b"])
-            results.append(WarmupResult("reranker", model_name, True, "ready"))
-        except Exception as e:
-            results.append(WarmupResult("reranker", model_name, False, str(e)))
+        results.append(WarmupResult("reranker", rerank_model, True, "ready"))
 
     return results

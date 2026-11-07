@@ -181,7 +181,7 @@ class TestKeyDescriptions:
             for key in optional:
                 assert key in flat, key
                 assert key in KEY_DESCRIPTIONS, key
-            assert flat["corpus.rerank_backend"] == "local"
+            assert flat["corpus.rerank_backend"] == "provider"
             for key in optional:
                 if key != "corpus.rerank_backend":
                     assert flat[key] == "", key

@@ -1121,20 +1121,13 @@ def test_search_over_retrieves_before_rrf(store_with_doc_factory, monkeypatch):
 
 def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
     import esdc.corpus.reranker as reranker_mod
-    from esdc.corpus.reranker import Reranker
 
-    Reranker._instance = None
-    Reranker._failed = False
+    class ReverseReranker:
+        def rerank(self, query, texts):
+            # Later candidates win, so the RRF order must visibly reverse.
+            return [float(i) for i in range(len(texts))]
 
-    class ReverseModel:
-        def __init__(self):
-            self.i = 0
-
-        def embed(self, prompt):
-            self.i += 1
-            return [float(self.i), 0.0]  # later candidate wins
-
-    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: ReverseModel())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: ReverseReranker())
 
     # chunk_size=20 forces the two sections into separate chunks so the
     # reranker has something to reorder.
@@ -1150,9 +1143,6 @@ def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
     base_ids = [r["doc_id"] + r["chunk_text"] for r in baseline["results"]]
     rer_ids = [r["doc_id"] + r["chunk_text"] for r in reranked["results"]]
     assert rer_ids == list(reversed(base_ids))
-
-    Reranker._instance = None
-    Reranker._failed = False
 
 
 def test_maybe_rerank_uses_get_reranker_and_maps_scores_to_input_positions(
@@ -1314,16 +1304,12 @@ def test_sample_content_seed_can_select_a_later_chunk(store_with_doc_factory):
 def test_search_surfaces_rerank_score(store_with_doc_factory, monkeypatch):
     """rerank_score must reach the payload; evaluate.py needs it for negatives."""
     import esdc.corpus.reranker as reranker_mod
-    from esdc.corpus.reranker import Reranker
 
-    Reranker._instance = None
-    Reranker._failed = False
+    class FixedReranker:
+        def rerank(self, query, texts):
+            return [0.42 for _ in texts]
 
-    class FixedModel:
-        def embed(self, prompt):
-            return [0.42, 0.0]
-
-    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: FixedModel())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: FixedReranker())
 
     # chunk_size=20 forces two chunks; _maybe_rerank is a no-op below two.
     store, _ = store_with_doc_factory(
@@ -1335,9 +1321,6 @@ def test_search_surfaces_rerank_score(store_with_doc_factory, monkeypatch):
     out = store.search("konten", limit=3, rerank=True)
     assert out["status"] == "success"
     assert out["results"][0]["rerank_score"] == 0.42
-
-    Reranker._instance = None
-    Reranker._failed = False
 
 
 def test_search_omits_rerank_score_when_rerank_off(store_with_doc_factory):
@@ -2589,21 +2572,23 @@ def test_search_without_fts_index_uses_vector_only(tmp_path):
     reader.close()
 
 
-def test_legacy_corpus_meta_missing_probe_repaired_on_write(tmp_path):
+def test_legacy_corpus_meta_missing_probe_is_refused_on_write(tmp_path):
+    """An index that already holds vectors cannot be certified by a new probe."""
     db, sqlite = _seed_corpus(tmp_path, name="legacy_probe.duckdb")
     _exec_sql(db, ["ALTER TABLE corpus_meta DROP COLUMN probe_vec"])
 
     writer = CorpusStore(
         read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder()
     )
-    writer.ensure_tables(validate_model=True)
+    with pytest.raises(ValueError, match="reembed"):
+        writer.ensure_tables(validate_model=True)
     row = (
         writer._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
     )
     writer.close()
 
     assert row is not None
-    assert json.loads(row[0]) == _fake_vector("esdc corpus embedding parity probe")
+    assert row[0] is None, "a write must not seed a probe over existing vectors"
 
 
 def test_readonly_sqlite_handles_uri_special_path(tmp_path):

@@ -103,21 +103,18 @@ def _stub_provider(monkeypatch, name: str):
     )
 
 
-def test_default_config_stays_local_and_off():
-    """Nothing here enables reranking: the saved default is local and disabled."""
+def test_default_config_is_provider_and_off():
+    """The service backend is the default; nothing here enables reranking."""
     cfg = rr_mod.Config.get_corpus_config()
     assert cfg.get("rerank") is False
-    assert cfg.get("rerank_backend") == "local"
+    assert cfg.get("rerank_backend") == "provider"
     assert cfg.get("rerank_provider") == ""
 
 
-def test_get_reranker_local_calls_the_singleton_and_builds_no_http_client(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        rr_mod.Reranker,
-        "get",
-        classmethod(lambda cls: calls.append(cls) or None),
-    )
+def test_legacy_local_backend_warns_once_and_falls_back_to_rrf(monkeypatch, caplog):
+    """D8: one warning per process per config signature, then RRF order."""
+    monkeypatch.setattr(rr_mod, "_WARNED_RERANK_SIGNATURES", set())
+    loads = _no_gguf_load(monkeypatch)
     _no_request(monkeypatch)
     monkeypatch.setattr(
         rr_mod.Config,
@@ -125,28 +122,39 @@ def test_get_reranker_local_calls_the_singleton_and_builds_no_http_client(monkey
         classmethod(lambda cls: _factory_cfg(rerank_backend="local")),
     )
 
-    assert rr_mod.get_reranker() is None
-    assert calls == [rr_mod.Reranker]
+    with caplog.at_level("WARNING"):
+        assert rr_mod.get_reranker() is None
+        assert rr_mod.get_reranker() is None
+
+    warnings = [r.message for r in caplog.records if "retired" in r.message]
+    assert len(warnings) == 1
+    assert "provider" in warnings[0]
+    assert loads == []
 
 
-def test_get_reranker_local_returns_the_loaded_singleton(monkeypatch):
+def test_legacy_local_never_returns_the_loaded_singleton(monkeypatch):
+    """A stored `local` value no longer reaches the in-process reranker."""
     sentinel = rr_mod.Reranker(MagicMock())
     monkeypatch.setattr(rr_mod.Reranker, "get", classmethod(lambda cls: sentinel))
+    monkeypatch.setattr(rr_mod, "_WARNED_RERANK_SIGNATURES", set())
     monkeypatch.setattr(
         rr_mod.Config,
         "get_corpus_config",
         classmethod(lambda cls: {"rerank_backend": "local"}),
     )
-    assert rr_mod.get_reranker() is sentinel
+    assert rr_mod.get_reranker() is None
 
 
-def test_get_reranker_backend_defaults_to_local(monkeypatch):
-    sentinel = rr_mod.Reranker(MagicMock())
-    monkeypatch.setattr(rr_mod.Reranker, "get", classmethod(lambda cls: sentinel))
+def test_get_reranker_backend_defaults_to_provider(monkeypatch, caplog):
+    """An absent backend means the service path, not the retired local path."""
+    monkeypatch.setattr(rr_mod, "_WARNED_RERANK_SIGNATURES", set())
+    _no_request(monkeypatch)
     monkeypatch.setattr(
         rr_mod.Config, "get_corpus_config", classmethod(lambda cls: {"rerank_model": "x"})
     )
-    assert rr_mod.get_reranker() is sentinel
+    with caplog.at_level("WARNING"):
+        assert rr_mod.get_reranker() is None
+    assert any("provider is not configured" in r.message for r in caplog.records)
 
 
 def test_get_reranker_provider_builds_the_http_client_with_the_explicit_model(monkeypatch):

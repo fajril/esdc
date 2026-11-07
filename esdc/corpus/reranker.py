@@ -54,6 +54,11 @@ is the stock English web-search instruction while these queries are
 Indonesian, and rerank() scores strictly one pair at a time (1.37 s/pair for
 a 0.6B model at full offload is anomalous — check n_batch and the serial
 loop). Neither has been tested.
+
+The in-process path is retired for configuration: `get_reranker()` never loads
+this model. A stored `corpus.rerank_backend: local` warns once per process per
+config signature and leaves search in RRF order. The class below stays only
+until its last callers are removed.
 """
 
 from __future__ import annotations
@@ -96,6 +101,11 @@ _infer_lock = threading.Lock()
 # Serializes singleton create/use against the shutdown close. Lock order
 # is always _load_lock then _infer_lock (rerank() takes only _infer_lock).
 _load_lock = threading.Lock()
+
+# D8: one retired-local warning per process per config signature, so a chat
+# server does not spam the log on every search. Kept apart from the probe memo.
+_WARNED_RERANK_SIGNATURES: set[tuple[str, str, str]] = set()
+_warn_lock = threading.Lock()
 
 
 def _rerank_prompt(query: str, doc: str) -> str:
@@ -219,20 +229,39 @@ class Reranker:
         return scores
 
 
+def _warn_retired_local(provider: str, model: str) -> None:
+    """Warn once per process per config signature; never rewrite config."""
+    signature = ("local", provider, model)
+    with _warn_lock:
+        if signature in _WARNED_RERANK_SIGNATURES:
+            return
+        _WARNED_RERANK_SIGNATURES.add(signature)
+    logger.warning(
+        "[Corpus] rerank backend 'local' is retired: in-process reranking was "
+        "removed in this version. Keeping RRF order. Set corpus.rerank_backend "
+        "to 'provider' and corpus.rerank_provider to an OpenAI-compatible "
+        "/v1/rerank service."
+    )
+
+
 def get_reranker() -> RerankClient | None:
     """Return the reranker for the active corpus config, or None.
 
-    `local` uses the existing GGUF singleton and its score meaning; `provider`
-    builds the HTTP client from the saved reference and the explicit model.
-    Nothing here raises: an inactive or invalid selection warns and returns
-    None, so search keeps its RRF order. Reranking itself stays gated by
-    `corpus.rerank` at the call site — this factory never enables it.
+    `provider` (the default) builds the HTTP client from the saved reference and
+    the explicit model. A stored `local` value is retired: it warns once per
+    process per config signature and returns None, so search keeps its RRF
+    order. Nothing here raises: an inactive or invalid selection warns and
+    returns None. Reranking itself stays gated by `corpus.rerank` at the call
+    site — this factory never enables it.
     """
     cfg = Config.get_corpus_config()
-    backend = str(cfg.get("rerank_backend") or "local").strip().lower()
+    backend = str(cfg.get("rerank_backend") or "provider").strip().lower()
+    name = str(cfg.get("rerank_provider") or "").strip()
+    model = str(cfg.get("rerank_model") or "").strip()
 
     if backend == "local":
-        return Reranker.get()
+        _warn_retired_local(name, model)
+        return None
 
     if backend != "provider":
         logger.warning(
@@ -240,9 +269,6 @@ def get_reranker() -> RerankClient | None:
             backend or "unknown",
         )
         return None
-
-    name = str(cfg.get("rerank_provider") or "").strip()
-    model = str(cfg.get("rerank_model") or "").strip()
 
     if not name:
         logger.warning(
