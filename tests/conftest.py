@@ -129,6 +129,16 @@ def reset_config_cache():
 
 
 @pytest.fixture(autouse=True)
+def clear_probe_memo():
+    """Keep the process-level D2 probe memo from leaking between tests."""
+    from esdc import embedders
+
+    embedders.clear_probe_memo()
+    yield
+    embedders.clear_probe_memo()
+
+
+@pytest.fixture(autouse=True)
 def reset_semantic_resolver_cache():
     """Reset the cached SemanticResolver before and after each test.
 

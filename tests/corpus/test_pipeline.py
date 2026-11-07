@@ -2979,7 +2979,7 @@ def test_status_tolerates_store_error(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkeypatch):
+def test_reembed_partial_failure_publishes_nothing(tmp_path, monkeypatch):
     store1 = make_store(tmp_path, embedder=FakeEmbedder())
     store1.ensure_tables()
     doc_a = {
@@ -3012,21 +3012,60 @@ def test_reembed_updates_meta_and_chunks_with_failure_isolation(tmp_path, monkey
 
     orig_replace = store2.replace_chunks
 
-    def flaky_replace(doc, chunks):
+    def flaky_replace(doc, chunks, **kwargs):
         if doc["doc_id"] == doc_b["doc_id"]:
             raise RuntimeError("embedding backend down")
-        return orig_replace(doc, chunks)
+        return orig_replace(doc, chunks, **kwargs)
 
     monkeypatch.setattr(store2, "replace_chunks", flaky_replace)
 
     report = pipeline.run_reembed()
 
-    assert "a.pdf" in report.processed
+    # A partial run publishes nothing: the old pin and chunks stay in place.
+    assert report.processed == []
     assert "b.pdf" in report.failed
+    assert report.embedding_model == ""
+    assert any("old index and pin" in warning for warning in report.warnings)
 
     updated_a = store2.get_document(doc_a["doc_id"])
     assert updated_a is not None
-    assert updated_a["embedding_model"] == "fake-embed-v2"
+    assert updated_a["embedding_model"] == "fake-embed-v1"
+    store2.close()
+
+
+def test_reembed_publishes_staged_chunks_when_every_document_succeeds(
+    tmp_path, monkeypatch
+):
+    store1 = make_store(tmp_path, embedder=FakeEmbedder())
+    store1.ensure_tables()
+    doc_a = {
+        "doc_id": "aaaa111122223333",
+        "file_name": "a.pdf",
+        "file_path": "x",
+        "file_hash": "aa" * 32,
+        "markdown": "# A\nisi dokumen a yang lumayan panjang",
+        "extraction_method": "native",
+    }
+    store1.insert_document(doc_a, [Chunk(0, None, "isi dokumen a")])
+    store1.refresh_mirror()
+    store1.close()
+
+    store2 = CorpusStore(
+        db_path=tmp_path / "corpus.duckdb", embedder=FakeEmbedder2(), read_only=False
+    )
+    monkeypatch.setattr(pipeline, "CorpusStore", lambda *a, **kw: store2)
+
+    report = pipeline.run_reembed()
+
+    assert report.processed == ["a.pdf"]
+    assert report.embedding_model == "fake-embed-v2"
+    updated = store2.get_document(doc_a["doc_id"])
+    assert updated is not None
+    assert updated["embedding_model"] == "fake-embed-v2"
+    chunk_count = store2._get_connection().execute(
+        "SELECT COUNT(*) FROM document_chunks"
+    ).fetchone()
+    assert chunk_count is not None and chunk_count[0] >= 1
     store2.close()
 
 

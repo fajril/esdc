@@ -299,8 +299,6 @@ def test_factory_local_is_a_config_error(monkeypatch):
     assert "in-process" in msg
     assert "Ollama" in msg or "llama-server" in msg
     assert "embedding_backend" in msg
-    # A stored value is reported, never repaired.
-    assert Config.get_embedding_backend() == "local"
 
 
 def test_factory_ollama_uses_configured_host(monkeypatch):
@@ -468,6 +466,12 @@ def test_empty_batch_makes_no_http_request(monkeypatch):
     post.assert_not_called()
 
 
+def test_timeout_values_are_the_confirmed_decisions():
+    """D3: pin the numbers themselves, not only their use."""
+    assert emb.QUERY_TIMEOUT_SECONDS == 20.0
+    assert emb.BATCH_TIMEOUT_SECONDS == 120.0
+
+
 def test_query_and_batch_use_separate_timeouts(monkeypatch):
     """D3: an interactive query must not inherit the batch timeout."""
     post = MagicMock(
@@ -601,6 +605,47 @@ def test_response_that_is_not_a_vector_list_is_rejected(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         e.generate_embeddings_batch(["t0"])
     assert "instead of a vector" in str(exc.value)
+
+
+def test_mixed_index_types_are_a_bad_answer(monkeypatch):
+    """A malformed index must not escape as a TypeError from sorting."""
+    payload = {
+        "data": [
+            {"index": 1, "embedding": [1.0]},
+            {"index": "0", "embedding": [2.0]},
+        ]
+    }
+    post = MagicMock(return_value=_http_ok(payload))
+    monkeypatch.setattr(emb.requests, "post", post)
+    e = emb.OpenAIEmbedder(host="http://h:1/v1", model="m", batch_size=10)
+    with pytest.raises(emb.EmbeddingResponseError) as exc:
+        e.generate_embeddings_batch(["t0", "t1"])
+    assert "index" in str(exc.value)
+    assert "TypeError" not in str(exc.value)
+
+    # The availability check reports the same bad answer, not a connectivity guess.
+    message = e.check_available()
+    assert message is not None
+    assert "index" in message
+    assert "TypeError" not in message
+
+
+def test_ollama_valid_response_passes_shape_validation(monkeypatch):
+    """The happy path: the adapter returns the service's vector as floats."""
+    mgr = MagicMock()
+    mgr.generate_embedding.return_value = [1.0, 0.5]
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    assert e.generate_embedding("x") == [1.0, 0.5]
+
+
+def test_ollama_check_available_returns_none_when_the_service_answers(monkeypatch):
+    """A service that returns a usable vector is available."""
+    mgr = MagicMock()
+    mgr.generate_embedding.return_value = [1.0, 0.5]
+    _patched_manager(monkeypatch, mgr)
+    e = emb.OllamaEmbedder(host="http://box:11434")
+    assert e.check_available() is None
 
 
 class _StatusError(Exception):

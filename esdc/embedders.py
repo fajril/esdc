@@ -389,6 +389,9 @@ class OllamaEmbedder:
         self.host = host or "local Ollama service"
         self.wire_model = str(model or "").strip() or self.OLLAMA_TAG
         self.model = MODEL_ID
+        # Two clients built from the same connection are interchangeable for
+        # memoization, so the probe cache can span store/resolver instances.
+        self.cache_key = ("ollama", str(host or ""), self.wire_model)
         self._query_mgr = EmbeddingManager(
             model=self.wire_model, host=host, timeout=QUERY_TIMEOUT_SECONDS
         )
@@ -470,6 +473,7 @@ class OpenAIEmbedder:
         query_timeout: float = QUERY_TIMEOUT_SECONDS,
         batch_timeout: float = BATCH_TIMEOUT_SECONDS,
     ) -> None:
+        model = str(model or "").strip()
         if not model:
             raise ValueError(
                 "[Embedding] backend 'openai' requires the `embedding_model` "
@@ -487,6 +491,10 @@ class OpenAIEmbedder:
         self._batch = int(batch_size or Config.get_embedding_batch_size())
         self._query_timeout = query_timeout
         self._batch_timeout = batch_timeout
+        # Two clients built from the same connection are interchangeable for
+        # memoization, so the probe cache can span store/resolver instances.
+        credential = hashlib.sha256(str(self._api_key or "").encode()).hexdigest()
+        self.cache_key = ("openai", self.url, self.wire_model, credential)
 
     def _post(self, batch: list[str], timeout: float) -> list[list[float]]:
         headers = {"Content-Type": "application/json"}
@@ -527,18 +535,29 @@ class OpenAIEmbedder:
             )
         # The OpenAI schema does not guarantee response order; each entry
         # carries its request index. Sorting is not optional — unsorted
-        # results silently pair each text with another text's vector.
-        ordered = sorted(data, key=lambda e: e.get("index", 0))
+        # results silently pair each text with another text's vector. An index
+        # that is not an integer is rejected before sorting, so a malformed
+        # answer cannot escape as a TypeError from the comparison.
+        indexes = [entry.get("index") for entry in data]
+        if any(
+            isinstance(index, bool) or not isinstance(index, int) for index in indexes
+        ):
+            raise EmbeddingResponseError(
+                f"[Embedding] {self.url} returned an index that is not an integer; "
+                "the answer is not the embeddings schema this client expects."
+            )
+        ordered = sorted(zip(indexes, data, strict=True), key=lambda pair: pair[0])
         n = len(batch)
-        if len(ordered) != n or [e.get("index") for e in ordered] != list(range(n)):
+        ordered_indexes = [index for index, _ in ordered]
+        if len(ordered) != n or ordered_indexes != list(range(n)):
             raise EmbeddingResponseError(
                 f"[Embedding] {self.url} returned {len(ordered)} embeddings for a "
-                f"batch of {n} with indexes {[e.get('index') for e in ordered]}; "
+                f"batch of {n} with indexes {ordered_indexes}; "
                 f"expected exactly 0..{n - 1}. The response is malformed or "
                 "truncated."
             )
         # A missing key is reported as a bad row by the validator, not as a KeyError.
-        raw = [entry.get("embedding") for entry in ordered]
+        raw = [entry.get("embedding") for _, entry in ordered]
         return _validate_vectors(raw, n, self.url)
 
     def generate_embedding(self, text: str) -> list[float]:
@@ -761,6 +780,51 @@ def probe_memo_key(
     )
 
 
+# Process-level memo for successful probe validations. D2 asks for one probe
+# request per (effective config, DB state), not one per operation; a chat turn
+# builds a fresh CorpusStore per tool call, so the memo cannot live only on the
+# store. The client identity is part of the key: HTTP clients expose a stable
+# `cache_key`, while an injected test client falls back to its object id.
+_PROBE_MEMO: dict[tuple[Any, ...], None] = {}
+_PROBE_MEMO_LOCK = threading.Lock()
+_PROBE_MEMO_MAX = 2048
+
+
+def client_identity(embedder: Any) -> tuple[Any, ...]:
+    """Stable identity for a client built from the same connection."""
+    key = getattr(embedder, "cache_key", None)
+    if isinstance(key, tuple):
+        try:
+            hash(key)
+        except TypeError:
+            pass
+        else:
+            return key
+    return ("instance", id(embedder))
+
+
+def probe_is_verified(key: tuple[Any, ...], embedder: Any) -> bool:
+    """True when this exact config/DB/client state already passed the probe."""
+    full = key + (client_identity(embedder),)
+    with _PROBE_MEMO_LOCK:
+        return full in _PROBE_MEMO
+
+
+def remember_probe_verified(key: tuple[Any, ...], embedder: Any) -> None:
+    """Record a successful probe check for this exact state."""
+    full = key + (client_identity(embedder),)
+    with _PROBE_MEMO_LOCK:
+        if len(_PROBE_MEMO) >= _PROBE_MEMO_MAX:
+            _PROBE_MEMO.clear()
+        _PROBE_MEMO[full] = None
+
+
+def clear_probe_memo() -> None:
+    """Drop every recorded probe validation (tests and explicit resets)."""
+    with _PROBE_MEMO_LOCK:
+        _PROBE_MEMO.clear()
+
+
 def _row_count(conn: Any, table: str) -> int:
     """Rows in a vector table; 0 when it does not exist yet."""
     try:
@@ -821,20 +885,11 @@ def probe_status(
     stored_model, stored = row[0], row[1]
 
     if stored is None:
-        # Nothing to compare against. The pin can still be honoured when it names this
-        # same client: that is the legacy repair path, where a genuine writer writes the
-        # probe on its first write. Behind an index that already holds vectors, a pin
-        # naming another model — or no pin at all — cannot be certified by a probe this
-        # client just made.
+        # Nothing to compare against. Seeding is only the migration path for a
+        # space that is still empty. Once vectors exist, a probe this client just
+        # made cannot certify vectors it did not produce — and a model name is not
+        # proof of a space, because every client reports the same MODEL_ID.
         if not vector_table or _row_count(conn, vector_table) == 0:
-            return {
-                "status": "unverified",
-                "stored_model": stored_model,
-                "current_model": current_model,
-                "detail": None,
-                "message": None,
-            }
-        if current_model is not None and stored_model == current_model:
             return {
                 "status": "unverified",
                 "stored_model": stored_model,
@@ -845,7 +900,8 @@ def probe_status(
         detail = (
             f"no stored probe for {meta_table} while {vector_table} already "
             "holds vectors — a probe from this service cannot certify vectors "
-            "produced elsewhere"
+            "produced elsewhere. Run `esdc corpus reembed` or "
+            "`esdc reload --embeddings-only` to rebuild the space"
         )
         return {
             "status": "error",

@@ -577,7 +577,7 @@ class TestEmbeddingsOnlyHealthCheck:
 
     def test_the_embed_backend_option_lists_only_services(self):
         """A value with no implementation is not offered as an option."""
-        for command in (["reload"], ["corpus", "reembed"]):
+        for command in (["reload"], ["corpus", "commit"], ["corpus", "reembed"]):
             result = runner.invoke(app, command + ["--help"])
             # The help is drawn in a bordered table: read this option's own text,
             # with the borders taken out and the wrap flattened back into words.

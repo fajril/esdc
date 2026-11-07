@@ -17,6 +17,7 @@ failing never aborts the batch.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -1526,11 +1527,9 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
     store = CorpusStore(embedder=get_embedder(embed_backend), read_only=False)
     try:
         store.ensure_tables()
-
         new_model = store.embedder.model
         new_dim = len(store.embedder.generate_embedding("test"))
-        store.set_meta(new_model, new_dim)
-        report.embedding_model = new_model
+        store.create_staging_chunks(new_dim)
 
         cfg = Config.get_corpus_config()
         documents = store.list_documents()
@@ -1549,16 +1548,37 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
                     chunks = chunk_markdown(
                         doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
                     )
-                    p.status("embed + replace")
-                    store.replace_chunks(doc, chunks)
+                    p.status("embed + stage")
+                    store.replace_chunks(
+                        doc,
+                        chunks,
+                        table=store.STAGING_TABLE,
+                        validate_probe=False,
+                        update_labels=False,
+                    )
                     report.processed.append(name)
                 except Exception as e:
                     report.failed[name] = str(e)
                 finally:
                     p.advance()
 
-        store.rebuild_indexes()
+        if report.failed:
+            # Nothing is published from a partial run: publishing would leave the
+            # new probe over a mix of old and new vectors.
+            store.drop_staging_chunks()
+            report.processed.clear()
+            report.warnings.append(
+                "Re-embed rejected: at least one document failed, so the old "
+                "index and pin were left unchanged. Fix the failing document(s) "
+                "and run the command again."
+            )
+        else:
+            store.publish_staged_chunks(new_model, new_dim)
+            report.embedding_model = new_model
+            store.rebuild_indexes()
     finally:
+        with contextlib.suppress(Exception):
+            store.drop_staging_chunks()
         store.close()
 
     return report

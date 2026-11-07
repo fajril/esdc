@@ -70,11 +70,6 @@ class SemanticResolver:
         self._embedder = embedder
         self._injected = embedder is not None
         self._resolved_signature: tuple | None = None
-        # Keys of (config, DB file, stored pin, stored dimension, stored probe) this
-        # client was proven to share a vector space with. Only a validation that
-        # succeeded is recorded, so a refused read is checked again rather than
-        # remembered as verified.
-        self._probe_verified: set[tuple[Any, ...]] = set()
 
     @property
     def embedder(self) -> Any:
@@ -137,12 +132,12 @@ class SemanticResolver:
         incompatible client degrades to ``not_available`` with the maintenance command;
         an unexpected database failure surfaces as ``error`` rather than a clean result.
 
-        The check is memoized under (config signature, DB file, stored pin, stored
-        dimension, stored probe), so a query on a space already proven for that state
-        does not pay for a probe request again, while a rewrite of the metadata row
-        underneath the cache — the same file, different facts — re-validates. A
-        validation that did not succeed is never recorded, so the next call checks
-        again rather than trusting a stale answer.
+        The check is memoized process-wide under (config signature, DB file, stored
+        pin, stored dimension, stored probe, client identity), so a query on a space
+        already proven for that state does not pay for a probe request again, while a
+        rewrite of the metadata row underneath the cache — the same file, different
+        facts — re-validates. A validation that did not succeed is never recorded, so
+        the next call checks again rather than trusting a stale answer.
 
         Returns:
             The ``not_available``/``error`` response dict when the active client cannot
@@ -151,11 +146,12 @@ class SemanticResolver:
         """
         try:
             conn = self._get_connection()
+            client = self.embedder
             # The key is the state this check would be computed from, read from the row
             # rather than from the file alone: a fetch or reload publishes in place, so
             # the same inode can hold a different pin, dimension or probe.
             key = embedders.probe_memo_key(conn, self.SEMANTIC_META, self._db_path)
-            if key in self._probe_verified:
+            if embedders.probe_is_verified(key, client):
                 return None
 
             from esdc.embedders import PROBE_TEXT, probe_mismatch
@@ -198,7 +194,7 @@ class SemanticResolver:
                 return self._not_available(
                     f"Stored embeddings pinned to {stored_model!r} have no parity "
                     "probe to compare against, so this client "
-                    f"({self.embedder.model!r}) cannot be trusted against them. Run "
+                    f"({client.model!r}) cannot be trusted against them. Run "
                     "'esdc reload --embeddings-only' to rebuild them."
                 )
             try:
@@ -214,19 +210,19 @@ class SemanticResolver:
                     f"records dim={dim}. Run 'esdc reload --embeddings-only' "
                     "to rebuild it."
                 )
-            current = self.embedder.generate_embedding(PROBE_TEXT)
+            current = client.generate_embedding(PROBE_TEXT)
             mismatch = probe_mismatch(stored, current)
             if mismatch is not None:
                 return self._not_available(
                     "Stored embeddings were built with a different embedding "
                     f"space ({mismatch}). This client reports "
-                    f"{self.embedder.model!r}; the stored probe is pinned to "
+                    f"{client.model!r}; the stored probe is pinned to "
                     f"{stored_model!r}. Run 'esdc reload --embeddings-only' "
                     "to rebuild them."
                 )
             # This path writes nothing, so the key as read is the state as it stands
             # after a successful check.
-            self._probe_verified.add(key)
+            embedders.remember_probe_verified(key, client)
         except Exception as e:  # pragma: no cover - DB-level failure
             logger.warning("[Semantic] pin check failed | %s", e)
             return {

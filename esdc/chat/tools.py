@@ -2241,7 +2241,10 @@ def aggregate_documents(
         else:
             readiness_op = "aggregate_keyword"
 
-        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        # No injected client: keyword and metadata aggregation must stay usable
+        # without an embedding service. The store resolves one only if the
+        # semantic path actually asks for a vector.
+        store = CorpusStore(read_only=True)
         store.validate_readiness(readiness_op)
         result = store.aggregate(
             query=query,
@@ -2336,7 +2339,9 @@ def read_document(
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        # Reading a document never needs a vector; let the store stay lazy so a
+        # retired or broken embedding config cannot block this tool.
+        store = CorpusStore(read_only=True)
         store.validate_readiness("document")
         doc = store.get_document(doc_id)
         if doc is None:

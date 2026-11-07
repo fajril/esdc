@@ -53,6 +53,14 @@ class _CountingEmbedder:
         return None
 
 
+class _CacheableEmbedder(_CountingEmbedder):
+    """A client whose memo identity is stable across instances (HTTP-client shape)."""
+
+    def __init__(self, vec, name="qwen3-embedding-0.6b-q8_0"):
+        super().__init__(vec, name)
+        self.cache_key = ("test", name, tuple(self._vec))
+
+
 def _store(tmp_path, vec, name="c.duckdb"):
     return CorpusStore(
         db_path=tmp_path / name, embedder=_FixedEmbedder(vec), read_only=False
@@ -346,6 +354,44 @@ def test_index_without_probe_is_not_solemnized_by_seeding_from_new_service(tmp_p
     assert _stored_probe(tmp_path / "empty.duckdb") == [1.0, 0.0, 0.0]
 
 
+def test_index_without_probe_is_not_solemnized_even_when_the_pin_is_model_id(
+    tmp_path,
+):
+    """Every client reports MODEL_ID, so the pin name cannot authorize a seed."""
+    db_path = tmp_path / "model-id.duckdb"
+    writer = _writer(
+        tmp_path,
+        _CountingEmbedder([0.0, 1.0, 0.0], embedders.MODEL_ID),
+        "model-id.duckdb",
+    )
+    writer.ensure_tables(validate_model=True)
+    writer.insert_document(DOC, [Chunk(0, "Surat", "isi surat persetujuan")])
+    writer.close()
+
+    conn = duckdb.connect(str(db_path))
+    conn.execute("UPDATE corpus_meta SET probe_vec = NULL")
+    conn.close()
+
+    new_service = _CountingEmbedder([1.0, 0.0, 0.0], embedders.MODEL_ID)
+
+    reader = CorpusStore(db_path=db_path, embedder=new_service, read_only=True)
+    out = reader.search("persetujuan", limit=5)
+    reader.close()
+    assert out["status"] == "error", out
+    assert "reembed" in out["message"]
+    assert new_service.calls == [], "a query must not ask the service for a probe"
+    assert _stored_probe(db_path) is None
+
+    writer2 = _writer(tmp_path, new_service, "model-id.duckdb")
+    with pytest.raises(ValueError, match="reembed"):
+        writer2.ensure_tables(validate_model=True)
+    writer2.close()
+    assert not [c for c in new_service.calls if c[0] == "probe"], (
+        "a refused write must not seed a probe"
+    )
+    assert _stored_probe(db_path) is None
+
+
 def test_validation_runs_once_per_config_signature_and_db_signature(
     tmp_path, monkeypatch
 ):
@@ -415,6 +461,40 @@ def test_validation_runs_once_per_config_signature_and_db_signature(
         ("probe", embedders.PROBE_TEXT),
     ]
     reader.close()
+
+
+def test_validation_is_shared_across_store_instances(tmp_path):
+    """D2: a fresh CorpusStore per tool call must not re-probe the same space."""
+    writer = _writer(
+        tmp_path, _CacheableEmbedder([1.0, 0.0, 0.0]), "shared.duckdb"
+    )
+    writer.ensure_tables(validate_model=True)
+    writer.insert_document(DOC, [Chunk(0, "Surat", "isi surat persetujuan")])
+    writer.close()
+    embedders.clear_probe_memo()
+
+    first = _CacheableEmbedder([1.0, 0.0, 0.0])
+    reader1 = CorpusStore(
+        db_path=tmp_path / "shared.duckdb", embedder=first, read_only=True
+    )
+    out1 = reader1.search("persetujuan", limit=5)
+    reader1.close()
+
+    second = _CacheableEmbedder([1.0, 0.0, 0.0])
+    reader2 = CorpusStore(
+        db_path=tmp_path / "shared.duckdb", embedder=second, read_only=True
+    )
+    out2 = reader2.search("persetujuan", limit=5)
+    reader2.close()
+
+    assert out1["status"] == "success", out1
+    assert out2["status"] == "success", out2
+    assert [c for c in first.calls if c[0] == "probe"] == [
+        ("probe", embedders.PROBE_TEXT)
+    ]
+    assert [c for c in second.calls if c[0] == "probe"] == [], (
+        "a second store on the same config/DB paid for another probe"
+    )
 
 
 def test_client_replaced_when_effective_config_changes(tmp_path, monkeypatch):

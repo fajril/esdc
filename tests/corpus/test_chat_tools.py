@@ -270,6 +270,40 @@ def test_search_documents_missing_embed_text_degrades_then_repairs(populated):
     assert repaired["status"] in ("success", "no_results")
 
 
+def test_non_vector_tools_work_with_a_retired_embedding_config(
+    populated, monkeypatch
+):
+    """Keyword/metadata aggregation and document reads need no embedding client."""
+    import esdc.chat.tools as tools_mod
+    from esdc.embedders import EmbeddingConfigError
+
+    def boom(backend=None):
+        raise EmbeddingConfigError(
+            "[Embedding] backend 'local' needs an HTTP embedding service"
+        )
+
+    monkeypatch.setattr(embedders, "get_embedder", boom)
+    monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
+    monkeypatch.setattr(tools_mod, "_corpus_embedder_signature", None)
+
+    read = json.loads(tools_mod.read_document.invoke({"doc_id": "abc123"}))
+    assert read["status"] == "success"
+
+    metadata = json.loads(
+        tools_mod.aggregate_documents.invoke({"mode": "count", "doc_type": "surat"})
+    )
+    assert metadata.get("status") != "error"
+    assert metadata["count"] == 2
+
+    keyword = json.loads(
+        tools_mod.aggregate_documents.invoke(
+            {"query": "persetujuan", "match": "keyword", "mode": "count"}
+        )
+    )
+    assert keyword.get("status") in ("success", "no_results")
+    assert keyword["count"] >= 1
+
+
 def test_read_document_returns_markdown_and_metadata(populated):
     from esdc.chat.tools import read_document
 

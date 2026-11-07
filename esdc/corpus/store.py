@@ -328,6 +328,9 @@ class CorpusStore:
     # index a probe is protecting, because a probe can only be seeded for a space that
     # is still empty.
     _VECTOR_TABLES = {META_TABLE: CHUNK_TABLE}
+    # Full re-embeds write here first; nothing is published unless every document
+    # succeeds, so a failed run cannot leave two vector spaces in one index.
+    STAGING_TABLE = "document_chunks_reembed"
 
     def __init__(
         self,
@@ -362,11 +365,6 @@ class CorpusStore:
         # a store opened for a document lookup owns no client until it needs one.
         self._embedder = embedder
         self._injected = embedder is not None
-        # Keys of (config, DB file, stored pin, stored dimension, stored probe) for
-        # which this client was proven to write into the stored space. Only a
-        # verification that succeeded is recorded, so a refused read is checked again
-        # rather than remembered as verified.
-        self._probe_verified: set[tuple[Any, ...]] = set()
         self._resolved_signature: tuple | None = None
 
     @property
@@ -393,38 +391,37 @@ class CorpusStore:
     def _probe_gate(self, table: str, *, allow_seed: bool) -> dict[str, Any] | None:
         """Cached probe validation for one vector space. None when it can be honoured.
 
-        The memo is keyed by the effective config plus the facts the check was computed
-        from — the DB file's inode and the pin, dimension and probe read from the
-        metadata row — so repeated operations on the same state validate once, while a
-        rewrite of that row underneath the cache re-validates. A write may seed or
-        repair the pin when there is no vector space yet behind it, or when the pin
-        already names this same client. A query never writes the pin, and an index that
-        already holds vectors cannot be certified by a probe from a service the pin
-        does not name.
+        The memo is process-level and keyed by the effective config plus the facts
+        the check was computed from — the DB file's inode, the pin, dimension and
+        probe read from the metadata row — and the client identity. A chat turn
+        builds a fresh store per tool call, so a per-instance cache would pay one
+        probe request per query. A write may seed the pin when the index is still
+        empty. A query never writes the pin, and an index that already holds
+        vectors cannot be certified by a probe from a service the pin does not
+        name.
 
         The entry is recorded as the state stands after a successful check, so a seed
         records its own post-seed key and the next operation hits the memo instead of
         asking the service again.
         """
         conn = self._get_connection()
+        client = self.embedder
         key = self._space_key(conn, table)
-        if key in self._probe_verified:
+        if embedders.probe_is_verified(key, client):
             return None
 
         status = embedders.probe_status(
-            conn, table, self.embedder, vector_table=self._VECTOR_TABLES.get(table)
+            conn, table, client, vector_table=self._VECTOR_TABLES.get(table)
         )
         if status["status"] == "match":
-            self._probe_verified.add(key)
+            embedders.remember_probe_verified(key, client)
             return None
 
         if status["status"] == "unverified":
             if allow_seed and not self._read_only and status["stored_model"]:
-                probe = json.dumps(
-                    self.embedder.generate_embedding(embedders.PROBE_TEXT)
-                )
+                probe = json.dumps(client.generate_embedding(embedders.PROBE_TEXT))
                 conn.execute(f"UPDATE {table} SET probe_vec = ?", [probe])
-                self._probe_verified.add(self._space_key(conn, table))
+                embedders.remember_probe_verified(self._space_key(conn, table), client)
             return None
 
         return status
@@ -1250,15 +1247,30 @@ class CorpusStore:
 
         return counts
 
-    def replace_chunks(self, doc: dict[str, Any], chunks: list[Chunk]) -> None:
-        """Replace all chunks for a document (used by `corpus reembed`)."""
+    def replace_chunks(
+        self,
+        doc: dict[str, Any],
+        chunks: list[Chunk],
+        *,
+        table: str | None = None,
+        validate_probe: bool = True,
+        update_labels: bool = True,
+    ) -> None:
+        """Replace all chunks for a document (used by `corpus reembed`).
+
+        ``table`` targets the staging table used by a full re-embed. There the
+        old-space probe is irrelevant and the labels are deferred until the
+        whole run publishes, so ``validate_probe`` and ``update_labels`` are
+        false.
+        """
         self._require_writable()
         from esdc.corpus.context import build_context_prefix, build_embed_text
 
+        target = table or self.CHUNK_TABLE
         doc_id = doc["doc_id"]
         conn = self._get_connection()
         # Nothing to embed means nothing to validate (see insert_document).
-        if chunks:
+        if chunks and validate_probe:
             self._require_probe(self.META_TABLE)
         prefix = build_context_prefix(doc)
         embed_texts = [build_embed_text(prefix, c.section, c.text) for c in chunks]
@@ -1269,14 +1281,14 @@ class CorpusStore:
 
         conn.execute("BEGIN TRANSACTION")
         try:
-            conn.execute(f"DELETE FROM {self.CHUNK_TABLE} WHERE doc_id = ?", [doc_id])
+            conn.execute(f"DELETE FROM {target} WHERE doc_id = ?", [doc_id])
             for chunk, embed_text, embedding in zip(
                 chunks, embed_texts, embeddings, strict=True
             ):
                 chunk_id = f"{doc_id}:{chunk.index:04d}"
                 conn.execute(
                     f"""
-                    INSERT INTO {self.CHUNK_TABLE} (
+                    INSERT INTO {target} (
                         chunk_id, doc_id, chunk_index, section, chunk_text,
                         embed_text, embedding
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1291,20 +1303,22 @@ class CorpusStore:
                         embedding,
                     ],
                 )
-            conn.execute(
-                f"UPDATE {self.DOC_TABLE} SET embedding_model = ? WHERE doc_id = ?",
-                [self.embedder.model, doc_id],
-            )
+            if update_labels:
+                conn.execute(
+                    f"UPDATE {self.DOC_TABLE} SET embedding_model = ? WHERE doc_id = ?",
+                    [self.embedder.model, doc_id],
+                )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        sconn = self._get_sqlite()
-        with sconn:
-            sconn.execute(
-                f"UPDATE {self.DOC_TABLE} SET embedding_model = ? WHERE doc_id = ?",
-                [self.embedder.model, doc_id],
-            )
+        if update_labels:
+            sconn = self._get_sqlite()
+            with sconn:
+                sconn.execute(
+                    f"UPDATE {self.DOC_TABLE} SET embedding_model = ? WHERE doc_id = ?",
+                    [self.embedder.model, doc_id],
+                )
 
     def _is_legacy_pin(self, stored_model: str, model: str) -> bool:
         """True when stored_model is the pre-refactor Ollama tag for this model.
@@ -1339,6 +1353,74 @@ class CorpusStore:
                 [new, old],
             )
         logger.info("[Corpus] repinned legacy model %s -> %s (same space)", old, new)
+
+    @staticmethod
+    def _chunks_table_sql(table: str, dim: int) -> str:
+        """Schema for a chunk table at one embedding dimension."""
+        return f"""
+            CREATE TABLE {table} (
+                chunk_id VARCHAR PRIMARY KEY,
+                doc_id VARCHAR NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                section VARCHAR,
+                chunk_text TEXT NOT NULL,
+                embed_text TEXT,
+                embedding FLOAT[{dim}]
+            )
+        """
+
+    def create_staging_chunks(self, dim: int) -> None:
+        """Create an empty staging chunk table for a full re-embed."""
+        self._require_writable()
+        conn = self._get_connection()
+        conn.execute(f"DROP TABLE IF EXISTS {self.STAGING_TABLE}")
+        conn.execute(self._chunks_table_sql(self.STAGING_TABLE, dim))
+
+    def drop_staging_chunks(self) -> None:
+        """Discard any staged re-embed; safe when nothing was staged."""
+        conn = self._get_connection()
+        conn.execute(f"DROP TABLE IF EXISTS {self.STAGING_TABLE}")
+
+    def publish_staged_chunks(self, embedding_model: str, dim: int) -> None:
+        """Publish a fully staged re-embed in one transaction.
+
+        Re-pins the new model, dimension and probe and replaces the chunk table
+        from the staging table. A run that staged only part of the corpus calls
+        ``drop_staging_chunks`` instead, leaving the old space untouched.
+        """
+        self._require_writable()
+        from esdc.embedders import PROBE_TEXT
+
+        conn = self._get_connection()
+        probe = json.dumps(self.embedder.generate_embedding(PROBE_TEXT))
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(f"DELETE FROM {self.META_TABLE}")
+            conn.execute(
+                f"INSERT INTO {self.META_TABLE} "
+                "(embedding_model, dim, probe_vec) VALUES (?, ?, ?)",
+                [embedding_model, dim, probe],
+            )
+            conn.execute(f"DROP TABLE IF EXISTS {self.CHUNK_TABLE}")
+            conn.execute(self._chunks_table_sql(self.CHUNK_TABLE, dim))
+            conn.execute(
+                f"INSERT INTO {self.CHUNK_TABLE} SELECT * FROM {self.STAGING_TABLE}"
+            )
+            conn.execute(f"DROP TABLE IF EXISTS {self.STAGING_TABLE}")
+            conn.execute(
+                f"UPDATE {self.DOC_TABLE} SET embedding_model = ?",
+                [embedding_model],
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        sconn = self._get_sqlite()
+        with sconn:
+            sconn.execute(
+                f"UPDATE {self.DOC_TABLE} SET embedding_model = ?",
+                [embedding_model],
+            )
 
     def set_meta(self, embedding_model: str, dim: int) -> None:
         """Overwrite corpus_meta; recreate document_chunks if dim changed.
@@ -1375,17 +1457,7 @@ class CorpusStore:
                     self.CHUNK_TABLE,
                 )
                 conn.execute(f"DROP TABLE IF EXISTS {self.CHUNK_TABLE}")
-                conn.execute(f"""
-                    CREATE TABLE {self.CHUNK_TABLE} (
-                        chunk_id VARCHAR PRIMARY KEY,
-                        doc_id VARCHAR NOT NULL,
-                        chunk_index INTEGER NOT NULL,
-                        section VARCHAR,
-                        chunk_text TEXT NOT NULL,
-                        embed_text TEXT,
-                        embedding FLOAT[{dim}]
-                    )
-                """)
+                conn.execute(self._chunks_table_sql(self.CHUNK_TABLE, dim))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
