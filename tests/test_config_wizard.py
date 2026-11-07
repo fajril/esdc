@@ -2165,7 +2165,7 @@ class TestRerankEnabledIsSeparate:
             "corpus.rerank": False,
             "corpus.rerank_backend": "provider",
             # An unknown provider name is the incomplete saved source: an empty
-            # model alone would fall back to DEFAULT_RERANKER and validate.
+            # model alone would resolve to the default service model id and validate.
             "corpus.rerank_provider": "no-such-provider",
             "corpus.rerank_model": "rerank-model",
         },

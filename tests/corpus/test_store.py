@@ -1332,24 +1332,15 @@ def test_search_omits_rerank_score_when_rerank_off(store_with_doc_factory):
 
 
 def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatch):
+    """A reranker that cannot serve leaves search in RRF order, never an error."""
     import esdc.corpus.reranker as reranker_mod
-    from esdc.corpus.reranker import Reranker
 
-    Reranker._instance = None
-    Reranker._failed = False
-
-    def boom():
-        raise RuntimeError("model missing")
-
-    monkeypatch.setattr(reranker_mod, "_load_reranker", boom)
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: None)
 
     store, _ = store_with_doc_factory(subject="Pengembangan Merak")
     store.rebuild_indexes()
     result = store.search("produksi", limit=5, rerank=True)
     assert result["status"] in ("success", "no_results")  # never error
-
-    Reranker._instance = None
-    Reranker._failed = False
 
 
 def test_cap_per_doc_keeps_first_two_per_doc_in_incoming_order(store):

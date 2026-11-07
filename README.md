@@ -117,45 +117,37 @@ uv pip install -e ".[phoenix]"
 uv sync --dev
 ```
 
-### Corpus embeddings/rerank (llama.cpp)
+### Corpus embedding and rerank (HTTP service)
 
-The corpus uses `llama-cpp-python` (Qwen3 GGUFs, in-process, no daemon).
-Plain `pip install` compiles from source (needs cmake + a C++ compiler).
-For a prebuilt wheel, add the matching index for your accelerator:
+Embedding and reranking run on an HTTP service: Ollama, omlx, llama-server,
+LM Studio, vLLM, or TEI. localhost is allowed, so a service on the same machine
+is fine. ESDC does not download a model, start a daemon, or carry a native
+inference library; storage, vector search, BM25 and RRF fusion stay in ESDC.
 
-    pip install esdc --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu     # CPU
-    #                                                                         .../whl/metal   # macOS
-    #                                                                         .../whl/cu124   # CUDA 12.4
-
-Models (~1.2 GB total) download to `~/.esdc/models` on first use; run
-`esdc corpus warmup` to pre-fetch them for offline use.
-
-GPU offload: `corpus.n_gpu_layers` defaults to `-1` (offload all layers
-when a GPU backend is present, else run on CPU — inert on the CPU-only
-wheel, so a GPU-less VPS just uses CPU). Set it to `0` to force CPU. The
-macOS metal wheel and a CUDA build both honour it; for CUDA install a CUDA
-build once (`CMAKE_ARGS="-DGGML_CUDA=on" pip install --force-reinstall
---no-cache-dir llama-cpp-python`, or use the `cu124` wheel index above).
+That means semantic search needs a reachable service. A cold model load can add
+seconds to a query, and `esdc corpus warmup` is a service check rather than a
+download: it asks each role's endpoint with a synthetic input and reports what
+answered. Credentials and document text are never printed.
 
 ### Embedding backends
 
-Query-time similarity **always** runs on the in-process llama.cpp model, so
-semantic search works offline and needs no daemon. Only bulk generation —
-`esdc corpus commit`, `esdc corpus reembed`, `esdc reload` — uses the
-configured backend.
+Query-time similarity and bulk generation resolve through the same factory, so
+both use the service.
 
 | key | values | default |
 |---|---|---|
-| `embedding_backend` | `local`, `ollama`, `openai` | `ollama` |
-| `embedding_host` | URL, `""` = local daemon | `""` |
-| `embedding_model` | wire model id, `openai` only | `""` |
+| `embedding_backend` | `ollama`, `openai` | `ollama` |
+| `embedding_host` | URL, `""` = the local Ollama service | `""` |
+| `embedding_model` | wire model id | `""` |
 | `embedding_api_key` | bearer token, `openai` only | `""` |
 
-`local` runs in-process with no daemon. `ollama` needs
-`ollama pull qwen3-embedding:0.6b` on the target host. `openai` works with
-any OpenAI-compatible `/v1/embeddings` server — LM Studio, llama-server,
-vLLM, TEI — and needs `embedding_model` set to whatever that server calls
-the model:
+`local` is retired: a stored value has no implementation any more, is reported
+when a client is asked for, and is never rewritten from reading the config.
+
+An explicit `embedding_host` or `embedding_api_key` overrides the saved provider
+named by `embedding_provider`; the provider is used when the explicit value is
+empty. An empty `embedding_model` on `ollama` falls back to the legacy
+`qwen3-embedding:0.6b` tag the current index was built against.
 
 ```yaml
 embedding_backend: openai
@@ -163,13 +155,18 @@ embedding_host: http://localhost:8889/v1
 embedding_model: Qwen3-Embedding-0.6B-8bit
 ```
 
-Each vector space stores a probe vector. If a backend produces vectors that
+`openai` works with any OpenAI-compatible `/v1/embeddings` server — LM Studio,
+llama-server, vLLM, TEI — and needs `embedding_model` set to whatever that
+server calls the model.
+
+Each vector space stores a probe vector. If a service produces vectors that
 disagree with the stored ones by more than a small tolerance — a different
 quantization, pooling mode, or model — writes are rejected and searches
-report that embeddings need rebuilding. Measured cosine between the local
-GGUF, Ollama `qwen3-embedding:0.6b` and an MLX 8-bit build is ≥ 0.9986.
+report that embeddings need rebuilding. Measured cosine between services
+running the same weights (Ollama `qwen3-embedding:0.6b` and an MLX 8-bit build)
+is ≥ 0.9986, so the probe, not the model name, is what proves the space.
 
-Per-run override: `--embed-backend local|ollama|openai` on
+Per-run override: `--embed-backend ollama|openai` on
 `esdc corpus commit`, `esdc corpus reembed` and `esdc reload`.
 
 `corpus.ollama_host` is unrelated — it points corpus OCR and text models at
@@ -479,16 +476,19 @@ task's keys; only Chat writes a provider's chat model, and a task that chooses
 to follow the chat model shows that link rather than pretending to be
 independent.
 
-Embeddings has four modes: `local` (the in-process GGUF, which query-time
-similarity always uses), an Ollama provider whose model is the tag pinned in
-code, an OpenAI-compatible provider reference, and a direct endpoint with no
-reference.
+Embeddings is service-only: an Ollama provider, an OpenAI-compatible provider
+reference, and a direct endpoint with no reference. An empty model on the Ollama
+row falls back to the legacy `qwen3-embedding:0.6b` tag. A stored `local` value
+is shown as needing configuration and is never rewritten.
 
 Reranking keeps Enabled as its own yes/no field, separate from Source and
 model: disabling writes only `corpus.rerank = false`, enabling validates the
-saved source and model first, and a connection test never turns it on. Source
-is either the local GGUF or `provider`, which calls `/v1/rerank` on the
-connection named by `corpus.rerank_provider`.
+saved source and model first, and a connection test never turns it on. Source is
+`provider`, which calls `/v1/rerank` on the connection named by
+`corpus.rerank_provider`. A stored `local` value is shown as needing
+configuration, is never rewritten, and leaves search in RRF order. A legacy
+`repo_id:filename.gguf` model id is preserved and sent to the service as the
+model name.
 
 OCR is either the local Ollama model or a saved OpenAI-compatible provider
 used for image chat. Vision support comes from reported model metadata only: a
@@ -543,8 +543,9 @@ ollama pull glm-ocr
 |-----|---------|-------------|
 | `chunk_size` | `3000` | Max characters per chunk (~750 tokens) |
 | `chunk_overlap` | `300` | Characters carried over between consecutive chunks |
-| `rerank_backend` | `local` | Where the rerank stage runs: `local` = the in-process GGUF named by `rerank_model`, `provider` = `/v1/rerank` through `rerank_provider` |
+| `rerank_backend` | `provider` | Where the rerank stage runs: `provider` = `/v1/rerank` through `rerank_provider`. A stored `local` value is retired: it warns once per process per config and search keeps its RRF order |
 | `rerank_provider` | `""` | Saved OpenAI-compatible connection used when `rerank_backend` is `provider`; `""` = none |
+| `rerank_model` | `ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF` | Model id sent to the rerank service; the default is the legacy id kept for stored configs, and a stored `repo_id:filename.gguf` value is preserved and passed through unchanged |
 | `ocr_model` | `glm-ocr` | Ollama vision model used to OCR scanned pages |
 | `ocr_provider` | `""` | Saved provider reused for OCR while `ocr_model` stays the model id; `""` = the Ollama daemon at `corpus.ollama_host` |
 | `metadata_model` | `"main"` | Text LLM for metadata extraction: `main` (default chat provider), `provider:<name>` (a configured provider from config.yaml), an Ollama model name, or `""` (image-based prefill via `ocr_model`) |

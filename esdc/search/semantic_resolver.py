@@ -55,9 +55,11 @@ class SemanticResolver:
             db_path: DuckDB file. Defaults to Config.get_db_file().
             embedder: Object with generate_embedding /
                 generate_embeddings_batch and a `.model` attribute.
-                Defaults to the in-process llama.cpp embedder — query-time
-                similarity always runs locally, with no daemon. Generation
-                call sites inject a backend from get_build_embedder.
+                Defaults to the client from the configured HTTP embedding
+                service (esdc.embedders.get_embedder), resolved on the first
+                operation that asks for a vector. Query-time similarity and
+                generation share that factory, so semantic search needs a
+                reachable service.
             read_only: Open the database in read-only mode. Defaults to
                 True; genuine writers must opt in with ``read_only=False``.
         """

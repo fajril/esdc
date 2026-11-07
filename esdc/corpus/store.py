@@ -345,9 +345,10 @@ class CorpusStore:
         Args:
             db_path: DuckDB file path. Defaults to Config.get_db_file().
             embedder: Object with generate_embedding/generate_embeddings_batch
-                and a `.model` attribute. Defaults to the internal llama.cpp
-                Qwen3 embedder (esdc.corpus.embedder.InternalEmbedder) — no
-                Ollama daemon needed for corpus commit/search.
+                and a `.model` attribute. Defaults to the client for the
+                configured HTTP embedding service (esdc.embedders.get_embedder),
+                resolved on the first operation that asks for a vector, so
+                corpus commit/search needs a reachable service.
             sqlite_path: Operational SQLite db holding the documents
                 source of truth. Defaults to the shared esdc.sqlite.
             read_only: Open the database in read-only mode. Defaults to

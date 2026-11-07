@@ -1,12 +1,15 @@
 """Tests for the token counter."""
 
 from types import SimpleNamespace
+from typing import get_args
 
 import pytest
 import tiktoken
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from esdc.chat.token_counter import (
+    TokenCountSource,
+    TokenUsage,
     estimate_messages_tokens,
     estimate_text_tokens,
     extract_usage_from_message,
@@ -233,3 +236,22 @@ def test_extract_usage_mixed_zero_and_nonzero():
     assert usage.input_tokens == 0
     assert usage.output_tokens == 50
     assert usage.total_tokens == 50
+
+
+def test_token_source_literal_has_no_removed_label():
+    """D9: nothing produces llama_cpp_tokenize once the native library is gone."""
+    sources = set(get_args(TokenCountSource))
+    assert "llama_cpp_tokenize" not in sources
+    assert sources == {"provider_usage", "tiktoken", "heuristic"}
+
+
+def test_every_remaining_source_still_produces_usage():
+    for source in sorted(get_args(TokenCountSource)):
+        usage = TokenUsage(
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            source=source,
+            confidence="exact" if source == "provider_usage" else "estimated",
+        )
+        assert usage.to_dict()["source"] == source

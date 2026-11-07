@@ -161,8 +161,8 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
     "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
     "corpus.n_gpu_layers": (
-        "llama.cpp GPU offload for corpus embed/rerank "
-        "(-1=auto: all layers if a GPU is present else CPU; 0=force CPU)"
+        "Retired llama.cpp GPU offload key: a stored value is still read but "
+        "nothing consumes it, since embedding and rerank run on a service"
     ),
     "corpus.extract_max_tokens": (
         "Max output tokens for each corpus-knowledge extraction LLM call "
@@ -1486,7 +1486,8 @@ class Config:
         # 81.7% -> 83.3%, Recall@10 85.0% -> 90.0%; the cost is roughly one
         # query at lookup Pass@5/Pass@10. Set False to A/B it back.
         "query_instruct": True,
-        # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
+        # rerank_model: model id sent to the rerank service. A stored legacy GGUF
+        # id is kept as it is and passed through unchanged. Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
         # rerank_backend: "provider" calls /v1/rerank on the saved connection
@@ -1525,11 +1526,9 @@ class Config:
         # ollama_host: Ollama server for corpus OCR + Ollama-named text
         # models; "" = local daemon (http://127.0.0.1:11434)
         "ollama_host": "",
-        # n_gpu_layers: llama.cpp GPU offload for corpus embed/rerank.
-        # -1 (default) = offload all layers when a GPU backend is present
-        # (Metal on the mac wheel, CUDA on a cuXXX wheel), and fall back to
-        # CPU otherwise — inert/no-op on the CPU-only wheel (a GPU-less VPS
-        # just runs on CPU). Set 0 to force CPU. Runtime-only, never stored.
+        # n_gpu_layers: retired llama.cpp GPU offload key, kept so a stored value
+        # parses without error. Nothing consumes it now that embedding and rerank
+        # go through a service. Runtime-only, never stored.
         "n_gpu_layers": -1,
     }
 

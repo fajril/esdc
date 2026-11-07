@@ -1,14 +1,14 @@
 # tests/test_embedders.py
-"""Shared embedding clients: HTTP services, plus the loader its last callers use.
+"""Shared embedding clients: the HTTP service factory and its contracts.
 
-The in-process loader and its tests are removed in Task 5, once nothing
-constructs it.
+There is no in-process loader any more, so nothing here patches a model object:
+every client is built from config shape and exercised through a fake transport.
 """
 
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import duckdb
 import pytest
@@ -16,56 +16,58 @@ import pytest
 import esdc.embedders as emb
 
 
-def _fake_model():
-    m = MagicMock()
-    # llama_cpp embed(str) -> list[float]; embed(list) -> list[list[float]]
-    m.embed.side_effect = lambda x: (
-        [0.1, 0.2, 0.3] if isinstance(x, str) else [[0.1, 0.2, 0.3] for _ in x]
-    )
-    return m
-
-
 def test_model_id_is_backend_neutral():
     assert emb.MODEL_ID == "qwen3-embedding-0.6b-q8_0"
 
 
-def test_internal_embedder_reports_model_id():
-    assert emb.InternalEmbedder().model == emb.MODEL_ID
+def test_no_in_process_seam_remains():
+    """The retired loader is removed, not quietly aliased to the HTTP client."""
+    for name in ("InternalEmbedder", "_get_model", "_close_model", "_model"):
+        assert not hasattr(emb, name), name
 
 
-def test_internal_generate_embedding_returns_floats():
-    with patch.object(emb, "_get_model", return_value=_fake_model()):
-        vec = emb.InternalEmbedder().generate_embedding("halo")
-    assert vec == [0.1, 0.2, 0.3]
-    assert all(isinstance(x, float) for x in vec)
-
-
-def test_internal_batch_empty_returns_empty():
-    assert emb.InternalEmbedder().generate_embeddings_batch([]) == []
-
-
-def test_internal_batch_maps_each_text():
-    with patch.object(emb, "_get_model", return_value=_fake_model()):
-        out = emb.InternalEmbedder().generate_embeddings_batch(["a", "b"])
-    assert out == [[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]]
-
-
-def test_corpus_shim_reexports_same_objects():
+def test_corpus_shim_reexports_the_contract():
     from esdc.corpus import embedder as shim
 
-    assert shim.InternalEmbedder is emb.InternalEmbedder
     assert shim.MODEL_ID == emb.MODEL_ID
+    assert shim.EmbeddingClient is emb.EmbeddingClient
+    assert sorted(shim.__all__) == ["EmbeddingClient", "MODEL_ID"]
 
 
 def test_embedders_module_has_no_module_level_search_import():
-    """esdc.search imports semantic_resolver, which will import this module."""
+    """esdc.search imports semantic_resolver, which will import this module.
+
+    The originals are restored in `finally`. A fresh import creates a second
+    module object, and both `sys.modules` and the `esdc` package attribute point
+    at it, so callers that imported `esdc.embedders` first would keep the
+    original while a later test patched the new one — the patch would not reach
+    them and the test would reach a real service instead of a fake one.
+    """
     import sys
 
-    sys.modules.pop("esdc.search", None)
-    sys.modules.pop("esdc.embedders", None)
-    import esdc.embedders  # noqa: F401
+    import esdc
 
-    assert "esdc.search" not in sys.modules
+    original_embedders = sys.modules.get("esdc.embedders")
+    original_search = sys.modules.get("esdc.search")
+    try:
+        sys.modules.pop("esdc.search", None)
+        sys.modules.pop("esdc.embedders", None)
+        import esdc.embedders  # noqa: F401
+
+        assert "esdc.search" not in sys.modules
+    finally:
+        for name, original in (
+            ("esdc.embedders", original_embedders),
+            ("esdc.search", original_search),
+        ):
+            attribute = name.split(".", 1)[1]
+            if original is None:
+                sys.modules.pop(name, None)
+                if hasattr(esdc, attribute):
+                    delattr(esdc, attribute)
+                continue
+            sys.modules[name] = original
+            setattr(esdc, attribute, original)
 
 
 def _patched_manager(monkeypatch, mgr) -> MagicMock:

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Change
+
+- Removed the in-process inference backend; point
+  `embedding_backend`/`corpus.rerank_backend` at an HTTP service (Ollama, omlx,
+  llama-server, LM Studio, TEI), including on localhost. Semantic search now
+  requires a reachable service.
+- `llama-cpp-python` and `huggingface-hub` are no longer dependencies, and the
+  prebuilt native-wheel indexes are gone from `pyproject.toml`. A cold model load
+  on the service can add seconds to a query.
+- A stored `embedding_backend: local` or `corpus.rerank_backend: local` value is
+  reported as retired when a client is asked for and is never rewritten:
+  query-time similarity and bulk generation share the service factory, and a
+  legacy rerank `local` value warns once per process and keeps RRF order.
+- `esdc corpus warmup` checks each role's service with synthetic input; it no
+  longer downloads or loads a model.
+
 ### Changed
 
 - Replace the retired POD serving model with canonical input tables and

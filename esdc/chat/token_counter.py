@@ -15,7 +15,6 @@ TOKEN_CHARS_PER_TOKEN = 4
 TokenCountSource = Literal[
     "provider_usage",
     "tiktoken",
-    "llama_cpp_tokenize",
     "heuristic",
 ]
 TokenCountConfidence = Literal["exact", "estimated"]
@@ -144,7 +143,7 @@ def estimate_text_tokens(
 ) -> int:
     """Estimate tokens for a text string using the best safe local strategy.
 
-    ``base_url`` is accepted as an extension point for future llama.cpp/Ollama
+    ``base_url`` is accepted as an extension point for future Ollama HTTP
     ``/tokenize`` support. v1 avoids network calls during preflight counting.
     """
     del base_url

@@ -4,8 +4,9 @@
 Query-time similarity and bulk generation both resolve through
 `get_embedder()`, which builds a client for the configured HTTP service
 (Ollama or any OpenAI-compatible `/v1/embeddings` server, localhost
-included). `InternalEmbedder` remains only while its last callers move; it
-is removed once nothing constructs it.
+included). There is no in-process backend: a stored `local` value is
+reported as a configuration error when a client is asked for, and is never
+rewritten.
 
 Every client reports MODEL_ID as its `.model`, never a service-specific
 wire name: that value is the vector-space identity written into
@@ -17,7 +18,6 @@ chooses the request, the probe proves the space.
 
 from __future__ import annotations
 
-import atexit
 import hashlib
 import json
 import logging
@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 # Stable identifier pinned in corpus_meta/semantic_meta. Backend-neutral on
 # purpose: an Ollama or OpenAI-compatible server running the same weights
-# writes into the same space under the same pin. Tied to EMBED_REPO/
-# EMBED_FILE in llama_backend; changing the GGUF means changing this +
-# reembedding.
+# writes into the same space under the same pin. Changing the weights the
+# services serve means changing this + reembedding, because every client
+# reports this name regardless of which deployment produced the vector.
 MODEL_ID = "qwen3-embedding-0.6b-q8_0"
 
 # An interactive query must not inherit the bulk-generation bound: a service
@@ -163,116 +163,6 @@ def _validate_vectors(
             )
         numbers.append(row)
     return numbers
-
-
-_load_lock = threading.Lock()
-# Llama contexts are not thread-safe; every embed() call serializes on
-# this. The chat server can run corpus tools concurrently.
-_infer_lock = threading.Lock()
-_model: Any | None = None
-# Set once _close_model begins so a late _get_model() cannot start a
-# reload that would outlive the atexit handlers (that model would never
-# be freed — the very SIGABRT this module removes).
-_closing = False
-
-
-def _close_model() -> None:
-    """Free the llama.cpp model before the process exits.
-
-    ggml-metal's dylib destructor runs at exit() and asserts every
-    residency set was released (ggml-metal-device.m: GGML_ASSERT
-    ([rsets->data count] == 0)). A model still alive then aborts the
-    process with SIGABRT — exit 134 — after the work already succeeded.
-    Dropping the last Python reference is not enough on its own: pytest
-    keeps models alive in retained tracebacks, and a daemon thread's
-    frame outlives interpreter finalization entirely.
-
-    Both locks are taken with a timeout because atexit runs on the main
-    thread while a daemon thread may still be inside _get_model() or
-    embed(); freeing the model under them would be a use-after-free.
-    Giving up restores the old abort — same outcome, no memory
-    corruption. Lock order is always _load_lock then _infer_lock.
-    """
-    global _model, _closing
-    _closing = True
-    if not _load_lock.acquire(timeout=2.0):
-        logger.warning("[Embedding] model loading at exit; skipping close")
-        return
-    try:
-        if _model is None:
-            return
-        if not _infer_lock.acquire(timeout=2.0):
-            logger.warning("[Embedding] model busy at exit; skipping close")
-            return
-        try:
-            _model.close()
-        finally:
-            # Clear even if close() raises so a handler re-registered by
-            # a load that finished mid-atexit never double-frees.
-            _model = None
-            _infer_lock.release()
-    finally:
-        _load_lock.release()
-
-
-def _get_model() -> Any:
-    """Load (once) and return the llama.cpp embedding model."""
-    global _model
-    with _load_lock:
-        if _model is None:
-            if _closing:
-                # Shutdown has begun; a model loaded now would outlive
-                # the atexit handlers and leak Metal buffers at exit().
-                # Raising rather than returning None keeps this function's
-                # contract — callers dereference the result immediately.
-                raise RuntimeError(
-                    "[Embedding] model load refused: interpreter shutdown has begun."
-                )
-            # Imports inside the try: a broken llama-cpp-python install
-            # (ImportError) must surface the same actionable message as a
-            # failed download.
-            try:
-                from esdc.corpus.llama_backend import (
-                    EMBED_FILE,
-                    EMBED_REPO,
-                    load_llama,
-                    resolve_gguf,
-                )
-
-                path = resolve_gguf(EMBED_REPO, EMBED_FILE)
-                _model = load_llama(path)
-            except Exception as e:
-                raise RuntimeError(
-                    f"[Embedding] failed to load embedding model {MODEL_ID}. "
-                    "First use needs internet to download the GGUF (~600 MB, "
-                    f"cached under ~/.esdc/models afterwards). Error: {e}"
-                ) from e
-            # Registered on load, not at import: a process that never
-            # embeds owns no Metal buffers and needs no teardown.
-            atexit.register(_close_model)
-            logger.info("[Embedding] internal model loaded | model=%s", MODEL_ID)
-        return _model
-
-
-class InternalEmbedder:
-    """llama.cpp-backed embedder. Always used for query-time similarity."""
-
-    def __init__(self) -> None:
-        self.model = MODEL_ID
-
-    def generate_embedding(self, text: str) -> list[float]:
-        """Generate an embedding for a single text."""
-        model = _get_model()
-        with _infer_lock:
-            return [float(x) for x in model.embed(text)]
-
-    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings for a batch of texts."""
-        if not texts:
-            return []
-        model = _get_model()
-        with _infer_lock:
-            return [[float(x) for x in vec] for vec in model.embed(texts)]
 
 
 # Exceptions that mean the service did not answer. Their text is the failure
@@ -641,10 +531,9 @@ def get_embedder(backend: str | None = None) -> EmbeddingClient:
 def get_build_embedder(backend: str | None = None) -> EmbeddingClient:
     """Compatibility alias for `get_embedder` (D6).
 
-    The old contract — "similarity always runs on InternalEmbedder, never
-    call this from a query path" — no longer holds: query and generation now
-    resolve through the same factory. The name stays because existing callers
-    and tests patch it.
+    There is no build-only client any more: query and generation resolve
+    through the same factory. The name stays because existing callers and
+    tests patch it.
     """
     return get_embedder(backend)
 

@@ -153,13 +153,16 @@ def test_rerank_failure_is_reported(monkeypatch):
     assert "timeout" in result.detail
 
 
-def test_legacy_local_backend_does_not_load_a_gguf(monkeypatch):
+def test_legacy_local_backend_has_no_load_path(monkeypatch):
+    """The retired local value is reported through the public factory.
+
+    There is no loader left for warmup to reach: nothing in-process can be
+    loaded any more.
+    """
     monkeypatch.setattr(reranker_mod, "_WARNED_RERANK_SIGNATURES", set())
+    assert not hasattr(reranker_mod, "_load_reranker")
+    assert not hasattr(reranker_mod, "Reranker")
 
-    def forbidden():
-        raise AssertionError("warmup must not load a local GGUF")
-
-    monkeypatch.setattr(reranker_mod, "_load_reranker", forbidden)
     monkeypatch.setattr(w, "get_embedder", lambda: _embedder())
     monkeypatch.setattr(
         w.Config,
@@ -168,7 +171,7 @@ def test_legacy_local_backend_does_not_load_a_gguf(monkeypatch):
             lambda cls: {
                 "rerank": True,
                 "rerank_backend": "local",
-                "rerank_model": "gguf-x",
+                "rerank_model": "service-model-x",
             }
         ),
     )
