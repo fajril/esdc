@@ -397,8 +397,6 @@ class TestGetLastUpdated:
     def test_get_last_updated_returns_timestamp(self, tmp_path):
         """Test get_last_updated returns timestamp from _metadata table."""
         conn = duckdb.connect(str(tmp_path / "test.db"))
-        conn.execute("INSTALL vss")
-        conn.execute("LOAD vss")
         _execute_sql_script(conn, "create_table_metadata.sql")
 
         result = get_last_updated(conn)
@@ -409,8 +407,6 @@ class TestGetLastUpdated:
     def test_get_last_updated_returns_none_when_no_table(self, tmp_path):
         """Test get_last_updated returns None when _metadata table does not exist."""
         conn = duckdb.connect(str(tmp_path / "test.db"))
-        conn.execute("INSTALL vss")
-        conn.execute("LOAD vss")
 
         result = get_last_updated(conn)
         assert result is None
@@ -418,23 +414,16 @@ class TestGetLastUpdated:
 
     def test_get_last_updated_updates_on_second_call(self, tmp_path):
         """Test that re-running metadata SQL updates the timestamp."""
-        import time
-
         conn = duckdb.connect(str(tmp_path / "test.db"))
-        conn.execute("INSTALL vss")
-        conn.execute("LOAD vss")
-
         _execute_sql_script(conn, "create_table_metadata.sql")
         first = get_last_updated(conn)
-
-        time.sleep(1.1)
 
         _execute_sql_script(conn, "create_table_metadata.sql")
         second = get_last_updated(conn)
 
         assert first is not None
         assert second is not None
-        assert second >= first
+        assert second > first
         conn.close()
 
 
