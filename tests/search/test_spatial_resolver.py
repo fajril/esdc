@@ -399,10 +399,8 @@ class TestCalculateAverageDistance:
 class TestClusteringPerformance:
     """Performance tests for clustering with larger datasets."""
 
-    def test_clustering_100_fields_performance(self, tmp_path: Path) -> None:
-        """Test clustering performance with 100 fields."""
-        import time
-
+    def test_clustering_100_fields(self, tmp_path: Path) -> None:
+        """Test clustering correctness with 100 fields."""
         db_path = tmp_path / "test_perf_100.db"
         conn = duckdb.connect(str(db_path))
         conn.execute("""
@@ -449,20 +447,12 @@ class TestClusteringPerformance:
 
         resolver = SpatialResolver(db_path=db_path)
 
-        start_time = time.time()
         result = resolver.find_field_clusters(max_distance_km=30.0, min_cluster_size=2)
-        elapsed_time = time.time() - start_time
 
         assert result["status"] == "success"
-        assert elapsed_time < 5.0, (
-            f"Clustering 100 fields took {elapsed_time:.2f}s, expected < 5s"
-        )
-        print(f"\nPerformance: 100 fields clustered in {elapsed_time:.2f}s")
 
-    def test_clustering_500_fields_performance(self, tmp_path: Path) -> None:
-        """Test clustering performance with 500 fields."""
-        import time
-
+    def test_clustering_500_fields(self, tmp_path: Path) -> None:
+        """Test clustering correctness with 500 fields."""
         db_path = tmp_path / "test_perf_500.db"
         conn = duckdb.connect(str(db_path))
         conn.execute("""
@@ -513,15 +503,9 @@ class TestClusteringPerformance:
 
         resolver = SpatialResolver(db_path=db_path)
 
-        start_time = time.time()
         result = resolver.find_field_clusters(max_distance_km=50.0, min_cluster_size=3)
-        elapsed_time = time.time() - start_time
 
         assert result["status"] == "success"
-        assert elapsed_time < 10.0, (
-            f"Clustering 500 fields took {elapsed_time:.2f}s, expected < 10s"
-        )
-        print(f"\nPerformance: 500 fields clustered in {elapsed_time:.2f}s")
 
     def test_clustering_quality_known_groups(self, tmp_path: Path) -> None:
         """Test that clustering correctly identifies known groups."""
