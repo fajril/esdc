@@ -12,8 +12,16 @@ import asyncio
 
 import pytest
 
-from esdc.server.constants import SSE_KEEPALIVE_INTERVAL, SSE_STREAM_TIMEOUT
+from esdc.server import routes
+from esdc.server.constants import SSE_STREAM_TIMEOUT
 from esdc.server.routes import with_keepalive
+
+
+@pytest.fixture
+def short_interval(monkeypatch) -> float:
+    interval = 0.05
+    monkeypatch.setattr(routes, "SSE_KEEPALIVE_INTERVAL", interval)
+    return interval
 
 
 class FakeRequest:
@@ -50,13 +58,13 @@ class TestWithKeepalive:
         assert len(data_chunks) == 5
 
     @pytest.mark.asyncio
-    async def test_sends_keepalive_during_gaps(self):
+    async def test_sends_keepalive_during_gaps(self, short_interval: float):
         """Keepalive pings sent during long gaps without destroying generator.
 
         This is the critical regression test: the old asyncio.wait_for()
         implementation permanently closed async generators on timeout.
         """
-        delay = SSE_KEEPALIVE_INTERVAL + 1
+        delay = short_interval + 0.02
 
         async def slow_inner():
             yield "data: first\n\n"
@@ -79,7 +87,7 @@ class TestWithKeepalive:
         )
 
     @pytest.mark.asyncio
-    async def test_generator_survives_multiple_timeouts(self):
+    async def test_generator_survives_multiple_timeouts(self, short_interval: float):
         """Generator survives multiple keepalive timeouts.
 
         Verifies the fix for the bug where asyncio.wait_for() on
@@ -89,9 +97,9 @@ class TestWithKeepalive:
 
         async def multi_gap_inner():
             yield "data: a\n\n"
-            await asyncio.sleep(SSE_KEEPALIVE_INTERVAL + 2)
+            await asyncio.sleep(short_interval + 0.02)
             yield "data: b\n\n"
-            await asyncio.sleep(SSE_KEEPALIVE_INTERVAL + 2)
+            await asyncio.sleep(short_interval + 0.02)
             yield "data: c\n\n"
 
         request = FakeRequest()
@@ -105,9 +113,11 @@ class TestWithKeepalive:
         )
 
     @pytest.mark.asyncio
-    async def test_stops_on_client_disconnect_during_keepalive(self):
+    async def test_stops_on_client_disconnect_during_keepalive(
+        self, short_interval: float
+    ):
         """Stream stops when client disconnects during a keep-alive wait."""
-        delay = SSE_KEEPALIVE_INTERVAL + 2  # longer than keepalive interval
+        delay = short_interval + 0.02  # longer than keepalive interval
 
         async def slow_inner():
             yield "data: first\n\n"
@@ -126,7 +136,7 @@ class TestWithKeepalive:
         )
 
     @pytest.mark.asyncio
-    async def test_stops_on_client_disconnect_after_chunk(self):
+    async def test_stops_on_client_disconnect_after_chunk(self, short_interval: float):
         """Stream stops when client disconnects after receiving chunks."""
         # Client disconnects after 3 is_disconnected checks
         # (enough to yield first 2 chunks then stop)
@@ -135,7 +145,7 @@ class TestWithKeepalive:
         async def inner():
             yield "data: first\n\n"
             yield "data: second\n\n"
-            await asyncio.sleep(SSE_KEEPALIVE_INTERVAL + 2)
+            await asyncio.sleep(short_interval + 0.02)
             yield "data: never_reached\n\n"
 
         results = []
