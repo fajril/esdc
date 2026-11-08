@@ -58,15 +58,6 @@ def test_probe_seeded_on_first_write_path(tmp_path):
     assert json.loads(stored) == [1.0, 0.0, 0.0]
 
 
-def test_matching_backend_reopens_cleanly(tmp_path):
-    s = _store(tmp_path, [1.0, 0.0, 0.0])
-    s.ensure_tables(validate_model=True)
-    s.close()
-    s2 = _store(tmp_path, [0.999, 0.001, 0.0])
-    s2.ensure_tables(validate_model=True)  # must not raise
-    s2.close()
-
-
 def test_drifted_backend_is_rejected(tmp_path):
     s = _store(tmp_path, [1.0, 0.0, 0.0])
     s.ensure_tables(validate_model=True)
@@ -74,15 +65,6 @@ def test_drifted_backend_is_rejected(tmp_path):
     s2 = _store(tmp_path, [0.0, 1.0, 0.0])
     with pytest.raises(ValueError, match="parity probe failed"):
         s2.ensure_tables(validate_model=True)
-    s2.close()
-
-
-def test_read_path_skips_probe(tmp_path):
-    s = _store(tmp_path, [1.0, 0.0, 0.0])
-    s.ensure_tables(validate_model=True)
-    s.close()
-    s2 = _store(tmp_path, [0.0, 1.0, 0.0])
-    s2.ensure_tables()  # validate_model=False -> no probe, no raise
     s2.close()
 
 

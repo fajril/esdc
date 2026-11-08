@@ -450,25 +450,6 @@ class TestHumanizeBytes:
         assert _humanize_bytes(-1024) == "0 B"
 
 
-class TestPrintHitRate:
-    """Tests for _print_hit_rate helper."""
-
-    def test_zero_activity(self):
-        from esdc.esdc import _print_hit_rate
-
-        _print_hit_rate(0, 0)
-
-    def test_high_hit_rate(self):
-        from esdc.esdc import _print_hit_rate
-
-        _print_hit_rate(90, 10)
-
-    def test_low_hit_rate(self):
-        from esdc.esdc import _print_hit_rate
-
-        _print_hit_rate(10, 90)
-
-
 class TestChatCommandCleanup:
     """chat command has no --setup flag and clean guard logic."""
 

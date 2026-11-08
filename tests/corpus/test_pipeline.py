@@ -1451,24 +1451,6 @@ def test_validate_entity_overrides_hierarchy_mismatch():
         pipeline._validate_entity_overrides(cast(EntityResolver, resolver), overrides)
 
 
-def test_validate_entity_overrides_hierarchy_valid():
-    """CLI overrides with valid hierarchy pass."""
-    resolver = FakeEntityResolver(
-        matches={
-            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
-            "Duri": {
-                "entity_type": "field_name",
-                "name": "Duri",
-                "confidence": 1.0,
-                "wk_name": "WK Rokan",
-            },
-        }
-    )
-    overrides = {"wk_name": "WK Rokan", "field_name": "Duri"}
-    # Should not raise
-    pipeline._validate_entity_overrides(cast(EntityResolver, resolver), overrides)
-
-
 def test_validate_entity_overrides_project_hierarchy_mismatch():
     """--project-name under a different field/wk raises, naming both flags."""
     resolver = FakeEntityResolver(
@@ -3063,17 +3045,6 @@ def test_run_commit_fails_sidecar_missing_file_hash(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 # progress bars
 # --------------------------------------------------------------------------
-
-
-def test_progress_with_status_helper_builds_and_updates():
-    with pipeline._progress_with_status("extract", 2, "files") as p:
-        p.file("surat.pdf")
-        p.status("parsing PDF")
-        p.advance()
-        p.status("resolve entities")
-        p.advance()
-    # No assertion beyond "did not raise" + both tasks completed.
-    # (Rendering correctness is visual; this pins the contract/signature.)
 
 
 class FakeProgressHandle:

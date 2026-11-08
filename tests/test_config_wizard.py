@@ -181,13 +181,6 @@ class TestRunWizard:
 
     @patch("esdc.config_wizard.Config.init_config")
     @patch("esdc.config_wizard.questionary.select")
-    @patch("esdc.config_wizard.rich_print")
-    def test_keyboard_interrupt(self, mock_print, mock_select, mock_init):
-        mock_select.return_value.unsafe_ask.side_effect = KeyboardInterrupt()
-        run_wizard()
-
-    @patch("esdc.config_wizard.Config.init_config")
-    @patch("esdc.config_wizard.questionary.select")
     @patch("esdc.config_wizard._edit_provider_flow")
     def test_edit_provider(self, mock_edit, mock_select, mock_init):
         mock_select.return_value.unsafe_ask.side_effect = [
@@ -1062,26 +1055,6 @@ class TestConfigFlows:
         # When back is selected, no edits should happen
         mock_prompt.assert_not_called()
         mock_set.assert_not_called()
-
-    @patch("esdc.config_wizard.Config.get_all_config_flat")
-    @patch("esdc.config_wizard.rich_print")
-    def test_show_config(self, mock_print, mock_flat):
-        from esdc.config_wizard import _show_config_flow
-
-        mock_flat.return_value = {
-            "api_url": "https://example.com",
-            "database_path": "/tmp/db",
-        }
-        _show_config_flow()
-
-    @patch("esdc.config_wizard.Config.get_all_config_flat")
-    @patch("esdc.config_wizard.rich_print")
-    def test_show_config_empty(self, mock_print, mock_flat):
-        from esdc.config_wizard import _show_config_flow
-
-        mock_flat.return_value = {}
-        _show_config_flow()
-
 
 class TestGeneralConfigListsCorpusKeys:
     """Corpus keys appear in the edit list even when absent from config.yaml."""

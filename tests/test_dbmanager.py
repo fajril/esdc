@@ -178,11 +178,6 @@ class TestInvalidateSqlCache:
         finally:
             observer.close()
 
-    def test_invalidate_cache_no_dir(self, tmp_path, mocker):
-        """Test invalidate_sql_cache handles missing cache dir gracefully."""
-        mocker.patch("esdc.dbmanager.Config.get_cache_dir", return_value=tmp_path)
-        invalidate_sql_cache()
-
     def test_disk_cache_clear_is_attempted_when_handle_reset_fails(
         self, tmp_path, mocker
     ):

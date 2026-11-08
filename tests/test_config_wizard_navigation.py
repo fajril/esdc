@@ -1,6 +1,8 @@
 """Tests for back navigation in config wizard flows."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from esdc.config_wizard import (
     PairSelection,
@@ -16,15 +18,54 @@ from esdc.config_wizard import (
 )
 from esdc.model_catalog import ModelCatalog
 
+BACK_FLOWS = [
+    _add_provider_flow,
+    _edit_provider_flow,
+    _remove_provider_flow,
+    _set_default_provider_flow,
+    _set_provider_order_flow,
+    _test_provider_standalone,
+]
+
+
+@pytest.mark.parametrize("flow", BACK_FLOWS, ids=lambda flow: flow.__name__)
+def test_back_at_the_first_level_returns_without_writing(flow, monkeypatch):
+    """Back at the provider picker stops the flow before it can write."""
+    monkeypatch.setattr(
+        "esdc.config_wizard.Config.get_providers",
+        lambda: {"openai": {"provider_type": "openai"}},
+    )
+    monkeypatch.setattr("esdc.config_wizard.Config.get_provider_order", lambda: [])
+    writers = {
+        name: MagicMock()
+        for name in (
+            "save_provider",
+            "remove_provider",
+            "set_default_provider",
+            "set_provider_order",
+            "set_config_value",
+            "set_config_values",
+        )
+    }
+    for name, mock in writers.items():
+        monkeypatch.setattr(f"esdc.config_wizard.Config.{name}", mock)
+    test_provider = MagicMock()
+    monkeypatch.setattr("esdc.config_wizard._test_provider", test_provider)
+    select = MagicMock()
+    select.return_value.unsafe_ask.return_value = "__back__"
+    monkeypatch.setattr("esdc.config_wizard.questionary.select", select)
+
+    flow()
+
+    # One prompt only: the flow returned instead of continuing to the next step.
+    assert select.call_count == 1
+    test_provider.assert_not_called()
+    for mock in writers.values():
+        mock.assert_not_called()
+
 
 class TestAddProviderFlowBack:
     """_add_provider_flow must return to main menu on Back."""
-
-    @patch("esdc.config_wizard.questionary.select")
-    def test_back_at_provider_type(self, mock_select):
-        mock_select.return_value.unsafe_ask.return_value = "__back__"
-        # Should return without raising or saving anything
-        _add_provider_flow()
 
     @patch("esdc.config_wizard.Config.save_provider")
     @patch("esdc.config_wizard._fetch_models")
@@ -45,13 +86,6 @@ class TestAddProviderFlowBack:
 
 class TestEditProviderFlowBack:
     """_edit_provider_flow must handle Back at each level."""
-
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_back_at_provider_selection(self, mock_select, mock_get_providers):
-        mock_get_providers.return_value = {"openai": {"provider_type": "openai"}}
-        mock_select.return_value.unsafe_ask.return_value = "__back__"
-        _edit_provider_flow()
 
     @patch("esdc.config_wizard.Config.save_provider")
     @patch("esdc.config_wizard.Config.get_providers")
@@ -89,50 +123,6 @@ class TestEditProviderFlowBack:
 
         mock_save.assert_not_called()
         assert saved["openai"]["api_key"] == "old"
-
-
-class TestRemoveProviderFlowBack:
-    """_remove_provider_flow must return on Back."""
-
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_back_at_provider_selection(self, mock_select, mock_get_providers):
-        mock_get_providers.return_value = {"openai": {"provider_type": "openai"}}
-        mock_select.return_value.unsafe_ask.return_value = "__back__"
-        _remove_provider_flow()
-
-
-class TestSetDefaultProviderFlowBack:
-    """_set_default_provider_flow must return on Back."""
-
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_back_at_provider_selection(self, mock_select, mock_get_providers):
-        mock_get_providers.return_value = {"openai": {"provider_type": "openai"}}
-        mock_select.return_value.unsafe_ask.return_value = "__back__"
-        _set_default_provider_flow()
-
-
-class TestSetProviderOrderFlowBack:
-    """_set_provider_order_flow must return on Back."""
-
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_back_at_provider_selection(self, mock_select, mock_get_providers):
-        mock_get_providers.return_value = {"openai": {"provider_type": "openai"}}
-        mock_select.return_value.unsafe_ask.return_value = "__back__"
-        _set_provider_order_flow()
-
-
-class TestTestProviderStandaloneBack:
-    """_test_provider_standalone must return on Back."""
-
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_back_at_provider_selection(self, mock_select, mock_get_providers):
-        mock_get_providers.return_value = {"openai": {"provider_type": "openai"}}
-        mock_select.return_value.unsafe_ask.return_value = "__back__"
-        _test_provider_standalone()
 
 
 _EMPTY_CATALOG = ModelCatalog()

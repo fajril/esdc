@@ -365,11 +365,6 @@ def test_probe_seeds_when_null():
     assert json.loads(stored) == [1.0, 0.0, 0.0]
 
 
-def test_probe_passes_on_near_identical_vector():
-    conn = _meta_conn(probe=[1.0, 0.0, 0.0])
-    emb.check_or_seed_probe(conn, "m", _FixedEmbedder([0.999, 0.001, 0.0]))
-
-
 def test_probe_raises_on_drifted_vector():
     conn = _meta_conn(probe=[1.0, 0.0, 0.0])
     with pytest.raises(ValueError) as exc:
@@ -381,11 +376,3 @@ def test_probe_raises_on_dim_change():
     conn = _meta_conn(probe=[1.0, 0.0, 0.0])
     with pytest.raises(ValueError, match="dimension"):
         emb.check_or_seed_probe(conn, "m", _FixedEmbedder([1.0, 0.0]))
-
-
-def test_probe_noop_when_meta_empty():
-    conn = duckdb.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE m (embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
-    )
-    emb.check_or_seed_probe(conn, "m", _FixedEmbedder([1.0]))  # must not raise

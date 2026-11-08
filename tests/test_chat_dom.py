@@ -72,14 +72,6 @@ class TestThinkingIndicator:
         assert len(indicator.steps) == 1
         assert indicator.steps[0] == "Test step"
 
-    def test_thinking_indicator_title_updates(self):
-        """ThinkingIndicator title should update with step count."""
-        indicator = ThinkingIndicator()
-        indicator.add_step("Step 1")
-        # Title should contain step count after adding
-        # (verified in _update_display called by add_step)
-
-
 class TestSQLPanel:
     """Test SQLPanel collapsible widget."""
 

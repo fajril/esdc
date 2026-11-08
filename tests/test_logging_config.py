@@ -1,11 +1,6 @@
 """Test logging configuration loading from config.yaml."""
 
-from unittest.mock import patch
-
 import pytest
-import yaml
-
-from esdc.configs import Config
 
 
 class TestLoggingConfig:
@@ -87,49 +82,6 @@ class TestLoggingConfig:
         perf_config = logging_config["performance"]
         assert "enabled" in perf_config
         assert "slow_request_threshold_ms" in perf_config
-
-    def test_logging_config_loaded_from_yaml(self, tmp_path):
-        """Verify logging config can be loaded from config.yaml."""
-        # Create temporary config file
-        config_dir = tmp_path / ".esdc"
-        config_dir.mkdir()
-        config_file = config_dir / "config.yaml"
-
-        test_config = {
-            "logging": {
-                "level": "DEBUG",
-                "server": {
-                    "level": "INFO",
-                    "file": {
-                        "enabled": True,
-                        "path": "test.log",
-                        "max_size": "5MB",
-                        "backup_count": 3,
-                    },
-                },
-            }
-        }
-
-        with open(config_file, "w") as f:
-            yaml.dump(test_config, f)
-
-        # This will fail initially - Config doesn't have get_logging_config yet
-        with patch.object(Config, "get_config_dir", return_value=config_dir):
-            # Try to load logging config
-            # logging_config = Config.get_logging_config()
-            # assert logging_config["level"] == "DEBUG"
-            pass  # Placeholder - will implement method
-
-    def test_default_logging_values_when_config_missing(self):
-        """Verify sensible defaults when logging config not in yaml."""
-        # When logging section is missing from config.yaml
-        # Should use default values
-
-        # Expected defaults:
-
-        # This will test Config.get_logging_config() with missing logging section
-        # Should return defaults
-        pass  # Placeholder
 
 
 if __name__ == "__main__":
