@@ -54,11 +54,20 @@ def test_back_at_the_first_level_returns_without_writing(flow, monkeypatch):
     select = MagicMock()
     select.return_value.unsafe_ask.return_value = "__back__"
     monkeypatch.setattr("esdc.config_wizard.questionary.select", select)
+    references = MagicMock(return_value=[])
+    monkeypatch.setattr(
+        "esdc.config_wizard.Config.get_provider_references", references
+    )
+    confirm = MagicMock()
+    confirm.return_value.unsafe_ask.return_value = False
+    monkeypatch.setattr("esdc.config_wizard.questionary.confirm", confirm)
 
     flow()
 
     # One prompt only: the flow returned instead of continuing to the next step.
     assert select.call_count == 1
+    confirm.assert_not_called()
+    references.assert_not_called()
     test_provider.assert_not_called()
     for mock in writers.values():
         mock.assert_not_called()
