@@ -1451,6 +1451,37 @@ def test_validate_entity_overrides_hierarchy_mismatch():
         pipeline._validate_entity_overrides(cast(EntityResolver, resolver), overrides)
 
 
+def test_validate_entity_overrides_hierarchy_valid(monkeypatch):
+    """CLI overrides with a valid hierarchy pass through the hierarchy check."""
+    resolver = FakeEntityResolver(
+        matches={
+            "Rokan": {"entity_type": "wk_name", "name": "WK Rokan", "confidence": 1.0},
+            "Duri": {
+                "entity_type": "field_name",
+                "name": "Duri",
+                "confidence": 1.0,
+                "wk_name": "WK Rokan",
+            },
+        }
+    )
+    overrides = {"wk_name": "WK Rokan", "field_name": "Duri"}
+    checked: list[dict[str, str]] = []
+    hierarchy_check = pipeline._validate_entity_hierarchy
+
+    def spy(res, given, canonical):
+        checked.append(dict(canonical))
+        hierarchy_check(res, given, canonical)
+
+    monkeypatch.setattr(pipeline, "_validate_entity_hierarchy", spy)
+
+    assert (
+        pipeline._validate_entity_overrides(cast(EntityResolver, resolver), overrides)
+        is None
+    )
+    # The resolved pair reached the hierarchy check and passed it.
+    assert checked == [{"wk_name": "WK Rokan", "field_name": "Duri"}]
+
+
 def test_validate_entity_overrides_project_hierarchy_mismatch():
     """--project-name under a different field/wk raises, naming both flags."""
     resolver = FakeEntityResolver(
