@@ -343,6 +343,11 @@ class _FixedEmbedder:
         return [list(self._vec) for _ in texts]
 
 
+def test_probe_text_is_frozen_for_vector_identity():
+    """No other default test covers it: changing it re-embeds every space."""
+    assert emb.PROBE_TEXT == "esdc corpus embedding parity probe"
+
+
 def test_cosine_is_scale_invariant():
     assert emb.cosine([1.0, 0.0], [5.0, 0.0]) == pytest.approx(1.0)
 
