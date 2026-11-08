@@ -1,6 +1,7 @@
 """Tests for the esdc CLI."""
 
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -65,12 +66,13 @@ class TestStatusCommand:
         assert result.exit_code == 0
         assert "Hit rate:" in result.stdout or "N/A" in result.stdout
 
-    def test_status_with_custom_env(self):
+    def test_status_with_custom_env(self, isolated_config):
         """Test `status fetch` shows custom path from env var."""
         with patch.dict(os.environ, {"ESDC_DB_FILE": "/custom/path/db.db"}):
             result = runner.invoke(app, ["status", "fetch"])
             assert result.exit_code == 0
             assert "/custom/path/db.db" in result.stdout
+            assert str(Path.home() / ".esdc") not in result.stdout
 
     def test_status_no_database(self):
         """Test bare status shows no database message when DB missing."""
@@ -402,13 +404,13 @@ class TestVerboseFlag:
             result = runner.invoke(app, ["--help"])
             assert result.exit_code == 0
 
-    def test_verbose_info(self):
+    def test_verbose_info(self, isolated_config):
         """Test info verbosity level."""
         with patch("esdc.esdc.Config.init_config"):
             result = runner.invoke(app, ["--verbose", "1", "status"])
             assert result.exit_code == 0
 
-    def test_verbose_debug(self):
+    def test_verbose_debug(self, isolated_config):
         """Test debug verbosity level."""
         with patch("esdc.esdc.Config.init_config"):
             result = runner.invoke(app, ["--verbose", "2", "status"])
