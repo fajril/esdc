@@ -58,6 +58,26 @@ def test_probe_seeded_on_first_write_path(tmp_path):
     assert json.loads(stored) == [1.0, 0.0, 0.0]
 
 
+def test_matching_backend_accepts_without_rewriting_probe(tmp_path):
+    s = _store(tmp_path, [1.0, 0.0, 0.0])
+    s.ensure_tables(validate_model=True)
+    before = (
+        s._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    )
+    s.close()
+    assert before is not None
+
+    s2 = _store(tmp_path, [0.999, 0.001, 0.0])
+    s2.ensure_tables(validate_model=True)
+    after = (
+        s2._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    )
+    s2.close()
+    assert after is not None
+    assert after[0] == before[0]
+    assert json.loads(after[0]) == [1.0, 0.0, 0.0]
+
+
 def test_drifted_backend_is_rejected(tmp_path):
     s = _store(tmp_path, [1.0, 0.0, 0.0])
     s.ensure_tables(validate_model=True)
@@ -66,6 +86,26 @@ def test_drifted_backend_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="parity probe failed"):
         s2.ensure_tables(validate_model=True)
     s2.close()
+
+
+def test_read_path_leaves_probe_untouched_on_drift(tmp_path):
+    s = _store(tmp_path, [1.0, 0.0, 0.0])
+    s.ensure_tables(validate_model=True)
+    before = (
+        s._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    )
+    s.close()
+    assert before is not None
+
+    s2 = _store(tmp_path, [0.0, 1.0, 0.0])
+    s2.ensure_tables()  # validate_model=False -> read path, no probe check
+    after = (
+        s2._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    )
+    s2.close()
+    assert after is not None
+    assert after[0] == before[0]
+    assert json.loads(after[0]) == [1.0, 0.0, 0.0]
 
 
 def test_set_meta_rebaselines_probe(tmp_path):
