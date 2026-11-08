@@ -8,6 +8,7 @@ from typing import cast
 
 import fitz
 import pytest
+from rich.console import Console
 
 from esdc.chat.domain_knowledge.entity_resolver_lib import EntityResolver
 from esdc.corpus import pipeline
@@ -3076,6 +3077,46 @@ def test_run_commit_fails_sidecar_missing_file_hash(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 # progress bars
 # --------------------------------------------------------------------------
+
+
+def test_progress_handle_wires_the_bar_and_the_status_line(monkeypatch):
+    """The only test that drives the real helper; the ones below patch it out.
+
+    Asserted on the rendered frame, so a handle wired to the wrong task, or a
+    `file()` that does not re-render, fails here (verified by neutering
+    `advance()` and `file()` in a scratch run).
+    """
+    recording = Console(record=True, width=80)
+    monkeypatch.setattr(pipeline, "console", recording)
+
+    with pipeline._progress_with_status("extract", 2, "files") as p:
+        p.file("surat.pdf")
+        p.status("parsing PDF")
+        p.advance()
+        p.status("resolve entities")
+        p.advance()
+
+    frame = recording.export_text()
+    assert "2/2 files" in frame, f"advance() did not reach the bar task: {frame!r}"
+    assert "surat.pdf · resolve entities" in frame, (
+        f"file()/status() did not compose on the status line: {frame!r}"
+    )
+
+    # Each call renders on its own so the frame shows only that call's effect.
+    recording.clear()
+    with pipeline._progress_with_status("commit", 1, "docs") as p:
+        p.status("read sidecar")  # no file name yet: the phase renders alone
+    frame = recording.export_text()
+    assert "read sidecar" in frame, frame
+    assert "commit" in frame, frame
+
+    recording.clear()
+    with pipeline._progress_with_status("commit", 1, "docs") as p:
+        p.status("read sidecar")
+        p.file("a.corpus.md")  # clears the stale phase text
+    frame = recording.export_text()
+    assert "a.corpus.md" in frame, frame
+    assert "read sidecar" not in frame, f"file() kept the stale phase text: {frame!r}"
 
 
 class FakeProgressHandle:
