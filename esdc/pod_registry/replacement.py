@@ -149,8 +149,9 @@ def validate_replacement_batch(batch: PreparedPodBatch) -> None:
     if batch.profile != "full":
         raise PodImportError(["POD replacement requires the full import profile"])
     # Incoming rows are typed as PreparedScalar, so narrow to the integer IDs the
-    # crosswalk can target. A non-int scalar can never equal an int target, so this
-    # changes no behaviour — it only makes the two sets the same type.
+    # crosswalk can target. This makes the two sets the same type for the checker.
+    # Behaviour differs only in the case the source cannot produce here: a Decimal
+    # equal to an int would previously have satisfied the difference.
     targets = {
         pod_id
         for row in batch.rows["m_pod"]
