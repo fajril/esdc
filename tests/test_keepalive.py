@@ -131,21 +131,25 @@ class TestWithKeepalive:
             results.append(chunk)
 
         data_chunks = [r for r in results if r.startswith("data:")]
-        assert len(data_chunks) >= 1, (
-            f"Expected at least 1 data chunk, got {len(data_chunks)}"
-        )
+        # Disconnect detection happens before the next chunk is yielded, so
+        # `second` must never reach the consumer. `>= 1` was also satisfied by
+        # the broken behaviour (the stream kept yielding), so it proved nothing.
+        assert len(data_chunks) == 1, f"stream did not stop: {data_chunks}"
+        assert "data: second" not in results
 
     @pytest.mark.asyncio
     async def test_stops_on_client_disconnect_after_chunk(self, short_interval: float):
         """Stream stops when client disconnects after receiving chunks."""
-        # Client disconnects after 3 is_disconnected checks
-        # (enough to yield first 2 chunks then stop)
+        # Client disconnects on the 4th is_disconnected check. The gap must be
+        # longer than two intervals so the check that trips happens before the
+        # last chunk is produced. With a single-interval gap the disconnect was
+        # only noticed after that chunk had already been yielded.
         request = FakeRequest(disconnected_after=3)
 
         async def inner():
             yield "data: first\n\n"
             yield "data: second\n\n"
-            await asyncio.sleep(short_interval + 0.02)
+            await asyncio.sleep(2 * short_interval + 0.02)
             yield "data: never_reached\n\n"
 
         results = []
@@ -153,10 +157,8 @@ class TestWithKeepalive:
             results.append(chunk)
 
         data_chunks = [r for r in results if r.startswith("data:")]
-        # Should get at least the first chunk(s) before disconnect is detected
-        assert len(data_chunks) >= 1, (
-            f"Expected at least 1 data chunk, got {len(data_chunks)}"
-        )
+        assert len(data_chunks) == 2, f"stream did not stop: {data_chunks}"
+        assert "data: never_reached" not in results
 
     @pytest.mark.asyncio
     async def test_empty_stream(self):
