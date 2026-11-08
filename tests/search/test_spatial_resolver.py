@@ -396,8 +396,8 @@ class TestCalculateAverageDistance:
         assert result["status"] == "not_found"
 
 
-class TestClusteringPerformance:
-    """Performance tests for clustering with larger datasets."""
+class TestClusteringLargeFieldSets:
+    """Clustering succeeds at 100 and 500 fields."""
 
     def test_clustering_100_fields(self, tmp_path: Path) -> None:
         """Test clustering correctness with 100 fields."""
