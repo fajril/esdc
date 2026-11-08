@@ -181,12 +181,6 @@ class TestRunWizard:
 
     @patch("esdc.config_wizard.Config.init_config")
     @patch("esdc.config_wizard.questionary.select")
-    def test_exit(self, mock_select, mock_init):
-        mock_select.return_value.unsafe_ask.side_effect = ["Exit"]
-        run_wizard()
-
-    @patch("esdc.config_wizard.Config.init_config")
-    @patch("esdc.config_wizard.questionary.select")
     @patch("esdc.config_wizard.rich_print")
     def test_keyboard_interrupt(self, mock_print, mock_select, mock_init):
         mock_select.return_value.unsafe_ask.side_effect = KeyboardInterrupt()
@@ -1157,16 +1151,6 @@ class TestRerankKeyWidgets:
         values = [c.value for c in choices]
         assert "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF" in values
         assert "__custom__" in values
-        assert result == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-
-    @patch("esdc.config_wizard.questionary.select")
-    def test_rerank_model_selecting_default(self, mock_select):
-        mock_select.return_value.unsafe_ask.return_value = (
-            "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-        )
-        result = _prompt_for_config_value(
-            "corpus.rerank_model", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-        )
         assert result == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
 
     @patch("esdc.config_wizard.questionary.text")

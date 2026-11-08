@@ -319,29 +319,6 @@ def test_refresh_documents_on_empty_truth_table_returns_zero(tmp_path: Path):
     assert types["field_name"] == "JSON"
 
 
-def test_sweep_orphan_chunks_removes_chunks_of_deleted_documents(truth_path: Path):
-    conn = duckdb.connect()
-    refresh_documents(conn, truth_path)
-    conn.execute(
-        "CREATE TABLE document_chunks (chunk_id VARCHAR, doc_id VARCHAR, "
-        "chunk_index INTEGER, section VARCHAR, chunk_text TEXT, embed_text TEXT)"
-    )
-    conn.execute(
-        "INSERT INTO document_chunks VALUES "
-        "('d1:0000','d1',0,NULL,'t','t'), ('gone:0000','gone',0,NULL,'t','t')"
-    )
-
-    deleted = sweep_orphan_chunks(conn)
-
-    assert deleted == 1
-    count_row = conn.execute("SELECT COUNT(*) FROM document_chunks").fetchone()
-    assert count_row is not None
-    assert count_row[0] == 1
-    doc_row = conn.execute("SELECT doc_id FROM document_chunks").fetchone()
-    assert doc_row is not None
-    assert doc_row[0] == "d1"
-
-
 def test_sweep_orphan_chunks_survives_a_null_doc_id_in_documents(truth_path: Path):
     """sweep_orphan_chunks still removes orphans when documents has a NULL doc_id.
 

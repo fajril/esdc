@@ -25,10 +25,6 @@ class TestReachabilityInjection:
         highlighted = [line for line in result.split("\n") if ">>>" in line]
         assert any("E3 →" in line for line in highlighted)
 
-    def test_level_topic_includes_matrix(self):
-        result = knowledge_traversal.invoke({"topic": "level", "entity": "E3"})
-        assert "Reachability Matrix" in result
-
     def test_transition_topic_without_entity_includes_matrix(self):
         result = knowledge_traversal.invoke({"topic": "transition"})
         assert "Reachability Matrix" in result

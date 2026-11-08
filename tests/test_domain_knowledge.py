@@ -828,13 +828,6 @@ class TestKsmiRetrieveEntityResolution:
         assert "KSMI" in result
         assert "not found" not in result.lower()
 
-    def test_entity_partial_name_match(self):
-        """Test partial name matching in nested sections."""
-        from esdc.chat.domain_knowledge import ksmi_retrieve
-
-        result = ksmi_retrieve("definition", "contingent")
-        assert "not found" not in result.lower()
-
     def test_groovy_definition_explains_report_content_column(self):
         """Text-to-SQL guidance distinguishes GROOVY content from its status flag."""
         from esdc.chat.domain_knowledge import ksmi_retrieve

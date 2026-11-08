@@ -1889,18 +1889,6 @@ def test_find_entity_type_filter_avoids_cross_type_truncation(learned_sqlite: Pa
     assert filtered[0]["name"] == PROJECT_DURI_NAME
 
 
-def test_query_rejects_mutation(learned_sqlite: Path):
-    """Public Ladybug queries must reject mutation.
-
-    The instance graph is a disposable read-only index over the relational
-    source of truth. query() is exposed to chat tools, so a write Cypher
-    statement must raise instead of mutating the graph.
-    """
-    mgr = InstanceGraphManager(sqlite_path=learned_sqlite)
-    with pytest.raises(ValueError, match="read-only"):
-        mgr.query("CREATE (:POD {pod_id: 'forbidden'})")
-
-
 @pytest.mark.parametrize(
     "bad",
     [

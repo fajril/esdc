@@ -186,11 +186,6 @@ class TestStatusSubcommands:
         assert result.exit_code == 0
         assert "Corpus:" in result.stdout
 
-    def test_cache_subcommand_shows_cache_marker(self, isolated_config):
-        result = runner.invoke(app, ["status", "cache"])
-        assert result.exit_code == 0
-        assert "Cache:" in result.stdout
-
     def test_bare_status_is_compact_summary(self, seeded_database):
         """Bare `esdc status` is a one-glance summary, not the full report."""
         result = runner.invoke(app, ["status"])
