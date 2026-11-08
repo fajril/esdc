@@ -1,6 +1,19 @@
-"""Tests for tool result truncation in agent.py."""
+"""Tests for tool result truncation in agent.py's tool node.
 
-from esdc.chat.agent import MAX_TOOL_RESULT_CHARS
+Truncation happens inside `tool_node`, so these drive the real graph with a stub
+tool whose result length the test controls. The previous version of this file
+reimplemented the `> MAX_TOOL_RESULT_CHARS` branch inside the test body and
+asserted its own arithmetic, so it could not fail on any change to `agent.py`.
+"""
+
+from typing import cast
+
+import pytest
+from langchain.tools import tool
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from esdc.chat.agent import MAX_TOOL_RESULT_CHARS, create_agent
 
 TRUNCATION_NOTICE = (
     f"\n\n[Result truncated to first {MAX_TOOL_RESULT_CHARS} characters "
@@ -8,59 +21,85 @@ TRUNCATION_NOTICE = (
 )
 
 
-class TestToolResultTruncation:
-    """Tests for truncating large tool results."""
+@tool("Entity Resolver")
+def _echo_tool(count: int) -> str:
+    """Stub tool whose observation length is set by the caller."""
+    return "x" * count
 
-    def test_truncation_logic_large_result(self):
-        """Test that truncation produces correct output for large results."""
-        large_result = "x" * 15000
-        observation_str = large_result
 
-        if len(observation_str) > MAX_TOOL_RESULT_CHARS:
-            truncated = observation_str[:MAX_TOOL_RESULT_CHARS] + TRUNCATION_NOTICE
-        else:
-            truncated = observation_str
+class FakeLLM:
+    """Minimal LLM stub: bind_tools returns self, ainvoke pops queued responses."""
 
-        expected_len = MAX_TOOL_RESULT_CHARS + len(TRUNCATION_NOTICE)
-        assert len(truncated) == expected_len
-        assert truncated.endswith(TRUNCATION_NOTICE)
-        assert truncated.startswith("x" * 100)
+    def __init__(self, responses: list[AIMessage]):
+        self._responses = list(responses)
 
-    def test_truncation_logic_small_result(self):
-        """Test that small results are not truncated."""
-        small_result = "x" * 5000
-        observation_str = small_result
+    def bind_tools(self, tools):
+        return self
 
-        if len(observation_str) > MAX_TOOL_RESULT_CHARS:
-            truncated = observation_str[:MAX_TOOL_RESULT_CHARS] + TRUNCATION_NOTICE
-        else:
-            truncated = observation_str
+    async def ainvoke(self, messages, **kwargs):
+        if not self._responses:
+            return AIMessage(content="No more responses queued.")
+        return self._responses.pop(0)
 
-        assert truncated == small_result
-        assert "[Result truncated" not in truncated
 
-    def test_truncation_exact_boundary(self):
-        """Test result exactly at MAX chars is not truncated."""
-        exact_result = "x" * MAX_TOOL_RESULT_CHARS
-        observation_str = exact_result
+async def _tool_message(count: int) -> ToolMessage:
+    """Run one tool call through the real tool node and return its result."""
+    llm = FakeLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "Entity Resolver",
+                        "args": {"count": count},
+                        "id": "call_1",
+                    }
+                ],
+            ),
+            AIMessage(content="Done."),
+        ]
+    )
+    agent = create_agent(
+        cast(BaseChatModel, llm),
+        tools=[_echo_tool],
+        checkpointer=None,
+        context_length=8000,
+    )
 
-        if len(observation_str) > MAX_TOOL_RESULT_CHARS:
-            truncated = observation_str[:MAX_TOOL_RESULT_CHARS] + TRUNCATION_NOTICE
-        else:
-            truncated = observation_str
+    state = await agent.ainvoke(
+        {"messages": [HumanMessage(content="test query about POD revisions")]},
+        config={"recursion_limit": 50},
+    )
 
-        assert truncated == exact_result
-        assert "[Result truncated" not in truncated
+    results = [
+        m
+        for m in state["messages"]
+        if isinstance(m, ToolMessage) and m.tool_call_id == "call_1"
+    ]
+    assert len(results) == 1, (
+        f"tool node did not execute the stub call: {state['messages']}"
+    )
+    return results[0]
 
-    def test_truncation_one_char_over(self):
-        """Test result one char over MAX is truncated."""
-        over_result = "x" * (MAX_TOOL_RESULT_CHARS + 1)
-        observation_str = over_result
 
-        if len(observation_str) > MAX_TOOL_RESULT_CHARS:
-            truncated = observation_str[:MAX_TOOL_RESULT_CHARS] + TRUNCATION_NOTICE
-        else:
-            truncated = observation_str
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "count, truncated",
+    [
+        (15000, True),  # well over the limit
+        (5000, False),  # under the limit
+        (MAX_TOOL_RESULT_CHARS, False),  # exactly at the limit is not truncated
+        (MAX_TOOL_RESULT_CHARS + 1, True),  # one char over
+    ],
+)
+async def test_tool_node_truncates_only_above_the_limit(count: int, truncated: bool):
+    """`tool_node` truncates the observation it hands back to the LLM."""
+    content = str((await _tool_message(count)).content)
 
-        assert "[Result truncated" in truncated
-        assert len(truncated) == MAX_TOOL_RESULT_CHARS + len(TRUNCATION_NOTICE)
+    if truncated:
+        # The tool returned more than the limit, so tool_node must have cut it.
+        assert content == "x" * MAX_TOOL_RESULT_CHARS + TRUNCATION_NOTICE
+    else:
+        # The tool returned exactly what the stub produced: nothing was cut.
+        assert content == "x" * count
+        assert "[Result truncated" not in content
