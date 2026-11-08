@@ -119,8 +119,7 @@ def capture_replacement_plan(
             raise PodImportError(
                 [
                     "Protected document links require --pod-crosswalk; "
-                    "missing old POD IDs: "
-                    + ", ".join(map(str, sorted(missing)))
+                    "missing old POD IDs: " + ", ".join(map(str, sorted(missing)))
                 ]
             )
         unknown = mapping.keys() - masters.keys()
@@ -149,7 +148,14 @@ def validate_replacement_batch(batch: PreparedPodBatch) -> None:
         return
     if batch.profile != "full":
         raise PodImportError(["POD replacement requires the full import profile"])
-    targets = {row["pod_id_seq"] for row in batch.rows["m_pod"]}
+    # Incoming rows are typed as PreparedScalar, so narrow to the integer IDs the
+    # crosswalk can target. A non-int scalar can never equal an int target, so this
+    # changes no behaviour — it only makes the two sets the same type.
+    targets = {
+        pod_id
+        for row in batch.rows["m_pod"]
+        if isinstance(pod_id := row["pod_id_seq"], int)
+    }
     missing = {new for _, new in plan.approved_crosswalk} - targets
     if missing:
         raise PodImportError(
