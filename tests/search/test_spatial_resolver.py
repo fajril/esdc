@@ -450,6 +450,24 @@ class TestClusteringLargeFieldSets:
         result = resolver.find_field_clusters(max_distance_km=30.0, min_cluster_size=2)
 
         assert result["status"] == "success"
+        # The five blobs are 20 fields jittered +-0.1 deg (~11 km) around their
+        # centres, well inside the 30 km eps, so each blob is one cluster, except
+        # Rokan and Minas, whose centres are 12 km apart and merge. Asserting the
+        # geographic grouping is the point of the test; `status == "success"` alone
+        # only proves the call did not raise.
+        blobs = {
+            frozenset(int(field[5:]) // 20 for field in cluster["fields"])
+            for cluster in result["clusters"]
+        }
+        assert blobs == {
+            frozenset({0, 1}),
+            frozenset({2}),
+            frozenset({3}),
+            frozenset({4}),
+        }
+        assert result["cluster_count"] == len(result["clusters"]) == 4
+        assert sum(c["field_count"] for c in result["clusters"]) == 100
+        assert result["unclustered"] == []
 
     def test_clustering_500_fields(self, tmp_path: Path) -> None:
         """Test clustering correctness with 500 fields."""
@@ -506,6 +524,20 @@ class TestClusteringLargeFieldSets:
         result = resolver.find_field_clusters(max_distance_km=50.0, min_cluster_size=3)
 
         assert result["status"] == "success"
+        # The 500-field case is about scale, not a specific partition: the random
+        # centres can land close enough to merge, so the asserts are the
+        # invariants the resolver promises: every field accounted for exactly
+        # once, every cluster at least min_cluster_size, sorted largest first with
+        # renumbered ids.
+        counts = [c["field_count"] for c in result["clusters"]]
+        assert sum(counts) + len(result["unclustered"]) == 500
+        clustered_names = {f for c in result["clusters"] for f in c["fields"]}
+        assert len(clustered_names | set(result["unclustered"])) == 500
+        assert all(count >= 3 for count in counts)
+        assert counts == sorted(counts, reverse=True)
+        assert [c["cluster_id"] for c in result["clusters"]] == list(
+            range(1, len(counts) + 1)
+        )
 
     def test_clustering_quality_known_groups(self, tmp_path: Path) -> None:
         """Test that clustering correctly identifies known groups."""
