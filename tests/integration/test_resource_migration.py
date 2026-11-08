@@ -317,10 +317,14 @@ def test_small_fixture_rehearsal_writes_a_complete_report(tmp_path: Path) -> Non
     assert before == after
 
 
-def test_runner_derives_scope_and_protected_data_from_changed_fixture_inputs(
+def test_runner_derives_scope_protected_data_and_cache_isolation(
     tmp_path: Path,
 ) -> None:
-    baseline, manifest = _write_inputs(tmp_path)
+    import esdc.chat.tools as chat_tools
+
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    baseline, manifest = _write_inputs(input_root)
     fixture_root = manifest.parent
     with duckdb.connect(str(baseline / "esdc.duckdb")) as conn:
         conn.execute(
@@ -402,61 +406,92 @@ def test_runner_derives_scope_and_protected_data_from_changed_fixture_inputs(
         encoding="utf-8",
     )
 
-    report_path = run_rehearsal(
-        baseline_dir=baseline,
-        fixture_manifest=manifest,
-        output_dir=tmp_path / "changed-runs",
-    )
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["milestone_b"]["status"] == "PASS"
-    assert all(stage["status"] == "PASS" for stage in report["stages"])
-    stages = {stage["name"]: stage["observations"] for stage in report["stages"]}
-    _assert_pair_bootstrap_and_recovery(
-        {name: {"observations": observations} for name, observations in stages.items()}
-    )
-    assert stages["unfiltered_cli_bootstrap"]["requested_and_scoped_years"][
-        "timeseries_fixture_years"
-    ] == [2031, 2033]
-    assert (
-        stages["typed_parity_views_spatial_search_and_protected_rows"][
-            "preserved_non_resource_table_hashes"
-        ]['unrelated"domain_cache']["row_count"]
-        == 1
-    )
-    assert (
-        stages["typed_parity_views_spatial_search_and_protected_rows"][
-            "unrequested_and_null_year_timeseries"
-        ]["row_count"]
-        == 0
-    )
-    assert (
-        stages["typed_parity_views_spatial_search_and_protected_rows"][
-            "valid_empty_timeseries_replacement"
-        ]["after"]["row_count"]
-        == 0
-    )
-    selective = stages["selective_year_refresh"]
-    assert (
-        selective["unselected_canonical_resource_values_before_after"]["before"]
-        == selective["unselected_canonical_resource_values_before_after"]["after"]
-    )
-    assert (
-        selective["unselected_and_null_timeseries_values_before_after"]["before"]
-        == selective["unselected_and_null_timeseries_values_before_after"]["after"]
-    )
-    target_stage = stages["separate_empty_target_rebuild_and_repeat"]
-    assert "project_timeseries" in target_stage["target_table_names"]
-    assert target_stage["timeseries_parity"]["ok"] is True
-    assert (
-        target_stage["canonical_pair_sources_before_after"]["before"]
-        == target_stage["canonical_pair_sources_before_after"]["after"]
-    )
-    with duckdb.connect(
-        str(Path(report["run_dir"]) / "db" / "esdc.duckdb"), read_only=True
-    ) as conn:
-        assert conn.execute(
-            "SELECT value FROM _metadata WHERE key='operator_note'"
-        ).fetchone() == ("preserve-this",)
+    old_sql, old_tools = chat_tools._sql_cache, chat_tools._tool_cache
+    sentinel_sql = Cache(str(tmp_path / "external-sql-cache"), statistics=True)
+    sentinel_tools = Cache(str(tmp_path / "external-tool-cache"), statistics=True)
+    sentinel_sql.set("keep", "sql sentinel")
+    sentinel_tools.set("keep", "tool sentinel")
+    chat_tools._sql_cache = sentinel_sql
+    chat_tools._tool_cache = sentinel_tools
+    try:
+        report_path = run_rehearsal(
+            baseline_dir=baseline,
+            fixture_manifest=manifest,
+            output_dir=tmp_path / "changed-runs",
+        )
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report["milestone_b"]["status"] == "PASS"
+        assert all(stage["status"] == "PASS" for stage in report["stages"])
+        stages = {stage["name"]: stage["observations"] for stage in report["stages"]}
+        _assert_pair_bootstrap_and_recovery(
+            {
+                name: {"observations": observations}
+                for name, observations in stages.items()
+            }
+        )
+        assert stages["unfiltered_cli_bootstrap"]["requested_and_scoped_years"][
+            "timeseries_fixture_years"
+        ] == [2031, 2033]
+        assert (
+            stages["typed_parity_views_spatial_search_and_protected_rows"][
+                "preserved_non_resource_table_hashes"
+            ]['unrelated"domain_cache']["row_count"]
+            == 1
+        )
+        assert (
+            stages["typed_parity_views_spatial_search_and_protected_rows"][
+                "unrequested_and_null_year_timeseries"
+            ]["row_count"]
+            == 0
+        )
+        assert (
+            stages["typed_parity_views_spatial_search_and_protected_rows"][
+                "valid_empty_timeseries_replacement"
+            ]["after"]["row_count"]
+            == 0
+        )
+        selective = stages["selective_year_refresh"]
+        assert (
+            selective["unselected_canonical_resource_values_before_after"]["before"]
+            == selective["unselected_canonical_resource_values_before_after"]["after"]
+        )
+        assert (
+            selective["unselected_and_null_timeseries_values_before_after"]["before"]
+            == selective["unselected_and_null_timeseries_values_before_after"]["after"]
+        )
+        target_stage = stages["separate_empty_target_rebuild_and_repeat"]
+        assert "project_timeseries" in target_stage["target_table_names"]
+        assert target_stage["timeseries_parity"]["ok"] is True
+        assert (
+            target_stage["canonical_pair_sources_before_after"]["before"]
+            == target_stage["canonical_pair_sources_before_after"]["after"]
+        )
+        with duckdb.connect(
+            str(Path(report["run_dir"]) / "db" / "esdc.duckdb"), read_only=True
+        ) as conn:
+            assert conn.execute(
+                "SELECT value FROM _metadata WHERE key='operator_note'"
+            ).fetchone() == ("preserve-this",)
+        run_dir = Path(report["run_dir"]).resolve()
+        assert chat_tools._sql_cache is sentinel_sql
+        assert chat_tools._tool_cache is sentinel_tools
+        assert sentinel_sql.get("keep") == "sql sentinel"
+        assert sentinel_tools.get("keep") == "tool sentinel"
+        assert sentinel_sql.set("still-usable", True)
+        assert sentinel_tools.set("still-usable", True)
+        assert (
+            run_dir
+            in Path(report["cache_isolation"]["sql_cache_dir"]).resolve().parents
+        )
+        assert (
+            run_dir
+            in Path(report["cache_isolation"]["tool_cache_dir"]).resolve().parents
+        )
+    finally:
+        chat_tools._sql_cache = old_sql
+        chat_tools._tool_cache = old_tools
+        sentinel_sql.close()
+        sentinel_tools.close()
 
 
 def test_logical_state_detects_same_count_resource_and_timeseries_value_changes(
@@ -599,47 +634,3 @@ def test_main_returns_nonzero_and_writes_report_when_rehearsal_assertion_fails(
     assert len(reports) == 1
     report = json.loads(reports[0].read_text(encoding="utf-8"))
     assert report["milestone_b"]["status"] == "FAIL"
-
-
-def test_runner_preserves_preexisting_cache_handles_and_scopes_new_caches(
-    tmp_path: Path,
-) -> None:
-    import esdc.chat.tools as chat_tools
-
-    input_root = tmp_path / "inputs"
-    input_root.mkdir()
-    baseline, manifest = _write_inputs(input_root)
-    old_sql, old_tools = chat_tools._sql_cache, chat_tools._tool_cache
-    sentinel_sql = Cache(str(tmp_path / "external-sql-cache"), statistics=True)
-    sentinel_tools = Cache(str(tmp_path / "external-tool-cache"), statistics=True)
-    sentinel_sql.set("keep", "sql sentinel")
-    sentinel_tools.set("keep", "tool sentinel")
-    chat_tools._sql_cache = sentinel_sql
-    chat_tools._tool_cache = sentinel_tools
-    try:
-        report_path = run_rehearsal(
-            baseline_dir=baseline,
-            fixture_manifest=manifest,
-            output_dir=tmp_path / "runs",
-        )
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        run_dir = Path(report["run_dir"]).resolve()
-        assert chat_tools._sql_cache is sentinel_sql
-        assert chat_tools._tool_cache is sentinel_tools
-        assert sentinel_sql.get("keep") == "sql sentinel"
-        assert sentinel_tools.get("keep") == "tool sentinel"
-        assert sentinel_sql.set("still-usable", True)
-        assert sentinel_tools.set("still-usable", True)
-        assert (
-            run_dir
-            in Path(report["cache_isolation"]["sql_cache_dir"]).resolve().parents
-        )
-        assert (
-            run_dir
-            in Path(report["cache_isolation"]["tool_cache_dir"]).resolve().parents
-        )
-    finally:
-        chat_tools._sql_cache = old_sql
-        chat_tools._tool_cache = old_tools
-        sentinel_sql.close()
-        sentinel_tools.close()
