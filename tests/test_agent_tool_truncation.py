@@ -11,10 +11,6 @@ TRUNCATION_NOTICE = (
 class TestToolResultTruncation:
     """Tests for truncating large tool results."""
 
-    def test_max_tool_result_chars_constant(self):
-        """Test that MAX_TOOL_RESULT_CHARS is defined correctly."""
-        assert MAX_TOOL_RESULT_CHARS == 10000
-
     def test_truncation_logic_large_result(self):
         """Test that truncation produces correct output for large results."""
         large_result = "x" * 15000

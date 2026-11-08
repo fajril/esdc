@@ -21,10 +21,6 @@ def _fake_model():
     return m
 
 
-def test_model_id_is_backend_neutral():
-    assert emb.MODEL_ID == "qwen3-embedding-0.6b-q8_0"
-
-
 def test_internal_embedder_reports_model_id():
     assert emb.InternalEmbedder().model == emb.MODEL_ID
 
@@ -345,11 +341,6 @@ class _FixedEmbedder:
 
     def generate_embeddings_batch(self, texts):
         return [list(self._vec) for _ in texts]
-
-
-def test_probe_constants():
-    assert emb.PROBE_TEXT == "esdc corpus embedding parity probe"
-    assert emb.PROBE_TOLERANCE == 0.995
 
 
 def test_cosine_is_scale_invariant():

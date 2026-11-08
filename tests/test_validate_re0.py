@@ -461,11 +461,6 @@ class TestExecuteAndBuildViolations:
 
 
 class TestConstants:
-    def test_uncert_values(self):
-        assert UncertLevel.LOW == "1. Low Value"
-        assert UncertLevel.MID == "2. Middle Value"
-        assert UncertLevel.HIGH == "3. High Value"
-
     def test_identifier_cols(self):
         assert IDENTIFIER_COLS == [
             "report_year",

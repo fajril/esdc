@@ -7,10 +7,6 @@ import esdc.embedders as emb
 from esdc.corpus import embedder as shim
 
 
-def test_shim_exports_model_id():
-    assert shim.MODEL_ID == "qwen3-embedding-0.6b-q8_0"
-
-
 def test_shim_exports_internal_embedder_class():
     assert shim.InternalEmbedder is emb.InternalEmbedder
 

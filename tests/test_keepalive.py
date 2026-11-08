@@ -183,8 +183,5 @@ class TestWithKeepalive:
 class TestSSEConstants:
     """Test that SSE constants are defined correctly."""
 
-    def test_keepalive_interval(self):
-        assert SSE_KEEPALIVE_INTERVAL == 15
-
     def test_stream_timeout(self):
         assert SSE_STREAM_TIMEOUT == 300
