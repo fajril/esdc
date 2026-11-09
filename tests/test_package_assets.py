@@ -112,6 +112,13 @@ def test_wheel_contains_and_loads_contract_and_sql_resources(tmp_path: Path) -> 
     )
     assert loaded.returncode == 0, loaded.stdout + loaded.stderr
     fields = loaded.stdout.split()
-    assert fields[:3] == ["esdc.pod", "1", "0.4.0"]
+    from esdc.pod_registry.contract import load_pod_contract
+
+    contract = load_pod_contract()
+    assert fields[:3] == [
+        contract.contract_id,
+        str(contract.contract_version),
+        contract.dictionary_version,
+    ]
     assert [int(value) for value in fields[3:8]] == [176, 24, 5, 4, 4]
     assert int(fields[8]) > 0
