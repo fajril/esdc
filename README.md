@@ -356,11 +356,15 @@ esdc load --from-excel pod-template.xlsx --schema-pod --dry-run
 esdc load --from-excel pod-template.xlsx --schema-pod
 esdc load --from-sqlite source.sqlite --dry-run
 esdc load --from-sqlite source.sqlite
+esdc pod-upgrade-economics --database path/to/esdc.sqlite
+esdc pod-upgrade-economics --database path/to/esdc.sqlite --apply --backup path/to/pre-upgrade.sqlite
 esdc fetch
 esdc portal
 ```
 
 A full XLSX import requires all five input sheets. `--pod-registry` replaces only the three master tables and preserves monitoring and forecast inputs. Old schema needs explicit validated full replacement; existing document links require reviewed `--pod-crosswalk` JSON, never guessed. Portal recalculates from local resources/timeseries; missing basis remains NULL with diagnostics. Download workbook produces a POD business backup with permanent identity reservations and read-only reference and result sheets. It excludes raw resources, timeseries, and corpus documents. Restoring it regenerates the outputs.
+
+Registries created before the economics column rename advertise contract 1. Ordinary reads and writes refuse them with a recovery message; they never rename columns implicitly. Inspect with `esdc pod-upgrade-economics --database <path>`, then apply once with `--apply --backup <new-file>`: the backup is a validated SQLite copy of the pre-upgrade database, the upgrade is transactional and name-only, and the application must restart or reopen the database afterwards. Applying to an already-current registry is a no-op and creates no backup.
 
 Corpus and POD changes invalidate derived knowledge. Run `esdc corpus learn` to rebuild the knowledge graph and `esdc corpus reembed --stale` to update stale document embeddings. Ordinary metadata saves do not call models. Source commit survives cache failure; portal retry only republishes committed source; `esdc rebuild-api-analytics` provides offline recovery. Writers use WAL/FK ON and validate patched SQLite runtime; GET does not initialize or migrate.
 

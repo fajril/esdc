@@ -84,6 +84,7 @@ from esdc.commands.analytics import (  # noqa: E402
     verify_analytics_migration_command,
 )
 from esdc.commands.configs import configs_app  # noqa: E402
+from esdc.commands.pod import upgrade_pod_economics_command  # noqa: E402
 from esdc.commands.spatial import spatial_app  # noqa: E402
 from esdc.configs import Config  # noqa: E402
 from esdc.console import console  # noqa: E402
@@ -165,6 +166,7 @@ corpus_app = typer.Typer(no_args_is_help=True)
 app.command(name="bootstrap-timeseries-source")(bootstrap_timeseries_source_command)
 app.command(name="rebuild-api-analytics")(rebuild_api_analytics_command)
 app.command(name="verify-analytics-migration")(verify_analytics_migration_command)
+app.command(name="pod-upgrade-economics")(upgrade_pod_economics_command)
 app.add_typer(configs_app, name="configs")
 app.add_typer(spatial_app, name="spatial")
 app.add_typer(schema_app, name="schema")

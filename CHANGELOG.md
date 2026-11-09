@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Explicit `esdc pod-upgrade-economics` inspection and transactional
+  contract-1 to contract-2 upgrade for POD registries created before the
+  economics column rename. Opening an old registry no longer fails with a
+  shape traceback and never renames columns implicitly; `--apply` requires a
+  validated, non-overwriting SQLite backup.
 - Strict YAML contract and SQL references.
 - Five POD endpoint slugs: `master-data-project`, `master-data-pod`, `pod-project`, `pod-monitoring`, `pod-forecast`.
 - Full XLSX and `--from-sqlite` loading plus crosswalk replacement.

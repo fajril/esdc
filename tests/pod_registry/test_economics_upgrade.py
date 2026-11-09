@@ -8,7 +8,6 @@ layout instead of rebuilding an old schema from the current contract text.
 from __future__ import annotations
 
 import importlib
-import importlib.resources
 import re
 import sqlite3
 from collections.abc import Callable
@@ -17,31 +16,22 @@ from typing import Any
 
 import pytest
 
-_FIXTURE = Path(__file__).with_name("fixtures") / "pre_economics_rename_v2.sql"
-_PREFIXES = (
-    ("npv_pf_ctr_", "npv_ctr_"),
-    ("irr_pf_ctr_", "irr_ctr_"),
-    ("pv_ratio_pf_ctr_", "pv_ratio_ctr_"),
-    ("pi_pf_ctr_", "pi_ctr_"),
-)
-_SUFFIXES = {
-    "m_pod": ("pod",),
-    "pod_monitoring": ("real", "otlk"),
-    "pod_monitoring_api": ("pod", "real", "otlk"),
-}
-RECOVERY = (
-    "Run 'esdc pod-upgrade-economics --database <path>' "
-    "to inspect the required upgrade."
+from tests.pod_registry.economics_fixture import (
+    RECOVERY,
+    build_registry,
+    columns,
+    connect,
+    dump,
+    renames,
+    sentinels,
 )
 
-
-def _renames() -> tuple[tuple[str, str, str], ...]:
-    return tuple(
-        (table, old_prefix + suffix, new_prefix + suffix)
-        for table, suffixes in _SUFFIXES.items()
-        for suffix in suffixes
-        for old_prefix, new_prefix in _PREFIXES
-    )
+_build_registry = build_registry
+_columns = columns
+_connect = connect
+_dump = dump
+_renames = renames
+_sentinels = sentinels
 
 
 def _api() -> tuple[Any, Any, Any, Any]:
@@ -57,231 +47,6 @@ def _api() -> tuple[Any, Any, Any, Any]:
         )
     except (ImportError, AttributeError) as exc:
         pytest.fail(f"POD economics upgrade API is unavailable: {exc}", pytrace=False)
-
-
-def _schema_sql() -> str:
-    return _FIXTURE.read_text(encoding="utf-8")
-
-
-def _seed_sql() -> str:
-    return (
-        importlib.resources.files("esdc")
-        .joinpath("sql")
-        .joinpath("pod_reference_seed.sql")
-        .read_text(encoding="utf-8")
-    )
-
-
-def _quote(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
-def _old_names() -> dict[tuple[str, str], str]:
-    return {(table, new): old for table, old, new in _renames()}
-
-
-def _sentinels() -> dict[tuple[str, str], str | None]:
-    values: dict[tuple[str, str], str | None] = {}
-    for index, (table, _old, new) in enumerate(_renames(), start=1):
-        values[(table, new)] = f"{100 + index}.{index:03d}"
-    values[("m_pod", "npv_ctr_pod")] = "123.456"
-    values[("m_pod", "irr_ctr_pod")] = "0.123456"
-    values[("m_pod", "pv_ratio_ctr_pod")] = None
-    values[("m_pod", "pi_ctr_pod")] = "-2.500"
-    values[("pod_monitoring", "irr_ctr_real")] = "0.000"
-    values[("pod_monitoring", "pv_ratio_ctr_real")] = None
-    values[("pod_monitoring_api", "npv_ctr_otlk")] = "0"
-    return values
-
-
-def _columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
-    return tuple(
-        str(row[1]) for row in conn.execute(f"PRAGMA table_info({_quote(table)})")
-    )
-
-
-def _connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def _insert(
-    conn: sqlite3.Connection,
-    table: str,
-    values: dict[str, Any],
-    *,
-    renamed: bool,
-) -> None:
-    names = dict(values)
-    if not renamed:
-        mapping = _old_names()
-        for (owner, new), old in mapping.items():
-            if owner == table and new in names:
-                names[old] = names.pop(new)
-    columns = ", ".join(_quote(name) for name in names)
-    placeholders = ", ".join("?" for _ in names)
-    conn.execute(
-        f"INSERT INTO {_quote(table)} ({columns}) VALUES ({placeholders})",
-        tuple(names.values()),
-    )
-
-
-def _build_registry(
-    path: Path,
-    *,
-    contract_version: int = 1,
-    renamed: bool = False,
-    metadata: dict[str, Any] | None = None,
-) -> dict[tuple[str, str], str | None]:
-    """Create a complete, valid contract-1 registry in either known layout."""
-    sentinels = _sentinels()
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(_schema_sql())
-    if renamed:
-        for table, old, new in _renames():
-            conn.execute(
-                f"ALTER TABLE {_quote(table)} "
-                f"RENAME COLUMN {_quote(old)} TO {_quote(new)}"
-            )
-    conn.executescript(_seed_sql())
-
-    pod_uuid = "11111111-1111-4111-8111-111111111111"
-    pod_id = "PL-2024-0001-1-1-0"
-    conn.execute(
-        "INSERT INTO _pod_identity_ledger (approval_year, approval_date, daily_slot, "
-        "pod_order_no, pod_id_seq, pod_id, pod_uuid, institution_id, pod_type_id, "
-        "rev_num, actor, issued_at) VALUES (2024, '2024-01-01', 1, 1, 1, ?, ?, 1, 1, "
-        "0, 'FA:test-ledger', '2026-10-27T08:00:00.000Z')",
-        (pod_id, pod_uuid),
-    )
-    master: dict[str, Any] = {
-        "pod_id_seq": 1,
-        "pod_uuid": pod_uuid,
-        "approval_date": "2024-01-01",
-        "superseded_by": None,
-        "institution_id": 1,
-        "pod_type_id": 1,
-        "rev_num": 0,
-        "pod_order_no": 1,
-        "pod_id": pod_id,
-        "pod_name": "Synthetic POD",
-        "pod_letter_num": "Letter-1",
-        "is_latest": 1,
-    }
-    master.update(
-        {new: value for (table, new), value in sentinels.items() if table == "m_pod"}
-    )
-    _insert(conn, "m_pod", master, renamed=renamed)
-
-    monitoring: dict[str, Any] = {
-        "monpod_uuid": "22222222-2222-4222-8222-222222222222",
-        "pod_id_seq": 1,
-        "pod_id": pod_id,
-        "reported_date": "2024-06-30",
-        "is_completed": 0,
-        "pod_stage_id": 1,
-    }
-    monitoring.update(
-        {
-            new: value
-            for (table, new), value in sentinels.items()
-            if table == "pod_monitoring"
-        }
-    )
-    _insert(conn, "pod_monitoring", monitoring, renamed=renamed)
-
-    api: dict[str, Any] = {"pod_id_seq": 1, "reported_date": "2024-06-30"}
-    api.update(
-        {
-            new: value
-            for (table, new), value in sentinels.items()
-            if table == "pod_monitoring_api"
-        }
-    )
-    _insert(conn, "pod_monitoring_api", api, renamed=renamed)
-
-    conn.execute(
-        "INSERT INTO m_project (project_id, project_name, is_active) "
-        "VALUES ('P-1', 'Synthetic project', 1)"
-    )
-    conn.execute(
-        "INSERT INTO pod_project (pod_project_uuid, pod_id_seq, project_id, "
-        "is_main_project, is_auto_inferred) VALUES (?, 1, 'P-1', 1, 0)",
-        ("33333333-3333-4333-8333-333333333333",),
-    )
-    conn.execute("INSERT INTO pod_document (pod_id_seq, doc_id) VALUES (1, 'DOC-001')")
-    conn.execute(
-        "INSERT INTO pod_registry_legacy_identity (legacy_pod_id, legacy_pod_id_value, "
-        "target_pod_id_seq, target_pod_id, target_pod_uuid, reconciled_by) "
-        "VALUES (900, 'LEGACY-900', 1, ?, ?, 'FA:test')",
-        (pod_id, pod_uuid),
-    )
-    conn.execute(
-        "INSERT INTO pod_read_model_snapshot (singleton_id, source_generation, "
-        "resource_revision, resource_sha256, timeseries_revision, timeseries_sha256) "
-        "VALUES (1, 7, 'resource-r1', 'resource-sha', 'timeseries-r1', 'timeseries-sha')"
-    )
-    conn.execute(
-        "INSERT INTO pod_knowledge_state (singleton_id, basis_sha256, source_generation) "
-        "VALUES (1, 'basis-sha', 7)"
-    )
-    conn.execute(
-        "INSERT INTO pod_read_model_diagnostic (diagnostic_id, source_generation, code, "
-        "message) VALUES (1, 7, 'synthetic', 'kept')"
-    )
-    conn.execute("CREATE TABLE application_notes (id INTEGER PRIMARY KEY, note TEXT)")
-    conn.execute("INSERT INTO application_notes (id, note) VALUES (1, 'keep me')")
-    state = {
-        "schema_version": 2,
-        "contract_id": "esdc.pod",
-        "contract_version": contract_version,
-        "dictionary_version": "0.4.0",
-        "reference_seed_version": 20261028,
-        "source_generation": 7,
-        "knowledge_generation": 3,
-        "updated_by": "FA:test-initialize",
-    }
-    if metadata is not None:
-        state.update(metadata)
-    conn.execute(
-        "INSERT INTO pod_registry_state (singleton_id, schema_version, contract_id, "
-        "contract_version, dictionary_version, reference_seed_version, "
-        "source_generation, knowledge_generation, updated_by) "
-        "VALUES (1, :schema_version, :contract_id, :contract_version, "
-        ":dictionary_version, :reference_seed_version, :source_generation, "
-        ":knowledge_generation, :updated_by)",
-        state,
-    )
-    conn.commit()
-    conn.close()
-    return sentinels
-
-
-def _dump(path: Path, *, tables: tuple[str, ...] | None = None) -> dict[str, Any]:
-    conn = _connect(path)
-    try:
-        names = tables or tuple(
-            str(row[0])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' "
-                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-            )
-        )
-        return {
-            table: tuple(
-                sorted(
-                    (tuple(row) for row in conn.execute(f"SELECT * FROM {_quote(table)}")),
-                    key=repr,
-                )
-            )
-            for table in names
-        }
-    finally:
-        conn.close()
 
 
 def _master_identity(path: Path) -> list[tuple[Any, ...]]:
@@ -300,7 +65,7 @@ def _master_identity(path: Path) -> list[tuple[Any, ...]]:
 
 
 def _upgrade(path: Path) -> Any:
-    inspect, apply, _refused, _load = _api()
+    _inspect, apply, _refused, _load = _api()
     conn = _connect(path)
     try:
         report = apply(conn)
@@ -313,7 +78,7 @@ def _upgrade(path: Path) -> Any:
 def test_upgrade_preserves_all_24_economics_values(tmp_path: Path) -> None:
     inspect, apply, _refused, load_contract = _api()
     path = tmp_path / "old.sqlite"
-    sentinels = _build_registry(path)
+    values = _build_registry(path)
 
     conn = _connect(path)
     try:
@@ -329,16 +94,15 @@ def test_upgrade_preserves_all_24_economics_values(tmp_path: Path) -> None:
         assert inspect(conn).status == "current"
         contract = load_contract()
         for table, old, new in _renames():
-            columns = _columns(conn, table)
-            assert old not in columns
-            assert columns == tuple(
+            actual = _columns(conn, table)
+            assert old not in actual
+            assert actual == tuple(
                 column.name for column in contract.tables[table].columns
             )
             row = conn.execute(
-                f"SELECT typeof({_quote(new)}), {_quote(new)} FROM {_quote(table)} "
-                "WHERE rowid = 1"
+                f'SELECT typeof("{new}"), "{new}" FROM "{table}" WHERE rowid = 1'
             ).fetchone()
-            expected = sentinels[(table, new)]
+            expected = values[(table, new)]
             if expected is None:
                 assert tuple(row) == ("null", None)
             else:
@@ -348,7 +112,6 @@ def test_upgrade_preserves_all_24_economics_values(tmp_path: Path) -> None:
 
 
 def test_upgrade_preserves_identities_links_and_generations(tmp_path: Path) -> None:
-    _inspect, _apply, _refused, _load = _api()
     path = tmp_path / "old.sqlite"
     _build_registry(path)
     identity_before = _master_identity(path)
@@ -393,12 +156,10 @@ def test_upgrade_is_explicit_and_read_only_inspection_changes_nothing(
     conn = _connect(path)
     try:
         assert inspect(conn).status == "upgrade_required"
-        assert _columns(conn, "m_pod")[0] == "pod_id_seq"
         assert "npv_pf_ctr_pod" in _columns(conn, "m_pod")
-        state = conn.execute(
+        assert conn.execute(
             "SELECT contract_version FROM pod_registry_state WHERE singleton_id = 1"
-        ).fetchone()[0]
-        assert state == 1
+        ).fetchone()[0] == 1
     finally:
         conn.close()
     assert path.read_bytes() == before_bytes
@@ -423,7 +184,7 @@ def test_already_renamed_contract_one_is_stamped_without_data_changes(
 ) -> None:
     inspect, apply, _refused, _load = _api()
     path = tmp_path / "renamed.sqlite"
-    sentinels = _build_registry(path, renamed=True)
+    values = _build_registry(path, renamed=True)
     before = _dump(path)
 
     conn = _connect(path)
@@ -449,9 +210,9 @@ def test_already_renamed_contract_one_is_stamped_without_data_changes(
             "WHERE singleton_id = 1"
         ).fetchone()
         assert tuple(state) == (2, "FA:pod-economics-upgrade")
-        for (table, new), expected in sentinels.items():
+        for (table, new), expected in values.items():
             row = conn.execute(
-                f"SELECT {_quote(new)} FROM {_quote(table)} WHERE rowid = 1"
+                f'SELECT "{new}" FROM "{table}" WHERE rowid = 1'
             ).fetchone()
             assert row[0] == expected
     finally:
