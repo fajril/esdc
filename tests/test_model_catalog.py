@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -594,6 +595,225 @@ class TestStandardOpenAIDiscovery:
         assert warning == "Model discovery failed (connection error)."
         for forbidden in (secret, "password", "runtime.example", "body"):
             assert forbidden not in warning
+
+
+    @pytest.mark.parametrize("type_key", ["provider_type", "type"])
+    def test_saved_oauth_wins_when_api_key_is_also_present(
+        self, monkeypatch, type_key: str
+    ):
+        from copy import deepcopy
+
+        from esdc.providers.openai import OpenAIProvider
+
+        provider = {
+            type_key: "openai",
+            "api_key": "api-key-account-a",
+            "oauth": {
+                "access_token": "oauth-account-b",
+                "expires_at": 4_102_444_800,
+            },
+        }
+        before = deepcopy(provider)
+        url = f"{OpenAIProvider.BASE_URL.rstrip('/')}/models"
+        calls = _fake_http(
+            monkeypatch,
+            {url: (200, {"data": [{"id": "oauth-model"}]})},
+        )
+
+        catalog = discover_models(provider)
+
+        assert len(calls) == 1
+        assert calls[0]["headers"] == {"Authorization": "Bearer oauth-account-b"}
+        assert [item.model_id for item in catalog.entries] == ["oauth-model"]
+        assert provider == before
+
+    def test_standard_openai_discovery_matches_runtime_oauth_identity(
+        self, monkeypatch
+    ):
+        import esdc.providers.openai as openai_module
+        from esdc.providers.base import ProviderConfig
+        from esdc.providers.openai import OpenAIProvider
+
+        oauth = {
+            "access_token": "oauth-account-b",
+            "refresh_token": "refresh-account-b",
+            "expires_at": 4_102_444_800,
+        }
+        recorded: dict[str, Any] = {}
+
+        def fake_chat(**kwargs):
+            recorded.update(kwargs)
+            return MagicMock()
+
+        monkeypatch.setattr(openai_module, "ChatOpenAI", fake_chat)
+        monkeypatch.setattr(
+            OpenAIProvider, "get_actual_context_length", lambda *args, **kwargs: 0
+        )
+        OpenAIProvider.create_llm(
+            model="gpt-test",
+            api_key="api-key-account-a",
+            config=ProviderConfig(
+                name="synthetic",
+                provider_type="openai",
+                oauth=dict(oauth),
+            ),
+        )
+        assert recorded["api_key"] == "oauth-account-b"
+
+        provider = {
+            "provider_type": "openai",
+            "api_key": "api-key-account-a",
+            "oauth": dict(oauth),
+        }
+        url = f"{OpenAIProvider.BASE_URL.rstrip('/')}/models"
+        calls = _fake_http(monkeypatch, {url: (200, {"data": [{"id": "m"}]})})
+        discover_models(provider)
+
+        assert calls[0]["headers"] == {
+            "Authorization": f"Bearer {recorded['api_key']}"
+        }
+
+    @pytest.mark.parametrize(
+        ("extra", "expected"),
+        [
+            (
+                {"api_key": "api-key-account-a"},
+                {"Authorization": "Bearer api-key-account-a"},
+            ),
+            (
+                {"oauth": {"access_token": "oauth-account-b"}},
+                {"Authorization": "Bearer oauth-account-b"},
+            ),
+            (
+                {
+                    "api_key": "api-key-account-a",
+                    "oauth": {"access_token": "oauth-account-b"},
+                },
+                {"Authorization": "Bearer oauth-account-b"},
+            ),
+            (
+                {
+                    "api_key": "api-key-account-a",
+                    "oauth": {"access_token": ""},
+                },
+                {"Authorization": "Bearer api-key-account-a"},
+            ),
+            ({}, {}),
+            (
+                {
+                    "api_key": "api-key-account-a",
+                    "oauth": {"access_token": "oauth-account-b"},
+                },
+                {"Authorization": "Bearer oauth-account-b"},
+            ),
+            (
+                {
+                    "api_key": "api-key-account-a",
+                    "oauth": {
+                        "access_token": "oauth-account-b",
+                        "expires_at": 1,
+                    },
+                },
+                {"Authorization": "Bearer oauth-account-b"},
+            ),
+            (
+                {
+                    "api_key": "api-key-account-a",
+                    "oauth": "not-a-mapping",
+                },
+                {"Authorization": "Bearer api-key-account-a"},
+            ),
+        ],
+        ids=[
+            "api-key-only",
+            "oauth-only",
+            "both-oauth-wins",
+            "empty-oauth-token-falls-back",
+            "no-credentials",
+            "missing-expiry",
+            "expired-oauth-still-wins",
+            "malformed-oauth-falls-back",
+        ],
+    )
+    def test_standard_openai_auth_selection_matrix(
+        self, monkeypatch, extra: dict[str, Any], expected: dict[str, str]
+    ):
+        from esdc.providers.openai import OpenAIProvider
+
+        url = f"{OpenAIProvider.BASE_URL.rstrip('/')}/models"
+        calls = _fake_http(
+            monkeypatch, {url: (200, {"data": [{"id": "model-a"}]})}
+        )
+        provider = {"provider_type": "openai", **extra}
+
+        discover_models(provider)
+
+        assert calls[0]["headers"] == expected
+
+    def test_openai_compatible_both_credentials_keep_api_key_precedence(
+        self, monkeypatch
+    ):
+        provider = {
+            "provider_type": "openai_compatible",
+            "base_url": BASE,
+            "api_key": "api-key-account-a",
+            "oauth": {"access_token": "oauth-account-b"},
+        }
+        calls = _fake_http(
+            monkeypatch,
+            {
+                MODELS_URL: (200, {"data": [{"id": "compatible-model"}]}),
+                INFO_URL: (200, {"data": []}),
+            },
+        )
+
+        discover_models(provider)
+
+        assert calls
+        assert all(
+            call["headers"] == {"Authorization": "Bearer api-key-account-a"}
+            for call in calls
+        )
+
+    def test_standard_openai_401_does_not_retry_with_api_key_or_refresh(
+        self, monkeypatch, tmp_path
+    ):
+        from copy import deepcopy
+
+        import esdc.auth as auth_module
+        import esdc.providers.openai as openai_module
+        from esdc.providers.openai import OpenAIProvider
+
+        monkeypatch.setenv("ESDC_CONFIG_DIR", str(tmp_path))
+        provider = {
+            "provider_type": "openai",
+            "api_key": "api-key-account-a",
+            "oauth": {
+                "access_token": "oauth-account-b",
+                "refresh_token": "refresh-account-b",
+                "expires_at": 4_102_444_800,
+            },
+        }
+        before = deepcopy(provider)
+        url = f"{OpenAIProvider.BASE_URL.rstrip('/')}/models"
+        calls = _fake_http(monkeypatch, {url: (401, {})})
+        refresh = MagicMock(side_effect=AssertionError("must not refresh"))
+        persist = MagicMock(side_effect=AssertionError("must not persist"))
+        monkeypatch.setattr(auth_module, "refresh_access_token", refresh)
+        monkeypatch.setattr(openai_module, "_persist_refreshed_oauth", persist)
+
+        catalog = discover_models(provider)
+
+        assert len(calls) == 1
+        assert calls[0]["headers"] == {"Authorization": "Bearer oauth-account-b"}
+        assert catalog.entries == ()
+        assert catalog.warning == "Model discovery failed (HTTP 401)."
+        refresh.assert_not_called()
+        persist.assert_not_called()
+        assert provider == before
+        assert not list(tmp_path.iterdir())
+        assert "oauth-account-b" not in (catalog.warning or "")
+        assert "api-key-account-a" not in (catalog.warning or "")
 
 
 class TestOllamaDiscovery:

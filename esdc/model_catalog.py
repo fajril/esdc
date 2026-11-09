@@ -146,6 +146,23 @@ def _auth_headers(provider: Mapping[str, Any]) -> dict[str, str]:
     return {"Authorization": f"Bearer {credential}"} if credential else {}
 
 
+def _standard_openai_auth_headers(provider: Mapping[str, Any]) -> dict[str, str]:
+    """Bearer header for standard OpenAI discovery, preferring saved OAuth.
+
+    ``OpenAIProvider.create_llm`` uses a saved OAuth access token over a
+    coexisting API key. Discovery is a read-only snapshot of saved credentials:
+    the saved token wins even when its expiry is missing or past, and nothing
+    here refreshes, persists or retries under another identity. A missing,
+    empty or malformed OAuth value delegates to the generic selector, which
+    keeps the other providers' API-key-first behavior unchanged.
+    """
+    oauth = provider.get("oauth")
+    token = oauth.get("access_token") if isinstance(oauth, Mapping) else ""
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return _auth_headers(provider)
+
+
 def _timeout_pair(timeout_seconds: float) -> tuple[float, float]:
     """(connect, read) timeouts: connect capped at 5s, read as requested."""
     read = max(MIN_TIMEOUT_SECONDS, float(timeout_seconds))
@@ -264,7 +281,9 @@ def _discover_standard_openai(
         )
 
     payload, reason = _fetch_json(
-        f"{base}/models", _auth_headers(provider), _timeout_pair(timeout_seconds)
+        f"{base}/models",
+        _standard_openai_auth_headers(provider),
+        _timeout_pair(timeout_seconds),
     )
     if reason is not None:
         return ModelCatalog(warning=f"Model discovery failed ({reason}).")
