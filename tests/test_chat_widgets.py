@@ -399,3 +399,33 @@ class TestCompactionNotice:
         app._handle_stream_chunk(meta)
         notices = [c for r, c in shown if r == "system" and "compacted" in c.lower()]
         assert len(notices) == 1
+
+
+@pytest.mark.asyncio
+async def test_real_context_panel_mounts_working_state_widgets():
+    """The real ContextPanel composes every working-state widget exactly once."""
+    from textual.app import App
+
+    from esdc.chat.widgets import (
+        ContextHealth,
+        ContextPanel,
+        ResultsPanel,
+        SQLPanel,
+        ToolTimeline,
+    )
+
+    class _Host(App):
+        def compose(self):
+            yield ContextPanel()
+
+    app = _Host()
+    async with app.run_test():
+        for widget_type, widget_id in (
+            (ToolTimeline, "tool-timeline"),
+            (SQLPanel, "sql-panel"),
+            (ResultsPanel, "results-panel"),
+            (ContextHealth, "context-health"),
+        ):
+            matches = app.query(f"#{widget_id}")
+            assert len(matches) == 1, widget_id
+            assert isinstance(app.query_one(f"#{widget_id}"), widget_type)

@@ -981,3 +981,55 @@ def test_aggregate_documents_rejects_similarity_threshold(populated):
         aggregate_documents.invoke(
             {"query": "persetujuan", "similarity_threshold": 0.5}
         )
+
+
+@pytest.mark.asyncio
+async def test_default_agent_binds_document_search_and_reader(monkeypatch, tmp_path):
+    """The real default registry must bind the document tools for a document route."""
+    from typing import cast
+
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    import esdc.chat.agent as agent_module
+
+    class RecordingLLM:
+        """Final answer with no tool calls; records the tools bound for one turn."""
+
+        def __init__(self):
+            self.bound_tool_names: list[list[str]] = []
+            self.seen: list[list] = []
+
+        def bind_tools(self, tools):
+            self.bound_tool_names.append([tool.name for tool in tools])
+            return self
+
+        async def ainvoke(self, messages, **kwargs):
+            self.seen.append(list(messages))
+            return AIMessage(content="jawaban final")
+
+    monkeypatch.setenv("ESDC_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(agent_module, "get_openterminal_tools", lambda: None)
+
+    llm = RecordingLLM()
+    agent = agent_module.create_agent(
+        cast(BaseChatModel, llm), tools=None, checkpointer=None, context_length=8000
+    )
+
+    await agent.ainvoke(
+        {
+            "messages": [
+                HumanMessage(
+                    content="Cari dokumen persetujuan POD lapangan sintetis"
+                )
+            ]
+        },
+        config={"recursion_limit": 10},
+    )
+
+    assert llm.seen, "the agent must invoke the model"
+    assert llm.bound_tool_names
+    bound = set(llm.bound_tool_names[-1])
+    assert {"document_search", "document_reader"} <= bound
+    assert "document_aggregator" in bound
+    assert "execute_sql" not in bound
