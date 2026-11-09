@@ -176,7 +176,15 @@ def _require_v2_tables(conn: sqlite3.Connection) -> int:
         "source_generation "
         "FROM pod_registry_state WHERE singleton_id = 1"
     ).fetchone()
-    expected = (2, "esdc.pod", 1, load_pod_contract().dictionary_version)
+    from esdc.pod_registry.migrations import SCHEMA_VERSION
+
+    contract = load_pod_contract()
+    expected = (
+        SCHEMA_VERSION,
+        contract.contract_id,
+        contract.contract_version,
+        contract.dictionary_version,
+    )
     if state is None or tuple(state[:4]) != expected:
         raise RuntimeError("POD read-model rebuild requires the supported v2 registry")
     return int(state[4])

@@ -129,11 +129,12 @@ def _fetch_sqlite_connection(path: Path) -> sqlite3.Connection:
         from esdc.pod_registry.contract import load_pod_contract
         from esdc.pod_registry.migrations import SCHEMA_VERSION
 
+        contract = load_pod_contract()
         expected = (
             SCHEMA_VERSION,
-            "esdc.pod",
-            1,
-            load_pod_contract().dictionary_version,
+            contract.contract_id,
+            contract.contract_version,
+            contract.dictionary_version,
         )
         if state is None or tuple(state) != expected:
             raise RuntimeError("POD fetch writer refuses unsupported registry metadata")

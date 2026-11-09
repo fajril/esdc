@@ -31,7 +31,7 @@ _EXPECTED_COLUMN_COUNTS = {
     "pod_monitoring_api": 176,
     "pod_forecast_api": 24,
 }
-_EXPECTED_CONTRACT = ("esdc.pod", 1, "0.4.0")
+_EXPECTED_CONTRACT = ("esdc.pod", 2, "0.4.0")
 _INTEGER_LIMITS = {
     "BIGINT": (-(2**63), 2**63 - 1),
     "INTEGER": (-(2**63), 2**63 - 1),

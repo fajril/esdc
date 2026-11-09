@@ -26,6 +26,10 @@ SCHEMA_VERSION = 2
 REFERENCE_SEED_VERSION = 20261028
 MIGRATION_ACTOR = "FA:migrate-pod-registry-v2"
 INITIALIZE_ACTOR = "FA:pod-registry-initialize"
+ECONOMICS_UPGRADE_RECOVERY = (
+    "Run 'esdc pod-upgrade-economics --database <path>' "
+    "to inspect the required upgrade."
+)
 
 _LEGACY_OBJECTS = (
     "m_pod",
@@ -241,13 +245,22 @@ def _canonical_storage_type(column: ColumnContract) -> str:
     return "TEXT"
 
 
-def _verify_v2_contract(conn: sqlite3.Connection) -> None:
+def _verify_v2_contract(
+    conn: sqlite3.Connection, *, legacy_economics: bool = False
+) -> None:
     contract = load_pod_contract()
+    legacy_map: dict[tuple[str, str], str] = {}
+    if legacy_economics:
+        from esdc.pod_registry.economics_upgrade import ECONOMICS_RENAMES
+
+        legacy_map = {(owner, new): old for owner, old, new in ECONOMICS_RENAMES}
     for name, table in contract.tables.items():
         rows = conn.execute(f"PRAGMA table_info({_quote(name)})").fetchall()
-        if tuple(str(row[1]) for row in rows) != tuple(
-            column.name for column in table.columns
-        ):
+        expected_columns = tuple(
+            legacy_map.get((name, column.name), column.name)
+            for column in table.columns
+        )
+        if tuple(str(row[1]) for row in rows) != expected_columns:
             raise MigrationRefusedError(
                 f"v2 table {name!r} does not match the ordered POD contract columns"
             )
@@ -343,9 +356,21 @@ def _validate_existing_v2_registry(conn: sqlite3.Connection) -> None:
         contract.contract_version,
         contract.dictionary_version,
     )
-    if state is None or tuple(state) != expected:
-        raise MigrationRefusedError("existing POD registry metadata is incompatible")
-    _verify_v2_contract(conn)
+    if state is not None and tuple(state) == expected:
+        _verify_v2_contract(conn)
+        return
+    if (
+        state is not None
+        and int(state[0]) == SCHEMA_VERSION
+        and str(state[1]) == contract.contract_id
+        and str(state[3]) == contract.dictionary_version
+    ):
+        from esdc.pod_registry.economics_upgrade import inspect_economics_upgrade
+
+        report = inspect_economics_upgrade(conn)
+        if report.status == "upgrade_required":
+            raise MigrationRefusedError(ECONOMICS_UPGRADE_RECOVERY)
+    raise MigrationRefusedError("existing POD registry metadata is incompatible")
 
 
 def initialize_registry_v2(conn: sqlite3.Connection) -> None:
@@ -354,18 +379,20 @@ def initialize_registry_v2(conn: sqlite3.Connection) -> None:
     if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
         raise RuntimeError("POD registry initialization requires foreign_keys=ON")
     names = _table_names(conn)
+    contract = load_pod_contract()
+    expected = (
+        SCHEMA_VERSION,
+        contract.contract_id,
+        contract.contract_version,
+        contract.dictionary_version,
+    )
     state_exists = "pod_registry_state" in names
     if state_exists:
         state = conn.execute(
             "SELECT schema_version, contract_id, contract_version, dictionary_version "
             "FROM pod_registry_state WHERE singleton_id = 1"
         ).fetchone()
-        if state is not None and tuple(state) != (
-            SCHEMA_VERSION,
-            "esdc.pod",
-            1,
-            "0.4.0",
-        ):
+        if state is not None and tuple(state) != expected:
             raise MigrationRefusedError(
                 "existing POD registry metadata is incompatible"
             )
@@ -395,8 +422,15 @@ def initialize_registry_v2(conn: sqlite3.Connection) -> None:
             "singleton_id, schema_version, contract_id, contract_version, "
             "dictionary_version, reference_seed_version, source_generation, "
             "knowledge_generation, updated_by"
-            ") VALUES (1, ?, 'esdc.pod', 1, '0.4.0', ?, 0, NULL, ?)",
-            (SCHEMA_VERSION, REFERENCE_SEED_VERSION, INITIALIZE_ACTOR),
+            ") VALUES (1, ?, ?, ?, ?, ?, 0, NULL, ?)",
+            (
+                SCHEMA_VERSION,
+                contract.contract_id,
+                contract.contract_version,
+                contract.dictionary_version,
+                REFERENCE_SEED_VERSION,
+                INITIALIZE_ACTOR,
+            ),
         )
         conn.execute(
             "UPDATE pod_registry_state SET reference_seed_version = ? "
@@ -488,6 +522,19 @@ def inspect_migration(conn: sqlite3.Connection) -> MigrationReport:
             "FROM pod_registry_state WHERE singleton_id = 1"
         ).fetchone()
         if state is not None and state[0] == SCHEMA_VERSION:
+            from esdc.pod_registry.economics_upgrade import (
+                inspect_economics_upgrade,
+            )
+
+            economics = inspect_economics_upgrade(conn)
+            if economics.status != "current":
+                blockers = economics.blockers or (ECONOMICS_UPGRADE_RECOVERY,)
+                return MigrationReport(
+                    status="blocked",
+                    blockers=blockers,
+                    legacy_tables=legacy_tables,
+                    documents_table_present="documents" in names,
+                )
             _verify_v2_contract(conn)
             return MigrationReport(
                 status="v2",

@@ -38,7 +38,7 @@ def _api():
     )
 
 
-def _empty_batch(contract, batch_type, *, omit=(), contract_version=1):
+def _empty_batch(contract, batch_type, *, omit=(), contract_version=None):
     headers = {}
     rows = {}
     for name, table in contract.tables.items():
@@ -49,7 +49,7 @@ def _empty_batch(contract, batch_type, *, omit=(), contract_version=1):
     return batch_type(
         source="test-fixture",
         contract_id=contract.contract_id,
-        contract_version=contract_version,
+        contract_version=contract.contract_version if contract_version is None else contract_version,
         dictionary_version=contract.dictionary_version,
         headers=headers,
         rows=rows,
@@ -115,7 +115,7 @@ def _row(contract, table_name, row_number=1):
     }
 
 
-def _batch_with_rows(contract, batch_type, replacements=None, *, contract_version=1):
+def _batch_with_rows(contract, batch_type, replacements=None, *, contract_version=None):
     batch = _empty_batch(contract, batch_type, contract_version=contract_version)
     rows = dict(batch.rows)
     if replacements:
@@ -135,7 +135,7 @@ def test_contract_declares_complete_input_and_api_columns_in_order():
     contract = load_pod_contract()
 
     assert contract.contract_id == "esdc.pod"
-    assert contract.contract_version == 1
+    assert contract.contract_version == 2
     assert contract.dictionary_version == "0.4.0"
     assert {
         name: len(table.columns) for name, table in contract.tables.items()
