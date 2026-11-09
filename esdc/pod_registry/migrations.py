@@ -104,6 +104,7 @@ class MigrationReport:
     identity_reconciliation: tuple[LegacyIdentityMapping, ...] = ()
     unmapped_legacy_pod_ids: tuple[int, ...] = ()
     row_counts: tuple[tuple[str, int], ...] = ()
+    economics_upgrade_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,6 +535,9 @@ def inspect_migration(conn: sqlite3.Connection) -> MigrationReport:
                     blockers=blockers,
                     legacy_tables=legacy_tables,
                     documents_table_present="documents" in names,
+                    economics_upgrade_required=(
+                        economics.status == "upgrade_required"
+                    ),
                 )
             _verify_v2_contract(conn)
             return MigrationReport(

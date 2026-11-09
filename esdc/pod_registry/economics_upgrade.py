@@ -93,19 +93,32 @@ def inspect_economics_upgrade(
             "POD registry is missing required tables: " + ", ".join(missing)
         )
 
-    metadata = _metadata(conn)
+    try:
+        metadata = _metadata(conn)
+    except sqlite3.Error:
+        return EconomicsUpgradeReport(
+            status="blocked",
+            blockers=("POD registry metadata is unreadable",),
+        )
+    parsed_contract_version: int | None = None
     if metadata is None:
         blockers.append("POD registry metadata is missing")
     else:
         schema_version, contract_id, contract_version, dictionary_version = metadata
-        if int(str(schema_version)) != SCHEMA_VERSION:
-            blockers.append("POD registry schema version is unsupported")
+        try:
+            parsed_schema_version = int(str(schema_version))
+            parsed_contract_version = int(str(contract_version))
+        except (TypeError, ValueError):
+            blockers.append("POD registry version metadata is not numeric")
+        else:
+            if parsed_schema_version != SCHEMA_VERSION:
+                blockers.append("POD registry schema version is unsupported")
+            if parsed_contract_version not in (1, contract.contract_version):
+                blockers.append("POD registry contract version is unsupported")
         if str(contract_id) != contract.contract_id:
             blockers.append("POD registry contract id is unsupported")
         if str(dictionary_version) != contract.dictionary_version:
             blockers.append("POD registry dictionary version is unsupported")
-        if int(str(contract_version)) not in (1, contract.contract_version):
-            blockers.append("POD registry contract version is unsupported")
 
     if blockers:
         return EconomicsUpgradeReport(status="blocked", blockers=tuple(blockers))
@@ -142,10 +155,12 @@ def inspect_economics_upgrade(
     if blockers:
         return EconomicsUpgradeReport(status="blocked", blockers=tuple(blockers))
 
-    metadata = _metadata(conn)
-    assert metadata is not None
-    contract_version = int(str(metadata[2]))
-    if contract_version == contract.contract_version:
+    if parsed_contract_version is None:
+        return EconomicsUpgradeReport(
+            status="blocked",
+            blockers=("POD registry contract version is unsupported",),
+        )
+    if parsed_contract_version == contract.contract_version:
         if legacy:
             return EconomicsUpgradeReport(
                 status="blocked",
@@ -154,7 +169,7 @@ def inspect_economics_upgrade(
                 ),
             )
         return EconomicsUpgradeReport(status="current")
-    if contract_version == 1:
+    if parsed_contract_version == 1:
         pending = ECONOMICS_RENAMES if legacy else ()
         return EconomicsUpgradeReport(
             status="upgrade_required", renames=tuple(pending)
@@ -181,6 +196,7 @@ def upgrade_economics_columns(
         if report.status == "current":
             return report
 
+        conn.execute("PRAGMA legacy_alter_table = OFF")
         for table, old, new in report.renames:
             conn.execute(
                 f"ALTER TABLE {_quote(table)} "

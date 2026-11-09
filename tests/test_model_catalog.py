@@ -444,6 +444,7 @@ class TestProviderTypeRouting:
     def test_openai_default_base(self, monkeypatch):
         from esdc.providers.openai import OpenAIProvider
 
+        assert "api.openai.com" not in OpenAIProvider.BASE_URL
         url = f"{OpenAIProvider.BASE_URL.rstrip('/')}/models"
         calls = _fake_http(
             monkeypatch,
@@ -796,4 +797,3 @@ class TestOllamaDiscovery:
             "RuntimeError",
         ):
             assert forbidden not in warning
-

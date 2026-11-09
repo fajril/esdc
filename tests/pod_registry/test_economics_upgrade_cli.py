@@ -198,3 +198,50 @@ def test_upgrade_cli_current_database_is_noop(tmp_path: Path) -> None:
     assert payload["status"] == "current"
     assert not backup.exists()
     assert dump(current) == before
+
+
+def test_upgrade_cli_current_database_with_existing_backup_is_noop(
+    tmp_path: Path,
+) -> None:
+    current = tmp_path / "current.sqlite"
+    build_registry(current, contract_version=2, renamed=True)
+    backup = tmp_path / "already-used.sqlite"
+    backup.write_bytes(b"keep this")
+    before = dump(current)
+
+    result = _invoke(
+        "--database", str(current), "--apply", "--backup", str(backup)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _payload(result.stdout)["status"] == "current"
+    assert backup.read_bytes() == b"keep this"
+    assert dump(current) == before
+
+
+def test_upgrade_cli_rejects_database_sidecar_backup(tmp_path: Path) -> None:
+    old = tmp_path / "old.sqlite"
+    build_registry(old)
+    before = dump(old)
+    sidecar = Path(f"{old}-wal")
+
+    result = _invoke(
+        "--database", str(old), "--apply", "--backup", str(sidecar)
+    )
+
+    assert result.exit_code != 0
+    assert dump(old) == before
+    assert not sidecar.exists()
+
+
+def test_upgrade_apply_does_not_create_a_missing_database(tmp_path: Path) -> None:
+    from esdc.commands import pod as pod_module
+
+    missing = tmp_path / "gone.sqlite"
+    backup = tmp_path / "backup.sqlite"
+
+    with pytest.raises(sqlite3.OperationalError):
+        pod_module._apply(missing, backup)
+
+    assert not missing.exists()
+    assert not backup.exists()

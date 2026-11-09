@@ -35,10 +35,13 @@ def _validate_backup(database: Path, backup: Path) -> None:
         raise RuntimeError(f"backup path already exists: {backup}")
     if backup.resolve() == database.resolve():
         raise RuntimeError("backup path must differ from the database path")
+    for suffix in ("-wal", "-shm", "-journal"):
+        if str(backup) == f"{database}{suffix}":
+            raise RuntimeError("backup path must not be a database sidecar file")
 
 
 def _create_backup(database: Path, backup: Path) -> None:
-    source = sqlite3.connect(database)
+    source = _read_only(database)
     destination = sqlite3.connect(backup)
     try:
         source.backup(destination)
@@ -58,10 +61,11 @@ def _verify_backup(backup: Path) -> None:
 
 
 def _apply(database: Path, backup: Path) -> None:
-    _validate_backup(database, backup)
     require_wal_runtime()
     created_backup = False
-    writer = sqlite3.connect(database)
+    # mode=rw refuses a path that disappeared after Typer's parse-time check instead
+    # of creating a new empty database file.
+    writer = sqlite3.connect(f"{database.resolve().as_uri()}?mode=rw", uri=True)
     try:
         configure_writer(writer)
         writer.execute("BEGIN IMMEDIATE")
@@ -73,6 +77,7 @@ def _apply(database: Path, backup: Path) -> None:
             typer.echo(json.dumps(_payload(report), sort_keys=True))
             return
 
+        _validate_backup(database, backup)
         _create_backup(database, backup)
         created_backup = True
         _verify_backup(backup)
@@ -130,6 +135,12 @@ def upgrade_pod_economics_command(
             return
         assert backup is not None
         _apply(database, backup)
-    except (sqlite3.Error, OSError, RuntimeError, MigrationRefusedError) as exc:
+    except (
+        ValueError,
+        sqlite3.Error,
+        OSError,
+        RuntimeError,
+        MigrationRefusedError,
+    ) as exc:
         typer.echo(f"POD economics upgrade failed: {exc}", err=True)
         raise typer.Exit(code=1) from None

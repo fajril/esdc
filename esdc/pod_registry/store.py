@@ -19,6 +19,7 @@ from pathlib import Path
 
 from esdc.configs import Config
 from esdc.pod_registry.migrations import (
+    ECONOMICS_UPGRADE_RECOVERY,
     MigrationRefusedError,
     MigrationReport,
     _atomic_writer,
@@ -314,6 +315,12 @@ def _refuse_incompatible_shape(report: MigrationReport) -> None:
     if report.status not in {"legacy", "blocked"}:
         return
     detail = "; ".join(report.blockers) or ", ".join(report.legacy_tables)
+    if report.economics_upgrade_required:
+        raise MigrationRefusedError(
+            "The operational SQLite database needs the explicit POD economics "
+            f"upgrade. {ECONOMICS_UPGRADE_RECOVERY} This store never renames "
+            "columns automatically."
+        )
     message = (
         "the operational store serves only the current POD schema; this "
         f"database needs the explicit validated replacement ({detail})"

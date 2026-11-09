@@ -258,6 +258,10 @@ def _unsupported_contract_version(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE pod_registry_state SET contract_version = 99")
 
 
+def _non_numeric_contract_version(conn: sqlite3.Connection) -> None:
+    conn.execute("UPDATE pod_registry_state SET contract_version = 'not-a-number'")
+
+
 def _wrong_dictionary(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE pod_registry_state SET dictionary_version = '9.9.9'")
 
@@ -278,6 +282,7 @@ def _missing_identity_guard(conn: sqlite3.Connection) -> None:
         _drop_expected_column,
         _add_extra_contract_column,
         _unsupported_contract_version,
+        _non_numeric_contract_version,
         _wrong_dictionary,
         _missing_metadata,
         _missing_identity_guard,
@@ -288,6 +293,7 @@ def _missing_identity_guard(conn: sqlite3.Connection) -> None:
         "missing-column",
         "extra-contract-column",
         "unsupported-contract-version",
+        "non-numeric-contract-version",
         "wrong-dictionary",
         "missing-metadata",
         "missing-identity-guard",
@@ -413,3 +419,45 @@ def test_upgraded_registry_opens_and_serves_new_economics_names(
         ).fetchone()[0] == "0.123456"
     finally:
         conn.close()
+
+
+def test_inspect_migration_reports_contract_one_upgrade_read_only(tmp_path: Path) -> None:
+    path = tmp_path / "old.sqlite"
+    _build_registry(path)
+    before = path.read_bytes()
+    migrations = importlib.import_module("esdc.pod_registry.migrations")
+    conn = _connect(path)
+    try:
+        report = migrations.inspect_migration(conn)
+    finally:
+        conn.close()
+
+    assert report.status == "blocked"
+    assert report.economics_upgrade_required is True
+    assert any(RECOVERY in blocker for blocker in report.blockers)
+    assert path.read_bytes() == before
+
+
+def test_operational_store_and_fetch_name_the_economics_upgrade(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "old.sqlite"
+    _build_registry(path)
+    migrations = importlib.import_module("esdc.pod_registry.migrations")
+    store = importlib.import_module("esdc.pod_registry.store")
+    fetch = importlib.import_module("esdc.fetch_publication")
+    fetching = importlib.import_module("esdc.fetching")
+
+    with pytest.raises(migrations.MigrationRefusedError) as store_error:
+        store.get_sqlite_connection(path)
+    assert "pod-upgrade-economics" in str(store_error.value)
+    assert "explicit validated replacement" not in str(store_error.value)
+
+    conn = _connect(path)
+    try:
+        with pytest.raises(fetching.FetchFailure) as fetch_error:
+            fetch._pod_target_shape(conn)
+    finally:
+        conn.close()
+    assert "pod-upgrade-economics" in str(fetch_error.value)
+    assert "crosswalk" not in str(fetch_error.value).lower()

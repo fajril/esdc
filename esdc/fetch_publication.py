@@ -50,6 +50,7 @@ from esdc.fetching import (
     parse_report_year,
 )
 from esdc.pod_registry.migrations import (
+    ECONOMICS_UPGRADE_RECOVERY,
     _validate_existing_v2_registry,
     initialize_registry_v2,
     inspect_migration,
@@ -1685,6 +1686,13 @@ def _pod_target_shape(conn: sqlite3.Connection | None) -> Literal["fresh", "v2"]
     if conn is None:
         return "fresh"
     report = inspect_migration(conn)
+    if report.economics_upgrade_required:
+        raise FetchFailure(
+            "POD fetch refuses a registry that needs the explicit economics "
+            f"upgrade. {ECONOMICS_UPGRADE_RECOVERY}",
+            phase="preflight",
+            table="pod_registry",
+        )
     if report.status == "legacy" or report.status == "blocked":
         raise _crosswalk_refusal(report.blockers)
     return report.status
