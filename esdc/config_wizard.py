@@ -369,9 +369,10 @@ def _prompt_for_config_value(
         retired = _RETIRED_ENUM_LABELS.get(key, {}).get(stored)
         if retired is not None:
             # A retired stored value is shown as it is and stays the default, so the
-            # first service choice is never chosen for the user by default.
+            # first service choice is never chosen for the user by default. The
+            # default must be the row's value, not its display label.
             rows.insert(0, questionary.Choice(retired, value=stored))
-            default = retired
+            default = stored
         else:
             default = stored if stored in choices else choices[0]
 

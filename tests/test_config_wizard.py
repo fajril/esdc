@@ -1201,7 +1201,7 @@ class TestRerankKeyWidgets:
         assert titles.count("local (retired — choose a rerank service)") == 1
         assert "local" not in titles
         assert result == stored
-        assert mock_select.call_args.kwargs["default"] == titles[0]
+        assert mock_select.call_args.kwargs["default"] == stored
 
     @patch("esdc.config_wizard.questionary.select")
     def test_retired_rerank_backend_choice_resolves_normally(self, mock_select):
@@ -1222,7 +1222,7 @@ class TestRerankKeyWidgets:
             "OpenAI-compatible HTTP service",
         ]
         assert result == stored
-        assert mock_select.call_args.kwargs["default"] == titles[0]
+        assert mock_select.call_args.kwargs["default"] == stored
 
     @patch("esdc.config_wizard.questionary.select")
     def test_retired_embedding_backend_choice_resolves_normally(self, mock_select):
@@ -6620,4 +6620,57 @@ def test_local_ocr_test_uses_saved_corpus_host_without_saving_draft(monkeypatch)
     assert captured[0]["ollama_host"] == "http://gpu-box:11434"
     assert captured[0]["ocr_provider"] == ""
     assert captured[0]["ocr_model"] == "draft-model"
+    save.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("key", "service_value"),
+    [
+        ("embedding_backend", "ollama"),
+        ("corpus.rerank_backend", "provider"),
+    ],
+)
+def test_retired_backend_editor_constructs_real_questionary_select(
+    monkeypatch, tmp_path, key: str, service_value: str
+):
+    """The retired default must be a real choice value, not its display label."""
+    import questionary
+
+    import esdc.config_wizard as wizard
+
+    monkeypatch.setenv("ESDC_CONFIG_DIR", str(tmp_path))
+    Config._config_cache = None
+    Config.init_config()
+    config_path = tmp_path / "config.yaml"
+    before = config_path.read_bytes()
+    save = MagicMock()
+    monkeypatch.setattr(Config, "set_config_values", save)
+
+    captured: dict[str, Any] = {}
+    real_select = questionary.select
+
+    def recording_select(*args, **kwargs):
+        captured.update(kwargs)
+        return real_select(*args, **kwargs)
+
+    monkeypatch.setattr(wizard.questionary, "select", recording_select)
+
+    # The real constructor above runs before `_ask`: a label default raises there.
+    monkeypatch.setattr(wizard, "_ask", lambda question: "local")
+    assert wizard._prompt_for_config_value(key, "local", {key: "local"}) == "local"
+
+    default = captured["default"]
+    assert default == "local"
+    assert any(choice.value == default for choice in captured["choices"])
+
+    monkeypatch.setattr(wizard, "_ask", lambda question: None)
+    assert wizard._prompt_for_config_value(key, "local", {key: "local"}) is None
+
+    monkeypatch.setattr(wizard, "_ask", lambda question: service_value)
+    assert (
+        wizard._prompt_for_config_value(key, "local", {key: "local"})
+        == service_value
+    )
+
+    assert config_path.read_bytes() == before
     save.assert_not_called()
