@@ -1428,6 +1428,7 @@ _RETRY_VALUE = "__retry__"
 _BACK_VALUE = "__back__"
 _DIRECT_SETTINGS_VALUE = "__direct_settings__"
 _LOCAL_CUSTOM_VALUE = "__local_custom__"
+_LOCAL_OCR_CUSTOM_VALUE = "__local_ocr_custom__"
 _CORPUS_OLLAMA_CACHE_KEY = "__corpus_ollama__"
 
 _LOCAL_LABEL = "Local"
@@ -1660,9 +1661,31 @@ def _special_selections(
         return selections
 
     if role == "ocr":
-        model = str(flat.get("corpus.ocr_model") or "")
-        if model:
-            selections.append(LocalSelection(model))
+        # The direct local OCR source is the corpus Ollama host: discover the models
+        # that host reports, and keep the saved model visible when it is absent or
+        # unverified. Only an explicit non-vision report removes it.
+        saved_model = str(flat.get("corpus.ocr_model") or "")
+        ollama_host = str(flat.get("corpus.ollama_host") or "")
+        catalog = _catalog_for(
+            cache,
+            _CORPUS_OLLAMA_CACHE_KEY,
+            {"provider_type": "ollama", "base_url": ollama_host},
+        )
+        reported = [
+            entry for entry in catalog.entries if _entry_matches_role(entry, "ocr")
+        ]
+        rows = _vision_filter(reported)
+        seen: set[str] = set()
+        for entry in rows:
+            seen.add(entry.model_id)
+            selections.append(LocalSelection(entry.model_id))
+        if saved_model and saved_model not in seen:
+            saved_entry = next(
+                (entry for entry in reported if entry.model_id == saved_model),
+                None,
+            )
+            if saved_entry is None or saved_entry.supports_vision is not False:
+                selections.append(LocalSelection(saved_model))
         return selections
 
     # metadata and cleanup: the chat-default, off, and linked rows, plus the
@@ -1729,6 +1752,14 @@ def _task_rows(
         # the local rows. The row is an input action, never a value Save can accept.
         rows.append(
             questionary.Choice("Local custom model…", value=_LOCAL_CUSTOM_VALUE)
+        )
+
+    if role == "ocr":
+        # The direct corpus Ollama source can name a model the host does not list yet.
+        rows.append(
+            questionary.Choice(
+                "Custom local OCR model…", value=_LOCAL_OCR_CUSTOM_VALUE
+            )
         )
 
     for name, entry in providers.items():
@@ -2010,6 +2041,33 @@ def _local_custom_rerank_flow() -> LocalSelection | None:
     return LocalSelection(model)
 
 
+def _local_ocr_model_flow(current: TaskSelection | None) -> LocalSelection | None:
+    """One typed local OCR model id, resolved to a LocalSelection. Nothing is written.
+
+    The direct corpus Ollama source may name a model its host does not list yet, so
+    an arbitrary non-empty id is accepted. A blank entry is refused and re-prompted;
+    a cancel (Escape or Back) returns None to the picker. Saving stays in the task
+    action menu, as it does for every other draft selection.
+    """
+    default = current.model_id if isinstance(current, LocalSelection) else ""
+    while True:
+        value = _ask(
+            questionary.text(
+                "Local OCR model id:",
+                default=default,
+                style=_WIZARD_STYLE,
+            )
+        )
+        if value is None:
+            return None
+        model = str(value).strip()
+        if model:
+            return LocalSelection(model)
+        rich_print(
+            f"[{_ERROR_COLOR}]A local OCR model needs a model id.[/{_ERROR_COLOR}]"
+        )
+
+
 def _choose_provider_model(
     role: TaskRole, current: TaskSelection | None = None
 ) -> TaskSelection | None:
@@ -2057,6 +2115,12 @@ def _choose_provider_model(
             # The row resolves to a LocalSelection; the sentinel itself is never a
             # value Save can accept, and a refused or cancelled input comes back here.
             resolved = _local_custom_rerank_flow()
+            if resolved is None:
+                continue
+            return resolved
+        if selected == _LOCAL_OCR_CUSTOM_VALUE:
+            # Same contract for the direct corpus OCR source: a typed draft only.
+            resolved = _local_ocr_model_flow(current)
             if resolved is None:
                 continue
             return resolved

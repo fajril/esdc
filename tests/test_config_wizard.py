@@ -3068,7 +3068,10 @@ class TestEmptyModelIsNeverARow:
     def test_ocr_has_no_blank_pair_row(
         self, mock_select, mock_providers, mock_flat, mock_discover
     ):
-        assert self._pick(mock_select, "ocr") == self._FIXED_ROWS
+        assert self._pick(mock_select, "ocr") == [
+            "Custom local OCR model…",
+            *self._FIXED_ROWS,
+        ]
         assert self._blank_rows(mock_select) == []
 
     @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
@@ -5986,3 +5989,192 @@ def test_bad_ollama_provider_does_not_hide_healthy_task_rows(monkeypatch):
     assert _RETRY_VALUE in values
     assert _CUSTOM_VALUE in values
     assert providers == before
+
+
+def _ocr_models(rows) -> list[str]:
+    return [row.value.model_id for row in rows if isinstance(row.value, LocalSelection)]
+
+
+def test_local_ocr_lists_corpus_host_vision_and_unknown_models(monkeypatch):
+    import esdc.config_wizard as wizard
+    from esdc.config_wizard import _task_rows
+
+    monkeypatch.setattr(Config, "get_providers", lambda: {})
+    monkeypatch.setattr(
+        Config,
+        "get_all_config_flat",
+        lambda: {"corpus.ollama_host": "http://gpu-box:11434"},
+    )
+    seen: dict[str, Any] = {}
+
+    def fake_discover(provider):
+        seen.update(provider)
+        return ModelCatalog(
+            entries=(
+                ModelEntry("vision-a", supports_vision=True),
+                ModelEntry("unknown-b", supports_vision=None),
+                ModelEntry("vision-named-text-c", supports_vision=False),
+            )
+        )
+
+    monkeypatch.setattr(wizard, "discover_models", fake_discover)
+
+    models = _ocr_models(_task_rows("ocr", None, {}))
+
+    assert "vision-a" in models
+    assert "unknown-b" in models
+    assert "vision-named-text-c" not in models
+    assert seen == {"provider_type": "ollama", "base_url": "http://gpu-box:11434"}
+
+
+def test_local_ocr_discovery_preserves_saved_unverified_model(monkeypatch):
+    import esdc.config_wizard as wizard
+    from esdc.config_wizard import _task_rows
+
+    monkeypatch.setattr(Config, "get_providers", lambda: {})
+    monkeypatch.setattr(
+        Config,
+        "get_all_config_flat",
+        lambda: {
+            "corpus.ollama_host": "http://gpu-box:11434",
+            "corpus.ocr_model": "saved-ocr",
+        },
+    )
+
+    monkeypatch.setattr(
+        wizard,
+        "discover_models",
+        lambda provider: ModelCatalog(
+            entries=(ModelEntry("other", supports_vision=True),)
+        ),
+    )
+    assert "saved-ocr" in _ocr_models(_task_rows("ocr", None, {}))
+
+    monkeypatch.setattr(
+        wizard,
+        "discover_models",
+        lambda provider: ModelCatalog(warning="Model discovery failed (timeout)."),
+    )
+    assert "saved-ocr" in _ocr_models(_task_rows("ocr", None, {}))
+
+    monkeypatch.setattr(
+        wizard,
+        "discover_models",
+        lambda provider: ModelCatalog(
+            entries=(ModelEntry("saved-ocr", supports_vision=False),)
+        ),
+    )
+    assert "saved-ocr" not in _ocr_models(_task_rows("ocr", None, {}))
+
+
+def test_local_ocr_custom_model_without_saved_provider(monkeypatch):
+    import esdc.config_wizard as wizard
+    from esdc.config_wizard import _local_ocr_model_flow
+
+    monkeypatch.setattr(Config, "get_providers", lambda: {})
+    discover = MagicMock()
+    monkeypatch.setattr(wizard, "discover_models", discover)
+    mock_text = MagicMock()
+    mock_text.return_value.unsafe_ask.return_value = "  custom-vision  "
+    monkeypatch.setattr(wizard.questionary, "text", mock_text)
+
+    result = _local_ocr_model_flow(None)
+
+    assert result == LocalSelection("custom-vision")
+    discover.assert_not_called()
+
+
+def test_local_ocr_custom_cancel_and_blank_do_not_save(
+    monkeypatch, tmp_path
+):
+    import esdc.config_wizard as wizard
+    from esdc.config_wizard import _local_ocr_model_flow
+
+    monkeypatch.setenv("ESDC_CONFIG_DIR", str(tmp_path))
+    Config._config_cache = None
+    Config.init_config()
+    config_path = tmp_path / "config.yaml"
+    before = config_path.read_bytes()
+    save = MagicMock()
+    monkeypatch.setattr(Config, "set_config_values", save)
+
+    mock_text = MagicMock()
+    mock_text.return_value.unsafe_ask.side_effect = ["", "   ", "model-x"]
+    monkeypatch.setattr(wizard.questionary, "text", mock_text)
+
+    assert _local_ocr_model_flow(None) == LocalSelection("model-x")
+    assert mock_text.return_value.unsafe_ask.call_count == 3
+
+    cancel_text = MagicMock()
+    cancel_text.return_value.unsafe_ask.return_value = None
+    monkeypatch.setattr(wizard.questionary, "text", cancel_text)
+    assert _local_ocr_model_flow(None) is None
+    assert config_path.read_bytes() == before
+    save.assert_not_called()
+
+
+def test_local_ocr_save_changes_only_role_source_and_model(monkeypatch):
+    import esdc.config_wizard as wizard
+    from esdc.config_wizard import _save_task_selection
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(Config, "set_config_values", lambda values: captured.update(values))
+    monkeypatch.setattr(
+        Config,
+        "get_all_config_flat",
+        lambda: {"corpus.ollama_host": "http://gpu-box:11434"},
+    )
+    monkeypatch.setattr(
+        wizard,
+        "discover_models",
+        lambda provider: ModelCatalog(
+            entries=(ModelEntry("glm-ocr", supports_vision=True),)
+        ),
+    )
+
+    _save_task_selection("ocr", LocalSelection("glm-ocr"))
+
+    assert captured == {
+        "corpus.ocr_provider": "",
+        "corpus.ocr_model": "glm-ocr",
+    }
+
+
+def test_local_ocr_test_uses_saved_corpus_host_without_saving_draft(monkeypatch):
+    import esdc.config_wizard as wizard
+    from esdc.config_wizard import _test_task_selection
+
+    monkeypatch.setattr(
+        Config,
+        "get_corpus_config",
+        lambda: {
+            "ollama_host": "http://gpu-box:11434",
+            "ocr_provider": "saved-other",
+            "ocr_model": "saved-model",
+            "extract_timeout_seconds": 5,
+        },
+    )
+    captured: list[dict[str, Any]] = []
+
+    class _FakeClient:
+        def health_check(self) -> bool:
+            return True
+
+        def query_image(self, image, prompt) -> str:
+            return "ESDC OCR TEST 12345"
+
+    def fake_create_ocr_client(config, **kwargs):
+        captured.append(dict(config))
+        return _FakeClient()
+
+    monkeypatch.setattr(wizard, "create_ocr_client", fake_create_ocr_client)
+    save = MagicMock()
+    monkeypatch.setattr(Config, "set_config_values", save)
+
+    _test_task_selection("ocr", LocalSelection("draft-model"))
+
+    assert len(captured) == 1
+    assert captured[0]["ollama_host"] == "http://gpu-box:11434"
+    assert captured[0]["ocr_provider"] == ""
+    assert captured[0]["ocr_model"] == "draft-model"
+    save.assert_not_called()
