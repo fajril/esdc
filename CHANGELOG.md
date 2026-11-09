@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tool names are sent to model providers in OpenAI-safe form and restored to
+  display names for execution and client tool calls. Fixes providers whose
+  tool parser rejects names with spaces, such as the llm-engine vLLM backend,
+  while keeping names such as `SQL Executor` in OpenWebUI.
 - Publication retry does not reissue identities or generation.
 - Document metadata KG invalidation is atomic and triggers no automatic model call.
 

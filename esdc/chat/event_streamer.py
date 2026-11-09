@@ -25,6 +25,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 
 from esdc.chat.external_tools import is_external_tool_marker, parse_external_tool_name
+from esdc.chat.tool_names import ToolNameMap
 
 logger = logging.getLogger("esdc.chat.event_streamer")
 
@@ -107,6 +108,9 @@ async def astream_agent_events(
     pending_tool_calls: list[dict[str, Any]] = []
     seen_image_markdowns: list[str] = []
     has_chat_model_end = False
+    name_map = getattr(agent, "_esdc_tool_name_map", None)
+    if not isinstance(name_map, ToolNameMap):
+        name_map = None
 
     try:
         async for event in agent.astream_events(
@@ -181,8 +185,17 @@ async def astream_agent_events(
                         else {},
                     )
                     if has_tool_calls:
-                        cleaned.tool_calls = output.tool_calls  # type: ignore[attr-defined]
-                        for tc in output.tool_calls:
+                        tool_calls: list[Any] = list(output.tool_calls)
+                        if name_map is not None:
+                            tool_calls = [
+                                {
+                                    **tc,
+                                    "name": name_map.to_display(tc.get("name", "")),
+                                }
+                                for tc in tool_calls
+                            ]
+                        cleaned.tool_calls = tool_calls  # type: ignore[attr-defined]
+                        for tc in tool_calls:
                             pending_tool_calls.append(
                                 {"name": tc.get("name", ""), "id": tc.get("id", "")}
                             )

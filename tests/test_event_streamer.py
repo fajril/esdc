@@ -93,6 +93,48 @@ class TestAstreamAgentEvents:
         assert msg_events[0]["ai_message"].content == "Test response"
 
     @pytest.mark.asyncio
+    async def test_message_complete_restores_display_tool_names(self):
+        """Provider wire names are translated back before clients see them."""
+        from langchain_core.messages import AIMessage
+
+        from esdc.chat.tool_names import ToolNameMap
+
+        ai_message = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "sql_executor", "args": {"query": "SELECT 1"}, "id": "c1"}
+            ],
+        )
+
+        events = [
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": ai_message},
+                "name": "chat_model",
+            },
+            {
+                "event": "on_tool_end",
+                "data": {"output": "1"},
+                "name": "SQL Executor",
+            },
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = MagicMock(return_value=AsyncEventIterator(events))
+        mock_agent._esdc_tool_name_map = ToolNameMap(["SQL Executor"])
+
+        result = []
+        async for event in astream_agent_events(mock_agent, []):
+            result.append(event)
+
+        msg_events = [e for e in result if e["type"] == "message_complete"]
+        assert msg_events[0]["ai_message"].tool_calls[0]["name"] == "SQL Executor"
+
+        tool_events = [e for e in result if e["type"] == "tool_result"]
+        assert tool_events[0]["tool_name"] == "SQL Executor"
+        assert tool_events[0]["tool_call_id"] == "c1"
+
+    @pytest.mark.asyncio
     async def test_message_complete_content_is_unfiltered(self):
         """Test message_complete content NOT SQL-filtered (streamer passthrough)."""
         from langchain_core.messages import AIMessage

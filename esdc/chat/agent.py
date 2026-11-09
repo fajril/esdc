@@ -42,6 +42,7 @@ from esdc.chat.skills import (
     skill_matches_query,
 )
 from esdc.chat.smart_query import simple_data_query
+from esdc.chat.tool_names import ToolNameMap
 from esdc.chat.tools import (
     aggregate_documents,
     entity_resolver,
@@ -541,6 +542,11 @@ def create_agent(
     if external_tools:
         tools = tools + external_tools
 
+    # Providers that enforce OpenAI's function-name grammar reject (or fail to
+    # parse) names such as "SQL Executor". Bind wire-safe names to the model
+    # and translate back to display names for execution and client output.
+    tool_name_map = ToolNameMap(tool.name for tool in tools)
+
     _external_tool_names = external_tool_names or set()
 
     conditional_tool_names: set[str] = set(_external_tool_names)
@@ -735,7 +741,9 @@ def create_agent(
             all_tools[name] for name in allowed_tools if name in all_tools
         ]
 
-        llm_with_selected_tools = llm.bind_tools(selected_tools)
+        llm_with_selected_tools = llm.bind_tools(
+            tool_name_map.wire_tools(selected_tools)
+        )
 
         total_chars = sum(len(str(m.content)) for m in messages_with_system)
         system_prompt_len = len(system_prompt)
@@ -755,7 +763,9 @@ def create_agent(
 
         try:
             response = await asyncio.wait_for(
-                llm_with_selected_tools.ainvoke(messages_with_system),
+                llm_with_selected_tools.ainvoke(
+                    tool_name_map.messages_to_wire(messages_with_system)
+                ),
                 timeout=120,
             )
         except asyncio.TimeoutError:
@@ -774,6 +784,13 @@ def create_agent(
                     )
                 ]
             }
+
+        # The model only knows wire-safe names. Restore display names before
+        # the tool node, loop detection, and client-facing code see them.
+        response = cast(
+            AIMessage,
+            tool_name_map.message_from_wire(cast(AIMessage, response)),
+        )
 
         inference_elapsed_ms = (time.perf_counter() - inference_start) * 1000
         response_len = len(str(response.content)) if hasattr(response, "content") else 0
@@ -1151,4 +1168,9 @@ def create_agent(
         .add_edge("tools", "agent")
     )
 
-    return graph.compile(checkpointer=checkpointer)
+    compiled = graph.compile(checkpointer=checkpointer)
+    # The event streamer sees raw provider messages before agent_node can
+    # restore display names; expose the map so its message events stay
+    # consistent with the state and with client-facing tool calls.
+    compiled._esdc_tool_name_map = tool_name_map  # type: ignore[attr-defined]
+    return compiled

@@ -17,6 +17,12 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from esdc.chat.agent import create_agent
+from esdc.chat.tool_names import sanitize_tool_name
+
+
+def _wire_names(*names: str) -> list[str]:
+    """Return the provider-facing names bound for the given display names."""
+    return [sanitize_tool_name(name) for name in names]
 
 
 class RecordingLLM:
@@ -240,7 +246,7 @@ async def test_follow_up_route_binds_ksmi_only_and_narrative_route_binds_semanti
         {"messages": [HumanMessage(content="Bolehkah E3 ke E4?")]},
         config={"recursion_limit": 10},
     )
-    assert llm.bound_tool_names[-1] == ["Knowledge Traversal"]
+    assert llm.bound_tool_names[-1] == _wire_names("Knowledge Traversal")
 
     await agent.ainvoke(
         {
@@ -250,7 +256,7 @@ async def test_follow_up_route_binds_ksmi_only_and_narrative_route_binds_semanti
         },
         config={"recursion_limit": 10},
     )
-    assert llm.bound_tool_names[-1] == ["Semantic Search", "SQL Executor"]
+    assert llm.bound_tool_names[-1] == _wire_names("Semantic Search", "SQL Executor")
 
 
 @pytest.mark.asyncio
@@ -266,7 +272,7 @@ async def test_simple_reserves_route_excludes_unrelated_tools():
         {"messages": [HumanMessage(content="Berapa cadangan minyak Lapangan Duri tahun 2025?")]},
         config={"recursion_limit": 10},
     )
-    assert llm.bound_tool_names[-1] == ["Simple Data Query"]
+    assert llm.bound_tool_names[-1] == _wire_names("Simple Data Query")
 
 
 @pytest.mark.asyncio
@@ -290,7 +296,7 @@ async def test_multi_turn_routes_replace_stale_strategy_and_bind_current_tools()
     await agent.ainvoke(
         {"messages": [HumanMessage(content="Bolehkah E3 ke E4?")]}, config=config
     )
-    assert llm.bound_tool_names[-1] == ["Knowledge Traversal"]
+    assert llm.bound_tool_names[-1] == _wire_names("Knowledge Traversal")
     assert "# KSMI reasoning playbook" in str(llm.seen[-1][0].content)
 
     await agent.ainvoke(
@@ -301,7 +307,7 @@ async def test_multi_turn_routes_replace_stale_strategy_and_bind_current_tools()
         },
         config=config,
     )
-    assert llm.bound_tool_names[-1] == ["Simple Data Query"]
+    assert llm.bound_tool_names[-1] == _wire_names("Simple Data Query")
     current_system = str(llm.seen[-1][0].content)
     assert "# KSMI reasoning playbook" not in current_system
     assert "Mandatory first action" not in current_system
@@ -317,11 +323,11 @@ async def test_multi_turn_routes_replace_stale_strategy_and_bind_current_tools()
         },
         config=config,
     )
-    assert llm.bound_tool_names[-1] == [
+    assert llm.bound_tool_names[-1] == _wire_names(
         "Document Search",
         "Document Reader",
         "Document Aggregator",
-    ]
+    )
 
     await agent.ainvoke(
         {
@@ -334,7 +340,7 @@ async def test_multi_turn_routes_replace_stale_strategy_and_bind_current_tools()
     await agent.ainvoke(
         {"messages": [HumanMessage(content="bagaimana tahun 2024?")]}, config=config
     )
-    assert llm.bound_tool_names[-1] == ["Simple Data Query"]
+    assert llm.bound_tool_names[-1] == _wire_names("Simple Data Query")
     anaphoric_system = str(llm.seen[-1][0].content)
     assert "field_name: 'duri'" in anaphoric_system
     assert "report_year: '2024'" in anaphoric_system
@@ -361,15 +367,15 @@ async def test_production_question_after_ksmi_turn_has_no_mandatory_ksmi():
     await agent.ainvoke(
         {"messages": [HumanMessage(content="Bolehkah E3 ke E4?")]}, config=config
     )
-    assert llm.bound_tool_names[-1] == ["Knowledge Traversal"]
+    assert llm.bound_tool_names[-1] == _wire_names("Knowledge Traversal")
 
     await agent.ainvoke(
         {"messages": [HumanMessage(content="Berapa produksi sumur tahun 2025?")]},
         config=config,
     )
     bound = llm.bound_tool_names[-1]
-    assert "Knowledge Traversal" not in bound
-    assert "SQL Executor" in bound
+    assert sanitize_tool_name("Knowledge Traversal") not in bound
+    assert sanitize_tool_name("SQL Executor") in bound
     current_system = str(llm.seen[-1][0].content)
     assert "# KSMI reasoning playbook" not in current_system
     assert "Mandatory first action" not in current_system
@@ -405,9 +411,9 @@ async def test_visualization_binds_configured_openterminal_tools_additively(
         config={"recursion_limit": 10},
     )
     bound = llm.bound_tool_names[-1]
-    assert "Shell Executor" in bound
-    assert "Code Interpreter" in bound
-    assert "SQL Executor" in bound
+    assert sanitize_tool_name("Shell Executor") in bound
+    assert sanitize_tool_name("Code Interpreter") in bound
+    assert sanitize_tool_name("SQL Executor") in bound
 
     await agent.ainvoke(
         {
@@ -417,7 +423,7 @@ async def test_visualization_binds_configured_openterminal_tools_additively(
         },
         config={"recursion_limit": 10},
     )
-    assert llm.bound_tool_names[-1] == ["Simple Data Query"]
+    assert llm.bound_tool_names[-1] == _wire_names("Simple Data Query")
 
 
 @pytest.mark.asyncio
@@ -445,8 +451,8 @@ async def test_mixed_negated_map_positive_chart_binds_and_allows_rendering_tools
         config={"recursion_limit": 10},
     )
     bound = llm.bound_tool_names[-1]
-    assert "Shell Executor" in bound
-    assert "Code Interpreter" in bound
+    assert sanitize_tool_name("Shell Executor") in bound
+    assert sanitize_tool_name("Code Interpreter") in bound
     assert "Shell Executor" in result["allowed_tools"]
 
     ordinary = await agent.ainvoke(
@@ -457,14 +463,14 @@ async def test_mixed_negated_map_positive_chart_binds_and_allows_rendering_tools
         },
         config={"recursion_limit": 10},
     )
-    assert "Shell Executor" not in llm.bound_tool_names[-1]
+    assert sanitize_tool_name("Shell Executor") not in llm.bound_tool_names[-1]
     assert "Shell Executor" not in ordinary["allowed_tools"]
 
     negated = await agent.ainvoke(
         {"messages": [HumanMessage(content="Jangan buat peta lapangan Duri")]},
         config={"recursion_limit": 10},
     )
-    assert "Shell Executor" not in llm.bound_tool_names[-1]
+    assert sanitize_tool_name("Shell Executor") not in llm.bound_tool_names[-1]
     assert "Shell Executor" not in negated["allowed_tools"]
 
 
@@ -492,8 +498,8 @@ async def test_fully_negated_visualization_does_not_bind_rendering_tools(
         config={"recursion_limit": 10},
     )
 
-    assert "Shell Executor" not in llm.bound_tool_names[-1]
-    assert "Code Interpreter" not in llm.bound_tool_names[-1]
+    assert sanitize_tool_name("Shell Executor") not in llm.bound_tool_names[-1]
+    assert sanitize_tool_name("Code Interpreter") not in llm.bound_tool_names[-1]
     assert "Shell Executor" not in result["allowed_tools"]
 
 
@@ -515,8 +521,8 @@ async def test_visualization_without_openterminal_binds_no_phantom_tools(
         config={"recursion_limit": 10},
     )
     bound = llm.bound_tool_names[-1]
-    assert "Shell Executor" not in bound
-    assert "Code Interpreter" not in bound
+    assert sanitize_tool_name("Shell Executor") not in bound
+    assert sanitize_tool_name("Code Interpreter") not in bound
 
 
 class _RecordingTool:
@@ -605,7 +611,7 @@ async def test_arbitrary_external_tools_are_not_default_bound(
         {"messages": [HumanMessage(content="Buat peta sebaran lapangan Duri")]},
         config={"recursion_limit": 10},
     )
-    assert "Some External" not in llm.bound_tool_names[-1]
+    assert sanitize_tool_name("Some External") not in llm.bound_tool_names[-1]
 
     await agent.ainvoke(
         {
@@ -615,4 +621,4 @@ async def test_arbitrary_external_tools_are_not_default_bound(
         },
         config={"recursion_limit": 10},
     )
-    assert "Some External" not in llm.bound_tool_names[-1]
+    assert sanitize_tool_name("Some External") not in llm.bound_tool_names[-1]
