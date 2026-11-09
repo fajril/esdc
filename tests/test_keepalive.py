@@ -12,8 +12,16 @@ import asyncio
 
 import pytest
 
-from esdc.server.constants import SSE_KEEPALIVE_INTERVAL, SSE_STREAM_TIMEOUT
+from esdc.server import routes
+from esdc.server.constants import SSE_STREAM_TIMEOUT
 from esdc.server.routes import with_keepalive
+
+
+@pytest.fixture
+def short_interval(monkeypatch) -> float:
+    interval = 0.05
+    monkeypatch.setattr(routes, "SSE_KEEPALIVE_INTERVAL", interval)
+    return interval
 
 
 class FakeRequest:
@@ -50,13 +58,13 @@ class TestWithKeepalive:
         assert len(data_chunks) == 5
 
     @pytest.mark.asyncio
-    async def test_sends_keepalive_during_gaps(self):
+    async def test_sends_keepalive_during_gaps(self, short_interval: float):
         """Keepalive pings sent during long gaps without destroying generator.
 
         This is the critical regression test: the old asyncio.wait_for()
         implementation permanently closed async generators on timeout.
         """
-        delay = SSE_KEEPALIVE_INTERVAL + 1
+        delay = short_interval + 0.02
 
         async def slow_inner():
             yield "data: first\n\n"
@@ -79,7 +87,7 @@ class TestWithKeepalive:
         )
 
     @pytest.mark.asyncio
-    async def test_generator_survives_multiple_timeouts(self):
+    async def test_generator_survives_multiple_timeouts(self, short_interval: float):
         """Generator survives multiple keepalive timeouts.
 
         Verifies the fix for the bug where asyncio.wait_for() on
@@ -89,9 +97,9 @@ class TestWithKeepalive:
 
         async def multi_gap_inner():
             yield "data: a\n\n"
-            await asyncio.sleep(SSE_KEEPALIVE_INTERVAL + 2)
+            await asyncio.sleep(short_interval + 0.02)
             yield "data: b\n\n"
-            await asyncio.sleep(SSE_KEEPALIVE_INTERVAL + 2)
+            await asyncio.sleep(short_interval + 0.02)
             yield "data: c\n\n"
 
         request = FakeRequest()
@@ -105,9 +113,11 @@ class TestWithKeepalive:
         )
 
     @pytest.mark.asyncio
-    async def test_stops_on_client_disconnect_during_keepalive(self):
+    async def test_stops_on_client_disconnect_during_keepalive(
+        self, short_interval: float
+    ):
         """Stream stops when client disconnects during a keep-alive wait."""
-        delay = SSE_KEEPALIVE_INTERVAL + 2  # longer than keepalive interval
+        delay = short_interval + 0.02  # longer than keepalive interval
 
         async def slow_inner():
             yield "data: first\n\n"
@@ -121,21 +131,25 @@ class TestWithKeepalive:
             results.append(chunk)
 
         data_chunks = [r for r in results if r.startswith("data:")]
-        assert len(data_chunks) >= 1, (
-            f"Expected at least 1 data chunk, got {len(data_chunks)}"
-        )
+        # Disconnect detection happens before the next chunk is yielded, so
+        # `second` must never reach the consumer. `>= 1` was also satisfied by
+        # the broken behaviour (the stream kept yielding), so it proved nothing.
+        assert len(data_chunks) == 1, f"stream did not stop: {data_chunks}"
+        assert "data: second" not in results
 
     @pytest.mark.asyncio
-    async def test_stops_on_client_disconnect_after_chunk(self):
+    async def test_stops_on_client_disconnect_after_chunk(self, short_interval: float):
         """Stream stops when client disconnects after receiving chunks."""
-        # Client disconnects after 3 is_disconnected checks
-        # (enough to yield first 2 chunks then stop)
+        # Client disconnects on the 4th is_disconnected check. The gap must be
+        # longer than two intervals so the check that trips happens before the
+        # last chunk is produced. With a single-interval gap the disconnect was
+        # only noticed after that chunk had already been yielded.
         request = FakeRequest(disconnected_after=3)
 
         async def inner():
             yield "data: first\n\n"
             yield "data: second\n\n"
-            await asyncio.sleep(SSE_KEEPALIVE_INTERVAL + 2)
+            await asyncio.sleep(2 * short_interval + 0.02)
             yield "data: never_reached\n\n"
 
         results = []
@@ -143,10 +157,8 @@ class TestWithKeepalive:
             results.append(chunk)
 
         data_chunks = [r for r in results if r.startswith("data:")]
-        # Should get at least the first chunk(s) before disconnect is detected
-        assert len(data_chunks) >= 1, (
-            f"Expected at least 1 data chunk, got {len(data_chunks)}"
-        )
+        assert len(data_chunks) == 2, f"stream did not stop: {data_chunks}"
+        assert "data: never_reached" not in results
 
     @pytest.mark.asyncio
     async def test_empty_stream(self):
@@ -182,9 +194,6 @@ class TestWithKeepalive:
 
 class TestSSEConstants:
     """Test that SSE constants are defined correctly."""
-
-    def test_keepalive_interval(self):
-        assert SSE_KEEPALIVE_INTERVAL == 15
 
     def test_stream_timeout(self):
         assert SSE_STREAM_TIMEOUT == 300

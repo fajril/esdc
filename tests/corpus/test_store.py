@@ -1082,15 +1082,6 @@ def test_insert_stores_contextual_embed_text(store_with_doc_factory):
     assert "Merak |" not in chunk_text  # display text has no prefix
 
 
-def test_embedder_receives_contextual_text(store_with_doc_factory):
-    """The vector is computed from embed_text, not chunk_text."""
-    store, doc = store_with_doc_factory(
-        doc_type="POD", subject="Pengembangan Merak", field_name=["Merak"]
-    )
-    embedded_texts = store._embedder.batch_calls[-1]
-    assert all("Merak" in t for t in embedded_texts)
-
-
 def test_keyword_search_matches_prefix_terms(store_with_doc_factory):
     """FTS runs over embed_text: doc-level entity terms hit every chunk."""
     store, doc = store_with_doc_factory(

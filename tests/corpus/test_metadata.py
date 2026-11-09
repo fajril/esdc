@@ -92,28 +92,6 @@ def test_vocab_tuples_derived_from_schema():
     )
 
 
-def test_doc_types_new_vocab():
-    assert metadata.DOC_TYPES == (
-        "uu",
-        "perpu",
-        "mk",
-        "pp",
-        "perpres",
-        "permen",
-        "kepres",
-        "kepmen",
-        "ptk",
-        "sop",
-        "letter",
-        "mom",
-        "ba",
-        "note",
-        "contract",
-        "book",
-        "others",
-    )
-
-
 def test_prompt_contains_every_llm_field():
     for name in doc_schema.llm_field_names():
         assert f"- {name}:" in metadata.METADATA_PROMPT

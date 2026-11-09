@@ -400,7 +400,12 @@ class _FixedEmbedder:
         return [list(self._vec) for _ in texts]
 
 
-def test_probe_constants():
+def test_probe_constants_are_frozen():
+    """Pinned because no default run exercises them behaviourally.
+
+    Changing PROBE_TEXT re-embeds every space, and the PROBE_TOLERANCE boundary
+    is asserted only in the skipif-gated `test_embed_parity_integration.py`.
+    """
     assert emb.PROBE_TEXT == "esdc corpus embedding parity probe"
     assert emb.PROBE_TOLERANCE == 0.995
 
@@ -416,11 +421,6 @@ def test_probe_seeds_when_null():
     assert row is not None
     stored = row[0]
     assert json.loads(stored) == [1.0, 0.0, 0.0]
-
-
-def test_probe_passes_on_near_identical_vector():
-    conn = _meta_conn(probe=[1.0, 0.0, 0.0])
-    emb.check_or_seed_probe(conn, "m", _FixedEmbedder([0.999, 0.001, 0.0]))
 
 
 def test_probe_raises_on_drifted_vector():

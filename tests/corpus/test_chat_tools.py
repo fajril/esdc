@@ -550,19 +550,6 @@ def test_search_documents_fts_absent_vector_only_fallback(tool_env):
     assert result["results"][0]["doc_id"] == "abc123"
 
 
-def test_tools_registered_in_agent():
-    """Grep-level check: agent.py imports and binds both tools."""
-    import importlib
-    import inspect
-
-    agent_mod = importlib.import_module("esdc.chat.agent")
-
-    source = inspect.getsource(agent_mod)
-    # once in the import block, once in the default tools list
-    assert source.count("search_documents") >= 2
-    assert source.count("read_document") >= 2
-
-
 def test_classifier_sets_include_document_tools():
     """Document tools are limited to DOCUMENT routes in the compact matrix."""
     from esdc.chat.query_classifier import (

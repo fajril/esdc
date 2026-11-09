@@ -61,18 +61,6 @@ class TestStatusBar:
         assert "≈" not in str(bar._status_text)
 
 
-class TestContextPanelSlim:
-    def test_context_panel_has_no_session_or_context_sections(self):
-        import inspect
-
-        from esdc.chat.widgets import ContextPanel
-
-        source = inspect.getsource(ContextPanel.compose)
-        assert "Session Info" not in source
-        assert "session-section" not in source
-        assert "context-section" not in source
-
-
 class TestToolTimeline:
     def test_start_and_finish_lifecycle(self):
         from esdc.chat.widgets import ToolTimeline
@@ -131,28 +119,6 @@ class TestToolTimeline:
         )
         tl._tick()
         assert calls["n"] == 0
-
-
-class TestChatDecluttered:
-    def test_tool_status_maps_removed_from_app(self):
-        import inspect
-
-        import esdc.chat.app as app_mod
-
-        source = inspect.getsource(app_mod)
-        assert "TOOL_STATUS_MAP" not in source
-        assert "TOOL_COMPLETED_MAP" not in source
-
-
-class TestRightPanelComposition:
-    def test_context_panel_composes_working_state_widgets(self):
-        import inspect
-
-        from esdc.chat.widgets import ContextPanel
-
-        source = inspect.getsource(ContextPanel.compose)
-        for widget in ("ToolTimeline", "SQLPanel", "ResultsPanel", "ContextHealth"):
-            assert widget in source, f"{widget} missing from ContextPanel.compose"
 
 
 class TestToolResultWiring:

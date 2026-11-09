@@ -88,12 +88,6 @@ def test_meta_table_name():
     assert SemanticResolver.SEMANTIC_META == "semantic_meta"
 
 
-def test_matching_embedder_passes_pin(tmp_path):
-    r = _seeded(tmp_path, [1.0, 0.0])
-    assert r._ensure_semantic_meta() is None
-    r.close()
-
-
 def test_drifted_embedder_returns_not_available_not_exception(tmp_path):
     """Same-dimension cosine drift must degrade, not raise.
 

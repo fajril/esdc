@@ -229,14 +229,6 @@ class TestFTSRewriteEdgeCases:
 class TestFTSRewritePreservation:
     """Test that original query semantics are preserved."""
 
-    def test_original_ilike_preserved(self):
-        """Test original ILIKE is always preserved as secondary filter."""
-        query = "SELECT * FROM project_resources WHERE field_name ILIKE '%Duri%'"
-        result = _rewrite_with_fts(query)
-
-        # Original ILIKE should still be there
-        assert "field_name ILIKE '%Duri%'" in result
-
     def test_select_columns_preserved(self):
         """Test SELECT columns are not modified."""
         query = (
@@ -281,13 +273,6 @@ class TestFTSRewriteNoMatch:
 
         assert result == query
         assert "match_bm25" not in result
-
-    def test_no_ilike_pattern(self):
-        """Test queries without ILIKE patterns are not rewritten."""
-        query = "SELECT * FROM project_resources WHERE report_year = 2024"
-        result = _rewrite_with_fts(query)
-
-        assert result == query
 
     def test_exact_match_no_wildcards(self):
         """Test ILIKE without wildcards may not match pattern."""

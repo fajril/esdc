@@ -2,6 +2,7 @@
 
 import os
 import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -66,12 +67,13 @@ class TestStatusCommand:
         assert result.exit_code == 0
         assert "Hit rate:" in result.stdout or "N/A" in result.stdout
 
-    def test_status_with_custom_env(self):
+    def test_status_with_custom_env(self, isolated_config):
         """Test `status fetch` shows custom path from env var."""
         with patch.dict(os.environ, {"ESDC_DB_FILE": "/custom/path/db.db"}):
             result = runner.invoke(app, ["status", "fetch"])
             assert result.exit_code == 0
             assert "/custom/path/db.db" in result.stdout
+            assert str(Path.home() / ".esdc") not in result.stdout
 
     def test_status_no_database(self):
         """Test bare status shows no database message when DB missing."""
@@ -186,11 +188,6 @@ class TestStatusSubcommands:
         result = runner.invoke(app, ["status", "corpus"])
         assert result.exit_code == 0
         assert "Corpus:" in result.stdout
-
-    def test_cache_subcommand_shows_cache_marker(self, isolated_config):
-        result = runner.invoke(app, ["status", "cache"])
-        assert result.exit_code == 0
-        assert "Cache:" in result.stdout
 
     def test_bare_status_is_compact_summary(self, seeded_database):
         """Bare `esdc status` is a one-glance summary, not the full report."""
@@ -408,13 +405,13 @@ class TestVerboseFlag:
             result = runner.invoke(app, ["--help"])
             assert result.exit_code == 0
 
-    def test_verbose_info(self):
+    def test_verbose_info(self, isolated_config):
         """Test info verbosity level."""
         with patch("esdc.esdc.Config.init_config"):
             result = runner.invoke(app, ["--verbose", "1", "status"])
             assert result.exit_code == 0
 
-    def test_verbose_debug(self):
+    def test_verbose_debug(self, isolated_config):
         """Test debug verbosity level."""
         with patch("esdc.esdc.Config.init_config"):
             result = runner.invoke(app, ["--verbose", "2", "status"])
@@ -454,25 +451,6 @@ class TestHumanizeBytes:
 
         assert _humanize_bytes(-1) == "0 B"
         assert _humanize_bytes(-1024) == "0 B"
-
-
-class TestPrintHitRate:
-    """Tests for _print_hit_rate helper."""
-
-    def test_zero_activity(self):
-        from esdc.esdc import _print_hit_rate
-
-        _print_hit_rate(0, 0)
-
-    def test_high_hit_rate(self):
-        from esdc.esdc import _print_hit_rate
-
-        _print_hit_rate(90, 10)
-
-    def test_low_hit_rate(self):
-        from esdc.esdc import _print_hit_rate
-
-        _print_hit_rate(10, 90)
 
 
 class TestChatCommandCleanup:

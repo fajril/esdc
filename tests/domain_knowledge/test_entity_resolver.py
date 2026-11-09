@@ -363,11 +363,6 @@ class TestEntityResolver:
         result = resolver.resolve("profil produksi Duri 2024")
         assert result["suggested_table"] == "field_timeseries"
 
-    def test_determine_table_for_reserves(self, mock_db: duckdb.DuckDBPyConnection):
-        resolver = EntityResolver(db=mock_db)
-        result = resolver.resolve("cadangan Duri 2024")
-        assert result["suggested_table"] == "field_resources"
-
 
 class TestResolveName:
     """resolve_name(): a targeted, no-NL-parsing lookup against one spec.

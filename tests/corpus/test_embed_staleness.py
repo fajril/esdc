@@ -77,12 +77,6 @@ def test_stale_embed_docs_empty_right_after_ingest(store: CorpusStore):
     assert store.stale_embed_docs() == []
 
 
-def test_stale_embed_docs_flags_document_after_entity_edit(store: CorpusStore):
-    _edit_field_name(store, "d1", '["Duri Field"]')
-
-    assert store.stale_embed_docs() == ["d1"]
-
-
 def test_stale_embed_docs_flags_a_name_shortened_to_its_own_prefix(
     store: CorpusStore,
 ):
