@@ -745,3 +745,55 @@ class TestOllamaDiscovery:
 
         assert catalog.entries
         assert not list(tmp_path.iterdir())
+
+    @pytest.mark.parametrize("host", ["http://[", "http://localhost:bad"])
+    def test_malformed_ollama_host_returns_unverified_catalog(
+        self, monkeypatch, host: str
+    ):
+        import ollama
+
+        def blocked(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("no list/show call may run for an invalid host")
+
+        # Real client construction; list/show are blocked so no network is possible.
+        monkeypatch.setattr(ollama.Client, "list", blocked)
+        monkeypatch.setattr(ollama.Client, "show", blocked)
+
+        catalog = discover_models({"provider_type": "ollama", "base_url": host})
+
+        assert catalog.entries == ()
+        warning = catalog.warning or ""
+        assert "construction failed" in warning
+        assert "localhost:11434" not in warning
+
+    def test_ollama_constructor_failure_does_not_expose_secrets(
+        self, monkeypatch
+    ):
+        import ollama
+
+        secret = "sk-synthetic-ollama-secret"
+
+        class _BoomClient:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                raise RuntimeError(
+                    f"failed {secret} https://user:password@host/v1 body"
+                )
+
+        monkeypatch.setattr(ollama, "Client", _BoomClient)
+
+        catalog = discover_models(
+            {"provider_type": "ollama", "base_url": "http://gpu-box:11434"}
+        )
+
+        assert catalog.entries == ()
+        warning = catalog.warning or ""
+        assert "construction failed" in warning
+        for forbidden in (
+            secret,
+            "password",
+            "gpu-box",
+            "body",
+            "RuntimeError",
+        ):
+            assert forbidden not in warning
+

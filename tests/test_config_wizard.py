@@ -5947,3 +5947,42 @@ class TestEmbeddingTestFollowsRuntimeHostPrecedence:
         _test_task_selection("embedding", self._DIRECT)
 
         assert mock_ollama.call_args.kwargs == {"host": "http://env-host:11434"}
+
+
+def test_bad_ollama_provider_does_not_hide_healthy_task_rows(monkeypatch):
+    """A malformed Ollama host must not crash the whole task picker."""
+    import esdc.config_wizard as wizard
+    from esdc.config_wizard import _CUSTOM_VALUE, _RETRY_VALUE, _task_rows
+
+    providers = {
+        "bad-ollama": {"provider_type": "ollama", "base_url": "http://["},
+        "healthy": {
+            "provider_type": "openai_compatible",
+            "base_url": "http://engine:4000/v1",
+            "api_key": "fixture-key",
+        },
+    }
+    before = {name: dict(entry) for name, entry in providers.items()}
+    monkeypatch.setattr(Config, "get_all_config_flat", lambda: {})
+    monkeypatch.setattr(Config, "get_providers", lambda: providers)
+
+    real_discover = wizard.discover_models
+
+    def fake_discover(provider):
+        if str(provider.get("provider_type")) == "ollama":
+            return real_discover(provider)
+        return ModelCatalog(
+            entries=(ModelEntry("healthy-chat", roles=frozenset({"chat"})),)
+        )
+
+    monkeypatch.setattr(wizard, "discover_models", fake_discover)
+
+    rows = _task_rows("chat", None, {})
+    values = [row.value for row in rows]
+    pairs = [value for value in values if isinstance(value, PairSelection)]
+
+    assert PairSelection("healthy", "healthy-chat") in pairs
+    assert all(pair.provider_name != "bad-ollama" for pair in pairs)
+    assert _RETRY_VALUE in values
+    assert _CUSTOM_VALUE in values
+    assert providers == before

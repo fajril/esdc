@@ -355,7 +355,15 @@ def _discover_ollama(base_url: str, timeout_seconds: float) -> ModelCatalog:
     # The Ollama client takes no per-call timeout argument, so the bound is set
     # on the client itself and applies to its list and show calls.
     read = max(MIN_TIMEOUT_SECONDS, float(timeout_seconds))
-    client = ollama.Client(host=base_url, timeout=read)
+    try:
+        client = ollama.Client(host=base_url, timeout=read)
+    except Exception:  # never echo the exception body or the address
+        return ModelCatalog(
+            warning=(
+                "Ollama client construction failed (invalid host address); "
+                "models are unverified."
+            )
+        )
 
     try:
         result = client.list()
