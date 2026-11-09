@@ -245,3 +245,39 @@ def test_upgrade_apply_does_not_create_a_missing_database(tmp_path: Path) -> Non
 
     assert not missing.exists()
     assert not backup.exists()
+
+
+@pytest.mark.parametrize(
+    ("missing_table", "contract_version", "renamed"),
+    [
+        ("pod_document", 1, False),
+        ("pod_read_model_snapshot", 1, False),
+        ("pod_document", 2, True),
+    ],
+    ids=["legacy-document", "legacy-snapshot", "current-document"],
+)
+def test_cli_apply_missing_support_table_refuses_before_backup(
+    tmp_path: Path,
+    missing_table: str,
+    contract_version: int,
+    renamed: bool,
+) -> None:
+    path = tmp_path / "incomplete.sqlite"
+    build_registry(path, contract_version=contract_version, renamed=renamed)
+    conn = connect(path)
+    try:
+        conn.execute(f'DROP TABLE "{missing_table}"')
+        conn.commit()
+    finally:
+        conn.close()
+    before = dump(path)
+    backup = tmp_path / "must-not-exist.sqlite"
+
+    result = _invoke(
+        "--database", str(path), "--apply", "--backup", str(backup)
+    )
+
+    assert result.exit_code != 0
+    assert missing_table in result.output
+    assert not backup.exists()
+    assert dump(path) == before

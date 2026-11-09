@@ -15,6 +15,7 @@ from typing import Literal, cast
 
 from esdc.pod_registry.contract import load_pod_contract
 from esdc.pod_registry.migrations import (
+    _V2_TABLES,
     SCHEMA_VERSION,
     MigrationRefusedError,
     _atomic_writer,
@@ -87,7 +88,7 @@ def inspect_economics_upgrade(
     contract = load_pod_contract()
     tables = _table_names(conn)
     blockers: list[str] = []
-    missing = sorted(set(contract.tables) - tables)
+    missing = sorted(_V2_TABLES - tables)
     if missing:
         blockers.append(
             "POD registry is missing required tables: " + ", ".join(missing)

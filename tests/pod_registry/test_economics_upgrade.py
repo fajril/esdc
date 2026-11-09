@@ -461,3 +461,81 @@ def test_operational_store_and_fetch_name_the_economics_upgrade(
         conn.close()
     assert "pod-upgrade-economics" in str(fetch_error.value)
     assert "crosswalk" not in str(fetch_error.value).lower()
+
+
+@pytest.mark.parametrize(
+    "missing_table",
+    [
+        "pod_document",
+        "pod_read_model_snapshot",
+        "pod_read_model_diagnostic",
+        "pod_knowledge_state",
+        "pod_registry_legacy_identity",
+    ],
+)
+@pytest.mark.parametrize(
+    ("contract_version", "renamed"),
+    [(1, False), (1, True), (2, True)],
+)
+def test_missing_required_support_table_blocks_inspection_and_apply(
+    tmp_path: Path,
+    missing_table: str,
+    contract_version: int,
+    renamed: bool,
+) -> None:
+    inspect, apply, refused, _load = _api()
+    path = tmp_path / "incomplete.sqlite"
+    _build_registry(path, contract_version=contract_version, renamed=renamed)
+    conn = _connect(path)
+    try:
+        conn.execute(f'DROP TABLE "{missing_table}"')
+        conn.commit()
+        before = _dump(path)
+        before_bytes = path.read_bytes()
+
+        report = inspect(conn)
+        assert report.status == "blocked"
+        assert any(missing_table in message for message in report.blockers)
+        assert report.renames == ()
+        assert not conn.in_transaction
+        assert path.read_bytes() == before_bytes
+
+        with pytest.raises(refused, match=missing_table):
+            apply(conn)
+        assert not conn.in_transaction
+        assert _dump(path) == before
+        assert conn.execute(
+            "SELECT contract_version FROM pod_registry_state WHERE singleton_id = 1"
+        ).fetchone()[0] == contract_version
+        actual_columns = _columns(conn, "m_pod")
+        if renamed:
+            assert "npv_ctr_pod" in actual_columns
+        else:
+            assert "npv_pf_ctr_pod" in actual_columns
+    finally:
+        conn.close()
+
+
+def test_required_support_table_view_is_not_a_valid_table(tmp_path: Path) -> None:
+    inspect, apply, refused, _load = _api()
+    path = tmp_path / "view.sqlite"
+    _build_registry(path)
+    conn = _connect(path)
+    try:
+        conn.execute("DROP TABLE pod_document")
+        conn.execute("CREATE VIEW pod_document AS SELECT 1 AS placeholder")
+        conn.commit()
+        before = _dump(path)
+
+        report = inspect(conn)
+        assert report.status == "blocked"
+        assert any("pod_document" in message for message in report.blockers)
+
+        with pytest.raises(refused, match="pod_document"):
+            apply(conn)
+        assert _dump(path) == before
+        assert conn.execute(
+            "SELECT type FROM sqlite_master WHERE name = 'pod_document'"
+        ).fetchone()[0] == "view"
+    finally:
+        conn.close()
