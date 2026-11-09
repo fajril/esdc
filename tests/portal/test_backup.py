@@ -23,9 +23,14 @@ def records(path, table):
         return [dict(r) for r in conn.execute(f'SELECT * FROM "{table}" ORDER BY 1')]
 
 
-@pytest.fixture()
-def source(tmp_path):
-    path = tmp_path / "source.sqlite"
+@pytest.fixture(scope="module")
+def source(tmp_path_factory):
+    """Shared read-only source database: the tests export from it, never mutate it.
+
+    Module-scoped because building the schema plus three changesets costs ~10 s
+    and was paid once per test.
+    """
+    path = tmp_path_factory.mktemp("backup_source") / "source.sqlite"
     get_sqlite_connection(path).close()
     approval = {
         "approval_date": "2024-01-01",

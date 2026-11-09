@@ -1866,12 +1866,17 @@ def test_corpus_unavailable_on_empty_corpus(tmp_path):
     store.close()
 
 
-@pytest.fixture
-def agg_store(tmp_path):
-    """Corpus where 'separator' appears in one body and one subject only."""
+@pytest.fixture(scope="module")
+def agg_store(tmp_path_factory):
+    """Corpus where 'separator' appears in one body and one subject only.
+
+    Module-scoped: every test below only reads the store, so rebuilding the
+    corpus and its indexes per test was pure repeated setup.
+    """
     from esdc.corpus.chunker import Chunk
     from esdc.corpus.store import CorpusStore
 
+    tmp_path = tmp_path_factory.mktemp("agg_store")
     store = CorpusStore(
         read_only=False,
         db_path=tmp_path / "agg.duckdb",
@@ -2160,17 +2165,20 @@ def test_aggregate_hybrid_semantic_candidates_exclude_keyword_hits(agg_store):
     assert len(tail_ids) == result["provenance"]["semantic_extra"]
 
 
-@pytest.fixture
-def many_docs_store(tmp_path):
+@pytest.fixture(scope="module")
+def many_docs_store(tmp_path_factory):
     """5 documents with long 'separator' bodies, for truncation tests.
 
     Enough documents to exercise limit-driven truncation in both list and
     count modes, and a chunk long enough (~1900 chars) to prove snippet
     trimming actually shrinks it.
+
+    Module-scoped: the tests below only read the store.
     """
     from esdc.corpus.chunker import Chunk
     from esdc.corpus.store import CorpusStore
 
+    tmp_path = tmp_path_factory.mktemp("many_docs_store")
     store = CorpusStore(
         read_only=False,
         db_path=tmp_path / "many.duckdb",
