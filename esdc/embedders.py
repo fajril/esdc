@@ -640,13 +640,15 @@ def probe_memo_key(
 ) -> tuple[Any, ...]:
     """The key a probe validation is memoized under.
 
-    `(effective config, DB file, stored pin, stored dimension, stored probe)` — the
-    facts a validation was computed from. Reading the row costs nothing beyond a SELECT;
-    the service is not asked. A rewrite that changes any of them re-validates, which is
-    what a file identity alone could not catch: `esdc fetch` and `esdc reload` publish
-    in place, so the same inode can hold a different pin, dimension or probe. A
-    writer's own writes change vectors, not the pin, the dimension or the probe, so
-    they cannot invalidate the memo that protects them.
+    `(effective config, DB file, metadata table, stored pin, stored dimension,
+    stored probe)` — the facts a validation was computed from. The metadata-table
+    identity keeps `corpus_meta` and `semantic_meta` in one file from sharing an
+    entry even when their pin and probe agree. Reading the row costs nothing beyond
+    a SELECT; the service is not asked. A rewrite that changes any of them
+    re-validates, which is what a file identity alone could not catch: `esdc fetch`
+    and `esdc reload` publish in place, so the same inode can hold a different pin,
+    dimension or probe. A writer's own writes change vectors, not the pin, the
+    dimension or the probe, so they cannot invalidate the memo that protects them.
 
     Recorded by the caller as the state stands *after* a successful check, and only
     for a check that succeeded.
@@ -663,6 +665,7 @@ def probe_memo_key(
     return (
         config_sig if config_sig is not None else config_signature(),
         db_signature(path),
+        str(meta_table),
         stored_model,
         stored_dim,
         probe_digest(stored_probe),

@@ -714,3 +714,171 @@ def test_memo_invalidated_when_the_stored_pin_or_probe_changes_without_replacing
         embedders.PROBE_TEXT,
     ]
     reader.close()
+
+
+class _MemoEmbedder:
+    """Stable client identity, like an HTTP client built from the same config."""
+
+    model = "qwen3-embedding-0.6b-q8_0"
+
+    def __init__(self, vec, cache_key=("semantic-test",)):
+        self._vec = list(vec)
+        self.cache_key = cache_key
+        self.calls = 0
+
+    def generate_embedding(self, text):
+        self.calls += 1
+        return list(self._vec)
+
+    def generate_embeddings_batch(self, texts):
+        return [list(self._vec) for _ in texts]
+
+
+def _meta_db(tmp_path, embedder, *, content_version=None, include_version=True):
+    db_path = tmp_path / "memo.duckdb"
+    columns = "embedding_model VARCHAR, dim INTEGER, probe_vec JSON"
+    if include_version:
+        columns += ", content_version INTEGER"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(f"CREATE TABLE semantic_meta ({columns})")
+    values = [
+        embedder.model,
+        len(embedder._vec),
+        json.dumps(list(embedder._vec)),
+    ]
+    if include_version:
+        values.append(
+            SemanticResolver.NARRATIVE_CONTENT_VERSION
+            if content_version is None
+            else content_version
+        )
+    placeholders = ", ".join("?" for _ in values)
+    conn.execute(
+        f"INSERT INTO semantic_meta VALUES ({placeholders})",
+        values,
+    )
+    conn.close()
+    return db_path
+
+
+def test_semantic_content_version_checked_after_memo_hit(tmp_path):
+    embedders.clear_probe_memo()
+    try:
+        client = _MemoEmbedder([1.0, 0.0])
+        db_path = _meta_db(tmp_path, client)
+        resolver = SemanticResolver(db_path=db_path, embedder=client)
+        assert resolver._ensure_semantic_meta() is None
+        assert client.calls == 1
+        resolver.close()
+
+        conn = duckdb.connect(str(db_path))
+        conn.execute(
+            "UPDATE semantic_meta SET content_version = ?",
+            [SemanticResolver.NARRATIVE_CONTENT_VERSION - 1],
+        )
+        conn.close()
+
+        resolver = SemanticResolver(db_path=db_path, embedder=client)
+        out = resolver._ensure_semantic_meta()
+        resolver.close()
+
+        assert out is not None
+        assert out["status"] == "not_available"
+        assert "current project narrative" in out["message"]
+        # The version guard fires before any remote parity probe.
+        assert client.calls == 1
+    finally:
+        embedders.clear_probe_memo()
+
+
+def test_semantic_missing_version_column_rejected_after_warm_memo(tmp_path):
+    embedders.clear_probe_memo()
+    try:
+        client = _MemoEmbedder([1.0, 0.0])
+        db_path = _meta_db(tmp_path, client)
+        resolver = SemanticResolver(db_path=db_path, embedder=client)
+        assert resolver._ensure_semantic_meta() is None
+        resolver.close()
+
+        conn = duckdb.connect(str(db_path))
+        conn.execute("DROP TABLE semantic_meta")
+        conn.execute(
+            "CREATE TABLE semantic_meta "
+            "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+        )
+        conn.execute(
+            "INSERT INTO semantic_meta VALUES (?, ?, ?)",
+            [client.model, 2, json.dumps([1.0, 0.0])],
+        )
+        conn.close()
+
+        resolver = SemanticResolver(db_path=db_path, embedder=client)
+        out = resolver._ensure_semantic_meta()
+        present = resolver._get_connection().execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'semantic_meta'"
+        ).fetchall()
+        resolver.close()
+
+        assert out is not None
+        assert out["status"] == "not_available"
+        assert "esdc reload --embeddings-only" in out["message"]
+        assert "content_version" not in {row[0] for row in present}
+    finally:
+        embedders.clear_probe_memo()
+
+
+def test_unchanged_semantic_state_reuses_one_probe(tmp_path):
+    embedders.clear_probe_memo()
+    try:
+        first = _MemoEmbedder([1.0, 0.0])
+        db_path = _meta_db(tmp_path, first)
+        resolver = SemanticResolver(db_path=db_path, embedder=first)
+        assert resolver._ensure_semantic_meta() is None
+        assert resolver._ensure_semantic_meta() is None
+        resolver.close()
+
+        second = _MemoEmbedder([1.0, 0.0])
+        fresh = SemanticResolver(db_path=db_path, embedder=second)
+        assert fresh._ensure_semantic_meta() is None
+        fresh.close()
+
+        assert first.calls == 1
+        assert second.calls == 0
+    finally:
+        embedders.clear_probe_memo()
+
+
+def test_failed_semantic_validation_never_populates_success_memo(tmp_path):
+    embedders.clear_probe_memo()
+    try:
+        client = _MemoEmbedder([1.0, 0.0])
+        db_path = _meta_db(tmp_path, client)
+
+        conn = duckdb.connect(str(db_path))
+        conn.execute(
+            "UPDATE semantic_meta SET probe_vec = ?",
+            [json.dumps([0.0, 1.0])],
+        )
+        conn.close()
+
+        resolver = SemanticResolver(db_path=db_path, embedder=client)
+        out = resolver._ensure_semantic_meta()
+        resolver.close()
+        assert out is not None
+        assert out["status"] == "not_available"
+        assert client.calls == 1
+
+        conn = duckdb.connect(str(db_path))
+        conn.execute(
+            "UPDATE semantic_meta SET probe_vec = ?",
+            [json.dumps([1.0, 0.0])],
+        )
+        conn.close()
+
+        resolver = SemanticResolver(db_path=db_path, embedder=client)
+        assert resolver._ensure_semantic_meta() is None
+        resolver.close()
+        assert client.calls == 2
+    finally:
+        embedders.clear_probe_memo()

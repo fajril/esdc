@@ -386,16 +386,16 @@ class CorpusStore:
         return self._embedder
 
     def _space_key(self, conn: Any, table: str) -> tuple[Any, ...]:
-        """What a validation is memoized under: config, file, pin, dim, probe."""
+        """What a validation is memoized under: config, file, table, pin, dim, probe."""
         return embedders.probe_memo_key(conn, table, self._db_path)
 
     def _probe_gate(self, table: str, *, allow_seed: bool) -> dict[str, Any] | None:
         """Cached probe validation for one vector space. None when it can be honoured.
 
         The memo is process-level and keyed by the effective config plus the facts
-        the check was computed from — the DB file's inode, the pin, dimension and
-        probe read from the metadata row — and the client identity. A chat turn
-        builds a fresh store per tool call, so a per-instance cache would pay one
+        the check was computed from — the DB file's inode, the metadata table, the
+        pin, dimension and probe read from that row — and the client identity. A chat
+        turn builds a fresh store per tool call, so a per-instance cache would pay one
         probe request per query. A write may seed the pin when the index is still
         empty. A query never writes the pin, and an index that already holds
         vectors cannot be certified by a probe from a service the pin does not

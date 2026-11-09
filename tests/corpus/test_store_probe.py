@@ -638,3 +638,64 @@ def test_readonly_reader_does_not_seed_probe(tmp_path):
     conn.close()
     assert stored is not None
     assert stored[0] is None
+
+
+def test_corpus_probe_memo_does_not_validate_stale_semantic_metadata(tmp_path):
+    """A warm corpus probe must not certify a different, stale semantic space."""
+    from esdc.search.semantic_resolver import SemanticResolver
+
+    db_path = tmp_path / "cross-space.duckdb"
+    client = _CacheableEmbedder([1.0, 0.0, 0.0])
+    conn = duckdb.connect(str(db_path))
+    probe = json.dumps([1.0, 0.0, 0.0])
+    conn.execute(
+        "CREATE TABLE corpus_meta "
+        "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+    )
+    conn.execute(
+        "INSERT INTO corpus_meta VALUES (?, ?, ?)",
+        ["qwen3-embedding-0.6b-q8_0", 3, probe],
+    )
+    conn.execute(
+        "CREATE TABLE semantic_meta "
+        "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON, "
+        "content_version INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO semantic_meta VALUES (?, ?, ?, ?)",
+        [
+            "qwen3-embedding-0.6b-q8_0",
+            3,
+            probe,
+            SemanticResolver.NARRATIVE_CONTENT_VERSION - 1,
+        ],
+    )
+    conn.close()
+
+    embedders.clear_probe_memo()
+    try:
+        store = CorpusStore(db_path=db_path, embedder=client, read_only=True)
+        assert store._probe_gate("corpus_meta", allow_seed=False) is None
+        store.close()
+
+        before = duckdb.connect(str(db_path))
+        rows_before = before.execute("SELECT * FROM semantic_meta").fetchall()
+        before.close()
+
+        resolver = SemanticResolver(
+            db_path=db_path, embedder=client, read_only=True
+        )
+        out = resolver._ensure_semantic_meta()
+        resolver.close()
+
+        assert out is not None
+        assert out["status"] == "not_available"
+        assert "current project narrative" in out["message"]
+        assert "esdc reload --embeddings-only" in out["message"]
+
+        after = duckdb.connect(str(db_path))
+        rows_after = after.execute("SELECT * FROM semantic_meta").fetchall()
+        after.close()
+        assert rows_after == rows_before
+    finally:
+        embedders.clear_probe_memo()

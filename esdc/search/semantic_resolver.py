@@ -134,12 +134,15 @@ class SemanticResolver:
         incompatible client degrades to ``not_available`` with the maintenance command;
         an unexpected database failure surfaces as ``error`` rather than a clean result.
 
-        The check is memoized process-wide under (config signature, DB file, stored
-        pin, stored dimension, stored probe, client identity), so a query on a space
-        already proven for that state does not pay for a probe request again, while a
-        rewrite of the metadata row underneath the cache — the same file, different
-        facts — re-validates. A validation that did not succeed is never recorded, so
-        the next call checks again rather than trusting a stale answer.
+        The check is memoized process-wide under (config signature, DB file, metadata
+        table, stored pin, stored dimension, stored probe, client identity), so a query
+        on a space already proven for that state does not pay for a probe request
+        again, while a rewrite of the metadata row underneath the cache — the same
+        file, different facts — re-validates. The required columns, row, usable
+        dimension, content version and probe presence are checked on every call; only
+        the remote parity request is memoized. A validation that did not succeed is
+        never recorded, so the next call checks again rather than trusting a stale
+        answer.
 
         Returns:
             The ``not_available``/``error`` response dict when the active client cannot
@@ -153,8 +156,6 @@ class SemanticResolver:
             # rather than from the file alone: a fetch or reload publishes in place, so
             # the same inode can hold a different pin, dimension or probe.
             key = embedders.probe_memo_key(conn, self.SEMANTIC_META, self._db_path)
-            if embedders.probe_is_verified(key, client):
-                return None
 
             from esdc.embedders import PROBE_TEXT, probe_mismatch
 
@@ -212,6 +213,11 @@ class SemanticResolver:
                     f"records dim={dim}. Run 'esdc reload --embeddings-only' "
                     "to rebuild it."
                 )
+            # Cheap structural, version and probe-fact checks run on every call. Only
+            # the expensive parity request is memoized: a cached success must never
+            # skip a schema, row, dimension or content-version change in the same file.
+            if embedders.probe_is_verified(key, client):
+                return None
             current = client.generate_embedding(PROBE_TEXT)
             mismatch = probe_mismatch(stored, current)
             if mismatch is not None:

@@ -822,3 +822,31 @@ def test_legacy_local_config_is_read_without_writing_and_cli_still_imports(
     assert not [p for p in tmp_path.iterdir() if p.name != "config.yaml"]
 
     import esdc.esdc  # noqa: F401  - importing the CLI must not need a service
+
+
+def test_probe_memo_distinguishes_metadata_tables(tmp_path):
+    """The same file/config/model/probe in two spaces must not share a memo entry."""
+    db_path = tmp_path / "two-spaces.duckdb"
+    conn = duckdb.connect(str(db_path))
+    probe = json.dumps([1.0, 0.0, 0.0])
+    for table in ("corpus_meta", "semantic_meta"):
+        conn.execute(
+            f"CREATE TABLE {table} "
+            "(embedding_model VARCHAR, dim INTEGER, probe_vec JSON)"
+        )
+        conn.execute(
+            f"INSERT INTO {table} VALUES (?, ?, ?)",
+            ["qwen3-embedding-0.6b-q8_0", 3, probe],
+        )
+    signature = ("ollama", "http://host:11434", "model", "key")
+
+    corpus = emb.probe_memo_key(conn, "corpus_meta", db_path, config_sig=signature)
+    semantic = emb.probe_memo_key(
+        conn, "semantic_meta", db_path, config_sig=signature
+    )
+
+    assert corpus != semantic
+    assert corpus == emb.probe_memo_key(
+        conn, "corpus_meta", db_path, config_sig=signature
+    )
+    conn.close()
