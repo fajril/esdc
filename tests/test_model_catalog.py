@@ -442,19 +442,19 @@ class TestProviderTypeRouting:
     """Supported types resolve to their own defaults; others get a warning."""
 
     def test_openai_default_base(self, monkeypatch):
+        from esdc.providers.openai import OpenAIProvider
+
+        url = f"{OpenAIProvider.BASE_URL.rstrip('/')}/models"
         calls = _fake_http(
             monkeypatch,
-            {
-                "https://api.openai.com/v1/models": (200, {"data": [{"id": "chat-a"}]}),
-                "https://api.openai.com/model/info": (200, {"data": []}),
-            },
+            {url: (200, {"data": [{"id": "chat-a"}]})},
         )
         catalog = discover_models({"provider_type": "openai"})
 
         assert catalog.entries[0].model_id == "chat-a"
-        assert calls[0]["url"] == "https://api.openai.com/v1/models"
+        assert calls[0]["url"] == url
 
-    def test_openai_saved_base_wins_over_the_default(self, monkeypatch):
+    def test_openai_compatible_saved_base_is_used(self, monkeypatch):
         calls = _fake_http(
             monkeypatch,
             {MODELS_URL: (200, {"data": [{"id": "chat-a"}]}), INFO_URL: (200, {"data": []})},
@@ -471,6 +471,128 @@ class TestProviderTypeRouting:
         catalog = discover_models({"provider_type": "anthropic", "model": "claude"})
         assert catalog.entries == ()
         assert "not supported" in (catalog.warning or "")
+
+
+class TestStandardOpenAIDiscovery:
+    """The standard provider's catalog follows the same base as its runtime."""
+
+    def test_standard_openai_catalog_uses_runtime_base_and_models_path(
+        self, monkeypatch
+    ):
+        from esdc.providers.openai import OpenAIProvider
+
+        monkeypatch.setattr(OpenAIProvider, "BASE_URL", "https://runtime.example/prefix")
+        calls = _fake_http(
+            monkeypatch,
+            {"https://runtime.example/prefix/models": (200, {"data": [{"id": "chat-a"}]})},
+        )
+        provider = {
+            "provider_type": "openai",
+            "api_key": "fixture-key",
+            "base_url": "https://saved.example/other",
+        }
+        before = dict(provider)
+
+        catalog = discover_models(provider)
+
+        assert [entry.model_id for entry in catalog.entries] == ["chat-a"]
+        assert catalog.entries[0].roles == frozenset()
+        assert catalog.entries[0].supports_vision is None
+        assert len(calls) == 1
+        assert calls[0]["url"] == "https://runtime.example/prefix/models"
+        assert "api.openai.com" not in calls[0]["url"]
+        assert provider == before
+
+    def test_standard_openai_catalog_matches_runtime_when_saved_base_is_present(
+        self, monkeypatch
+    ):
+        from esdc.providers.openai import OpenAIProvider
+
+        monkeypatch.setattr(OpenAIProvider, "BASE_URL", "https://runtime.example/prefix")
+        calls = _fake_http(
+            monkeypatch,
+            {"https://runtime.example/prefix/models": (200, {"data": [{"id": "chat-a"}]})},
+        )
+
+        discover_models(
+            {
+                "provider_type": "openai",
+                "base_url": "https://saved.example/custom/v1",
+            }
+        )
+
+        # The standard provider pins its class runtime base; a custom address is
+        # the separate `openai_compatible` provider path.
+        assert [call["url"] for call in calls] == [
+            "https://runtime.example/prefix/models"
+        ]
+
+    @pytest.mark.parametrize(
+        ("runtime_base", "expected"),
+        [
+            ("https://runtime.example/prefix/", "https://runtime.example/prefix/models"),
+            (
+                "https://runtime.example/prefix/v1",
+                "https://runtime.example/prefix/v1/models",
+            ),
+            ("https://runtime.example/v1/", "https://runtime.example/v1/models"),
+        ],
+    )
+    def test_standard_openai_appends_models_once(
+        self, monkeypatch, runtime_base: str, expected: str
+    ):
+        from esdc.providers.openai import OpenAIProvider
+
+        monkeypatch.setattr(OpenAIProvider, "BASE_URL", runtime_base)
+        calls = _fake_http(monkeypatch, {expected: (200, {"data": [{"id": "chat-a"}]})})
+
+        discover_models({"provider_type": "openai"})
+
+        assert [call["url"] for call in calls] == [expected]
+        assert calls[0]["url"].count("/models") == 1
+
+    @pytest.mark.parametrize(
+        ("provider", "expected_header"),
+        [
+            ({"provider_type": "openai", "api_key": "sk-synthetic-key"}, "Bearer sk-synthetic-key"),
+            (
+                {"provider_type": "openai", "oauth": {"access_token": "oauth-synthetic"}},
+                "Bearer oauth-synthetic",
+            ),
+        ],
+        ids=["api-key", "oauth"],
+    )
+    def test_standard_openai_credentials_match_discovery_rules(
+        self, monkeypatch, provider: dict[str, Any], expected_header: str
+    ):
+        from esdc.providers.openai import OpenAIProvider
+
+        url = f"{OpenAIProvider.BASE_URL.rstrip('/')}/models"
+        calls = _fake_http(monkeypatch, {url: (200, {"data": [{"id": "chat-a"}]})})
+
+        discover_models(provider)
+
+        assert calls[0]["headers"] == {"Authorization": expected_header}
+
+    def test_standard_openai_failure_warning_hides_secrets_and_urls(
+        self, monkeypatch
+    ):
+        from esdc.providers.openai import OpenAIProvider
+
+        url = f"{OpenAIProvider.BASE_URL.rstrip('/')}/models"
+        secret = "sk-synthetic-secret"
+        error = requests.exceptions.ConnectionError(
+            f"failed {secret} https://user:password@runtime.example/v1/models body"
+        )
+        calls = _fake_http(monkeypatch, {url: error})
+
+        catalog = discover_models({"provider_type": "openai", "api_key": secret})
+
+        assert calls[0]["url"] == url  # mocked transport, no real socket
+        warning = catalog.warning or ""
+        assert warning == "Model discovery failed (connection error)."
+        for forbidden in (secret, "password", "runtime.example", "body"):
+            assert forbidden not in warning
 
 
 class TestOllamaDiscovery:

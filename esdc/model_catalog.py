@@ -30,7 +30,6 @@ MIN_TIMEOUT_SECONDS = 0.1
 
 # The provider layer's own fallback hosts. No audited hostname, alias, or key
 # belongs in product code.
-DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 
 
@@ -106,13 +105,14 @@ def discover_models(
     if provider_type == "ollama":
         return _discover_ollama(base_url or DEFAULT_OLLAMA_BASE_URL, timeout_seconds)
 
+    if provider_type == "openai":
+        return _discover_standard_openai(provider, timeout_seconds)
+
     if provider_type == "openai_compatible":
         if not base_url:
             return ModelCatalog(
                 warning="Provider has no base URL; model discovery was skipped."
             )
-    elif provider_type == "openai":
-        base_url = base_url or DEFAULT_OPENAI_BASE_URL
     else:
         name = provider_type or "unknown"
         return ModelCatalog(
@@ -242,6 +242,44 @@ def _roles_and_vision(
 
     vision = info.get("supports_vision")
     return frozenset(roles), vision if isinstance(vision, bool) else None
+
+
+def _discover_standard_openai(
+    provider: Mapping[str, Any], timeout_seconds: float
+) -> ModelCatalog:
+    """Model IDs from the standard provider's own runtime base and ``/models`` path.
+
+    The runtime resolves ``OpenAIProvider.BASE_URL`` in ``create_llm``; the catalog
+    mirrors that address instead of falling back to public OpenAI. A custom address
+    belongs to the separate ``openai_compatible`` provider. Capability metadata is
+    not invented: every entry keeps unknown roles and unknown vision.
+    """
+    from esdc.providers.openai import OpenAIProvider
+
+    base = str(OpenAIProvider.BASE_URL or "").strip().rstrip("/")
+    if not base:
+        return ModelCatalog(
+            warning="Standard OpenAI provider has no runtime base URL; "
+            "model discovery was skipped."
+        )
+
+    payload, reason = _fetch_json(
+        f"{base}/models", _auth_headers(provider), _timeout_pair(timeout_seconds)
+    )
+    if reason is not None:
+        return ModelCatalog(warning=f"Model discovery failed ({reason}).")
+
+    model_ids, shape_ok = _model_ids(payload)
+    if not shape_ok:
+        return ModelCatalog(
+            warning="Model discovery returned an unexpected response shape."
+        )
+    if not model_ids:
+        return ModelCatalog(warning="Model discovery returned no models.")
+
+    return ModelCatalog(
+        entries=tuple(ModelEntry(model_id=model_id) for model_id in model_ids)
+    )
 
 
 def _discover_openai_compatible(
