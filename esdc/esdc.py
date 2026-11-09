@@ -860,7 +860,7 @@ def reload(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: local, ollama or openai.",
+            help="Override embedding_backend for this run: ollama or openai.",
         ),
     ] = None,
 ) -> None:
@@ -877,7 +877,7 @@ def reload(
         no_embeddings: If True, skip semantic embeddings generation.
         embeddings_only: If True, only regenerate embeddings without reloading data.
         embed_backend: Override embedding_backend for this run
-        (local, ollama or openai).
+        (ollama or openai).
 
     Returns:
         None
@@ -1009,10 +1009,11 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
     """Generate semantic embeddings for project_remarks with progress bar.
 
     ``embed_backend`` overrides the ``embedding_backend`` config key for
-    this run only. Query-time similarity always runs locally regardless.
+    this run only. A value with no implementation, the retired in-process
+    backend, is reported as an error rather than repaired.
     """
     from esdc.configs import Config
-    from esdc.embedders import get_build_embedder
+    from esdc.embedders import get_embedder
     from esdc.search.semantic_resolver import SemanticResolver
 
     logger = logging.getLogger(__name__)
@@ -1030,21 +1031,26 @@ def _generate_embeddings(embed_backend: str | None = None) -> None:
         )
         return
 
-    embedder = get_build_embedder(embed_backend)
+    try:
+        embedder = get_embedder(embed_backend)
+    except ValueError as e:
+        # A stored value that has no implementation is reported, not repaired.
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(1) from None
+
     logger.info(f"Initialized embedder with model: {embedder.model}")
 
-    # Only daemon-backed backends can be health-checked; the in-process one
-    # has nothing to check and the OpenAI-compatible one fails loudly on use.
-    health_check = getattr(embedder, "health_check", None)
-    if health_check is not None and not health_check():
-        logger.warning("Ollama not available, cannot generate embeddings")
-        console.print(
-            "[yellow]Warning: Ollama not available, skipping embeddings generation[/yellow]"  # noqa: E501
-        )
+    # Every client is an HTTP service now, so the check reports what that
+    # service said: a status, a connection failure, or a response that is not a
+    # vector. The message is the diagnosis, so it is what the user sees.
+    message = embedder.check_available()
+    if message:
+        # The message already names the failure, so it is printed as it is.
+        logger.warning(message)
+        console.print(f"[yellow]{message}[/yellow]")
         console.print(
             "[dim]To generate embeddings later, run: esdc reload --embeddings-only[/dim]"  # noqa: E501
         )
-        console.print("[dim]Or set embedding_backend: local to embed in-process.[/dim]")
         return
 
     resolver = SemanticResolver(db_path=db_path, embedder=embedder, read_only=False)
@@ -3791,7 +3797,7 @@ def commit(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: local, ollama or openai.",
+            help="Override embedding_backend for this run: ollama or openai.",
         ),
     ] = None,
 ) -> None:
@@ -4342,7 +4348,7 @@ def reembed(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: local, ollama or openai.",
+            help="Override embedding_backend for this run: ollama or openai.",
         ),
     ] = None,
     stale: Annotated[
@@ -4646,10 +4652,10 @@ def corpus_warmup(
     rerank: bool | None = typer.Option(
         None,
         "--rerank/--no-rerank",
-        help="Also warm the reranker (default: corpus.rerank config)",
+        help="Also check the reranker service (default: corpus.rerank config)",
     ),
 ) -> None:
-    """Pre-download corpus models (embedder + optional reranker) for offline use."""
+    """Check the corpus embedding service and the optional reranking service."""
     from esdc.corpus.warmup import run_warmup
 
     results = run_warmup(rerank=rerank)

@@ -24,7 +24,12 @@ from rich import print as rich_print
 from rich.panel import Panel
 
 # Local
-from esdc.config_fields import format_config_value, parse_config_input
+from esdc.config_fields import (
+    field_hint,
+    format_config_value,
+    looks_like_gguf_id,
+    parse_config_input,
+)
 from esdc.configs import (
     ADVANCED_SECTIONS,
     APPLICATION_SECTIONS,
@@ -36,8 +41,7 @@ from esdc.configs import (
 )
 from esdc.corpus.ocr import create_ocr_client
 from esdc.corpus.provider_reranker import ProviderReranker
-from esdc.corpus.reranker import DEFAULT_RERANKER
-from esdc.embedders import MODEL_ID, OllamaEmbedder, OpenAIEmbedder
+from esdc.embedders import OllamaEmbedder, OpenAIEmbedder
 from esdc.model_catalog import CatalogRole, ModelCatalog, ModelEntry, discover_models
 from esdc.providers import PROVIDER_CLASSES, PROVIDER_NAMES, get_provider
 from esdc.providers.base import ProviderConfig
@@ -250,6 +254,36 @@ def _format_provider_label(name: str, cfg: dict) -> str:
     return f"{name} ({type_label})"
 
 
+# Labels for the enum rows. Every inference choice is an HTTP service, so the label
+# says so; a retired stored value has its own label and keeps its own value.
+_ENUM_LABELS: dict[str, dict[str, str]] = {
+    "embedding_backend": {
+        "ollama": "Ollama HTTP service",
+        "openai": "OpenAI-compatible HTTP service",
+    },
+    "corpus.rerank_backend": {"provider": "HTTP rerank service"},
+}
+
+_RETIRED_ENUM_LABELS: dict[str, dict[str, str]] = {
+    "embedding_backend": {"local": "local (retired — choose an HTTP service)"},
+    "corpus.rerank_backend": {"local": "local (retired — choose a rerank service)"},
+}
+
+# Retired enum values are never offered as a plain choice, only as their retired row,
+# so a stored one is reported rather than silently kept as a working option.
+_RETIRED_ENUM_VALUES: dict[str, set[str]] = {"corpus.rerank_backend": {"local"}}
+
+
+def _instruction_with_hint(
+    key: str,
+    instruction: str,
+    values: Mapping[str, Any],
+) -> str:
+    """The key's description, with the read-only hint for a legacy stored value."""
+    hint = field_hint(key, values)
+    return f"{instruction} {hint}".strip() if hint else instruction
+
+
 def _check_default_provider_warning() -> None:
     """Show warning if no default provider is set but providers exist."""
     providers = Config.get_providers()
@@ -303,57 +337,58 @@ def _prompt_for_config_value(
         )
         return None if selected is None else selected == "True"
 
-    # 2. Reranker model key? Curated GGUF choice (llama.cpp registry) +
-    # custom escape. Keep in sync with esdc/corpus/reranker.py.
+    # 2. Reranker model key? A service model id, typed as plain text. A legacy GGUF
+    # id is shown with its hint and kept exactly as stored until the user changes it.
     if key == "corpus.rerank_model":
-        choices = [
-            questionary.Choice(
-                "Qwen3-Reranker-0.6B Q8_0 (default, llama.cpp GGUF)",
-                value="ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
-            ),
-            questionary.Choice("Custom…", value="__custom__"),
-        ]
-        default_choice = next(
-            (c for c in choices if c.value == str(current)), choices[0]
-        )
-        selected = resolve(
+        return resolve(
             _ask(
-                questionary.select(
+                questionary.text(
                     label,
-                    choices=choices,
-                    default=default_choice,
-                    instruction=instruction,
+                    default=str(current),
+                    instruction=_instruction_with_hint(key, instruction, draft),
                     style=_WIZARD_STYLE,
                 )
             )
         )
-        if selected == "__custom__":
-            return resolve(
-                _ask(
-                    questionary.text(
-                        f"{label} — model name:",
-                        default=str(current),
-                        style=_WIZARD_STYLE,
-                    )
-                )
-            )
-        return selected
 
     # 3. Enum key?
     if key in ENUM_CHOICES:
-        choices = ENUM_CHOICES[key]
-        default = str(current) if str(current) in choices else choices[0]
-        return resolve(
-            _ask(
-                questionary.select(
-                    label,
-                    choices=choices,
-                    default=default,
-                    instruction=instruction,
-                    style=_WIZARD_STYLE,
-                )
+        # A retired value is not a normal choice: it can only come back as the stored
+        # value through its retired row.
+        choices = [
+            choice
+            for choice in ENUM_CHOICES[key]
+            if choice not in _RETIRED_ENUM_VALUES.get(key, set())
+        ]
+        labels = _ENUM_LABELS.get(key, {})
+        rows = [
+            questionary.Choice(labels.get(choice, choice), value=choice)
+            for choice in choices
+        ]
+        stored = str(current)
+        retired = _RETIRED_ENUM_LABELS.get(key, {}).get(stored)
+        if retired is not None:
+            # A retired stored value is shown as it is and stays the default, so the
+            # first service choice is never chosen for the user by default.
+            rows.insert(0, questionary.Choice(retired, value=stored))
+            default = retired
+        else:
+            default = stored if stored in choices else choices[0]
+
+        selected = _ask(
+            questionary.select(
+                label,
+                choices=rows,
+                default=default,
+                instruction=_instruction_with_hint(key, instruction, draft),
+                style=_WIZARD_STYLE,
             )
         )
+        if retired is not None and selected == stored:
+            # Choosing the retired row reports the state: the stored value comes back
+            # unchanged, so nothing is written. A service choice resolves normally.
+            return current
+        return resolve(selected)
 
     # 4. Integer or decimal key?
     if key in Config.INT_KEYS or key in Config.FLOAT_KEYS:
@@ -1273,6 +1308,15 @@ def _edit_section(title: str, keys: list[str]) -> None:
                 )
                 break
 
+            if new_value == flat.get(selected):
+                # The field came back as it was stored (a retired row is read, not
+                # switched), so there is nothing to write.
+                rich_print(
+                    f"[{_SEP_COLOR}]'{selected}' unchanged, nothing written."
+                    f"[/{_SEP_COLOR}]"
+                )
+                break
+
             Config.set_config_value(selected, new_value)
             rich_print(
                 f"[{_SUCCESS_COLOR}]Saved '[{_KEY_COLOR}]{selected}[/{_KEY_COLOR}]' = "
@@ -1360,6 +1404,17 @@ class CustomSelection:
     model_id: str
 
 
+@dataclass(frozen=True)
+class NeedsConfigurationSelection:
+    """A stored value with no implementation any more: a status, never a picker row.
+
+    It carries the reason only. Showing it writes nothing and does not switch the
+    stored value; the user has to choose a service for the task to work.
+    """
+
+    reason: str
+
+
 TaskSelection = (
     PairSelection
     | LinkedProviderSelection
@@ -1368,6 +1423,7 @@ TaskSelection = (
     | DirectSelection
     | LocalSelection
     | CustomSelection
+    | NeedsConfigurationSelection
 )
 
 _TASK_MENU_ORDER: tuple[TaskRole, ...] = (
@@ -1427,26 +1483,34 @@ _CUSTOM_VALUE = "__custom__"
 _RETRY_VALUE = "__retry__"
 _BACK_VALUE = "__back__"
 _DIRECT_SETTINGS_VALUE = "__direct_settings__"
-_LOCAL_CUSTOM_VALUE = "__local_custom__"
 _LOCAL_OCR_CUSTOM_VALUE = "__local_ocr_custom__"
 _CORPUS_OLLAMA_CACHE_KEY = "__corpus_ollama__"
 
-_LOCAL_LABEL = "Local"
+# A `LocalSelection` row now names a model the Ollama service serves; it is never a
+# GGUF file the wizard would load.
 _OLLAMA_LOCAL_LABEL = "Ollama (local)"
 _DEFAULT_OLLAMA_EMBEDDING_HOST_LABEL = "localhost:1234"
+
+# Why a stored value has no implementation any more. The reason is shown, and the
+# stored value itself is preserved until the user chooses a service.
+_RETIRED_EMBEDDING_REASON = (
+    "retired in-process embedding backend — choose an HTTP service"
+)
+_RETIRED_RERANK_REASON = "retired local rerank backend — choose a rerank service"
 
 _RESTART_NOTE = "Running ESDC services may need restart to read the saved config."
 
 _RERANK_ENABLE_ERROR = (
     "Cannot enable reranking: the saved source or model is incomplete. "
-    "Choose a source and model first."
+    "Choose a rerank provider and model first."
 )
 
-# Selection types Save accepts for each task. Custom is never saved.
+# Selection types Save accepts for each task. Custom is never saved, and a status
+# selection (a retired stored value) is never saved either: it writes nothing.
 _SAVEABLE_SELECTIONS: dict[TaskRole, tuple[type, ...]] = {
     "chat": (PairSelection,),
-    "embedding": (PairSelection, LocalSelection, DirectSelection),
-    "rerank": (PairSelection, LocalSelection),
+    "embedding": (PairSelection, DirectSelection),
+    "rerank": (PairSelection,),
     "ocr": (PairSelection, LocalSelection),
     "metadata": (
         PairSelection,
@@ -1478,7 +1542,13 @@ def _selection_label(
     """
     if isinstance(selection, PairSelection):
         label = f"{selection.provider_name} / {selection.model_id}"
-        return f"{label} (saved, unverified)" if unverified else label
+        if unverified:
+            label = f"{label} (saved, unverified)"
+        if role == "rerank" and looks_like_gguf_id(selection.model_id):
+            # A legacy GGUF id kept on a rerank pair is still passed through
+            # unchanged; the label only says it needs configuring.
+            label = f"{label} (needs configuring)"
+        return label
     if isinstance(selection, LinkedProviderSelection):
         return f"{selection.provider_name} / (chat model)"
     if isinstance(selection, ChatDefaultSelection):
@@ -1491,13 +1561,11 @@ def _selection_label(
             return f"{_OLLAMA_LOCAL_LABEL} / {selection.model_id}"
         host = selection.host or _DEFAULT_OLLAMA_EMBEDDING_HOST_LABEL
         return f"Direct endpoint / {host} / {selection.model_id}"
+    if isinstance(selection, NeedsConfigurationSelection):
+        return f"Needs configuring ({selection.reason})"
     if isinstance(selection, LocalSelection):
-        prefix = (
-            _OLLAMA_LOCAL_LABEL
-            if role in ("ocr", "metadata", "cleanup")
-            else _LOCAL_LABEL
-        )
-        return f"{prefix} / {selection.model_id}"
+        # The model the Ollama service serves for this task; nothing is loaded.
+        return f"{_OLLAMA_LOCAL_LABEL} / {selection.model_id}"
     raise ValueError(f"No label for selection {type(selection).__name__}")
 
 
@@ -1545,32 +1613,29 @@ def _current_task_selection(role: TaskRole) -> TaskSelection | None:
         model = str(flat.get("embedding_model") or "")
         host = str(flat.get("embedding_host") or "")
         if backend == "local":
-            return LocalSelection(MODEL_ID)
+            return NeedsConfigurationSelection(_RETIRED_EMBEDDING_REASON)
         if reference:
             if backend == "ollama":
-                # The Ollama embedding backend pins its model: the inactive
-                # `embedding_model` is never shown as the selection.
-                return PairSelection(reference, OllamaEmbedder.OLLAMA_TAG)
+                # The configured wire model is what the service is asked for; an
+                # empty value falls back to the legacy tag.
+                return PairSelection(reference, model or OllamaEmbedder.OLLAMA_TAG)
             return PairSelection(reference, model)
         if backend == "openai":
             return DirectSelection("openai", host, model)
         if backend == "ollama":
-            # A direct Ollama backend has no provider, so it is its own row rather
-            # than the local GGUF row.
-            return DirectSelection("ollama", host, OllamaEmbedder.OLLAMA_TAG)
+            # A direct Ollama backend has no provider, so it is its own row.
+            return DirectSelection("ollama", host, model or OllamaEmbedder.OLLAMA_TAG)
         return None
 
     if role == "rerank":
         backend = str(flat.get("corpus.rerank_backend") or "")
-        model = str(flat.get("corpus.rerank_model") or "") or DEFAULT_RERANKER
-        if backend == "provider":
-            name = str(flat.get("corpus.rerank_provider") or "")
-            # A provider source with no reference stays incomplete: reading it as
-            # a local model would let enable pass validation on an incomplete draft.
-            return PairSelection(name, model) if name else None
-        # A local source names a local GGUF; the default is what the loader uses
-        # when the saved value is empty.
-        return LocalSelection(model)
+        if backend == "local":
+            return NeedsConfigurationSelection(_RETIRED_RERANK_REASON)
+        name = str(flat.get("corpus.rerank_provider") or "")
+        # The stored model is read as it is, even when it is a legacy GGUF id, and a
+        # provider source with no reference stays incomplete.
+        model = str(flat.get("corpus.rerank_model") or "")
+        return PairSelection(name, model) if name else None
 
     if role == "ocr":
         reference = str(flat.get("corpus.ocr_provider") or "")
@@ -1628,11 +1693,9 @@ def _special_selections(
         return selections
 
     if role == "embedding":
-        selections.append(LocalSelection(MODEL_ID))
-
-        # Rows for a source with no provider reference: the direct Ollama backend is
-        # its own row, distinct from the local GGUF row, and an existing direct
-        # OpenAI-compatible endpoint keeps its own row.
+        # Rows for a source with no provider reference: the direct Ollama service is
+        # its own row, and an existing direct OpenAI-compatible endpoint keeps its own
+        # row. There is no in-process row any more.
         if not str(flat.get("embedding_provider") or ""):
             backend = str(flat.get("embedding_backend") or "")
             host = str(flat.get("embedding_host") or "")
@@ -1640,24 +1703,13 @@ def _special_selections(
             if backend == "openai" and model:
                 selections.append(DirectSelection("openai", host, model))
             selections.append(
-                DirectSelection("ollama", host, OllamaEmbedder.OLLAMA_TAG)
+                DirectSelection("ollama", host, model or OllamaEmbedder.OLLAMA_TAG)
             )
         return selections
 
     if role == "rerank":
-        # A local row is a local GGUF, so the saved model is only a local row while
-        # the saved source is local: a provider source stores a remote model id in the
-        # same key, which the loader cannot read as a GGUF.
-        saved_local = (
-            str(flat.get("corpus.rerank_model") or "")
-            if str(flat.get("corpus.rerank_backend") or "") == "local"
-            else ""
-        )
-        # The registry default is always visible, and a saved local model that is not
-        # the default keeps its own row next to it.
-        selections.append(LocalSelection(DEFAULT_RERANKER))
-        if saved_local and saved_local != DEFAULT_RERANKER:
-            selections.append(LocalSelection(saved_local))
+        # Every rerank row is a saved provider pair; a retired stored backend is a
+        # status, not a row.
         return selections
 
     if role == "ocr":
@@ -1715,8 +1767,11 @@ def _selectable(selection: TaskSelection) -> bool:
     """A row that names a model can be chosen; a row with an empty model cannot.
 
     Rows that follow something else (the chat model, off, the chat default) carry
-    no model id of their own and stay selectable.
+    no model id of their own and stay selectable. A selection that only reports a
+    retired stored value is a status, never a row, so it is never selectable.
     """
+    if isinstance(selection, NeedsConfigurationSelection):
+        return False
     if isinstance(selection, (PairSelection, LocalSelection, DirectSelection)):
         return bool(str(selection.model_id).strip())
     return True
@@ -1745,13 +1800,6 @@ def _task_rows(
             questionary.Choice(
                 "Direct embedding settings…", value=_DIRECT_SETTINGS_VALUE
             )
-        )
-
-    if role == "rerank":
-        # A local GGUF outside the known registry is typed here, at the same level as
-        # the local rows. The row is an input action, never a value Save can accept.
-        rows.append(
-            questionary.Choice("Local custom model…", value=_LOCAL_CUSTOM_VALUE)
         )
 
     if role == "ocr":
@@ -2014,33 +2062,6 @@ def _direct_embedding_flow() -> DirectSelection | None:
         draft["model"] = str(value).strip()
 
 
-def _local_custom_rerank_flow() -> LocalSelection | None:
-    """One typed local rerank GGUF, resolved to a LocalSelection. Nothing is written.
-
-    The value is the loader's own form: `repo_id:filename.gguf`, or a name the rerank
-    registry knows. An empty or whitespace-only value is refused and returns to the
-    picker, and a cancel (Escape) returns there without a value, so the sentinel row
-    itself never reaches Save.
-    """
-    value = _ask(
-        questionary.text(
-            "Local rerank model (repo_id:filename.gguf, or a known registry name):",
-            style=_WIZARD_STYLE,
-        )
-    )
-    if value is None:
-        return None
-
-    model = str(value).strip()
-    if not model:
-        rich_print(
-            f"[{_ERROR_COLOR}]A local rerank model needs a GGUF id "
-            f"('repo_id:filename.gguf') or a known registry name.[/{_ERROR_COLOR}]"
-        )
-        return None
-    return LocalSelection(model)
-
-
 def _local_ocr_model_flow(current: TaskSelection | None) -> LocalSelection | None:
     """One typed local OCR model id, resolved to a LocalSelection. Nothing is written.
 
@@ -2108,13 +2129,6 @@ def _choose_provider_model(
             # The editor writes nothing; Done hands the draft back as a selection,
             # and a cancel returns to this same list.
             resolved = _direct_embedding_flow()
-            if resolved is None:
-                continue
-            return resolved
-        if selected == _LOCAL_CUSTOM_VALUE:
-            # The row resolves to a LocalSelection; the sentinel itself is never a
-            # value Save can accept, and a refused or cancelled input comes back here.
-            resolved = _local_custom_rerank_flow()
             if resolved is None:
                 continue
             return resolved
@@ -2232,10 +2246,12 @@ def _save_task_selection(role: TaskRole, selection: TaskSelection) -> None:
         if isinstance(selection, PairSelection):
             provider_type = _pair_provider_type(role, selection)
             if provider_type == "ollama":
-                # The Ollama backend pins its model: embedding_model is preserved.
+                # An Ollama service keeps its default tag when nothing is configured;
+                # an explicit wire model is saved with the reference.
                 values = {
                     "embedding_backend": "ollama",
                     "embedding_provider": selection.provider_name,
+                    "embedding_model": selection.model_id,
                 }
             else:
                 values = {
@@ -2243,19 +2259,18 @@ def _save_task_selection(role: TaskRole, selection: TaskSelection) -> None:
                     "embedding_provider": selection.provider_name,
                     "embedding_model": selection.model_id,
                 }
-        elif isinstance(selection, LocalSelection):
-            # Service fields stay as they are.
-            values = {"embedding_backend": "local"}
         elif isinstance(selection, DirectSelection):
             # A direct selection clears the reference and writes its own endpoint
             # fields. The key is written only when the selection carries one: None
             # means the saved `embedding_api_key` is preserved.
             if selection.backend == "ollama":
-                # The Ollama backend pins its model, so the saved model and key stay.
+                # An Ollama service keeps the default tag when nothing is configured;
+                # the model the row shows is the one written.
                 values = {
                     "embedding_backend": "ollama",
                     "embedding_provider": "",
                     "embedding_host": selection.host,
+                    "embedding_model": selection.model_id,
                 }
             else:
                 values = {
@@ -2275,21 +2290,16 @@ def _save_task_selection(role: TaskRole, selection: TaskSelection) -> None:
         return
 
     if role == "rerank":
-        if isinstance(selection, PairSelection):
-            _pair_provider_type(role, selection)
-            values = {
-                "corpus.rerank_backend": "provider",
-                "corpus.rerank_provider": selection.provider_name,
-                "corpus.rerank_model": selection.model_id,
-            }
-        elif isinstance(selection, LocalSelection):
-            values = {
-                "corpus.rerank_backend": "local",
-                "corpus.rerank_provider": "",
-                "corpus.rerank_model": selection.model_id,
-            }
-        else:
+        if not isinstance(selection, PairSelection):
             raise ValueError(f"{type(selection).__name__} is not a rerank selection")
+        _pair_provider_type(role, selection)
+        # The model is saved exactly as selected: a legacy GGUF id is preserved,
+        # never rewritten to a service model.
+        values = {
+            "corpus.rerank_backend": "provider",
+            "corpus.rerank_provider": selection.provider_name,
+            "corpus.rerank_model": selection.model_id,
+        }
 
         # The enable switch is never part of a source/model save.
         Config.set_config_values(values)
@@ -2391,15 +2401,9 @@ def _test_embedding_selection(role: TaskRole, selection: TaskSelection) -> None:
     fallback for an embedding test, and a named provider with no address at all is
     reported instead of tested against a default host. A direct row keeps its existing
     behavior, so an empty host stays the embedder's own default endpoint. Nothing is
-    saved, nothing is enabled, and a local embedding model is never loaded for a test.
+    saved, nothing is enabled, and every embedding selection here is an HTTP service:
+    a retired stored value is reported by the caller and never reaches this path.
     """
-    if isinstance(selection, LocalSelection):
-        rich_print(
-            f"[{_SEP_COLOR}]Local embedding model; no remote endpoint to test."
-            f"[/{_SEP_COLOR}]"
-        )
-        return
-
     flat = Config.get_all_config_flat()
 
     if isinstance(selection, (PairSelection, LinkedProviderSelection)):
@@ -2470,10 +2474,15 @@ def _test_embedding_selection(role: TaskRole, selection: TaskSelection) -> None:
 
     try:
         if provider_type == "ollama":
-            # OllamaEmbedder pins its own model tag, so only the resolved address comes
-            # from the draft. A named provider always has one by the time this runs; an
-            # empty direct host stays the embedder's local default.
-            embedder = OllamaEmbedder(host=host or None)
+            # The model asked for is the one runtime will use: the configured wire
+            # model, falling back to the embedder's default tag when nothing is set.
+            # Only the resolved address and model come from the draft. A named provider
+            # always has an address by the time this runs; an empty direct host stays
+            # the embedder's local default.
+            embedder = OllamaEmbedder(
+                host=host or None,
+                model=model or OllamaEmbedder.OLLAMA_TAG,
+            )
         else:
             embedder = OpenAIEmbedder(
                 host=host,
@@ -2525,16 +2534,10 @@ def _test_rerank_selection(role: TaskRole, selection: TaskSelection) -> None:
     and asks for one score per test document, so a success means the rerank route
     answered with a complete numeric result.
 
-    A local GGUF is never loaded for a test, nothing is saved, and `corpus.rerank` is
-    never touched: the enable switch is not part of a connection test.
+    A retired stored value never reaches this path, so every selection here is a service
+    reference; nothing is saved, and `corpus.rerank` is never touched: the enable switch
+    is not part of a connection test.
     """
-    if isinstance(selection, LocalSelection):
-        # A local reranker is a model file, not an endpoint; a test would load it.
-        rich_print(
-            f"[{_SEP_COLOR}]Local reranker; no remote endpoint to test.[/{_SEP_COLOR}]"
-        )
-        return
-
     if not isinstance(selection, (PairSelection, LinkedProviderSelection)):
         rich_print(
             f"[{_SEP_COLOR}]Nothing to test for "
@@ -2628,8 +2631,13 @@ def _test_task_selection(role: TaskRole, selection: TaskSelection) -> None:
     endpoint that accepts an image and ignores it cannot pass. Every other role uses the
     provider connection test. For the embedding task the runtime environment values are
     applied to the test draft (see `_embedding_test_draft`); they are never written to
-    config.
+    config. A selection that only reports a retired stored value is never tested: there
+    is nothing to reach, and the stored value is left as it is.
     """
+    if isinstance(selection, NeedsConfigurationSelection):
+        rich_print(f"[{_SEP_COLOR}]Nothing to test: {selection.reason}.[/]")
+        return
+
     if role == "ocr":
         draft = dict(Config.get_corpus_config())
         if isinstance(selection, PairSelection):
@@ -2778,10 +2786,8 @@ def _edit_task(role: TaskRole) -> None:
 
 def _rerank_saved_selection_is_valid(selection: TaskSelection | None) -> bool:
     """Enable only validates what is already saved; it does not choose a model."""
-    if not isinstance(selection, (LocalSelection, PairSelection)):
+    if not isinstance(selection, PairSelection):
         return False
-    if isinstance(selection, LocalSelection):
-        return bool(selection.model_id)
     if not selection.model_id:
         return False
     providers = Config.get_providers()
@@ -2833,7 +2839,8 @@ def _edit_rerank_task() -> None:
 
         saved = _current_task_selection("rerank")
         if saved is None or not _rerank_saved_selection_is_valid(saved):
-            # An incomplete provider source is not treated as a local model.
+            # A retired stored value stays stored: enabling is refused until a rerank
+            # service reference and model are chosen.
             rich_print(f"[{_ERROR_COLOR}]{_RERANK_ENABLE_ERROR}[/]")
             continue
 

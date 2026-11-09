@@ -54,9 +54,6 @@ jobs:
           echo "LD_LIBRARY_PATH=$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Install dependencies
-        # llama-cpp-python resolves to a prebuilt cpu wheel on Linux via the
-        # platform-marked [tool.uv.sources] index in pyproject.toml (no source
-        # compile) — no extra env needed.
         run: uv sync --python "$(command -v python)" --group dev
 
       - name: Verify SQLite runtime

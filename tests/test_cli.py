@@ -1,6 +1,7 @@
 """Tests for the esdc CLI."""
 
 import os
+import re
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -527,3 +528,60 @@ def test_portal_command_invokes_run_portal(monkeypatch):
     result = CliRunner().invoke(app, ["portal"])
     assert result.exit_code == 0
     assert called == {"host": "127.0.0.1", "port": 13334, "log_level": "info"}
+
+
+class TestEmbeddingsOnlyHealthCheck:
+    """The reload path reports what the embedding service said, not a fixed label."""
+
+    def test_the_service_message_is_what_the_cli_prints(
+        self, isolated_config, monkeypatch
+    ):
+        import duckdb
+
+        from esdc.configs import Config
+
+        Config.init_config()
+        db_file = Config.get_db_file()
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        duckdb.connect(str(db_file)).close()
+
+        class UnhealthyEmbedder:
+            model = "qwen3-embedding-0.6b-q8_0"
+
+            def check_available(self):
+                return "[Embedding] service at http://box returned HTTP 503."
+
+        printed: list[str] = []
+
+        class CapturingConsole:
+            def print(self, text: str) -> None:
+                printed.append(str(text))
+
+        # Repointed for Task 2: the reload path resolves through `get_embedder`
+        # (`get_build_embedder` is only the D6 alias, so patching it no longer reaches
+        # the CLI). Patching the factory is also what keeps this test offline.
+        monkeypatch.setattr(
+            "esdc.embedders.get_embedder",
+            lambda backend=None: UnhealthyEmbedder(),
+        )
+        monkeypatch.setattr("esdc.esdc.console", CapturingConsole())
+        runner.invoke(app, ["reload", "--embeddings-only"])
+
+        # The diagnosis the check produced is what the user sees, as it is worded:
+        # no generic label replaces it, and the retired in-process backend is no
+        # longer offered as an alternative.
+        assert any("503" in line for line in printed)
+        assert not any("Ollama not available" in line for line in printed)
+        assert not any("in-process" in line for line in printed)
+        assert not any(line.startswith("Warning:") for line in printed)
+
+    def test_the_embed_backend_option_lists_only_services(self):
+        """A value with no implementation is not offered as an option."""
+        for command in (["reload"], ["corpus", "commit"], ["corpus", "reembed"]):
+            result = runner.invoke(app, command + ["--help"])
+            # The help is drawn in a bordered table: read this option's own text,
+            # with the borders taken out and the wrap flattened back into words.
+            flat = " ".join(re.sub(r"[│╭╰─]", " ", result.output).split())
+            option = flat.split("--embed-backend")[-1].split("--help")[0]
+            assert "ollama or openai" in option, command
+            assert "local" not in option.lower(), command

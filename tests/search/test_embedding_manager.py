@@ -1,6 +1,9 @@
 """Tests for EmbeddingManager."""
 
+import logging
 from unittest.mock import Mock, patch
+
+import pytest
 
 from esdc.search.embedding_manager import EmbeddingManager
 
@@ -115,6 +118,51 @@ def test_embedding_manager_reads_host_from_config():
         EmbeddingManager(model="test")
 
         client_cls.assert_called_with(host="http://remote:11434")
+
+
+def test_timeout_is_passed_to_the_client():
+    """The ollama SDK binds a timeout per client, so the caller supplies it."""
+    with (
+        patch("esdc.search.embedding_manager.ollama.Client") as client_cls,
+        patch("esdc.search.embedding_manager.Config.get_embedding_host") as mock_host,
+        patch("esdc.search.embedding_manager.Config._load_config") as mock_config,
+    ):
+        mock_host.return_value = "http://remote:11434"
+        mock_config.return_value = None
+        client_cls.return_value = Mock()
+
+        EmbeddingManager(model="test", timeout=20.0)
+
+        client_cls.assert_called_with(host="http://remote:11434", timeout=20.0)
+
+
+def test_failure_logs_and_raises_without_the_response_body(caplog):
+    """The ollama SDK's error text is the server body, which can echo a credential."""
+
+    class StatusError(Exception):
+        def __init__(self, body, status_code):
+            super().__init__(f"{body} (status code: {status_code})")
+            self.status_code = status_code
+
+    with (
+        patch("esdc.search.embedding_manager.ollama.Client") as client_cls,
+        caplog.at_level(logging.ERROR),
+    ):
+        client = Mock()
+        client.embed.side_effect = StatusError("Bearer sk-secret rejected", 401)
+        client_cls.return_value = client
+
+        manager = EmbeddingManager(model="test")
+        with pytest.raises(Exception) as exc:
+            manager.generate_embedding("x")
+
+    # The re-raised error is body-free too: a caller printing a traceback must
+    # not be shown the server body or the credential.
+    assert "401" in caplog.text
+    assert "401" in str(exc.value)
+    assert "sk-secret" not in caplog.text
+    assert "sk-secret" not in str(exc.value)
+    assert exc.value.__cause__ is None
 
 
 def test_embedding_manager_explicit_host_overrides_config():

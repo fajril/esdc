@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 SENSITIVE_KEYS = frozenset({"api_key"})
 
 ENUM_CHOICES: dict[str, list[str]] = {
-    "embedding_backend": ["local", "ollama", "openai"],
+    "embedding_backend": ["ollama", "openai"],
     "corpus.rerank_backend": ["local", "provider"],
     "tool_format": ["native", "markdown", "auto"],
     "logging.level": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -70,16 +70,19 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "semantic_search.embedding_batch_size": ("Number of embeddings per batch (10-500)"),
     "embedding_host": "Ollama host URL for embeddings (default: localhost)",
     "embedding_backend": (
-        "Where bulk embedding generation runs for every vector space "
-        "('ollama' [default] = Ollama daemon at embedding_host, 'local' = "
-        "in-process llama.cpp with no daemon, 'openai' = any "
-        "OpenAI-compatible /v1/embeddings server). Query-time similarity "
-        "always runs locally regardless of this setting."
+        "HTTP embedding service used for every vector space ('ollama' [default] "
+        "= Ollama service at embedding_host, 'openai' = any OpenAI-compatible "
+        "/v1/embeddings server, localhost included). Query-time similarity and "
+        "bulk generation both use it. The in-process backend was removed: a "
+        "stored 'local' value is reported when a client is asked for, and is "
+        "never rewritten."
     ),
     "embedding_model": (
-        "Wire model id for the 'openai' embedding backend, as that server "
-        "names it (e.g. Qwen3-Embedding-0.6B-8bit); ignored by the 'local' "
-        "and 'ollama' backends, which pin their model in code"
+        "Wire model id for the embedding service, as that server names it "
+        "(e.g. Qwen3-Embedding-0.6B-8bit); for the 'ollama' backend an empty "
+        "value falls back to the tag the current index was built against. The "
+        "vector-space identity is MODEL_ID, not this name — the probe is what "
+        "proves a server serves the model the stored vectors came from"
     ),
     "embedding_api_key": (
         "Bearer token for the 'openai' embedding backend "
@@ -127,14 +130,15 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "corpus.chunk_size": "Max characters per corpus chunk",
     "corpus.chunk_overlap": "Characters carried over between corpus chunks",
     "corpus.rerank": (
-        "Enable local cross-encoder rerank stage over RRF search results "
-        "(off by default; first use downloads the model, ~1 GB)"
+        "Enable the cross-encoder rerank stage over RRF search results "
+        "(off by default; scores come from the configured rerank service)"
     ),
     "corpus.rerank_pool": "Number of RRF candidates scored when rerank is on",
     "corpus.rerank_backend": (
-        "Where the rerank stage runs ('local' [default] = in-process llama.cpp "
-        "with the GGUF below, 'provider' = an OpenAI-compatible /v1/rerank "
-        "server reached through corpus.rerank_provider)"
+        "Where the rerank stage runs ('provider' [default] = an "
+        "OpenAI-compatible /v1/rerank server reached through "
+        "corpus.rerank_provider; a stored 'local' value is retired and falls "
+        "back to RRF order)"
     ),
     "corpus.rerank_provider": (
         "Saved OpenAI-compatible connection used when corpus.rerank_backend "
@@ -151,14 +155,14 @@ KEY_DESCRIPTIONS: dict[str, str] = {
         "stay raw, so toggling this never needs a re-embed)"
     ),
     "corpus.rerank_model": (
-        "Reranker GGUF id run in-process via llama.cpp "
-        "(default ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
+        "Rerank model id sent to the service; a stored legacy GGUF id is "
+        "passed through unchanged"
     ),
     "corpus.ocr_dpi": "Page render resolution (DPI) for OCR",
     "corpus.num_ctx": "Ollama context window size for corpus OCR/metadata models",
     "corpus.n_gpu_layers": (
-        "llama.cpp GPU offload for corpus embed/rerank "
-        "(-1=auto: all layers if a GPU is present else CPU; 0=force CPU)"
+        "Retired llama.cpp GPU offload key: a stored value is still read but "
+        "nothing consumes it, since embedding and rerank run on a service"
     ),
     "corpus.extract_max_tokens": (
         "Max output tokens for each corpus-knowledge extraction LLM call "
@@ -229,7 +233,6 @@ ADVANCED_SECTIONS: dict[str, list[str]] = {
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
         "corpus.ollama_host",
-        "corpus.n_gpu_layers",
     ],
     "Logging": [
         "logging.file.path",
@@ -1370,13 +1373,12 @@ class Config:
             return str(config["embedding_host"])
         raise ValueError(
             f"`embedding_provider`: provider {provider['name']!r} has no "
-            "base_url and `embedding_host` is empty; set one of them, or use "
-            "the 'local' backend."
+            "base_url and `embedding_host` is empty; set one of them."
         )
 
     @classmethod
     def get_embedding_backend(cls) -> str:
-        """Get the bulk-generation embedding backend.
+        """Get the embedding service backend.
 
         Priority:
         1. ESDC_EMBEDDING_BACKEND environment variable
@@ -1385,12 +1387,15 @@ class Config:
 
         An active `embedding_provider` reference must agree with it:
         an openai_compatible provider means "openai", an ollama provider means
-        "ollama", and "local" ignores the reference.
+        "ollama", and a stored "local" value ignores the reference.
 
-        Query-time similarity ignores this and always runs locally.
+        Reading config is not validation: a stored "local" value is returned
+        as it is stored, and `esdc.embedders.get_embedder()` reports it as a
+        retired value when a client is asked for. Nothing here writes config.
 
         Returns:
-            One of "local", "ollama", "openai" (lowercased, stripped).
+            One of "ollama", "openai", or a stored retired value such as
+            "local" (lowercased, stripped).
 
         Raises:
             ValueError: the active reference is unknown or mismatched.
@@ -1399,16 +1404,19 @@ class Config:
 
     @classmethod
     def get_embedding_model(cls) -> str:
-        """Get the wire model id for the 'openai' embedding backend.
+        """Get the wire model id for the embedding service.
 
         Priority:
         1. ESDC_EMBEDDING_MODEL environment variable
         2. config.yaml: embedding_model
-        3. "" (empty — the openai backend rejects this at construction)
+        3. "" (empty — the openai backend rejects this at construction, and the
+        ollama backend falls back to the tag the current index was built against)
 
-        Ignored by the 'local' and 'ollama' backends, which pin their model. A
-        referenced provider never supplies the embedding model: its `model`
-        field is that provider's chat model, owned by Chat.
+        This is the name the service is asked for, not the vector-space
+        identity: `esdc.embedders.MODEL_ID` stays the pin written into
+        corpus_meta/semantic_meta. A referenced provider never supplies the
+        embedding model: its `model` field is that provider's chat model, owned
+        by Chat.
 
         Raises:
             ValueError: the active reference is unknown or mismatched.
@@ -1478,12 +1486,14 @@ class Config:
         # 81.7% -> 83.3%, Recall@10 85.0% -> 90.0%; the cost is roughly one
         # query at lookup Pass@5/Pass@10. Set False to A/B it back.
         "query_instruct": True,
-        # rerank_model: reranker GGUF id (llama.cpp). Runtime-only (output
+        # rerank_model: model id sent to the rerank service. A stored legacy GGUF
+        # id is kept as it is and passed through unchanged. Runtime-only (output
         # not stored), so safe to change without reembedding.
         "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
-        # rerank_backend: "local" runs the GGUF above in-process; "provider"
-        # calls /v1/rerank on the saved connection named by rerank_provider.
-        "rerank_backend": "local",
+        # rerank_backend: "provider" calls /v1/rerank on the saved connection
+        # named by rerank_provider. A stored "local" value is retired: it warns
+        # once per process and search keeps RRF order.
+        "rerank_backend": "provider",
         # rerank_provider: saved openai_compatible provider used when
         # rerank_backend is "provider"; "" = none. An inactive reference is
         # kept as stored, never repaired.
@@ -1516,11 +1526,9 @@ class Config:
         # ollama_host: Ollama server for corpus OCR + Ollama-named text
         # models; "" = local daemon (http://127.0.0.1:11434)
         "ollama_host": "",
-        # n_gpu_layers: llama.cpp GPU offload for corpus embed/rerank.
-        # -1 (default) = offload all layers when a GPU backend is present
-        # (Metal on the mac wheel, CUDA on a cuXXX wheel), and fall back to
-        # CPU otherwise — inert/no-op on the CPU-only wheel (a GPU-less VPS
-        # just runs on CPU). Set 0 to force CPU. Runtime-only, never stored.
+        # n_gpu_layers: retired llama.cpp GPU offload key, kept so a stored value
+        # parses without error. Nothing consumes it now that embedding and rerank
+        # go through a service. Runtime-only, never stored.
         "n_gpu_layers": -1,
     }
 

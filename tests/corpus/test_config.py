@@ -44,8 +44,8 @@ def test_corpus_ollama_host_default_and_documented(monkeypatch):
 
 
 def test_corpus_defaults_gpu_layers_auto():
-    # Default -1 = offload all layers when a GPU backend (Metal/CUDA) is
-    # present, and fall back to CPU otherwise (inert on the CPU-only wheel).
+    # Retired key: the stored default stays -1 so a legacy config still parses,
+    # but no inference library consumes it any more.
     assert Config.CORPUS_DEFAULTS["n_gpu_layers"] == -1
 
 

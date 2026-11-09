@@ -10,7 +10,7 @@ import pytest
 
 from esdc.corpus.chunker import Chunk, chunk_markdown
 from esdc.corpus.store import CorpusNotReadyError, CorpusStore
-from esdc.embedders import MODEL_ID
+from esdc.embedders import MODEL_ID, EmbeddingError
 
 
 def _fake_vector(text: str) -> list[float]:
@@ -790,17 +790,234 @@ def test_get_document_readers_return_same_row_shape(store):
     assert by_id == by_hash
 
 
-def test_default_embedder_is_internal(monkeypatch, tmp_path):
-    from esdc.corpus.embedder import MODEL_ID
+def test_constructor_does_not_call_the_service(embedding_client, monkeypatch, tmp_path):
+    """Construction resolves nothing; the client is built on the first vector operation.
+
+    The store used to build an in-process embedder in the constructor, so a store
+    opened for a read that needs no vector still paid for a model nobody asked
+    for. Construction now resolves nothing, and the first operation that actually
+    asks for a vector is what builds the client.
+    """
+    import esdc.embedders as emb
+
+    resolved: list = []
+
+    def factory(backend=None):
+        resolved.append(embedding_client)
+        return embedding_client
+
+    monkeypatch.setattr(emb, "get_embedder", factory)
 
     store = CorpusStore(
         read_only=False,
         db_path=tmp_path / "corpus.duckdb",
         sqlite_path=tmp_path / "esdc.sqlite",
     )
-    assert store._embedder.model == MODEL_ID
-    assert type(store._embedder).__name__ == "InternalEmbedder"
+
+    # A read that needs no vector must not build a client either.
     assert store.get_document_by_hash("deadbeef") is None
+    assert resolved == []
+    assert embedding_client.requests == 0
+
+    store.ensure_tables()  # dimension detection is the first vector operation
+    assert resolved == [embedding_client]
+    # D1: the client reports the canonical identity, never the wire name.
+    assert getattr(store.embedder, "model", None) == MODEL_ID
+    assert embedding_client.requests == 1
+    store.close()
+
+
+class FailingBatchClient:
+    """Answers the first batch, then fails on the next one.
+
+    Batches are counted apart from the probe request, so the failure is the batch
+    that comes halfway through a run rather than the validation before it.
+    """
+
+    def __init__(self, vector: list[float] | None = None) -> None:
+        self.vector = vector or [1.0, 0.0, 0.0]
+        self.requests = 0
+        self.batches = 0
+        self.fail_after = 0
+
+    model = MODEL_ID
+
+    def generate_embedding(self, text: str) -> list[float]:
+        self.requests += 1
+        return list(self.vector)
+
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        self.requests += 1
+        self.batches += 1
+        if self.batches > self.fail_after:
+            raise EmbeddingError("[Embedding] service at fake failed")
+        return [list(self.vector) for _ in texts]
+
+
+class ShortBatchClient:
+    """Returns fewer vectors than the texts it was given (a truncated answer)."""
+
+    model = MODEL_ID
+
+    def __init__(self, vector: list[float] | None = None) -> None:
+        self.vector = vector or [1.0, 0.0, 0.0]
+        self.requests = 0
+
+    def generate_embedding(self, text: str) -> list[float]:
+        self.requests += 1
+        return list(self.vector)
+
+    def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        self.requests += 1
+        return [list(self.vector) for _ in texts[:1]]
+
+
+def test_no_http_call_for_empty_batch(embedding_client, tmp_path):
+    """An empty batch makes no request, and the source row is still written."""
+    store = CorpusStore(
+        read_only=False,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=embedding_client,
+    )
+    store.ensure_tables()
+    embedding_client.requests = 0
+
+    store.insert_document(DOC, [])
+
+    assert embedding_client.requests == 0
+    assert store.counts()["documents"] == 1
+    store.close()
+
+
+def test_mid_batch_failure_leaves_index_and_source_intact(tmp_path):
+    """A batch that fails partway writes nothing: the old vectors and the source row survive."""
+    client = FailingBatchClient()
+    store = CorpusStore(
+        read_only=False,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=client,
+    )
+    store.ensure_tables()
+    client.requests = 0
+    client.fail_after = 1  # the first batch answers, the next one fails partway
+    chunks = [Chunk(0, "Surat", "isi pertama"), Chunk(1, "Surat", "isi kedua")]
+    store.insert_document(DOC, chunks)
+
+    stored_before = (
+        store._get_connection()
+        .execute(
+            "SELECT chunk_id, embedding FROM document_chunks WHERE doc_id = ? ORDER BY chunk_id",
+            [DOC["doc_id"]],
+        )
+        .fetchall()
+    )
+    source_before = store.get_document_by_id(DOC["doc_id"])
+    assert stored_before and source_before is not None
+
+    with pytest.raises(EmbeddingError):
+        store.replace_chunks(DOC, chunks)
+
+    assert (
+        store._get_connection()
+        .execute(
+            "SELECT chunk_id, embedding FROM document_chunks "
+            "WHERE doc_id = ? ORDER BY chunk_id",
+            [DOC["doc_id"]],
+        )
+        .fetchall()
+        == stored_before
+    )
+    assert store.get_document_by_id(DOC["doc_id"]) == source_before
+    store.close()
+
+
+def test_short_batch_is_refused_before_any_write(tmp_path):
+    """A truncated answer is rejected whole: no chunk is written from a partial batch."""
+    client = ShortBatchClient()
+    store = CorpusStore(
+        read_only=False,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=client,
+    )
+    store.ensure_tables()
+    store.insert_document(DOC, [Chunk(0, "Surat", "isi pertama")])
+
+    stored_before = (
+        store._get_connection()
+        .execute(
+            "SELECT chunk_id, embedding FROM document_chunks WHERE doc_id = ? ORDER BY chunk_id",
+            [DOC["doc_id"]],
+        )
+        .fetchall()
+    )
+
+    with pytest.raises(ValueError, match="partial batch"):
+        store.replace_chunks(
+            DOC, [Chunk(0, "Surat", "isi pertama"), Chunk(1, "Surat", "isi kedua")]
+        )
+
+    assert (
+        store._get_connection()
+        .execute(
+            "SELECT chunk_id, embedding FROM document_chunks "
+            "WHERE doc_id = ? ORDER BY chunk_id",
+            [DOC["doc_id"]],
+        )
+        .fetchall()
+        == stored_before
+    )
+    store.close()
+
+
+def test_search_reports_service_failure_as_structured_error(embedding_client, tmp_path):
+    """An unreachable service is an error envelope, not an exception out of search()."""
+
+    class UnreachableClient:
+        model = MODEL_ID
+
+        def generate_embedding(self, text: str) -> list[float]:
+            raise EmbeddingError(
+                "[Embedding] backend 'ollama' could not reach the service"
+            )
+
+        def generate_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+            raise EmbeddingError(
+                "[Embedding] backend 'ollama' could not reach the service"
+            )
+
+        def check_available(self) -> str | None:
+            return "[Embedding] backend 'ollama' could not reach the service"
+
+    store = CorpusStore(
+        read_only=False,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=embedding_client,
+    )
+    store.ensure_tables()
+    store.insert_document(DOC, [Chunk(0, "Surat", "isi surat persetujuan")])
+    store.refresh_mirror()
+    store.close()
+
+    reader = CorpusStore(
+        read_only=True,
+        db_path=tmp_path / "corpus.duckdb",
+        sqlite_path=tmp_path / "esdc.sqlite",
+        embedder=UnreachableClient(),
+    )
+    out = reader.search("persetujuan")
+    reader.close()
+
+    assert out["status"] == "error"
+    assert out["results"] == []
+    assert "could not reach" in out["message"]
 
 
 # --------------------------------------------------------------------------
@@ -904,20 +1121,13 @@ def test_search_over_retrieves_before_rrf(store_with_doc_factory, monkeypatch):
 
 def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
     import esdc.corpus.reranker as reranker_mod
-    from esdc.corpus.reranker import Reranker
 
-    Reranker._instance = None
-    Reranker._failed = False
+    class ReverseReranker:
+        def rerank(self, query, texts):
+            # Later candidates win, so the RRF order must visibly reverse.
+            return [float(i) for i in range(len(texts))]
 
-    class ReverseModel:
-        def __init__(self):
-            self.i = 0
-
-        def embed(self, prompt):
-            self.i += 1
-            return [float(self.i), 0.0]  # later candidate wins
-
-    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: ReverseModel())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: ReverseReranker())
 
     # chunk_size=20 forces the two sections into separate chunks so the
     # reranker has something to reorder.
@@ -933,9 +1143,6 @@ def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
     base_ids = [r["doc_id"] + r["chunk_text"] for r in baseline["results"]]
     rer_ids = [r["doc_id"] + r["chunk_text"] for r in reranked["results"]]
     assert rer_ids == list(reversed(base_ids))
-
-    Reranker._instance = None
-    Reranker._failed = False
 
 
 def test_maybe_rerank_uses_get_reranker_and_maps_scores_to_input_positions(
@@ -1097,16 +1304,12 @@ def test_sample_content_seed_can_select_a_later_chunk(store_with_doc_factory):
 def test_search_surfaces_rerank_score(store_with_doc_factory, monkeypatch):
     """rerank_score must reach the payload; evaluate.py needs it for negatives."""
     import esdc.corpus.reranker as reranker_mod
-    from esdc.corpus.reranker import Reranker
 
-    Reranker._instance = None
-    Reranker._failed = False
+    class FixedReranker:
+        def rerank(self, query, texts):
+            return [0.42 for _ in texts]
 
-    class FixedModel:
-        def embed(self, prompt):
-            return [0.42, 0.0]
-
-    monkeypatch.setattr(reranker_mod, "_load_reranker", lambda: FixedModel())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: FixedReranker())
 
     # chunk_size=20 forces two chunks; _maybe_rerank is a no-op below two.
     store, _ = store_with_doc_factory(
@@ -1119,9 +1322,6 @@ def test_search_surfaces_rerank_score(store_with_doc_factory, monkeypatch):
     assert out["status"] == "success"
     assert out["results"][0]["rerank_score"] == 0.42
 
-    Reranker._instance = None
-    Reranker._failed = False
-
 
 def test_search_omits_rerank_score_when_rerank_off(store_with_doc_factory):
     store, _ = store_with_doc_factory(subject="Pengembangan Merak")
@@ -1132,24 +1332,15 @@ def test_search_omits_rerank_score_when_rerank_off(store_with_doc_factory):
 
 
 def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatch):
+    """A reranker that cannot serve leaves search in RRF order, never an error."""
     import esdc.corpus.reranker as reranker_mod
-    from esdc.corpus.reranker import Reranker
 
-    Reranker._instance = None
-    Reranker._failed = False
-
-    def boom():
-        raise RuntimeError("model missing")
-
-    monkeypatch.setattr(reranker_mod, "_load_reranker", boom)
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: None)
 
     store, _ = store_with_doc_factory(subject="Pengembangan Merak")
     store.rebuild_indexes()
     result = store.search("produksi", limit=5, rerank=True)
     assert result["status"] in ("success", "no_results")  # never error
-
-    Reranker._instance = None
-    Reranker._failed = False
 
 
 def test_cap_per_doc_keeps_first_two_per_doc_in_incoming_order(store):
@@ -2372,21 +2563,23 @@ def test_search_without_fts_index_uses_vector_only(tmp_path):
     reader.close()
 
 
-def test_legacy_corpus_meta_missing_probe_repaired_on_write(tmp_path):
+def test_legacy_corpus_meta_missing_probe_is_refused_on_write(tmp_path):
+    """An index that already holds vectors cannot be certified by a new probe."""
     db, sqlite = _seed_corpus(tmp_path, name="legacy_probe.duckdb")
     _exec_sql(db, ["ALTER TABLE corpus_meta DROP COLUMN probe_vec"])
 
     writer = CorpusStore(
         read_only=False, db_path=db, sqlite_path=sqlite, embedder=FakeEmbedder()
     )
-    writer.ensure_tables(validate_model=True)
+    with pytest.raises(ValueError, match="reembed"):
+        writer.ensure_tables(validate_model=True)
     row = (
         writer._get_connection().execute("SELECT probe_vec FROM corpus_meta").fetchone()
     )
     writer.close()
 
     assert row is not None
-    assert json.loads(row[0]) == _fake_vector("esdc corpus embedding parity probe")
+    assert row[0] is None, "a write must not seed a probe over existing vectors"
 
 
 def test_readonly_sqlite_handles_uri_special_path(tmp_path):

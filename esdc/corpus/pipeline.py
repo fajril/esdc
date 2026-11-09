@@ -17,6 +17,7 @@ failing never aborts the batch.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -66,7 +67,7 @@ from esdc.corpus.sidecar import (
     write_sidecar_file,
 )
 from esdc.corpus.store import CorpusStore
-from esdc.embedders import get_build_embedder
+from esdc.embedders import get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -1032,7 +1033,7 @@ def run_commit(
     cfg = Config.get_corpus_config()
     sidecars = _collect_sidecars(paths)
 
-    store = CorpusStore(embedder=get_build_embedder(embed_backend), read_only=False)
+    store = CorpusStore(embedder=get_embedder(embed_backend), read_only=False)
     any_processed = False
     merged_doc_ids: list[str] = []
     try:
@@ -1152,7 +1153,7 @@ def run_commit(
                         "metadata": json.dumps(meta.get("extras") or {}),
                         "markdown": body,
                         "extraction_method": meta.get("extraction_method"),
-                        "embedding_model": store._embedder.model,
+                        "embedding_model": store.embedder.model,
                         "page_count": meta.get("page_count"),
                     }
 
@@ -1523,14 +1524,12 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
     this run only; None uses the configured default.
     """
     report = CorpusReport()
-    store = CorpusStore(embedder=get_build_embedder(embed_backend), read_only=False)
+    store = CorpusStore(embedder=get_embedder(embed_backend), read_only=False)
     try:
         store.ensure_tables()
-
-        new_model = store._embedder.model
-        new_dim = len(store._embedder.generate_embedding("test"))
-        store.set_meta(new_model, new_dim)
-        report.embedding_model = new_model
+        new_model = store.embedder.model
+        new_dim = len(store.embedder.generate_embedding("test"))
+        store.create_staging_chunks(new_dim)
 
         cfg = Config.get_corpus_config()
         documents = store.list_documents()
@@ -1549,16 +1548,37 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
                     chunks = chunk_markdown(
                         doc["markdown"], cfg["chunk_size"], cfg["chunk_overlap"]
                     )
-                    p.status("embed + replace")
-                    store.replace_chunks(doc, chunks)
+                    p.status("embed + stage")
+                    store.replace_chunks(
+                        doc,
+                        chunks,
+                        table=store.STAGING_TABLE,
+                        validate_probe=False,
+                        update_labels=False,
+                    )
                     report.processed.append(name)
                 except Exception as e:
                     report.failed[name] = str(e)
                 finally:
                     p.advance()
 
-        store.rebuild_indexes()
+        if report.failed:
+            # Nothing is published from a partial run: publishing would leave the
+            # new probe over a mix of old and new vectors.
+            store.drop_staging_chunks()
+            report.processed.clear()
+            report.warnings.append(
+                "Re-embed rejected: at least one document failed, so the old "
+                "index and pin were left unchanged. Fix the failing document(s) "
+                "and run the command again."
+            )
+        else:
+            store.publish_staged_chunks(new_model, new_dim)
+            report.embedding_model = new_model
+            store.rebuild_indexes()
     finally:
+        with contextlib.suppress(Exception):
+            store.drop_staging_chunks()
         store.close()
 
     return report
@@ -1613,7 +1633,7 @@ def run_reembed_documents(
     try:
         if owned:
             store.ensure_tables()
-        report.embedding_model = store._embedder.model
+        report.embedding_model = store.embedder.model
         cfg = Config.get_corpus_config()
         with (
             _progress_with_status("reembed", len(doc_ids), "docs")

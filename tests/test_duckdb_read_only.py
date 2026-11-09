@@ -15,6 +15,7 @@ The runtime spy test (A) is the actual connection guarantee; the AST guard
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib
 import json
 import multiprocessing
@@ -75,8 +76,6 @@ class FixedEmbedder:
 def ro_env(tmp_path: Path, monkeypatch):
     """Tool environment pinned to a tmp DB with fake embedders + tmp cache."""
     tools_mod = importlib.import_module("esdc.chat.tools")
-    embedder_mod = importlib.import_module("esdc.corpus.embedder")
-    sr_mod = importlib.import_module("esdc.search.semantic_resolver")
     configs = importlib.import_module("esdc.configs")
 
     db_path = tmp_path / "corpus.duckdb"
@@ -88,11 +87,13 @@ def ro_env(tmp_path: Path, monkeypatch):
         configs.Config, "get_cache_dir", classmethod(lambda cls: tmp_path / "cache")
     )
     monkeypatch.setattr(configs.Config, "_load_config", classmethod(lambda cls: None))
+    # The clients are resolved through the factory, so this is where a fake is put in:
+    # nothing here may open a real HTTP connection.
+    embedders_mod = importlib.import_module("esdc.embedders")
     monkeypatch.setattr(
-        embedder_mod, "InternalEmbedder", lambda: FixedEmbedder((1.0, 0.0, 0.0))
-    )
-    monkeypatch.setattr(
-        sr_mod, "InternalEmbedder", lambda: FixedEmbedder((1.0, 0.0))
+        embedders_mod,
+        "get_embedder",
+        lambda backend=None: FixedEmbedder((1.0, 0.0, 0.0)),
     )
     monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
@@ -124,14 +125,14 @@ def _seed_everything(db_path: Path, sqlite_path: Path) -> None:
     store.close()
 
     resolver = SemanticResolver(
-        db_path=db_path, embedder=FixedEmbedder((1.0, 0.0)), read_only=False
+        db_path=db_path, embedder=FixedEmbedder((1.0, 0.0, 0.0)), read_only=False
     )
     assert resolver.build_embeddings_table() is True
     resolver._get_connection().execute(
         "INSERT INTO project_embeddings "
         "(project_id, report_year, table_name, project_remarks, embedding) "
         "VALUES (?, ?, ?, ?, ?)",
-        ["P1", 2024, "project_resources", "kendala teknis", [1.0, 0.0]],
+        ["P1", 2024, "project_resources", "kendala teknis", [1.0, 0.0, 0.0]],
     )
     resolver.close()
 
@@ -359,6 +360,33 @@ def test_corpus_mutators_leave_content_unchanged(tmp_path):
     assert _snapshot(db) == before
 
 
+def test_readonly_probe_mismatch_refuses_query_without_writing(tmp_path):
+    """A read-only store refuses to embed against a space it cannot prove.
+
+    Refusal must not become repair: a reader that cannot honour the stored probe
+    reports it, and the database file is left exactly as it was.
+    """
+    db = tmp_path / "ro_probe_mismatch.duckdb"
+    sqlite = tmp_path / "ro_probe_mismatch.sqlite"
+    _seed_corpus(db, sqlite)
+
+    before = hashlib.sha256(db.read_bytes()).hexdigest()
+    drifted = FixedEmbedder((0.0, 1.0, 0.0))
+    store = CorpusStore(
+        db_path=db, sqlite_path=sqlite, embedder=drifted, read_only=True
+    )
+    out = store.search("persetujuan", limit=5)
+    store.close()
+
+    assert out["status"] == "error", out
+    assert "qwen3-embedding-0.6b-q8_0" in out["message"]
+    assert hashlib.sha256(db.read_bytes()).hexdigest() == before
+    conn = duckdb.connect(str(db), read_only=True)
+    probe = conn.execute("SELECT probe_vec FROM corpus_meta").fetchone()
+    conn.close()
+    assert probe is not None and json.loads(probe[0]) == [1.0, 0.0, 0.0]
+
+
 def test_resolver_mutators_leave_content_unchanged(tmp_path):
     db = tmp_path / "ro_semantic.duckdb"
     writer = SemanticResolver(
@@ -557,11 +585,11 @@ class _NoopEmbedder:
 
 def test_default_constructor_instances_reject_writes(isolated_config, monkeypatch):
     """Both classes default to read-only and refuse writes outside chat."""
-    import esdc.corpus.embedder as corpus_embedder_mod
-    import esdc.search.semantic_resolver as sr_mod
+    import esdc.embedders as embedders_mod
 
-    monkeypatch.setattr(corpus_embedder_mod, "InternalEmbedder", _NoopEmbedder)
-    monkeypatch.setattr(sr_mod, "InternalEmbedder", _NoopEmbedder)
+    # Repointed for Task 2: the default client comes from the factory, so this is the
+    # seam a fake goes through. Construction must not contact the service.
+    monkeypatch.setattr(embedders_mod, "get_embedder", lambda backend=None: _NoopEmbedder())
 
     resolver = SemanticResolver()
     assert resolver._read_only is True
@@ -591,10 +619,10 @@ def test_open_corpus_store_reader_validates_without_creating(isolated_config):
 
 def test_open_corpus_store_writer_ensures_schema(isolated_config, monkeypatch):
     """An explicit writer factory ensures schema; the default validates it."""
-    import esdc.corpus.embedder as corpus_embedder_mod
+    import esdc.embedders as embedders_mod
     import esdc.esdc as cli
 
-    monkeypatch.setattr(corpus_embedder_mod, "InternalEmbedder", _NoopEmbedder)
+    monkeypatch.setattr(embedders_mod, "get_embedder", lambda backend=None: _NoopEmbedder())
 
     writer = cli._open_corpus_store(read_only=False)
     try:
@@ -664,7 +692,7 @@ def test_explicit_writer_workflow_round_trips(tmp_path):
 def test_reader_lookup_list_evaluate_export_paths(tmp_path, monkeypatch):
     """Reader lookup/list/eval/export paths run against a committed corpus."""
     import esdc.configs as configs
-    import esdc.corpus.embedder as corpus_embedder_mod
+    import esdc.embedders as embedders_mod
     from esdc.corpus.evaluate import run_eval
     from esdc.corpus.pipeline import run_export
 
@@ -672,7 +700,7 @@ def test_reader_lookup_list_evaluate_export_paths(tmp_path, monkeypatch):
     sqlite = tmp_path / "esdc.sqlite"
     monkeypatch.setattr(configs.Config, "get_db_file", classmethod(lambda cls: db))
     monkeypatch.setattr(configs.Config, "get_db_dir", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(corpus_embedder_mod, "InternalEmbedder", _NoopEmbedder)
+    monkeypatch.setattr(embedders_mod, "get_embedder", lambda backend=None: _NoopEmbedder())
 
     src = tmp_path / "doc.corpus.md"
     doc = dict(_DOC)

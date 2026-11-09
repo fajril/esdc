@@ -2,10 +2,10 @@
 
 Monkeypatch choice: the tools construct ``CorpusStore()`` via
 ``_get_corpus_embedder()``, which resolves ``db_path`` via
-``Config.get_db_file()`` and the embedder via
-``esdc.corpus.embedder.InternalEmbedder`` (lazily imported inside
-``_get_corpus_embedder``). We patch both module attributes so the real
-constructor path is exercised against a tmp DuckDB with a FakeEmbedder.
+``Config.get_db_file()`` and the client via the factory
+``embedders.get_embedder``. We patch both so the real constructor
+path is exercised against a tmp DuckDB with a FakeEmbedder, and nothing
+here reaches the network.
 The tool result cache is redirected to a tmp diskcache for isolation.
 """
 
@@ -16,6 +16,7 @@ import diskcache
 import duckdb
 import pytest
 
+from esdc import embedders
 from esdc.corpus.chunker import Chunk
 from esdc.corpus.store import CorpusStore
 
@@ -94,14 +95,14 @@ def tool_env(tmp_path: Path, monkeypatch):
     from esdc.configs import Config
 
     tools_mod = importlib.import_module("esdc.chat.tools")
-    embedder_mod = importlib.import_module("esdc.corpus.embedder")
 
     db_path = tmp_path / "corpus.duckdb"
     monkeypatch.setattr(Config, "get_db_file", classmethod(lambda cls: db_path))
     monkeypatch.setattr(
         Config, "get_cache_dir", classmethod(lambda cls: tmp_path / "cache")
     )
-    monkeypatch.setattr(embedder_mod, "InternalEmbedder", FakeEmbedder)
+    client = FakeEmbedder()
+    monkeypatch.setattr(embedders, "get_embedder", lambda backend=None: client)
     monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
 
     cache = diskcache.Cache(str(tmp_path / "tool_cache"))
@@ -267,6 +268,40 @@ def test_search_documents_missing_embed_text_degrades_then_repairs(populated):
 
     repaired = json.loads(search_documents.invoke({"query": "persetujuan POD Duri"}))
     assert repaired["status"] in ("success", "no_results")
+
+
+def test_non_vector_tools_work_with_a_retired_embedding_config(
+    populated, monkeypatch
+):
+    """Keyword/metadata aggregation and document reads need no embedding client."""
+    import esdc.chat.tools as tools_mod
+    from esdc.embedders import EmbeddingConfigError
+
+    def boom(backend=None):
+        raise EmbeddingConfigError(
+            "[Embedding] backend 'local' needs an HTTP embedding service"
+        )
+
+    monkeypatch.setattr(embedders, "get_embedder", boom)
+    monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
+    monkeypatch.setattr(tools_mod, "_corpus_embedder_signature", None)
+
+    read = json.loads(tools_mod.read_document.invoke({"doc_id": "abc123"}))
+    assert read["status"] == "success"
+
+    metadata = json.loads(
+        tools_mod.aggregate_documents.invoke({"mode": "count", "doc_type": "surat"})
+    )
+    assert metadata.get("status") != "error"
+    assert metadata["count"] == 2
+
+    keyword = json.loads(
+        tools_mod.aggregate_documents.invoke(
+            {"query": "persetujuan", "match": "keyword", "mode": "count"}
+        )
+    )
+    assert keyword.get("status") in ("success", "no_results")
+    assert keyword["count"] >= 1
 
 
 def test_read_document_returns_markdown_and_metadata(populated):
@@ -588,13 +623,13 @@ def test_search_documents_reuses_embedder(tool_env, monkeypatch):
     """EmbeddingManager should be reused across corpus tool calls."""
     import esdc.chat.tools as tools_mod
 
-    instantiations = []
+    resolved = []
 
     class _CountingEmbedder:
         model = "fake"
 
         def __init__(self):
-            instantiations.append(1)
+            resolved.append(1)
 
         def generate_embedding(self, text):
             return [0.0] * 4
@@ -602,15 +637,17 @@ def test_search_documents_reuses_embedder(tool_env, monkeypatch):
         def generate_embeddings_batch(self, texts):
             return [[0.0] * 4 for _ in texts]
 
+    monkeypatch.setattr(
+        embedders, "get_embedder", lambda backend=None: _CountingEmbedder()
+    )
     monkeypatch.setattr(tools_mod, "_corpus_embedder", None)
-    monkeypatch.setattr("esdc.corpus.embedder.InternalEmbedder", _CountingEmbedder)
     # invalidate the tool cache so both calls hit the store
     tools_mod.invalidate_tool_cache()
 
     tools_mod.search_documents.invoke({"query": "query one"})
     tools_mod.search_documents.invoke({"query": "query two"})
 
-    assert sum(instantiations) <= 1
+    assert len(resolved) <= 1
 
 
 class TestSemanticSearchCorpusFanOut:

@@ -1,5 +1,5 @@
 # tests/corpus/test_pipeline_backend.py
-"""Generation commands route through get_build_embedder; others do not."""
+"""Generation commands route through the factory client; others do not."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def test_run_reembed_passes_backend_to_factory(tmp_path):
     fake.model = "qwen3-embedding-0.6b-q8_0"
     fake.generate_embedding.return_value = [1.0, 0.0]
     with (
-        patch.object(pipeline, "get_build_embedder", return_value=fake) as factory,
+        patch.object(pipeline, "get_embedder", return_value=fake) as factory,
         patch.object(pipeline, "CorpusStore") as store_cls,
     ):
         store = store_cls.return_value
@@ -43,7 +43,7 @@ def test_run_commit_passes_backend_to_factory(tmp_path):
     fake = MagicMock()
     fake.model = "qwen3-embedding-0.6b-q8_0"
     with (
-        patch.object(pipeline, "get_build_embedder", return_value=fake) as factory,
+        patch.object(pipeline, "get_embedder", return_value=fake) as factory,
         patch.object(pipeline, "CorpusStore") as store_cls,
         patch.object(pipeline, "_collect_sidecars", return_value=[]),
     ):

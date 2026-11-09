@@ -1,9 +1,7 @@
 # tests/corpus/test_reranker.py
-"""Reranker on llama.cpp RANK pooling (mocked model) and the get_reranker factory."""
+"""get_reranker: the service factory, and what it does with a retired `local`."""
 
 from __future__ import annotations
-
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -12,51 +10,30 @@ from esdc.corpus import reranker as rr_mod
 from esdc.corpus.provider_reranker import ProviderReranker
 
 
-def setup_function(_):
-    # reset singleton between tests
-    rr_mod.Reranker._instance = None
-    rr_mod.Reranker._failed = False
+def _no_request(monkeypatch) -> None:
+    def forbidden(*args, **kwargs):
+        raise AssertionError("the factory must not send a request")
+
+    monkeypatch.setattr(provider_reranker.requests, "post", forbidden)
 
 
-def test_resolve_model_name_default():
-    with patch.object(rr_mod.Config, "get_corpus_config", return_value={}):
-        assert rr_mod._resolve_model_name() == rr_mod.DEFAULT_RERANKER
+def test_no_in_process_reranker_remains():
+    """The loader, registry, singleton and teardown are gone, not hidden."""
+    for name in (
+        "Reranker",
+        "_load_reranker",
+        "_resolve_model_name",
+        "DEFAULT_RERANKER",
+        "_RERANKER_GGUFS",
+        "_rerank_prompt",
+        "_load_lock",
+        "_infer_lock",
+        "atexit",
+    ):
+        assert not hasattr(rr_mod, name), name
+    assert hasattr(rr_mod, "_warn_lock")
+    assert hasattr(rr_mod, "_WARNED_RERANK_SIGNATURES")
 
-
-def test_rerank_score_is_index_zero_of_rank_output():
-    model = MagicMock()
-    # relevant -> high P(yes); irrelevant -> low
-    model.embed.side_effect = lambda pair: (
-        [0.98, 0.02] if "450 juta" in pair else [0.30, 0.70]
-    )
-    r = rr_mod.Reranker(model)
-    scores = r.rerank("cadangan?", ["Banyu Urip 450 juta barel", "keselamatan kerja"])
-    assert scores[0] > scores[1]
-    assert scores[0] == 0.98
-
-
-def test_rerank_input_uses_official_qwen3_template():
-    model = MagicMock()
-    model.embed.return_value = [0.5, 0.5]
-    rr_mod.Reranker(model).rerank("cadangan?", ["some doc"])
-    prompt = model.embed.call_args[0][0]
-    # GGUF does not bake the template; we must build it. Official format:
-    # system prefix + <Instruct>/<Query>/<Document> + assistant/<think> suffix.
-    assert "<Instruct>:" in prompt
-    assert "<Query>: cadangan?" in prompt
-    assert "<Document>: some doc" in prompt
-    assert prompt.endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n")
-
-
-def test_get_returns_none_and_caches_failure_on_load_error():
-    with patch.object(rr_mod, "_load_reranker", side_effect=RuntimeError("boom")):
-        assert rr_mod.Reranker.get() is None
-        assert rr_mod.Reranker.get() is None  # cached, no second attempt
-
-
-# --------------------------------------------------------------------------
-# get_reranker: local keeps the loader, provider builds the HTTP client
-# --------------------------------------------------------------------------
 
 RERANK_PROVIDERS = {
     "engine": {
@@ -81,20 +58,6 @@ def _factory_cfg(**overrides) -> dict:
     return cfg
 
 
-def _no_gguf_load(monkeypatch) -> list:
-    """Record any loader attempt; the provider path must never reach llama.cpp."""
-    loads: list[str] = []
-    monkeypatch.setattr(rr_mod, "_load_reranker", lambda: loads.append("load"))
-    return loads
-
-
-def _no_request(monkeypatch) -> None:
-    def forbidden(*args, **kwargs):
-        raise AssertionError("the factory must not send a request")
-
-    monkeypatch.setattr(provider_reranker.requests, "post", forbidden)
-
-
 def _stub_provider(monkeypatch, name: str):
     monkeypatch.setattr(
         rr_mod.Config,
@@ -103,56 +66,60 @@ def _stub_provider(monkeypatch, name: str):
     )
 
 
-def test_default_config_stays_local_and_off():
-    """Nothing here enables reranking: the saved default is local and disabled."""
+def test_default_config_is_provider_and_off():
+    """The service backend is the default; nothing here enables reranking."""
     cfg = rr_mod.Config.get_corpus_config()
     assert cfg.get("rerank") is False
-    assert cfg.get("rerank_backend") == "local"
+    assert cfg.get("rerank_backend") == "provider"
     assert cfg.get("rerank_provider") == ""
 
 
-def test_get_reranker_local_calls_the_singleton_and_builds_no_http_client(monkeypatch):
-    calls = []
+def test_legacy_local_backend_warns_once_and_falls_back_to_rrf(monkeypatch, caplog):
+    """D8: one warning per process per config signature, then RRF order."""
+    monkeypatch.setattr(rr_mod, "_WARNED_RERANK_SIGNATURES", set())
+    _no_request(monkeypatch)
+    cfg = _factory_cfg(rerank_backend="local")
     monkeypatch.setattr(
-        rr_mod.Reranker,
-        "get",
-        classmethod(lambda cls: calls.append(cls) or None),
+        rr_mod.Config,
+        "get_corpus_config",
+        classmethod(lambda cls: cfg),
     )
+
+    with caplog.at_level("WARNING"):
+        assert rr_mod.get_reranker() is None
+        assert rr_mod.get_reranker() is None
+
+    warnings = [r.message for r in caplog.records if "retired" in r.message]
+    assert len(warnings) == 1
+    assert "provider" in warnings[0]
+    # A stored value is reported, never repaired.
+    assert cfg == _factory_cfg(rerank_backend="local")
+
+
+def test_get_reranker_backend_defaults_to_provider(monkeypatch, caplog):
+    """An absent backend means the service path, not the retired local path."""
+    monkeypatch.setattr(rr_mod, "_WARNED_RERANK_SIGNATURES", set())
     _no_request(monkeypatch)
     monkeypatch.setattr(
         rr_mod.Config,
         "get_corpus_config",
-        classmethod(lambda cls: _factory_cfg(rerank_backend="local")),
+        classmethod(lambda cls: {"rerank_model": "x"}),
     )
+    with caplog.at_level("WARNING"):
+        assert rr_mod.get_reranker() is None
+    assert any("provider is not configured" in r.message for r in caplog.records)
+    assert not any("retired" in r.message for r in caplog.records)
 
-    assert rr_mod.get_reranker() is None
-    assert calls == [rr_mod.Reranker]
 
-
-def test_get_reranker_local_returns_the_loaded_singleton(monkeypatch):
-    sentinel = rr_mod.Reranker(MagicMock())
-    monkeypatch.setattr(rr_mod.Reranker, "get", classmethod(lambda cls: sentinel))
+def test_get_reranker_provider_builds_the_http_client_with_the_explicit_model(
+    monkeypatch,
+):
+    _no_request(monkeypatch)
     monkeypatch.setattr(
         rr_mod.Config,
         "get_corpus_config",
-        classmethod(lambda cls: {"rerank_backend": "local"}),
+        classmethod(lambda cls: _factory_cfg()),
     )
-    assert rr_mod.get_reranker() is sentinel
-
-
-def test_get_reranker_backend_defaults_to_local(monkeypatch):
-    sentinel = rr_mod.Reranker(MagicMock())
-    monkeypatch.setattr(rr_mod.Reranker, "get", classmethod(lambda cls: sentinel))
-    monkeypatch.setattr(
-        rr_mod.Config, "get_corpus_config", classmethod(lambda cls: {"rerank_model": "x"})
-    )
-    assert rr_mod.get_reranker() is sentinel
-
-
-def test_get_reranker_provider_builds_the_http_client_with_the_explicit_model(monkeypatch):
-    loads = _no_gguf_load(monkeypatch)
-    _no_request(monkeypatch)
-    monkeypatch.setattr(rr_mod.Config, "get_corpus_config", classmethod(lambda cls: _factory_cfg()))
     _stub_provider(monkeypatch, "engine")
 
     client = rr_mod.get_reranker()
@@ -160,8 +127,23 @@ def test_get_reranker_provider_builds_the_http_client_with_the_explicit_model(mo
     assert isinstance(client, ProviderReranker)
     assert client.model == "d1-2b"  # the explicit choice, not the provider chat model
     assert client.base_url == "http://engine:4000/v1"
-    assert loads == []  # no GGUF load for the provider path
     assert RERANK_PROVIDERS["engine"]["model"] == "chat-a"
+
+
+def test_legacy_gguf_model_id_is_passed_through_unchanged(monkeypatch):
+    """D5: a stored GGUF-shaped id is not reinterpreted; it is sent as the model."""
+    _no_request(monkeypatch)
+    legacy = _factory_cfg(rerank_model="ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF")
+    monkeypatch.setattr(
+        rr_mod.Config, "get_corpus_config", classmethod(lambda cls: legacy)
+    )
+    _stub_provider(monkeypatch, "engine")
+
+    client = rr_mod.get_reranker()
+    assert isinstance(client, ProviderReranker)
+    assert client.model == legacy["rerank_model"]
+    # The stored value itself is unchanged.
+    assert legacy == _factory_cfg(rerank_model="ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF")
 
 
 @pytest.mark.parametrize(
@@ -170,7 +152,10 @@ def test_get_reranker_provider_builds_the_http_client_with_the_explicit_model(mo
         (_factory_cfg(rerank_provider=""), "provider is not configured"),
         (_factory_cfg(rerank_model=""), "model is not configured"),
         (_factory_cfg(rerank_provider="nope"), "not configured"),
-        (_factory_cfg(rerank_provider="gpu-box"), "not supported for provider type ollama"),
+        (
+            _factory_cfg(rerank_provider="gpu-box"),
+            "not supported for provider type ollama",
+        ),
         (_factory_cfg(rerank_provider="no-address"), "has no base URL"),
         (_factory_cfg(rerank_backend="gateway"), "not supported"),
     ],
@@ -178,7 +163,6 @@ def test_get_reranker_provider_builds_the_http_client_with_the_explicit_model(mo
 def test_get_reranker_invalid_selection_warns_and_returns_none(
     monkeypatch, caplog, cfg, phrase
 ):
-    loads = _no_gguf_load(monkeypatch)
     _no_request(monkeypatch)
 
     def referenced(cls, name):
@@ -193,4 +177,3 @@ def test_get_reranker_invalid_selection_warns_and_returns_none(
         assert rr_mod.get_reranker() is None
 
     assert any(phrase in r.message for r in caplog.records)
-    assert loads == []  # an invalid selection never loads a model

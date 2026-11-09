@@ -7,10 +7,12 @@ using Ollama's embedding models.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import ollama
 
 from esdc.configs import Config
+from esdc.embedders import _raise_service_error, error_text
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,7 @@ class EmbeddingManager:
         model: str | None = None,
         host: str | None = None,
         batch_size: int | None = None,
+        timeout: float | None = None,
     ) -> None:
         """Initialize EmbeddingManager.
 
@@ -37,6 +40,10 @@ class EmbeddingManager:
             model: Ollama model name (default from config or qwen3-embedding:0.6b)
             host: Ollama host URL (default: None, uses localhost)
             batch_size: Max texts per embed request (default from config or 100)
+            timeout: Request timeout in seconds (default: the ollama SDK's own).
+                The ollama client binds a timeout to the connection, so a
+                caller that wants a different bound for query and for batch
+                holds one manager per bound.
         """
         if model is None:
             config = Config._load_config()
@@ -54,8 +61,12 @@ class EmbeddingManager:
 
         if host is None:
             host = Config.get_embedding_host()
+        self._host = host or "local Ollama service"
         self.model: str = resolved_model
-        self._client = ollama.Client(host=host) if host else ollama.Client()
+        client_kwargs: dict[str, Any] = {}
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        self._client = ollama.Client(host=host, **client_kwargs)
 
         logger.info(
             "[Embedding] initialized | model=%s",
@@ -90,8 +101,10 @@ class EmbeddingManager:
             return list(embedding)
 
         except Exception as e:
-            logger.error("[Embedding] failed | error=%s", e)
-            raise
+            # The ollama SDK's ResponseError text is the server's body, which
+            # can echo the credential: log and re-raise the status, not the body.
+            logger.error("[Embedding] failed | error=%s", error_text(e))
+            _raise_service_error("ollama", self._host, e)
 
     def generate_embeddings_batch(
         self,
@@ -120,8 +133,8 @@ class EmbeddingManager:
             )
             return results
         except Exception as e:
-            logger.error("[Embedding] batch failed | error=%s", e)
-            raise
+            logger.error("[Embedding] batch failed | error=%s", error_text(e))
+            _raise_service_error("ollama", self._host, e)
 
     def health_check(self) -> bool:
         """Check if Ollama is available and model is loaded."""

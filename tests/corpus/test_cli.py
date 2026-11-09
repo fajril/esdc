@@ -1061,7 +1061,7 @@ def test_reembed_stale_rejects_an_embed_backend_override(monkeypatch):
 
 
 def test_corpus_list_chunks_absent_is_actionable_not_a_traceback(
-    isolated_config, monkeypatch
+    isolated_config, monkeypatch, embedding_client
 ):
     """`corpus list` validates the chunk-count join it performs.
 
@@ -1071,27 +1071,22 @@ def test_corpus_list_chunks_absent_is_actionable_not_a_traceback(
     """
     import duckdb
 
-    import esdc.corpus.embedder as corpus_embedder_mod
+    from esdc import embedders
     from esdc.configs import Config
     from esdc.corpus.store import CorpusStore
 
-    class _NoopEmbedder:
-        model = "fake-embed"
-
-        def generate_embedding(self, text):
-            return [1.0, 0.0, 0.0]
-
-        def generate_embeddings_batch(self, texts):
-            return [[1.0, 0.0, 0.0] for _ in texts]
-
-    monkeypatch.setattr(corpus_embedder_mod, "InternalEmbedder", _NoopEmbedder)
+    # Repointed for Task 2: the CLI resolves its client through the factory, so the
+    # offline stand-in is put behind the factory rather than in front of a class.
+    monkeypatch.setattr(
+        embedders, "get_embedder", lambda backend=None: embedding_client
+    )
 
     db_path = Config.get_db_file()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     writer = CorpusStore(
         db_path=db_path,
         sqlite_path=db_path.with_suffix(".sqlite"),
-        embedder=_NoopEmbedder(),
+        embedder=embedding_client,
         read_only=False,
     )
     writer.ensure_tables()
@@ -1117,16 +1112,17 @@ def test_corpus_sync_cli_uses_v2_writer_for_default_source(tmp_path, monkeypatch
 
     import duckdb
 
-    import esdc.corpus.embedder as embedder_module
+    from esdc import embedders
     from esdc.configs import Config
     from esdc.corpus.store import _SQLITE_DOC_DDL
     from esdc.pod_registry.migrations import initialize_registry_v2
 
-    class ForbiddenEmbedder:
-        def __init__(self):
-            raise AssertionError("projection sync must not load an embedder")
+    def forbidden(backend=None):
+        raise AssertionError("projection sync must not resolve a client")
 
-    monkeypatch.setattr(embedder_module, "InternalEmbedder", ForbiddenEmbedder)
+    # Repointed for Task 2: sync never asks for a vector, so the factory must not be
+    # reached at all.
+    monkeypatch.setattr(embedders, "get_embedder", forbidden)
 
     data_dir = tmp_path / "db"
     data_dir.mkdir()

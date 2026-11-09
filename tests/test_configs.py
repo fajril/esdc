@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from esdc.config_fields import parse_config_input
 from esdc.configs import (
     ENUM_CHOICES,
     KEY_DESCRIPTIONS,
@@ -233,7 +234,15 @@ class TestWizardSectionCoverage:
     The wizard redesign groups flat config keys into a domain tree. This
     invariant guards against a new key silently falling out of the tree
     (no home) or landing in two groups at once.
+
+    `corpus.n_gpu_layers` is the one deliberate exception: a value it has no
+    implementation for any more is no longer offered for editing, but the key
+    stays in defaults, descriptions and the int set so a stored value is still
+    parsed and preserved.
     """
+
+    # Keys the wizard no longer offers, while config still keeps them.
+    _RETIRED_KEYS = {"corpus.n_gpu_layers"}
 
     def _editable_flat_keys(self) -> set[str]:
         flat_defaults = Config._flatten(Config.get_defaults())
@@ -254,7 +263,7 @@ class TestWizardSectionCoverage:
         for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values():
             grouped_keys.extend(keys)
 
-        assert set(grouped_keys) == self._editable_flat_keys()
+        assert set(grouped_keys) == self._editable_flat_keys() - self._RETIRED_KEYS
 
     def test_no_key_duplicated_across_groups(self):
         grouped_keys: list[str] = []
@@ -269,8 +278,24 @@ class TestWizardSectionCoverage:
             for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
             for key in keys
         }
-        orphans = self._editable_flat_keys() - grouped_keys
+        orphans = self._editable_flat_keys() - grouped_keys - self._RETIRED_KEYS
         assert orphans == set()
+
+    def test_the_retired_key_has_no_menu_home_but_is_still_preserved(self):
+        grouped_keys = {
+            key
+            for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
+            for key in keys
+        }
+        assert self._RETIRED_KEYS.isdisjoint(grouped_keys)
+
+        for key in self._RETIRED_KEYS:
+            assert key in KEY_DESCRIPTIONS, key
+            assert key in Config.INT_KEYS, key
+
+        # A stored value still parses and is preserved; nothing here drops the key.
+        assert Config._flatten(Config.get_defaults())["corpus.n_gpu_layers"] == -1
+        assert parse_config_input("corpus.n_gpu_layers", "6", {}) == 6
 
 
 class TestBooleanAndIntKeyCoercion:
@@ -369,8 +394,10 @@ class TestOptionalRoleReferences:
         for key in ROLE_REFERENCE_KEYS:
             assert flat[key] == "", key
 
-    def test_rerank_backend_defaults_to_local(self):
-        assert Config._flatten(Config.get_defaults())["corpus.rerank_backend"] == "local"
+    def test_rerank_backend_defaults_to_provider(self):
+        assert (
+            Config._flatten(Config.get_defaults())["corpus.rerank_backend"] == "provider"
+        )
 
     def test_role_reference_keys_have_descriptions(self):
         for key in (*ROLE_REFERENCE_KEYS, "corpus.rerank_backend"):
