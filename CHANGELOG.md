@@ -68,6 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `esdc pod-upgrade-economics` now validates the complete physical registry
+  inventory shared with the ordinary opener. A registry missing a support
+  table (for example `pod_document` or `pod_read_model_snapshot`) is reported
+  blocked and refused before any column rename, metadata change or backup.
+- Standard OpenAI model discovery now uses a saved OAuth access token when one
+  coexists with an API key, matching runtime identity. Discovery never
+  refreshes, persists or retries credentials; compatible-provider API-key
+  precedence is unchanged.
 - Tool names are sent to model providers in OpenAI-safe form and restored to
   display names for execution and client tool calls. Fixes providers whose
   tool parser rejects names with spaces, such as the llm-engine vLLM backend,
