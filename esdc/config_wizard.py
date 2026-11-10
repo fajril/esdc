@@ -12,6 +12,7 @@ import os
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 # Third-party
@@ -1755,6 +1756,89 @@ def _show_config_flow() -> None:
     print()
 
 
+def _needs_model_conversion() -> bool:
+    """Whether the saved file lacks the canonical model-settings marker."""
+    config = Config._load_config()
+    return bool(config) and "model_settings_version" not in config
+
+
+def _update_model_settings_flow() -> None:
+    """Preview, confirm and apply the one-time model-settings conversion."""
+    from esdc.model_config_apply import (
+        ModelSettingsApplyError,
+        apply_model_settings,
+        preview_model_settings,
+        render_preview,
+    )
+
+    source = Config.get_config_file()
+    try:
+        preview = preview_model_settings(source)
+    except ModelSettingsApplyError as error:
+        rich_print(f"[{_ERROR_COLOR}]{error}[/{_ERROR_COLOR}]")
+        return
+
+    for line in render_preview(preview):
+        print(line)
+
+    if preview.conversion.blockers:
+        rich_print(
+            f"[{_ERROR_COLOR}]Conversion is blocked; nothing was written."
+            f"[/{_ERROR_COLOR}]"
+        )
+        return
+    if preview.noop:
+        rich_print(
+            f"[{_SEP_COLOR}]Already canonical; nothing was written."
+            f"[/{_SEP_COLOR}]"
+        )
+        return
+
+    backup_value = _ask(
+        questionary.text(
+            "Backup path:",
+            default=f"{source}.pre-unified",
+            style=_WIZARD_STYLE,
+        )
+    )
+    if not backup_value:
+        rich_print(f"[{_SEP_COLOR}]Cancelled, nothing written.[/{_SEP_COLOR}]")
+        return
+
+    confirm = _ask(
+        questionary.confirm(
+            "Apply model settings conversion?",
+            default=False,
+            style=_WIZARD_STYLE,
+        )
+    )
+    if not confirm:
+        rich_print(f"[{_SEP_COLOR}]Cancelled, nothing written.[/{_SEP_COLOR}]")
+        return
+
+    try:
+        result = apply_model_settings(source, Path(str(backup_value)).expanduser())
+    except ModelSettingsApplyError as error:
+        rich_print(f"[{_ERROR_COLOR}]{error}[/{_ERROR_COLOR}]")
+        return
+
+    if result.conversion.blockers:
+        for blocker in result.conversion.blockers:
+            rich_print(f"[{_ERROR_COLOR}]{blocker}[/{_ERROR_COLOR}]")
+        return
+    if result.noop:
+        rich_print(
+            f"[{_SEP_COLOR}]Already canonical; nothing was written."
+            f"[/{_SEP_COLOR}]"
+        )
+        return
+    rich_print(
+        f"[{_SUCCESS_COLOR}]Model settings converted. Backup: "
+        f"[{_VALUE_COLOR}]{result.backup}[/{_VALUE_COLOR}].[/{_SUCCESS_COLOR}]"
+    )
+    rich_print(f"[{_SEP_COLOR}]{_RESTART_NOTE}[/]")
+
+
 # ---------------------------------------------------------------------------
 # Task selection (D4)
 # ---------------------------------------------------------------------------
@@ -3416,19 +3500,27 @@ def run_wizard() -> None:
 def _run_wizard_loop() -> None:
     """Core wizard loop. Escape at the top level exits the wizard."""
     while True:
+        choices = [
+            questionary.Choice("Models by task ▸", value="Models by task"),
+            questionary.Choice("Connections ▸", value="Connections"),
+            questionary.Choice(
+                "Application settings ▸", value="Application settings"
+            ),
+            questionary.Choice("Advanced ▸", value="Advanced"),
+            questionary.Choice("View settings", value="View settings"),
+        ]
+        if _needs_model_conversion():
+            choices.append(
+                questionary.Choice(
+                    "Update model settings…", value="Update model settings"
+                )
+            )
+        choices.append(questionary.Choice("Exit", value="Exit"))
+
         selected = _ask(
             questionary.select(
                 "What would you like to do?",
-                choices=[
-                    questionary.Choice("Models by task ▸", value="Models by task"),
-                    questionary.Choice("Connections ▸", value="Connections"),
-                    questionary.Choice(
-                        "Application settings ▸", value="Application settings"
-                    ),
-                    questionary.Choice("Advanced ▸", value="Advanced"),
-                    questionary.Choice("View settings", value="View settings"),
-                    questionary.Choice("Exit", value="Exit"),
-                ],
+                choices=choices,
                 style=_WIZARD_STYLE,
             )
         )
@@ -3453,6 +3545,8 @@ def _run_wizard_loop() -> None:
                 _advanced_menu()
             elif selected == "View settings":
                 _show_config_flow()
+            elif selected == "Update model settings":
+                _update_model_settings_flow()
         except Exception:
             traceback.print_exc()
             rich_print(

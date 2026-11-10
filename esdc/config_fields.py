@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from esdc.configs import ENUM_CHOICES, Config
 
@@ -31,6 +32,56 @@ OPTIONAL_HOST_KEYS = frozenset({"embedding_host", "corpus.ollama_host"})
 def is_secret_key(key: str) -> bool:
     """True when a key holds a secret that must not be displayed in full."""
     return any(key.endswith(suffix) for suffix in SECRET_SUFFIXES)
+
+
+_URL_SECRET_QUERY_NAMES = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "token",
+        "password",
+        "passwd",
+        "secret",
+        "sig",
+        "signature",
+        "key",
+    }
+)
+
+
+def mask_url_credentials(value: Any) -> str:
+    """Mask userinfo and secret query values in a credential-bearing URL.
+
+    Only URL-shaped values are changed; every other value is returned as
+    ``str(value)``. The scheme, host, port, path and non-secret query names stay
+    readable so a user can identify the endpoint without seeing a credential.
+    """
+    text = str(value)
+    if not text.startswith(("http://", "https://")):
+        return text
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return "****"
+
+    netloc = parts.netloc
+    if "@" in netloc:
+        host = netloc.rsplit("@", 1)[1]
+        netloc = f"****@{host}"
+
+    query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+    if query_pairs:
+        masked_pairs = [
+            (name, "****" if name.casefold() in _URL_SECRET_QUERY_NAMES else item)
+            for name, item in query_pairs
+        ]
+        query = urlencode(masked_pairs, safe="*")
+    else:
+        query = parts.query
+
+    return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
 
 
 def looks_like_gguf_id(value: Any) -> bool:
@@ -75,18 +126,19 @@ def field_hint(key: str, values: Mapping[str, Any]) -> str | None:
 
 
 def format_config_value(key: str, value: Any) -> str:
-    """Render one value for display, masking secrets.
+    """Render one value for display, masking secrets and URL credentials.
 
-    Mask form: ``****`` for a value of four characters or fewer, otherwise the
-    first two characters, ``****``, and the last two. Every other value is
-    shown as ``str(value)``.
+    Mask form for a secret: ``****`` for a value of four characters or fewer,
+    otherwise the first two characters, ``****``, and the last two. A URL-shaped
+    value also masks userinfo and secret query values while keeping the endpoint
+    readable.
     """
     text = str(value)
-    if not is_secret_key(key):
-        return text
-    if len(text) <= 4:
-        return "****"
-    return text[:2] + "****" + text[-2:]
+    if is_secret_key(key):
+        if len(text) <= 4:
+            return "****"
+        return text[:2] + "****" + text[-2:]
+    return mask_url_credentials(value)
 
 
 def parse_config_input(key: str, raw: Any, values: Mapping[str, Any]) -> Any:

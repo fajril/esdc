@@ -2136,12 +2136,35 @@ class Config:
     def reset_config(cls, key: str | None = None) -> None:
         """Reset config to defaults, or reset a specific key.
 
+        A canonical task assignment is reset as a whole with
+        ``models.<role>``: only that task's mode/target/fallbacks/enabled change,
+        never a connection or another task. Resetting a subkey of a task is
+        rejected because it could leave an invalid assignment behind.
+
         Args:
             key: Dot-notation key to reset, or None to reset all.
         """
         if key is None:
             defaults = cls.get_defaults()
             cls._save_config(defaults)
+            return
+
+        if key.startswith("models."):
+            parts = key.split(".")
+            if len(parts) != 2 or parts[1] not in TASK_ROLES:
+                raise KeyError(
+                    "Reset a whole task assignment with "
+                    "'models.<role>' (for example models.chat)."
+                )
+            role = parts[1]
+            config = cls._model_config_for_write()
+            models = config.get("models")
+            if not isinstance(models, dict):
+                raise ValueError("`models` must be a mapping of task assignments.")
+            models[role] = default_model_settings()[role]
+            config["models"] = models
+            validate_model_settings(config)
+            cls._save_config(config)
             return
 
         defaults = cls.get_defaults()

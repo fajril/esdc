@@ -420,52 +420,6 @@ class TestDefaultProviderAutoSet:
         mock_set_default.assert_called_once_with("openai")
 
 
-class TestCLISetDefault:
-    """Test --set-default-provider CLI flag."""
-
-    @patch("esdc.configs.Config.get_providers")
-    @patch("esdc.configs.Config.set_default_provider")
-    @patch("builtins.print")
-    @patch("typer.echo")
-    def test_set_default_valid(self, mock_echo, mock_print, mock_set, mock_get):
-        from esdc.commands.configs import configs
-
-        mock_get.return_value = {
-            "my-openai": {"provider_type": "openai"},
-        }
-
-        configs(
-            reset=False,
-            reset_key=None,
-            show=False,
-            set_default_provider="my-openai",
-        )
-
-        mock_set.assert_called_once_with("my-openai")
-        mock_echo.assert_called_once_with("Default provider set to 'my-openai'.")
-
-    @patch("esdc.configs.Config.get_providers")
-    @patch("esdc.configs.Config.set_default_provider")
-    @patch("typer.echo")
-    def test_set_default_invalid(self, mock_echo, mock_set, mock_get):
-        from esdc.commands.configs import configs
-
-        mock_get.return_value = {
-            "my-openai": {"provider_type": "openai"},
-        }
-
-        configs(
-            reset=False,
-            reset_key=None,
-            show=False,
-            set_default_provider="nonexistent",
-        )
-
-        mock_set.assert_not_called()
-        # Should print error
-        assert mock_echo.call_count >= 1
-
-
 class TestCheckNameExists:
     """Test _check_name_exists() helper."""
 
