@@ -863,6 +863,13 @@ def _save_draft(draft: TaskDraft) -> bool:
     except ValueError as error:
         rich_print(f"[{_ERROR_COLOR}]{error}[/{_ERROR_COLOR}]")
         return False
+    except OSError as error:
+        rich_print(
+            f"[{_ERROR_COLOR}]Could not save the draft "
+            f"({_short_test_message(error)}); the draft is retained."
+            f"[/{_ERROR_COLOR}]"
+        )
+        return False
     rich_print(
         f"[{_SUCCESS_COLOR}]Saved {_TASK_TITLES[draft.role]}: "
         f"{_assignment_label(draft.role, draft.assignment)}.[/{_SUCCESS_COLOR}]"
@@ -874,8 +881,9 @@ def _save_draft(draft: TaskDraft) -> bool:
 def _run_actions(draft: TaskDraft) -> str:
     """Save / Test / model options / Cancel for one draft.
 
-    Returns ``"saved"``, ``"cancel"`` or ``"failed"``. A failed save keeps the
-    draft and returns to the action menu without writing anything.
+    Returns only ``"saved"`` or ``"cancel"``. A failed Save leaves this loop
+    running with the latest edited draft, so options and draft connections are
+    not lost and Save can be retried without reopening discovery.
     """
     while True:
         choices = [questionary.Choice("Save", value="save")]
@@ -921,7 +929,8 @@ def _run_actions(draft: TaskDraft) -> str:
                     draft, assignment=replace(draft.assignment, target=edited)
                 )
             continue
-        return "saved" if _save_draft(draft) else "failed"
+        if _save_draft(draft):
+            return "saved"
 
 
 def _edit_task_loop(role: TaskRole) -> None:
@@ -933,11 +942,8 @@ def _edit_task_loop(role: TaskRole) -> None:
         picked = _pick_assignment(draft, _CatalogCache())
         if picked is None:
             return
-        draft = picked
-        while True:
-            status = _run_actions(draft)
-            if status in {"saved", "cancel"}:
-                return
+        _run_actions(picked)
+        return
 
 
 def _edit_rerank_task() -> None:

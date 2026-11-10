@@ -967,3 +967,208 @@ def test_saved_missing_or_ineligible_connection_is_not_reinserted(
     )
 
     _assert_target_absent(rows, "saved")
+
+
+def test_failed_validation_save_retries_with_latest_options(monkeypatch, prompts):
+    _connection()
+    _discover(monkeypatch, ModelEntry("model-a"))
+    real_save = Config.save_model_assignment
+    attempts: list[TaskAssignment] = []
+
+    def flaky_save(role, assignment, **kwargs):
+        attempts.append(assignment)
+        if len(attempts) == 1:
+            raise ValueError("synthetic validation failure")
+        return real_save(role, assignment, **kwargs)
+
+    monkeypatch.setattr(Config, "save_model_assignment", flaky_save)
+    tested: list[Any] = []
+    monkeypatch.setattr(
+        model_wizard, "_test_text", lambda task: tested.append(task)
+    )
+    prompts(
+        [
+            "gateway / model-a",
+            "Model options…",
+            "high",
+            "Save",
+            "Test",
+            "Save",
+        ]
+    )
+
+    model_wizard.edit_task("chat")
+
+    assert len(attempts) == 2
+    assert attempts[0].target is not None
+    assert attempts[1].target is not None
+    assert attempts[0].target.options == {"reasoning_effort": "high"}
+    assert attempts[1].target.options == {"reasoning_effort": "high"}
+    assert tested
+    assert tested[0].primary.options == {"reasoning_effort": "high"}
+    Config._config_cache = None
+    saved = Config.get_model_assignment("chat")
+    assert saved.target is not None
+    assert saved.target.options == {"reasoning_effort": "high"}
+
+
+def test_os_replace_failure_keeps_latest_draft_and_retries_atomically(
+    monkeypatch, prompts
+):
+    import copy
+    import os
+
+    import esdc.configs as configs_mod
+
+    _discover(monkeypatch, ModelEntry("new-model"))
+    monkeypatch.setattr(
+        model_wizard,
+        "collect_connection_draft",
+        lambda: ("desk", {"type": "ollama", "base_url": "http://new:11434"}),
+    )
+    Config.init_config()
+    config_file = Config.get_config_file()
+    Config._config_cache = None
+    before_bytes = config_file.read_bytes()
+    before_cache = copy.deepcopy(Config._load_config())
+    real_replace = os.replace
+    replacements: list[tuple[str, str]] = []
+    observed: dict[str, Any] = {}
+
+    def flaky_replace(source, destination):
+        replacements.append((str(source), str(destination)))
+        if len(replacements) == 1:
+            observed["bytes"] = config_file.read_bytes()
+            observed["cache"] = copy.deepcopy(Config._config_cache)
+            raise OSError("synthetic disk full")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(configs_mod.os, "replace", flaky_replace)
+    prompts(
+        [
+            "Add connection…",
+            "desk / new-model",
+            "Model options…",
+            "high",
+            "Save",
+            "Save",
+        ]
+    )
+
+    model_wizard.edit_task("chat")
+
+    assert len(replacements) == 2
+    assert observed["bytes"] == before_bytes
+    assert observed["cache"] == before_cache
+    Config._config_cache = None
+    saved = Config.get_model_assignment("chat")
+    assert saved.target is not None
+    assert (saved.target.connection, saved.target.model) == ("desk", "new-model")
+    assert saved.target.options == {"reasoning_effort": "high"}
+    assert Config.get_connections()["desk"]["type"] == "ollama"
+
+
+@pytest.mark.parametrize("failure", ["value_error", "os_error"])
+def test_cancel_after_failed_save_preserves_file_and_cache(
+    monkeypatch, prompts, capsys, failure
+):
+    import copy
+
+    import esdc.configs as configs_mod
+
+    _connection()
+    _discover(monkeypatch, ModelEntry("model-a"))
+    config_file = Config.get_config_file()
+    Config._config_cache = None
+    before_bytes = config_file.read_bytes()
+    before_cache = copy.deepcopy(Config._load_config())
+
+    if failure == "value_error":
+        def flaky_save(role, assignment, **kwargs):
+            raise ValueError("synthetic validation failure")
+
+        monkeypatch.setattr(Config, "save_model_assignment", flaky_save)
+    else:
+        def flaky_replace(source, destination):
+            raise OSError("synthetic disk full")
+
+        monkeypatch.setattr(configs_mod.os, "replace", flaky_replace)
+
+    prompts(
+        [
+            "gateway / model-a",
+            "Model options…",
+            "high",
+            "Save",
+            "Cancel",
+        ]
+    )
+
+    model_wizard.edit_task("chat")
+
+    assert config_file.read_bytes() == before_bytes
+    assert Config._load_config() == before_cache
+    output = capsys.readouterr().out
+    assert "Saved" not in output
+
+
+def test_test_after_failed_save_uses_latest_draft_without_writes(
+    monkeypatch, prompts
+):
+    import copy
+
+    _connection()
+    _discover(monkeypatch, ModelEntry("model-a"))
+    config_file = Config.get_config_file()
+    Config._config_cache = None
+    before_bytes = config_file.read_bytes()
+    before_cache = copy.deepcopy(Config._load_config())
+    attempts = 0
+
+    def flaky_save(role, assignment, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("synthetic validation failure")
+
+    monkeypatch.setattr(Config, "save_model_assignment", flaky_save)
+    tested: list[Any] = []
+    monkeypatch.setattr(
+        model_wizard, "_test_text", lambda task: tested.append(task)
+    )
+    prompts(
+        [
+            "gateway / model-a",
+            "Model options…",
+            "high",
+            "Save",
+            "Test",
+            "Cancel",
+        ]
+    )
+
+    model_wizard.edit_task("chat")
+
+    assert attempts == 1
+    assert tested
+    assert tested[0].primary.options == {"reasoning_effort": "high"}
+    assert config_file.read_bytes() == before_bytes
+    assert Config._load_config() == before_cache
+
+
+def test_unexpected_save_exception_is_not_swallowed(monkeypatch, prompts):
+    draft = model_wizard.TaskDraft(
+        role="chat",
+        assignment=TaskAssignment(
+            mode="model",
+            target=ModelTarget("gateway", "m", {}),
+        ),
+    )
+    monkeypatch.setattr(
+        Config,
+        "save_model_assignment",
+        MagicMock(side_effect=RuntimeError("synthetic programming error")),
+    )
+    prompts(["Save"])
+
+    with pytest.raises(RuntimeError, match="synthetic programming error"):
+        model_wizard._run_actions(draft)
