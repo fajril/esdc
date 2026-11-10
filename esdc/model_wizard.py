@@ -129,9 +129,17 @@ def _eligible_names(
     ]
 
 
-def _entry_matches_role(entry: ModelEntry, role: TaskRole) -> bool:
+def _entry_supports_task(entry: ModelEntry, role: TaskRole) -> bool:
+    """Whether one catalog entry positively permits this task.
+
+    Empty roles and unknown vision mean unknown, which stays usable. A
+    nonempty role set must include the task's catalog role, and OCR refuses
+    only an explicit vision False.
+    """
     catalog_role = _TASK_CATALOG_ROLE[role]
-    return not entry.roles or catalog_role in entry.roles
+    if entry.roles and catalog_role not in entry.roles:
+        return False
+    return not (role == "ocr" and entry.supports_vision is False)
 
 
 def _target_label(role: TaskRole, target: ModelTarget, *, unverified: bool) -> str:
@@ -467,14 +475,11 @@ def _manual_target(
                 f"[{_ERROR_COLOR}]A model ID cannot be empty.[/{_ERROR_COLOR}]"
             )
             continue
-        if (
-            draft.role == "ocr"
-            and _known_vision(cache, entries, connection, model) is False
-        ):
-            rich_print(
-                f"[{_ERROR_COLOR}]OCR model {model!r} is reported as non-vision by "
-                f"this connection.[/{_ERROR_COLOR}]"
-            )
+        reason = _known_target_incompatibility(
+            draft.role, cache, entries, connection, model
+        )
+        if reason is not None:
+            rich_print(f"[{_ERROR_COLOR}]{reason}[/{_ERROR_COLOR}]")
             return None
         options = (
             dict(current.options)
@@ -484,16 +489,45 @@ def _manual_target(
         return ModelTarget(connection=connection, model=model, options=options)
 
 
-def _known_vision(
+def _known_target_incompatibility(
+    role: TaskRole,
     cache: _CatalogCache,
     entries: Mapping[str, Mapping[str, Any]],
     connection: str,
     model: str,
-) -> bool | None:
-    catalog = cache.get(connection, entries[connection])
-    for entry in catalog.entries:
-        if entry.model_id == model:
-            return entry.supports_vision
+) -> str | None:
+    """Short rejection reason for positively incompatible catalog metadata.
+
+    Unknown stays unknown: no entry, entries without the exact ID, empty roles,
+    unknown vision and discovery warnings all return None. A known negative on
+    any duplicate entry is not bypassed by another unknown/positive entry.
+    A missing or role-ineligible connection is also rejected without touching
+    the cache.
+    """
+    connection_entry = entries.get(connection)
+    if connection_entry is None:
+        return f"Connection {connection!r} is not available."
+    if _provider_type(connection_entry) not in ROLE_CONNECTION_TYPES[role]:
+        return (
+            f"Connection {connection!r} cannot serve {ROLE_LABELS[role]}."
+        )
+
+    catalog = cache.get(connection, connection_entry)
+    matching = [entry for entry in catalog.entries if entry.model_id == model]
+    if not matching:
+        return None
+
+    catalog_role = _TASK_CATALOG_ROLE[role]
+    for entry in matching:
+        if _entry_supports_task(entry, role):
+            continue
+        if role == "ocr" and entry.supports_vision is False:
+            return f"Model {model!r} is reported as non-vision by this connection."
+        if entry.roles and catalog_role not in entry.roles:
+            return (
+                f"Model {model!r} is not reported as a "
+                f"{ROLE_LABELS[role]} model by this connection."
+            )
     return None
 
 
@@ -512,15 +546,19 @@ def _target_rows(
             rich_print(
                 f"[{_WARNING_COLOR}]{name}: {catalog.warning}[/{_WARNING_COLOR}]"
             )
-        candidates = [
-            entry for entry in catalog.entries if _entry_matches_role(entry, draft.role)
-        ]
-        if draft.role == "ocr":
-            candidates = [
-                entry
-                for entry in candidates
-                if entry.supports_vision is not False
-            ]
+        candidates: list[ModelEntry] = []
+        seen_models: set[str] = set()
+        for entry in catalog.entries:
+            if entry.model_id in seen_models:
+                continue
+            seen_models.add(entry.model_id)
+            if (
+                _known_target_incompatibility(
+                    draft.role, cache, entries, name, entry.model_id
+                )
+                is None
+            ):
+                candidates.append(entry)
         for entry in candidates:
             target = ModelTarget(name, entry.model_id, {})
             if current and (current.connection, current.model) == (
@@ -536,12 +574,14 @@ def _target_rows(
             seen.add((target.connection, target.model))
 
     if current is not None and (current.connection, current.model) not in seen:
-        known_vision = (
-            _known_vision(cache, entries, current.connection, current.model)
-            if draft.role == "ocr"
-            else None
+        reason = _known_target_incompatibility(
+            draft.role,
+            cache,
+            entries,
+            current.connection,
+            current.model,
         )
-        if known_vision is not False:
+        if reason is None:
             rows.insert(
                 0,
                 questionary.Choice(

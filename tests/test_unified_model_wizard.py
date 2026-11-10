@@ -686,3 +686,284 @@ def test_wizard_promotes_existing_chat_fallback(monkeypatch, prompts, selection)
     ]
     assert assignment.fallbacks[0].options == {"reasoning_effort": "low"}
     assert assignment.fallbacks[1].options == {}
+
+
+def _catalog_role_for(role: TaskRole) -> str:
+    return model_wizard._TASK_CATALOG_ROLE[role]
+
+
+def _incompatible_entry(role: TaskRole, model: str = "incompatible") -> ModelEntry:
+    other_role = "embedding" if _catalog_role_for(role) != "embedding" else "chat"
+    return ModelEntry(model, roles=frozenset({other_role}))
+
+
+def _row_targets(rows) -> list[ModelTarget]:
+    return [choice.value for choice in rows if isinstance(choice.value, ModelTarget)]
+
+
+def _assert_target_absent(rows, model: str = "incompatible") -> None:
+    assert all(
+        not isinstance(choice.value, ModelTarget) or choice.value.model != model
+        for choice in rows
+    ), [str(choice.title) for choice in rows]
+
+
+@pytest.mark.parametrize(
+    "role",
+    ["chat", "embedding", "rerank", "ocr", "metadata", "cleanup"],
+)
+@pytest.mark.parametrize("path", ["discovered", "manual", "saved"])
+def test_known_incompatible_model_is_rejected_in_all_picker_paths(
+    monkeypatch, prompts, role, path
+):
+    if path == "saved":
+        _connection()
+        _assign(role, connection="gateway", model="incompatible")
+        entry = _incompatible_entry(role)
+        _discover(monkeypatch, entry)
+        answers: list[Any] = ["Source and model"] if role == "rerank" else []
+        answers += ["← Back"]
+        if role == "rerank":
+            answers += ["← Back"]
+        plan = prompts(answers)
+
+        model_wizard.edit_task(role)
+
+        Config._config_cache = None
+        assignment = Config.get_model_assignment(role)
+        assert assignment.target is not None
+        assert assignment.target.model == "incompatible"
+        assert all(
+            "gateway / incompatible" not in label
+            for _message, labels in plan.select_calls
+            for label in labels
+        )
+        return
+
+    entries = {
+        "gateway": {
+            "type": "openai_compatible",
+            "base_url": "http://gateway.example/v1",
+        }
+    }
+    entry = _incompatible_entry(role)
+    monkeypatch.setattr(
+        model_wizard,
+        "discover_models",
+        MagicMock(return_value=ModelCatalog(entries=(entry,))),
+    )
+    draft = model_wizard.TaskDraft(
+        role=role, assignment=TaskAssignment(mode="unset")
+    )
+    cache = model_wizard._CatalogCache()
+
+    if path == "discovered":
+        rows = model_wizard._target_rows(draft, cache, entries)
+        _assert_target_absent(rows)
+        return
+
+    prompts(["gateway (OpenAI Compatible API)", "incompatible"])
+    assert model_wizard._manual_target(draft, entries, cache) is None
+
+
+@pytest.mark.parametrize(
+    "role",
+    ["chat", "embedding", "rerank", "ocr", "metadata", "cleanup"],
+)
+@pytest.mark.parametrize("kind", ["empty_roles", "absent", "warning"])
+def test_manual_unknown_model_remains_usable(prompts, role, kind):
+    entries = {
+        "gateway": {
+            "type": "openai_compatible",
+            "base_url": "http://gateway.example/v1",
+        }
+    }
+    if kind == "empty_roles":
+        catalog = ModelCatalog(entries=(ModelEntry("unknown", roles=frozenset()),))
+    elif kind == "absent":
+        catalog = ModelCatalog(entries=(ModelEntry("other"),))
+    else:
+        catalog = ModelCatalog(warning="discovery failed")
+    cache = model_wizard._CatalogCache()
+    cache._entries[("gateway", "openai_compatible", "http://gateway.example/v1")] = catalog
+    draft = model_wizard.TaskDraft(
+        role=role,
+        assignment=TaskAssignment(mode="unset", enabled=False)
+        if role == "rerank"
+        else TaskAssignment(mode="unset"),
+    )
+    prompts(["gateway (OpenAI Compatible API)", "unknown"])
+
+    target = model_wizard._manual_target(draft, entries, cache)
+
+    assert target == ModelTarget("gateway", "unknown", {})
+    if role == "rerank":
+        assert draft.assignment.enabled is False
+
+
+@pytest.mark.parametrize("path", ["discovered", "manual", "saved"])
+def test_ocr_known_nonvision_model_is_rejected_in_all_picker_paths(
+    monkeypatch, prompts, path
+):
+    entry = ModelEntry(
+        "text-only", roles=frozenset({"chat"}), supports_vision=False
+    )
+    if path == "saved":
+        _connection()
+        _assign("ocr", connection="gateway", model="text-only")
+        _discover(monkeypatch, entry)
+        plan = prompts(["← Back"])
+
+        model_wizard.edit_task("ocr")
+
+        Config._config_cache = None
+        assert Config.get_model_assignment("ocr").target is not None
+        assert all(
+            "gateway / text-only" not in label
+            for _message, labels in plan.select_calls
+            for label in labels
+        )
+        return
+
+    entries = {
+        "gateway": {
+            "type": "openai_compatible",
+            "base_url": "http://gateway.example/v1",
+        }
+    }
+    monkeypatch.setattr(
+        model_wizard,
+        "discover_models",
+        MagicMock(return_value=ModelCatalog(entries=(entry,))),
+    )
+    draft = model_wizard.TaskDraft(
+        role="ocr", assignment=TaskAssignment(mode="unset")
+    )
+    cache = model_wizard._CatalogCache()
+    if path == "discovered":
+        rows = model_wizard._target_rows(draft, cache, entries)
+        _assert_target_absent(rows, "text-only")
+        return
+
+    prompts(["gateway (OpenAI Compatible API)", "text-only"])
+    assert model_wizard._manual_target(draft, entries, cache) is None
+
+
+def test_ocr_vision_true_and_unknown_remain_selectable(monkeypatch):
+    entries = {
+        "gateway": {
+            "type": "openai_compatible",
+            "base_url": "http://gateway.example/v1",
+        }
+    }
+    monkeypatch.setattr(
+        model_wizard,
+        "discover_models",
+        MagicMock(
+            return_value=ModelCatalog(
+                entries=(
+                    ModelEntry(
+                        "vision", roles=frozenset({"chat"}), supports_vision=True
+                    ),
+                    ModelEntry(
+                        "unknown", roles=frozenset({"chat"}), supports_vision=None
+                    ),
+                )
+            )
+        ),
+    )
+    draft = model_wizard.TaskDraft(
+        role="ocr", assignment=TaskAssignment(mode="unset")
+    )
+    rows = model_wizard._target_rows(
+        draft, model_wizard._CatalogCache(), entries
+    )
+    assert {target.model for target in _row_targets(rows)} == {"vision", "unknown"}
+
+
+def test_capability_rejection_keeps_other_model_and_cancel_usable(
+    monkeypatch, prompts
+):
+    _connection()
+    _discover(
+        monkeypatch,
+        ModelEntry("good", roles=frozenset()),
+        ModelEntry("bad", roles=frozenset({"embedding"})),
+    )
+    prompts(
+        [
+            "Enter model ID…",
+            "gateway (OpenAI Compatible API)",
+            "bad",
+            "gateway / good",
+            "Save",
+        ]
+    )
+
+    model_wizard.edit_task("chat")
+
+    Config._config_cache = None
+    assignment = Config.get_model_assignment("chat")
+    assert assignment.target == ModelTarget("gateway", "good", {})
+
+
+def test_conflicting_duplicate_catalog_entries_reject_positive_incompatibility(
+    prompts,
+):
+    entries = {
+        "gateway": {
+            "type": "openai_compatible",
+            "base_url": "http://gateway.example/v1",
+        }
+    }
+    catalog = ModelCatalog(
+        entries=(
+            ModelEntry("dup", roles=frozenset()),
+            ModelEntry("dup", roles=frozenset({"embedding"})),
+        )
+    )
+    cache = model_wizard._CatalogCache()
+    cache._entries[("gateway", "openai_compatible", "http://gateway.example/v1")] = catalog
+    draft = model_wizard.TaskDraft(
+        role="chat", assignment=TaskAssignment(mode="unset")
+    )
+
+    rows = model_wizard._target_rows(draft, cache, entries)
+    _assert_target_absent(rows, "dup")
+
+    prompts(["gateway (OpenAI Compatible API)", "dup"])
+    assert model_wizard._manual_target(draft, entries, cache) is None
+
+
+@pytest.mark.parametrize(
+    "role",
+    ["chat", "embedding", "rerank", "ocr", "metadata", "cleanup"],
+)
+@pytest.mark.parametrize("connection", ["missing", "ineligible"])
+def test_saved_missing_or_ineligible_connection_is_not_reinserted(
+    monkeypatch, role, connection
+):
+    entries = {
+        "gateway": {
+            "type": "openai_compatible",
+            "base_url": "http://gateway.example/v1",
+        }
+    }
+    if connection == "ineligible":
+        entries["ollama"] = {"type": "ollama", "base_url": "http://ollama:11434"}
+    target = ModelTarget(connection, "saved")
+    draft = model_wizard.TaskDraft(
+        role=role,
+        assignment=TaskAssignment(mode="model", target=target),
+    )
+    monkeypatch.setattr(
+        model_wizard,
+        "discover_models",
+        MagicMock(return_value=ModelCatalog(entries=())),
+    )
+
+    rows = model_wizard._target_rows(
+        draft, model_wizard._CatalogCache(), entries
+    )
+
+    _assert_target_absent(rows, "saved")
