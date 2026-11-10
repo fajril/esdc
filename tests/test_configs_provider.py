@@ -20,26 +20,34 @@ class TestGetProviders:
             assert isinstance(providers, dict)
 
     def test_get_providers_from_config(self, tmp_path):
-        """Test get_providers returns providers from config file."""
+        """Test get_providers returns canonical connections as adapters."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text(
                 """
-providers:
+model_settings_version: 1
+connections:
   openai:
-    provider_type: openai
+    type: openai
     api_key: sk-test
-    model: gpt-4o
   ollama:
-    provider_type: ollama
+    type: ollama
     base_url: http://localhost:11434
-    model: llama3.2
+models:
+  chat: {mode: unset}
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
 """
             )
             providers = Config.get_providers()
             assert "openai" in providers
             assert "ollama" in providers
             assert providers["openai"]["provider_type"] == "openai"
+            assert providers["openai"]["type"] == "openai"
+            assert "model" not in providers["openai"]
 
     def test_get_providers_empty_when_none(self, tmp_path):
         """Test get_providers returns empty dict when no providers."""
@@ -169,24 +177,31 @@ class TestGetProviderConfig:
     """Tests for get_provider_config()."""
 
     def test_get_provider_config_returns_default_provider(self, tmp_path):
-        """Test get_provider_config returns the default provider's config."""
+        """Test get_provider_config returns the canonical Chat primary."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text(
                 """
-default_provider: ollama
-providers:
+model_settings_version: 1
+connections:
   openai:
-    provider_type: openai
+    type: openai
     api_key: sk-test
-    model: gpt-4o
   ollama:
-    provider_type: ollama
+    type: ollama
     base_url: http://localhost:11434
+models:
+  chat:
+    mode: model
+    connection: ollama
     model: llama3.2
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
 """
             )
-            # Clear cache
             provider_config = Config.get_provider_config()
             assert provider_config is not None
             assert provider_config["provider_type"] == "ollama"
@@ -194,18 +209,25 @@ providers:
             assert provider_config["model"] == "llama3.2"
 
     def test_get_provider_config_no_default_provider(self, tmp_path):
-        """Test get_provider_config returns None when no default set."""
+        """Test get_provider_config returns None when Chat is unset."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text(
                 """
-providers:
+model_settings_version: 1
+connections:
   openai:
-    provider_type: openai
-    model: gpt-4o
+    type: openai
+    api_key: sk-test
+models:
+  chat: {mode: unset}
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
 """
             )
-            # Clear cache
             provider_config = Config.get_provider_config()
             assert provider_config is None
 
@@ -226,24 +248,32 @@ providers:
             assert provider_config is None
 
     def test_get_provider_config_attaches_fallback_configs(self, tmp_path):
-        """Test provider_order attaches fallback configs to the primary config."""
+        """Test ordered Chat fallback targets attach adapter configs."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text(
                 """
-default_provider: deepseek
-provider_order:
-  - deepseek
-  - openai
-providers:
+model_settings_version: 1
+connections:
   deepseek:
-    provider_type: deepseek
+    type: deepseek
     api_key: sk-deepseek
-    model: deepseek-v4-flash
   openai:
-    provider_type: openai
+    type: openai
     api_key: sk-openai
-    model: gpt-4o-mini
+models:
+  chat:
+    mode: model
+    connection: deepseek
+    model: deepseek-v4-flash
+    fallbacks:
+      - connection: openai
+        model: gpt-4o-mini
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
 """
             )
 
@@ -252,22 +282,33 @@ providers:
             assert provider_config["provider_type"] == "deepseek"
             assert len(provider_config["fallback_configs"]) == 1
             assert provider_config["fallback_configs"][0]["provider_type"] == "openai"
+            assert provider_config["fallback_configs"][0]["model"] == "gpt-4o-mini"
 
     def test_get_provider_order_prepends_default_provider(self, tmp_path):
-        """Test default_provider remains primary even with provider_order."""
+        """Chat primary remains first even when fallbacks are not ordered."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text(
                 """
-default_provider: openai
-provider_order:
-  - deepseek
-  - openai
-providers:
+model_settings_version: 1
+connections:
   deepseek:
-    provider_type: deepseek
+    type: deepseek
   openai:
-    provider_type: openai
+    type: openai
+models:
+  chat:
+    mode: model
+    connection: openai
+    model: gpt-4o-mini
+    fallbacks:
+      - connection: deepseek
+        model: deepseek-v4-flash
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
 """
             )
 
@@ -369,23 +410,30 @@ class TestPersistProviderOauth:
     """Tests for persist_provider_oauth()."""
 
     def test_persist_provider_oauth_updates_matching_provider_only(self, tmp_path):
-        """Only the named provider's oauth section is updated on disk."""
+        """Only the named canonical connection's oauth section is updated."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
             config_file.write_text(
                 """
-providers:
+model_settings_version: 1
+connections:
   openai:
-    provider_type: openai
-    model: gpt-4o
+    type: openai
     auth_method: oauth
     oauth:
       access_token: old-access
       refresh_token: old-refresh
       expires_at: 1
   ollama:
-    provider_type: ollama
+    type: ollama
     base_url: http://localhost:11434
+models:
+  chat: {mode: unset}
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
 """
             )
 
@@ -399,13 +447,14 @@ providers:
             with open(config_file) as f:
                 config = yaml.safe_load(f)
 
-            assert config["providers"]["openai"]["oauth"] == new_oauth
-            # Other provider fields/config are untouched.
-            assert config["providers"]["openai"]["model"] == "gpt-4o"
-            assert config["providers"]["ollama"] == {
-                "provider_type": "ollama",
+            assert config["connections"]["openai"]["oauth"] == new_oauth
+            # Other connection fields/config are untouched.
+            assert config["connections"]["openai"]["auth_method"] == "oauth"
+            assert config["connections"]["ollama"] == {
+                "type": "ollama",
                 "base_url": "http://localhost:11434",
             }
+            assert "providers" not in config
 
     def test_persist_provider_oauth_writes_file_with_0o600_permissions(self, tmp_path):
         """The rewritten config file must not be group/world readable."""
@@ -413,11 +462,19 @@ providers:
             config_file = tmp_path / "config.yaml"
             config_file.write_text(
                 """
-providers:
+model_settings_version: 1
+connections:
   openai:
-    provider_type: openai
+    type: openai
     oauth:
       access_token: old
+models:
+  chat: {mode: unset}
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
 """
             )
             config_file.chmod(0o644)
@@ -459,24 +516,32 @@ providers:
 
 
 class TestGetReferencedProvider:
-    """A task role is handed a copy, never the cached provider dict."""
+    """A task role is handed a canonical connection adapter, never a cache ref."""
 
     _CONFIG_TEXT = """
-default_provider: opencode
-provider_order:
-  - opencode
-  - engine
-providers:
+model_settings_version: 1
+connections:
   opencode:
-    provider_type: openai_compatible
-    model: chat-a
+    type: openai_compatible
   engine:
-    provider_type: openai_compatible
+    type: openai_compatible
     base_url: http://engine:4000/v1
     api_key: fixture-key
-    model: chat-a
     oauth:
       access_token: fixture-access
+models:
+  chat:
+    mode: model
+    connection: opencode
+    model: chat-a
+    fallbacks:
+      - connection: engine
+        model: chat-a
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
 """
 
     def test_returns_copy_with_saved_name(self, tmp_path):
@@ -486,9 +551,11 @@ providers:
             provider = Config.get_referenced_provider("engine")
             assert provider["name"] == "engine"
             assert provider["provider_type"] == "openai_compatible"
+            assert provider["type"] == "openai_compatible"
             assert provider["base_url"] == "http://engine:4000/v1"
             assert provider["api_key"] == "fixture-key"
-            assert provider["model"] == "chat-a"
+            assert "model" not in provider
+            assert "reasoning_effort" not in provider
 
     def test_copy_is_deep_and_does_not_reach_the_cache(self, tmp_path):
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
@@ -500,11 +567,12 @@ providers:
             assert provider is not saved
             assert provider["oauth"] is not saved["oauth"]
 
-            provider["model"] = "wire-b"
+            provider["api_key"] = "wire-b"
             provider["oauth"]["access_token"] = "changed"
-            assert saved["model"] == "chat-a"
-            assert saved["oauth"]["access_token"] == "fixture-access"
-            assert Config.get_provider_config_by_name("engine") is saved
+            fresh = Config.get_provider_config_by_name("engine")
+            assert fresh is not None
+            assert fresh["api_key"] == "fixture-key"
+            assert fresh["oauth"]["access_token"] == "fixture-access"
 
     def test_unknown_reference_raises(self, tmp_path):
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
@@ -515,9 +583,20 @@ providers:
     def test_non_mapping_provider_raises(self, tmp_path):
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             (tmp_path / "config.yaml").write_text(
-                "providers:\n  engine: not-a-mapping\n"
+                """
+model_settings_version: 1
+connections:
+  engine: not-a-mapping
+models:
+  chat: {mode: unset}
+  embedding: {mode: unset}
+  rerank: {mode: unset, enabled: false}
+  ocr: {mode: unset}
+  metadata: {mode: chat}
+  cleanup: {mode: chat}
+"""
             )
-            with pytest.raises(ValueError, match="Unknown provider"):
+            with pytest.raises(ValueError, match="must be a mapping"):
                 Config.get_referenced_provider("engine")
 
 

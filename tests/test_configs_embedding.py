@@ -10,6 +10,7 @@ import pytest
 import esdc.configs as configs
 import esdc.embedders as emb
 from esdc.configs import ENUM_CHOICES, KEY_DESCRIPTIONS, MODEL_SECTIONS, Config
+from esdc.model_settings import default_model_settings
 
 
 @pytest.fixture(autouse=True)
@@ -44,12 +45,23 @@ _ENGINE = {
 
 
 def _embedding_config(**overrides):
+    providers = overrides.pop("providers", {"engine": dict(_ENGINE)})
+    connections = {}
+    for name, entry in providers.items():
+        connection = {"type": entry.get("provider_type") or entry.get("type")}
+        for key in ("base_url", "api_key", "oauth", "auth_method", "api_version"):
+            if key in entry:
+                connection[key] = entry[key]
+        connections[name] = connection
+
     data = {
+        "model_settings_version": 1,
+        "connections": connections,
+        "models": default_model_settings(),
         "embedding_backend": "openai",
         "embedding_provider": "engine",
         "embedding_model": "embed-b",
         "embedding_api_key": "other-source-key",
-        "providers": {"engine": dict(_ENGINE)},
     }
     data.update(overrides)
     return data

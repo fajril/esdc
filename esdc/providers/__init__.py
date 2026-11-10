@@ -1,3 +1,4 @@
+import copy
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -7,6 +8,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 
+from esdc.model_runtime import ResolvedTask
 from esdc.providers.anthropic import AnthropicProvider
 from esdc.providers.azure_openai import AzureOpenAIProvider
 from esdc.providers.base import Provider, ProviderConfig
@@ -301,6 +303,46 @@ def create_llm_from_config(
     )
 
 
+def create_llm_from_resolved_task(
+    task: ResolvedTask,
+    *,
+    max_output_tokens: int | None = None,
+    timeout_seconds: float | None = None,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+):
+    """Create the LLM for an already resolved task and its fallbacks.
+
+    Per-request reasoning/temperature overrides apply to the primary target
+    only; each fallback keeps its saved assignment options. The resolved
+    runtime mapping is copied so provider construction cannot mutate it.
+    """
+    if task.primary is None:
+        raise ValueError(f"No model is configured for task {task.role!r}")
+
+    primary = copy.deepcopy(dict(task.primary.provider))
+    primary["model"] = task.primary.model
+    if reasoning_effort is not None:
+        primary["reasoning_effort"] = reasoning_effort
+    if temperature is not None:
+        primary["temperature"] = temperature
+
+    if task.fallbacks:
+        primary["fallback_configs"] = [
+            copy.deepcopy(dict(fallback.provider)) for fallback in task.fallbacks
+        ]
+        for config, fallback in zip(
+            primary["fallback_configs"], task.fallbacks, strict=True
+        ):
+            config["model"] = fallback.model
+
+    return create_llm_from_config(
+        primary,
+        max_output_tokens=max_output_tokens,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 __all__ = [
     "Provider",
     "ProviderConfig",
@@ -322,4 +364,5 @@ __all__ = [
     "list_provider_types",
     "create_provider",
     "create_llm_from_config",
+    "create_llm_from_resolved_task",
 ]

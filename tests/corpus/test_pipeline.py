@@ -755,11 +755,12 @@ def test_resolve_text_caller_named_provider(monkeypatch):
 
     monkeypatch.setattr(
         pipeline.Config,
-        "get_providers",
+        "get_referenced_provider",
         classmethod(
-            lambda cls: {
-                "foo": {"provider_type": "openai", "model": "gpt-x"},
-                "bar": {"provider_type": "anthropic", "model": "claude-x"},
+            lambda cls, name: {
+                "name": name,
+                "provider_type": "openai",
+                "type": "openai",
             }
         ),
     )
@@ -771,18 +772,22 @@ def test_resolve_text_caller_named_provider(monkeypatch):
 
     monkeypatch.setattr(providers, "create_llm_from_config", fake_create)
 
-    caller = pipeline._resolve_text_caller("provider:foo", None)
+    caller = pipeline._resolve_text_caller("gpt-x", None, provider_name="foo")
     assert caller is not None
     assert caller("extract metadata") == '{"doc_type": "mom"}'
-    # that provider's config was used, with the same shape the priority
-    # accessor produces (name/provider_type filled in)
+    # The canonical connection supplies transport only; the explicit task model
+    # is the wire model sent to the provider.
     assert captured["provider_type"] == "openai"
     assert captured["model"] == "gpt-x"
     assert captured["name"] == "foo"
 
 
 def test_resolve_text_caller_unknown_provider_returns_none(monkeypatch, caplog):
-    monkeypatch.setattr(pipeline.Config, "get_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(
+        pipeline.Config,
+        "get_provider_config_by_name",
+        classmethod(lambda cls, name: None),
+    )
     with caplog.at_level("WARNING"):
         assert pipeline._resolve_text_caller("provider:nope", None) is None
     assert any("nope" in r.message for r in caplog.records)

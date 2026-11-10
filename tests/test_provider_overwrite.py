@@ -210,7 +210,26 @@ providers:
         """Run the add flow with the prompt values, ending the menu with Save."""
         from esdc.config_wizard import _add_provider_flow
 
+        def legacy_data():
+            path = Config.get_config_file()
+            if not path.exists():
+                return {}
+            data = yaml.safe_load(path.read_text()) or {}
+            return data if isinstance(data, dict) else {}
+
+        def legacy_providers():
+            providers = legacy_data().get("providers", {})
+            return providers if isinstance(providers, dict) else {}
+
         with (
+            patch(
+                "esdc.config_wizard.Config.get_providers",
+                classmethod(lambda cls: legacy_providers()),
+            ),
+            patch(
+                "esdc.config_wizard.Config.get_default_provider",
+                classmethod(lambda cls: str(legacy_data().get("default_provider") or "")),
+            ),
             patch("esdc.config_wizard._fetch_models", return_value=["chat-new"]),
             patch("esdc.config_wizard.questionary.select") as mock_select,
             patch("esdc.config_wizard.questionary.password") as mock_password,

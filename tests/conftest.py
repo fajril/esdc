@@ -162,11 +162,10 @@ def reset_semantic_resolver_cache():
 
 @pytest.fixture(autouse=True)
 def _mock_provider_config(request):
-    """Prevent accidental real LLM calls in tests.
+    """Prevent accidental real LLM calls in agent wrapper tests.
 
-    Patches get_provider_config in agent_wrapper where
-    generate_response/generate_streaming_response call it. Does NOT
-    patch esdc.configs globally so that config tests still work.
+    Patches the agent wrapper's Chat LLM factory, not ``Config`` itself, so
+    config/runtime tests still resolve canonical settings normally.
 
     Skip this fixture with @pytest.mark.allow_provider_config marker.
     """
@@ -178,8 +177,11 @@ def _mock_provider_config(request):
         return
 
     with patch(
-        "esdc.server.agent_wrapper.Config.get_provider_config",
-        return_value=None,
+        "esdc.server.agent_wrapper._create_chat_llm",
+        return_value=(
+            None,
+            "No provider configured. Run 'esdc configs' first.",
+        ),
     ):
         yield
 

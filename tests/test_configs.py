@@ -16,6 +16,7 @@ from esdc.configs import (
     SETTINGS_SECTIONS,
     Config,
 )
+from esdc.model_settings import ModelConfigurationRequired
 
 
 class TestConfigDir:
@@ -473,8 +474,14 @@ unknown_user_key: kept
             assert Config.get_embedding_host() == "http://legacy-embed:1234/v1"
             assert Config.get_embedding_model() == "legacy-model"
             assert Config.get_embedding_api_key() == "legacy-key"
-            assert Config.get_default_provider() == "opencode"
-            assert Config.get_provider_order() == ["opencode", "engine"]
+
+            # Chat runtime adapters read canonical settings only: a file with
+            # legacy providers but no model-settings marker is not converted
+            # or interpreted here.
+            with pytest.raises(ModelConfigurationRequired):
+                Config.get_default_provider()
+            with pytest.raises(ModelConfigurationRequired):
+                Config.get_provider_order()
 
             config = Config._load_config()
             assert config is not None

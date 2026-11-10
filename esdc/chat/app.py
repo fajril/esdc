@@ -266,6 +266,7 @@ class ESDCChatApp(App):
         self._provider_type: str = ""
         self._model_name: str = ""
         self._base_url: str = ""
+        self._config_error: str | None = None
         self._system_prompt: str = ""
         self._context_panel_visible: bool = True
         self._context_metadata: dict | None = None
@@ -309,29 +310,35 @@ class ESDCChatApp(App):
         self.user_input.focus()
 
         from esdc.configs import Config
+        from esdc.model_settings import ModelConfigurationRequired
 
         # Initialize config if not exists (creates directory and default config)
         Config.init_config()
 
-        self._provider_name = Config.get_default_provider()
-        self._model_name = Config.get_provider_model()
-        self._system_prompt = ""
+        try:
+            resolved = Config.resolve_model_task("chat")
+        except ModelConfigurationRequired as exc:
+            self._config_error = str(exc)
+            resolved = None
+        else:
+            self._config_error = None
 
-        # Get context length from provider
-        provider_config = Config.get_provider_config()
-        if provider_config and provider_config.get("model"):
+        if resolved is not None and resolved.primary is not None:
+            primary = resolved.primary
+            self._provider_name = primary.connection
+            self._model_name = primary.model
+            self._provider_type = str(primary.provider.get("provider_type") or "")
+            self._base_url = str(primary.provider.get("base_url") or "")
+
             from esdc.providers import get_provider
 
-            self._provider_type = provider_config.get("provider_type", "ollama")
-            self._base_url = provider_config.get("base_url", "")
             provider = get_provider(self._provider_type)
             if provider:
                 # Use static fallback; dynamic resolution from the provider API
                 # happens later inside the agent pipeline when the LLM instance
                 # is already available (see _detect_context_length / agent_node).
-                self._context_length = provider.get_context_length(
-                    provider_config.get("model", "")
-                )
+                self._context_length = provider.get_context_length(primary.model)
+        self._system_prompt = ""
         try:
             from esdc.chat.prompts import get_system_prompt
 
@@ -369,7 +376,8 @@ class ESDCChatApp(App):
         from esdc.chat.agent import create_agent
         from esdc.chat.memory import create_checkpointer, create_thread_id
         from esdc.configs import Config
-        from esdc.providers import create_llm_from_config
+        from esdc.model_settings import ModelConfigurationRequired
+        from esdc.providers import create_llm_from_resolved_task
 
         try:
             from esdc.phoenix import setup_phoenix_tracing
@@ -378,15 +386,20 @@ class ESDCChatApp(App):
         except ImportError:
             logger.debug("Phoenix dependencies not available, skipping tracing")
 
-        provider_config = Config.get_provider_config()
-        if not provider_config:
-            self.display_message(
-                "system",
-                "Error: No provider configured. Run 'esdc configs' first.",
-            )
+        try:
+            resolved = Config.resolve_model_task("chat")
+        except ModelConfigurationRequired as exc:
+            self.display_message("system", f"Error: {exc}")
             return
 
-        self._llm = create_llm_from_config(provider_config)
+        if resolved.mode != "model" or resolved.primary is None:
+            message = self._config_error or (
+                "Error: No provider configured. Run 'esdc configs' first."
+            )
+            self.display_message("system", message)
+            return
+
+        self._llm = create_llm_from_resolved_task(resolved)
         self._checkpointer = create_checkpointer()
         self._agent = create_agent(
             self._llm,

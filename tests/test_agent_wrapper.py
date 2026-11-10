@@ -143,16 +143,11 @@ class TestAgentWrapperIntegration:
 
         with (
             patch(
-                "esdc.server.agent_wrapper.Config.get_provider_config"
-            ) as mock_config,
-            patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm,
+                "esdc.server.agent_wrapper._create_chat_llm",
+                return_value=(MagicMock(), None),
+            ),
             patch("esdc.server.agent_wrapper.create_agent") as mock_agent,
         ):
-            mock_config.return_value = {
-                "provider": "ollama",
-                "model": "test-model",
-            }
-            mock_llm.return_value = MagicMock()
             mock_agent.return_value = MagicMock()
 
             async def _astream_events(*args, **kwargs):
@@ -177,16 +172,11 @@ class TestAgentWrapperIntegration:
         """Test generate_streaming_response with mocked astream_agent_events."""
         with (
             patch(
-                "esdc.server.agent_wrapper.Config.get_provider_config"
-            ) as mock_config,
-            patch("esdc.server.agent_wrapper.create_llm_from_config") as mock_llm,
+                "esdc.server.agent_wrapper._create_chat_llm",
+                return_value=(MagicMock(), None),
+            ),
             patch("esdc.server.agent_wrapper.create_agent") as mock_agent,
         ):
-            mock_config.return_value = {
-                "provider": "ollama",
-                "model": "test-model",
-            }
-            mock_llm.return_value = MagicMock()
             mock_agent.return_value = MagicMock()
 
             async def _astream_events(*args, **kwargs):
@@ -222,19 +212,16 @@ class TestAgentWrapperIntegration:
     @pytest.mark.asyncio
     async def test_generate_streaming_response_no_provider(self):
         """Test generate_streaming_response when no provider configured."""
-        with patch(
-            "esdc.server.agent_wrapper.Config.get_provider_config"
-        ) as mock_config:
-            mock_config.return_value = None
+        from esdc.server.agent_wrapper import generate_streaming_response
 
-            chunks = []
-            async for chunk in generate_streaming_response(
-                messages=[MagicMock(role="user", content="Hello")],
-            ):
-                chunks.append(json.loads(chunk))
+        chunks = []
+        async for chunk in generate_streaming_response(
+            messages=[MagicMock(role="user", content="Hello")],
+        ):
+            chunks.append(json.loads(chunk))
 
-            assert len(chunks) == 1
-            assert "Error" in chunks[0]["choices"][0]["delta"]["content"]
+        assert len(chunks) == 1
+        assert "Error" in chunks[0]["choices"][0]["delta"]["content"]
 
 
 @pytest.mark.asyncio
@@ -252,14 +239,9 @@ async def test_generate_streaming_response_real_token_streaming():
 
     with (
         patch(
-            "esdc.server.agent_wrapper.Config.get_provider_config",
-            return_value={
-                "provider_type": "ollama",
-                "model": "test-model",
-                "base_url": "http://localhost:11434",
-            },
+            "esdc.server.agent_wrapper._create_chat_llm",
+            return_value=(MagicMock(), None),
         ),
-        patch("esdc.server.agent_wrapper.create_llm_from_config"),
         patch("esdc.server.agent_wrapper.create_agent", return_value=MagicMock()),
         patch(
             "esdc.server.agent_wrapper.astream_agent_events",
@@ -291,14 +273,9 @@ async def test_generate_streaming_response_recursion_error():
 
     with (
         patch(
-            "esdc.server.agent_wrapper.Config.get_provider_config",
-            return_value={
-                "provider_type": "ollama",
-                "model": "test-model",
-                "base_url": "http://localhost:11434",
-            },
+            "esdc.server.agent_wrapper._create_chat_llm",
+            return_value=(MagicMock(), None),
         ),
-        patch("esdc.server.agent_wrapper.create_llm_from_config"),
         patch("esdc.server.agent_wrapper.create_agent", return_value=MagicMock()),
         patch(
             "esdc.server.agent_wrapper.astream_agent_events",

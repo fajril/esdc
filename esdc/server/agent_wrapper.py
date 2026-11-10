@@ -36,7 +36,8 @@ from esdc.chat.agent import (
 )
 from esdc.chat.event_streamer import astream_agent_events
 from esdc.configs import Config
-from esdc.providers import create_llm_from_config
+from esdc.model_settings import ModelConfigurationRequired
+from esdc.providers import create_llm_from_resolved_task
 from esdc.server.cache import get_parsed_json
 from esdc.server.constants import SSE_STREAM_TIMEOUT
 from esdc.server.title_detection import (
@@ -48,6 +49,30 @@ from esdc.server.title_detection import (
 )
 
 logger = logging.getLogger("esdc.server.agent")
+
+
+def _create_chat_llm(
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+) -> tuple[Any | None, str | None]:
+    """Create the Chat LLM or return a short user-facing configuration error."""
+    try:
+        resolved = Config.resolve_model_task("chat")
+    except ModelConfigurationRequired as exc:
+        return None, str(exc)
+
+    if resolved.mode != "model" or resolved.primary is None:
+        return None, "No provider configured. Run 'esdc configs' first."
+
+    return (
+        create_llm_from_resolved_task(
+            resolved,
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
+        ),
+        None,
+    )
 
 
 def convert_messages_to_langchain(messages: list[Any]) -> list[Any]:
@@ -386,23 +411,12 @@ async def generate_streaming_response(
             user_query[:80],
         )
 
-        provider_config = Config.get_provider_config()
-        if not provider_config:
-            for chunk in create_ancillary_chat_stream_chunks(
-                "Error: No provider configured."
-            ):
+        llm, error = _create_chat_llm(reasoning_effort="none")
+        if error is not None:
+            for chunk in create_ancillary_chat_stream_chunks(f"Error: {error}"):
                 yield chunk
             return
-
-        provider_config_obj = {
-            "provider_type": provider_config.get("provider_type", "ollama"),
-            "model": provider_config.get("model"),
-            "base_url": provider_config.get("base_url"),
-            "api_key": provider_config.get("api_key"),
-            "reasoning_effort": "none",
-            "fallback_configs": provider_config.get("fallback_configs"),
-        }
-        llm = create_llm_from_config(provider_config_obj)
+        assert llm is not None
 
         if anc_type == "tags":
             result = await generate_conversation_tags(llm, user_query)
@@ -438,37 +452,23 @@ async def generate_streaming_response(
     logger.debug(f"[{request_id}] STREAM_START - num_messages={len(messages)}")
 
     try:
-        provider_config = Config.get_provider_config()
-        if not provider_config:
+        llm, error = _create_chat_llm(
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
+        )
+        if error is not None:
             yield_counter += 1
             yield json.dumps(
                 create_openai_chunk(
-                    content="Error: No provider configured.",
+                    content=f"Error: {error}",
                     model=model,
                     finish_reason="stop",
                     chunk_id=next_chunk_id(),
                 )
             )
             return
+        assert llm is not None
 
-        provider_name = provider_config.get("provider_type", "ollama")
-        provider_model = provider_config.get("model")
-        base_url = provider_config.get("base_url")
-        api_key = provider_config.get("api_key")
-
-        provider_config_obj = {
-            "provider_type": provider_name,
-            "model": provider_model,
-            "base_url": base_url,
-            "api_key": api_key,
-            "reasoning_effort": reasoning_effort
-            if reasoning_effort is not None
-            else provider_config.get("reasoning_effort"),
-            "temperature": temperature,
-            "fallback_configs": provider_config.get("fallback_configs"),
-        }
-
-        llm = create_llm_from_config(provider_config_obj)
         agent = create_agent(llm, checkpointer=None)
         logger.debug(
             f"[{request_id}] [TIMING] llm_and_agent_created | "
@@ -649,19 +649,10 @@ async def generate_response(
             user_query[:80],
         )
 
-        provider_config = Config.get_provider_config()
-        if not provider_config:
-            return create_ancillary_chat_response("Error: No provider configured.")
-
-        provider_config_obj = {
-            "provider_type": provider_config.get("provider_type", "ollama"),
-            "model": provider_config.get("model"),
-            "base_url": provider_config.get("base_url"),
-            "api_key": provider_config.get("api_key"),
-            "reasoning_effort": "none",
-            "fallback_configs": provider_config.get("fallback_configs"),
-        }
-        llm = create_llm_from_config(provider_config_obj)
+        llm, error = _create_chat_llm(reasoning_effort="none")
+        if error is not None:
+            return create_ancillary_chat_response(f"Error: {error}")
+        assert llm is not None
 
         if anc_type == "tags":
             result = await generate_conversation_tags(llm, user_query)
@@ -681,8 +672,11 @@ async def generate_response(
         return create_ancillary_chat_response(result_json)
 
     try:
-        provider_config = Config.get_provider_config()
-        if not provider_config:
+        llm, error = _create_chat_llm(
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
+        )
+        if error is not None:
             return {
                 "id": f"chatcmpl-{response_uuid}",
                 "object": "chat.completion",
@@ -693,31 +687,14 @@ async def generate_response(
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "Error: No provider configured.",
+                            "content": f"Error: {error}",
                         },
                         "finish_reason": "stop",
                     }
                 ],
             }
 
-        provider_name = provider_config.get("provider_type", "ollama")
-        provider_model = provider_config.get("model")
-        base_url = provider_config.get("base_url")
-        api_key = provider_config.get("api_key")
-
-        provider_config_obj = {
-            "provider_type": provider_name,
-            "model": provider_model,
-            "base_url": base_url,
-            "api_key": api_key,
-            "reasoning_effort": reasoning_effort
-            if reasoning_effort is not None
-            else provider_config.get("reasoning_effort"),
-            "temperature": temperature,
-            "fallback_configs": provider_config.get("fallback_configs"),
-        }
-
-        llm = create_llm_from_config(provider_config_obj)
+        assert llm is not None
         agent = create_agent(llm, checkpointer=None)
 
         lc_messages = convert_messages_to_langchain(messages)

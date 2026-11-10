@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import yaml
 
+from esdc.model_runtime import ResolvedTask, resolve_task
 from esdc.model_settings import (
     LEGACY_MODEL_CORPUS_KEYS,
     MODEL_SETTINGS_REQUIRED_MESSAGE,
@@ -670,6 +671,25 @@ class Config:
         return parse_task_assignment(task, config["models"][task])
 
     @classmethod
+    def resolve_model_task(
+        cls, role: TaskRole, *, apply_overrides: bool = True
+    ) -> ResolvedTask:
+        """Resolve one task's effective connection, model and options.
+
+        ``mode: chat`` follows the Chat assignment dynamically; ``mode: ocr``
+        and ``mode: off`` remain distinct relationships with no primary target.
+        Supported per-run environment overrides are applied only when
+        ``apply_overrides`` is true.
+        """
+        task = cls._require_task_role(role)
+        return resolve_task(
+            task,
+            load_assignment=cls.get_model_assignment,
+            load_connection=cls.get_connection,
+            apply_overrides=apply_overrides,
+        )
+
+    @classmethod
     def save_model_assignment(
         cls,
         role: TaskRole,
@@ -739,19 +759,31 @@ class Config:
 
     @classmethod
     def get_providers(cls) -> dict:
-        """Get all provider configurations."""
-        config = cls._load_config()
-        return config.get("providers", {}) if config else {}
+        """Return canonical connections shaped as runtime provider entries.
+
+        This is an internal transport adapter for callers that still speak the
+        former provider-entry shape. It reads ``connections`` only; a
+        connection's model belongs to a task assignment and is never returned
+        here.
+        """
+        providers: dict[str, dict[str, Any]] = {}
+        for name, connection in cls.get_connections().items():
+            entry = copy.deepcopy(connection)
+            entry["name"] = name
+            entry["provider_type"] = str(
+                entry.get("type") or entry.get("provider_type") or ""
+            ).strip()
+            entry.pop("model", None)
+            entry.pop("reasoning_effort", None)
+            providers[name] = entry
+        return providers
 
     @classmethod
     def _provider_entry(cls, config: dict[str, Any], name: str) -> dict[str, Any]:
-        """Return the saved provider entry, or raise.
+        """Return a saved legacy provider entry, or raise.
 
-        Internal helper shared by the provider-aware saves; callers that must
-        not mutate the saved entry copy the result.
-
-        Raises:
-            ValueError: the provider is unknown, or its entry is not a mapping.
+        Used only by the legacy provider write helpers. Runtime reads use the
+        canonical connection adapters instead.
         """
         providers = config.get("providers")
         entry = providers.get(name) if isinstance(providers, dict) else None
@@ -761,18 +793,26 @@ class Config:
 
     @classmethod
     def get_referenced_provider(cls, name: str) -> dict[str, Any]:
-        """Return a deep copy of one saved provider entry, with ``name`` set.
+        """Return a detached runtime adapter for one canonical connection.
 
-        A task role gets its own copy so it can set its own wire model without
-        touching the saved chat model or the cached config dict; nothing here
-        ever hands out a reference into the cache.
+        The saved connection supplies transport and authentication only. The
+        caller sets the task's explicit wire model, so no connection-level
+        model is returned or consulted.
 
         Raises:
-            ValueError: the provider is unknown, or its entry is not a mapping.
+            ValueError: the connection is unknown.
         """
-        copied = copy.deepcopy(cls._provider_entry(cls._load_config() or {}, name))
-        copied["name"] = name
-        return copied
+        connections = cls.get_connections()
+        if name not in connections:
+            raise ValueError(f"Unknown provider reference: {name!r}")
+        provider = copy.deepcopy(connections[name])
+        provider["name"] = name
+        provider["provider_type"] = str(
+            provider.get("type") or provider.get("provider_type") or ""
+        ).strip()
+        provider.pop("model", None)
+        provider.pop("reasoning_effort", None)
+        return provider
 
     @classmethod
     def save_provider(cls, name: str, provider_config: dict) -> None:
@@ -991,17 +1031,18 @@ class Config:
 
     @classmethod
     def get_provider_config(cls) -> dict[str, Any] | None:
-        """Get provider configuration from config file.
+        """Return the canonical Chat runtime provider adapter, or None.
 
-        Returns the config for the default provider. If ``provider_order`` is
-        configured, fallback provider configs are attached under
-        ``fallback_configs`` for downstream LLM creation.
+        The primary entry carries the Chat target's model and options. Chat
+        fallback targets are attached under ``fallback_configs`` in order.
+        This reads ``connections``/``models`` only; it is an internal transport
+        adapter, not a second persisted configuration system.
         """
         configs = cls.get_provider_configs_by_priority()
         if not configs:
             return None
 
-        primary = dict(configs[0])
+        primary = configs[0]
         fallbacks = configs[1:]
         if fallbacks:
             primary["fallback_configs"] = fallbacks
@@ -1009,28 +1050,15 @@ class Config:
 
     @classmethod
     def get_provider_order(cls) -> list[str]:
-        """Return provider names in failover priority order."""
-        config = cls._load_config()
-        if not config:
+        """Return canonical Chat connection names in effective failover order."""
+        resolved = cls.resolve_model_task("chat")
+        if resolved.mode != "model" or resolved.primary is None:
             return []
 
-        default_provider = config.get("default_provider")
-        configured_order = config.get("provider_order", [])
-        providers = config.get("providers", {})
-
         ordered: list[str] = []
-        if default_provider and default_provider in providers:
-            ordered.append(default_provider)
-
-        if isinstance(configured_order, list):
-            for provider_name in configured_order:
-                if (
-                    isinstance(provider_name, str)
-                    and provider_name in providers
-                    and provider_name not in ordered
-                ):
-                    ordered.append(provider_name)
-
+        for target in (resolved.primary, *resolved.fallbacks):
+            if target.connection not in ordered:
+                ordered.append(target.connection)
         return ordered
 
     @classmethod
@@ -1080,51 +1108,40 @@ class Config:
 
     @classmethod
     def get_provider_configs_by_priority(cls) -> list[dict[str, Any]]:
-        """Return provider configs ordered for failover."""
-        config = cls._load_config()
-        if not config:
+        """Return canonical Chat runtime adapters in failover order."""
+        resolved = cls.resolve_model_task("chat")
+        if resolved.mode != "model" or resolved.primary is None:
             return []
-
-        providers = config.get("providers", {})
-        ordered_names = cls.get_provider_order()
-        configs: list[dict[str, Any]] = []
-        for name in ordered_names:
-            provider_config = providers.get(name)
-            if not isinstance(provider_config, dict):
-                continue
-            cfg = dict(provider_config)
-            cfg.setdefault("name", name)
-            cfg.setdefault("provider_type", cfg.get("type") or name)
-            configs.append(cfg)
-
-        return configs
+        targets = (resolved.primary, *resolved.fallbacks)
+        return [copy.deepcopy(dict(target.provider)) for target in targets]
 
     @classmethod
     def get_default_provider(cls) -> str:
-        """Get default provider name."""
-        config = cls._load_config() or {}
-        return config.get("default_provider", "ollama")
+        """Return the canonical Chat primary connection name, or ``""``."""
+        resolved = cls.resolve_model_task("chat")
+        if resolved.mode != "model" or resolved.primary is None:
+            return ""
+        return resolved.primary.connection
 
     @classmethod
     def get_provider_api_key(cls) -> str:
-        """Get provider API key from env var or config."""
+        """Get the active Chat provider API key or explicit env override."""
         env_key = os.environ.get("OPENAI_API_KEY")
         if env_key:
             return env_key
 
-        provider_config = cls.get_provider_config()
-        if provider_config and "api_key" in provider_config:
-            return provider_config["api_key"]
-
-        return ""
+        resolved = cls.resolve_model_task("chat")
+        if resolved.mode != "model" or resolved.primary is None:
+            return ""
+        return str(resolved.primary.provider.get("api_key") or "")
 
     @classmethod
     def get_provider_model(cls) -> str:
-        """Get provider model from config."""
-        provider_config = cls.get_provider_config()
-        if provider_config and "model" in provider_config:
-            return provider_config["model"]
-        return "gpt-4o"
+        """Return the canonical Chat primary wire model, or ``""``."""
+        resolved = cls.resolve_model_task("chat")
+        if resolved.mode != "model" or resolved.primary is None:
+            return ""
+        return resolved.primary.model
 
     @classmethod
     def get_log_level(cls) -> str:
@@ -1225,11 +1242,11 @@ class Config:
 
     @classmethod
     def get_provider_base_url(cls) -> str:
-        """Get provider base URL from config."""
-        provider_config = cls.get_provider_config()
-        if provider_config and "base_url" in provider_config:
-            return provider_config["base_url"]
-        return ""
+        """Return the canonical Chat primary connection base URL, or ``""``."""
+        resolved = cls.resolve_model_task("chat")
+        if resolved.mode != "model" or resolved.primary is None:
+            return ""
+        return str(resolved.primary.provider.get("base_url") or "")
 
     @classmethod
     def get_chat_db_path(cls) -> Path:
@@ -1291,9 +1308,13 @@ class Config:
 
     @classmethod
     def get_provider_config_by_name(cls, name: str) -> dict[str, Any] | None:
-        """Get provider configuration by name."""
-        providers = cls.get_providers()
-        return providers.get(name)
+        """Return one canonical connection runtime adapter, or ``None``."""
+        try:
+            return cls.get_referenced_provider(name)
+        except ModelConfigurationRequired:
+            raise
+        except ValueError:
+            return None
 
     @classmethod
     def update_provider_config(cls, name: str, config_data: dict[str, Any]) -> None:
@@ -1313,36 +1334,34 @@ class Config:
 
     @classmethod
     def persist_provider_oauth(cls, provider_name: str, oauth: dict[str, Any]) -> None:
-        """Persist refreshed OAuth tokens for one provider back to disk.
+        """Persist refreshed OAuth tokens for one canonical connection.
 
         OAuth providers may rotate the refresh_token on every refresh. The
         in-memory ``ProviderConfig.oauth`` dict is updated by the caller
         immediately after a refresh, but that update is lost on process
         restart unless it is also written to the config file. This method
-        performs that write.
+        performs that write against ``connections[provider_name].oauth``.
 
-        Only the named provider's ``oauth`` section is modified; every other
-        key (including other providers) is left untouched. The config file
-        is read fresh from disk (bypassing the in-memory cache) and written
-        back atomically via a temp file + ``os.replace``, with permissions
-        restricted to the owner (0o600) since it may contain access and
-        refresh tokens.
+        The config file is read fresh from disk (bypassing the in-memory
+        cache), so an unrelated concurrent edit is preserved. Only the named
+        connection's ``oauth`` section changes; a ``providers`` section is
+        never created or restored. The file is written atomically via a temp
+        file + ``os.replace`` with owner-only permissions because it may hold
+        access and refresh tokens.
 
-        If the provider is not present in the on-disk config (e.g. it was
-        configured purely via environment variables) or the config file does
-        not exist, this logs a warning and returns without error. Callers
-        should treat persistence failures as non-fatal: refreshing the token
-        in memory must still succeed even if the write to disk fails.
+        If the connection is absent from the on-disk config, or the config
+        file does not exist, this logs a warning and returns without error.
+        Callers treat persistence failures as non-fatal: refreshing the token
+        in memory must still succeed even when the write to disk fails.
 
         Args:
-            provider_name: Name of the provider to update (matches
-                ``ProviderConfig.name``).
-            oauth: The refreshed OAuth token dict to store for the provider.
+            provider_name: Canonical connection name.
+            oauth: The refreshed OAuth token dict to store.
         """
         config_file = cls.get_config_file()
         if not config_file.exists():
             logger.warning(
-                "Skipping OAuth token persistence for provider '%s': "
+                "Skipping OAuth token persistence for connection '%s': "
                 "config file %s does not exist",
                 provider_name,
                 config_file,
@@ -1352,21 +1371,26 @@ class Config:
         with open(config_file) as f:
             config = yaml.safe_load(f) or {}
 
-        providers = config.get("providers")
-        if not isinstance(providers, dict) or provider_name not in providers:
+        connections = config.get("connections")
+        if not isinstance(connections, dict) or provider_name not in connections:
             logger.warning(
-                "Skipping OAuth token persistence: provider '%s' not found "
+                "Skipping OAuth token persistence: connection '%s' not found "
                 "in config file %s",
                 provider_name,
                 config_file,
             )
             return
 
-        provider_entry = providers[provider_name]
-        if not isinstance(provider_entry, dict):
-            provider_entry = {}
-            providers[provider_name] = provider_entry
-        provider_entry["oauth"] = oauth
+        connection = connections[provider_name]
+        if not isinstance(connection, dict):
+            logger.warning(
+                "Skipping OAuth token persistence: connection '%s' in %s is "
+                "not a mapping",
+                provider_name,
+                config_file,
+            )
+            return
+        connection["oauth"] = copy.deepcopy(oauth)
 
         config_dir = cls.get_config_dir()
         fd, tmp_name = tempfile.mkstemp(
@@ -1411,9 +1435,12 @@ class Config:
 
     @classmethod
     def has_chat_config(cls) -> bool:
-        """Check if chat configuration exists."""
-        config = cls._load_config() or {}
-        return "providers" in config and len(config.get("providers", {})) > 0
+        """Whether canonical Chat is configured with a model target."""
+        try:
+            assignment = cls.get_model_assignment("chat")
+        except ModelConfigurationRequired:
+            return False
+        return assignment.mode == "model" and assignment.target is not None
 
     @classmethod
     def get_embedding_batch_size(cls) -> int:
