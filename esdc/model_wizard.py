@@ -41,6 +41,7 @@ from esdc.model_settings import (
     ModelTarget,
     TaskAssignment,
     TaskRole,
+    with_chat_primary,
 )
 
 _RESTRICTED_OPTION_ROLES = frozenset({"chat", "metadata", "cleanup"})
@@ -682,6 +683,20 @@ def _manage_fallbacks(draft: TaskDraft, cache: _CatalogCache) -> TaskDraft | Non
                 )
 
 
+def _assignment_for_target(
+    draft: TaskDraft, target: ModelTarget
+) -> TaskAssignment:
+    """Chat promotion owns fallback cleanup; other roles just set the target."""
+    if draft.role == "chat":
+        return with_chat_primary(draft.assignment, target)
+    return replace(
+        draft.assignment,
+        mode="model",
+        target=target,
+        enabled=draft.assignment.enabled,
+    )
+
+
 def _pick_assignment(
     draft: TaskDraft, cache: _CatalogCache
 ) -> TaskDraft | None:
@@ -753,12 +768,7 @@ def _pick_assignment(
                 continue
             return replace(
                 draft,
-                assignment=replace(
-                    draft.assignment,
-                    mode="model",
-                    target=target,
-                    enabled=draft.assignment.enabled,
-                ),
+                assignment=_assignment_for_target(draft, target),
             )
         if selected == _MODE_CHAT:
             return replace(
@@ -783,12 +793,7 @@ def _pick_assignment(
         if isinstance(selected, ModelTarget):
             return replace(
                 draft,
-                assignment=replace(
-                    draft.assignment,
-                    mode="model",
-                    target=selected,
-                    enabled=draft.assignment.enabled,
-                ),
+                assignment=_assignment_for_target(draft, selected),
             )
 
 

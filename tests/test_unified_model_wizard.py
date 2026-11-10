@@ -637,3 +637,52 @@ def test_rerank_test_uses_the_rerank_endpoint(monkeypatch):
     model_wizard._test_draft(draft)
 
     client.rerank.assert_called_once()
+
+
+@pytest.mark.parametrize("selection", ["discovered", "manual"])
+def test_wizard_promotes_existing_chat_fallback(monkeypatch, prompts, selection):
+    _connection()
+    _connection("backup", base_url="http://backup.example/v1")
+    _connection("other", base_url="http://other.example/v1")
+    _assign(
+        "chat",
+        connection="gateway",
+        model="a",
+        fallbacks=(
+            ModelTarget("backup", "b", {"reasoning_effort": "high"}),
+            ModelTarget("gateway", "c", {"reasoning_effort": "low"}),
+            ModelTarget("other", "d", {}),
+        ),
+    )
+    _discover(
+        monkeypatch,
+        ModelEntry("a"),
+        ModelEntry("b"),
+        ModelEntry("c"),
+        ModelEntry("d"),
+    )
+    if selection == "discovered":
+        prompts(["backup / b", "Save"])
+    else:
+        prompts(
+            [
+                "Enter model ID…",
+                "backup (OpenAI Compatible API)",
+                "b",
+                "Save",
+            ]
+        )
+
+    model_wizard.edit_task("chat")
+
+    Config._config_cache = None
+    assignment = Config.get_model_assignment("chat")
+    assert assignment.target == ModelTarget(
+        "backup", "b", {"reasoning_effort": "high"}
+    )
+    assert [(pair.connection, pair.model) for pair in assignment.fallbacks] == [
+        ("gateway", "c"),
+        ("other", "d"),
+    ]
+    assert assignment.fallbacks[0].options == {"reasoning_effort": "low"}
+    assert assignment.fallbacks[1].options == {}

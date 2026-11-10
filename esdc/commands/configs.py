@@ -9,7 +9,7 @@ import typer
 from esdc.config_fields import format_config_value
 from esdc.config_wizard import run_wizard
 from esdc.configs import Config
-from esdc.model_settings import ModelTarget, TaskAssignment
+from esdc.model_settings import ModelTarget, TaskAssignment, with_chat_primary
 
 configs_app = typer.Typer(invoke_without_command=False, no_args_is_help=False)
 
@@ -39,13 +39,15 @@ def _save_chat(
     primary = current.target
     if primary_value is not None:
         connection, model = _pair(primary_value, option="--set-chat-primary")
-        options = (
-            dict(primary.options)
-            if primary is not None
-            and (primary.connection, primary.model) == (connection, model)
-            else {}
+        current = with_chat_primary(
+            current, ModelTarget(connection, model, {})
         )
-        primary = ModelTarget(connection, model, options)
+        primary = current.target
+    elif primary is not None:
+        # Normalize inherited fallbacks even when only the explicit fallback
+        # list is being replaced: a stored duplicate of the primary is invalid.
+        current = with_chat_primary(current, primary)
+        primary = current.target
 
     if primary is None:
         raise ValueError(
@@ -64,7 +66,12 @@ def _save_chat(
 
     Config.save_model_assignment(
         "chat",
-        TaskAssignment(mode="model", target=primary, fallbacks=fallbacks),
+        TaskAssignment(
+            mode="model",
+            target=primary,
+            enabled=current.enabled,
+            fallbacks=fallbacks,
+        ),
     )
     if primary_value is not None:
         typer.echo(f"Chat primary set to '{primary.connection}' / '{primary.model}'.")

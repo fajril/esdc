@@ -27,6 +27,7 @@ from esdc.model_settings import (
     parse_task_assignment,
     serialize_task_assignment,
     validate_model_settings,
+    with_chat_primary,
 )
 
 TASK_ROLES: tuple[TaskRole, ...] = ("chat", "embedding", "rerank", "ocr", "metadata", "cleanup")
@@ -1051,3 +1052,127 @@ class TestPurity:
             ) == TaskAssignment(mode="unset", target=None, enabled=True, fallbacks=())
             assert Config.get_connections()["gateway"]["type"] == "openai_compatible"
             assert Config.get_model_assignment("chat").mode == "model"
+
+
+class TestChatPrimaryPromotion:
+    """Changing Chat primary removes that exact target from fallbacks."""
+
+    def test_promote_chat_fallback_preserves_options_and_remaining_order(self):
+        assignment = TaskAssignment(
+            mode="model",
+            target=ModelTarget("gateway", "a", {}),
+            fallbacks=(
+                ModelTarget(
+                    "backup",
+                    "b",
+                    {"reasoning_effort": "high", "nested": {"score": 1}},
+                ),
+                ModelTarget("gateway", "c", {"reasoning_effort": "low"}),
+                ModelTarget("other", "d", {}),
+            ),
+        )
+
+        promoted = with_chat_primary(
+            assignment, ModelTarget("backup", "b", {})
+        )
+
+        assert promoted.mode == "model"
+        assert promoted.target == ModelTarget(
+            "backup",
+            "b",
+            {"reasoning_effort": "high", "nested": {"score": 1}},
+        )
+        assert [(pair.connection, pair.model) for pair in promoted.fallbacks] == [
+            ("gateway", "c"),
+            ("other", "d"),
+        ]
+        assert promoted.fallbacks[0].options == {"reasoning_effort": "low"}
+        assert promoted.fallbacks[1].options == {}
+
+    def test_chat_primary_promotion_uses_connection_and_model_pair(self):
+        assignment = TaskAssignment(
+            mode="model",
+            target=ModelTarget("main", "primary", {}),
+            fallbacks=(
+                ModelTarget("one", "shared", {"owner": "one"}),
+                ModelTarget("two", "shared", {"owner": "two"}),
+            ),
+        )
+
+        promoted = with_chat_primary(
+            assignment, ModelTarget("one", "shared", {})
+        )
+
+        assert promoted.target == ModelTarget("one", "shared", {"owner": "one"})
+        assert promoted.fallbacks == (
+            ModelTarget("two", "shared", {"owner": "two"}),
+        )
+
+    def test_chat_primary_reselection_and_new_target_preserve_other_state(self):
+        reselected = with_chat_primary(
+            TaskAssignment(
+                mode="model",
+                target=ModelTarget("gateway", "a", {"reasoning_effort": "medium"}),
+                fallbacks=(ModelTarget("backup", "b", {}),),
+            ),
+            ModelTarget("gateway", "a", {}),
+        )
+        assert reselected.target == ModelTarget(
+            "gateway", "a", {"reasoning_effort": "medium"}
+        )
+        assert reselected.fallbacks == (ModelTarget("backup", "b", {}),)
+
+        new_target = with_chat_primary(
+            TaskAssignment(
+                mode="model",
+                target=ModelTarget("gateway", "a", {}),
+                fallbacks=(
+                    ModelTarget("backup", "b", {}),
+                    ModelTarget("other", "d", {}),
+                ),
+            ),
+            ModelTarget("fresh", "new", {"reasoning_effort": "high"}),
+        )
+        assert new_target.target == ModelTarget(
+            "fresh", "new", {"reasoning_effort": "high"}
+        )
+        assert [(pair.connection, pair.model) for pair in new_target.fallbacks] == [
+            ("backup", "b"),
+            ("other", "d"),
+        ]
+        assert all(pair.model != "a" for pair in new_target.fallbacks)
+
+        first_model = with_chat_primary(
+            TaskAssignment(mode="unset"),
+            ModelTarget("gateway", "first", {}),
+        )
+        assert first_model.mode == "model"
+        assert first_model.target == ModelTarget("gateway", "first", {})
+        assert first_model.fallbacks == ()
+
+    def test_chat_primary_promotion_detaches_nested_options(self):
+        original_nested = {"items": [1]}
+        assignment = TaskAssignment(
+            mode="model",
+            target=ModelTarget("gateway", "a", {}),
+            fallbacks=(
+                ModelTarget(
+                    "backup",
+                    "b",
+                    {"nested": original_nested, "reasoning_effort": "high"},
+                ),
+            ),
+        )
+
+        promoted = with_chat_primary(
+            assignment, ModelTarget("backup", "b", {})
+        )
+
+        assert promoted.target is not None
+        promoted_target_options = cast(dict[str, Any], promoted.target.options)
+        promoted_target_options["nested"]["items"].append(2)
+        assert original_nested == {"items": [1]}
+        assert assignment.fallbacks[0].options["nested"] == {"items": [1]}
+
+        original_nested["items"].append(3)
+        assert promoted.target.options["nested"] == {"items": [1, 2]}

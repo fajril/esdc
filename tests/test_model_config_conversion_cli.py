@@ -623,3 +623,90 @@ class TestWizardConversionAction:
         assert isinstance(converted, dict)
         assert converted["model_settings_version"] == 1
         assert not has_legacy_model_settings(converted)
+
+
+class TestChatPrimaryPromotion:
+    def _promotion_config(self) -> dict[str, Any]:
+        config = canonical_config()
+        config["connections"]["other"] = {
+            "type": "openai_compatible",
+            "base_url": "http://other.example/v1",
+        }
+        config["models"]["chat"] = {
+            "mode": "model",
+            "connection": "gateway",
+            "model": "a",
+            "fallbacks": [
+                {
+                    "connection": "backup",
+                    "model": "b",
+                    "options": {"reasoning_effort": "high"},
+                },
+                {
+                    "connection": "gateway",
+                    "model": "c",
+                    "options": {"reasoning_effort": "low"},
+                },
+                {"connection": "other", "model": "d"},
+            ],
+        }
+        return config
+
+    def test_cli_promotes_existing_chat_fallback(self, isolated_config: Path):
+        source = isolated_config / "config.yaml"
+        write_yaml(source, self._promotion_config())
+
+        result = invoke_configs(["--set-chat-primary", "backup:b"])
+
+        assert result.exit_code == 0, result.output
+        Config._config_cache = None
+        assignment = Config.get_model_assignment("chat")
+        assert assignment.target is not None
+        assert (assignment.target.connection, assignment.target.model) == (
+            "backup",
+            "b",
+        )
+        assert assignment.target.options == {"reasoning_effort": "high"}
+        assert [(pair.connection, pair.model) for pair in assignment.fallbacks] == [
+            ("gateway", "c"),
+            ("other", "d"),
+        ]
+        assert assignment.fallbacks[0].options == {"reasoning_effort": "low"}
+        assert assignment.fallbacks[1].options == {}
+
+    def test_cli_explicit_duplicate_fallback_still_rejects_atomically(
+        self, isolated_config: Path
+    ):
+        source = isolated_config / "config.yaml"
+        write_yaml(source, self._promotion_config())
+        Config._config_cache = None
+        cache_before = Config._load_config()
+        assert cache_before is not None
+        before_bytes = source.read_bytes()
+
+        rejected = invoke_configs(
+            [
+                "--set-chat-primary",
+                "backup:b",
+                "--set-chat-fallbacks",
+                "backup:b,gateway:c",
+            ]
+        )
+
+        assert rejected.exit_code != 0
+        assert source.read_bytes() == before_bytes
+        assert Config._load_config() == cache_before
+
+        replaced = invoke_configs(["--set-chat-fallbacks", "gateway:c"])
+
+        assert replaced.exit_code == 0, replaced.output
+        Config._config_cache = None
+        assignment = Config.get_model_assignment("chat")
+        assert assignment.target is not None
+        assert (assignment.target.connection, assignment.target.model) == (
+            "gateway",
+            "a",
+        )
+        assert [(pair.connection, pair.model) for pair in assignment.fallbacks] == [
+            ("gateway", "c"),
+        ]

@@ -142,6 +142,54 @@ class TaskAssignment:
     fallbacks: tuple[ModelTarget, ...] = ()
 
 
+def with_chat_primary(
+    assignment: TaskAssignment, target: ModelTarget
+) -> TaskAssignment:
+    """Return Chat's assignment with ``target`` as primary.
+
+    Identity is the exact ``(connection, model)`` pair. When that pair is
+    already Chat's primary or one of its fallbacks, its stored options are kept
+    (including nested values, in a detached copy). A genuinely new target uses
+    a detached copy of its own options. The promoted pair is removed from the
+    fallback tuple without disturbing the order or options of the others; the
+    former primary is not turned into a fallback. Inputs are never mutated.
+    """
+    pair = (target.connection, target.model)
+    existing: ModelTarget | None = None
+    if assignment.target is not None and (
+        assignment.target.connection,
+        assignment.target.model,
+    ) == pair:
+        existing = assignment.target
+    else:
+        for fallback in assignment.fallbacks:
+            if (fallback.connection, fallback.model) == pair:
+                existing = fallback
+                break
+
+    source = existing if existing is not None else target
+    primary = ModelTarget(
+        source.connection,
+        source.model,
+        copy.deepcopy(dict(source.options)),
+    )
+    remaining = tuple(
+        ModelTarget(
+            fallback.connection,
+            fallback.model,
+            copy.deepcopy(dict(fallback.options)),
+        )
+        for fallback in assignment.fallbacks
+        if (fallback.connection, fallback.model) != pair
+    )
+    return TaskAssignment(
+        mode="model",
+        target=primary,
+        enabled=assignment.enabled,
+        fallbacks=remaining,
+    )
+
+
 def default_model_settings() -> dict[str, Any]:
     """Return fresh canonical ``models`` defaults.
 
