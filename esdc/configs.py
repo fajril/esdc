@@ -8,9 +8,24 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
+
+from esdc.model_settings import (
+    LEGACY_MODEL_CORPUS_KEYS,
+    MODEL_SETTINGS_REQUIRED_MESSAGE,
+    MODEL_SETTINGS_VERSION,
+    TASK_ROLES,
+    ModelConfigurationRequired,
+    TaskAssignment,
+    TaskRole,
+    default_model_settings,
+    has_legacy_model_settings,
+    parse_task_assignment,
+    serialize_task_assignment,
+    validate_model_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +73,14 @@ KEY_DESCRIPTIONS: dict[str, str] = {
     "tool_format": "Format for tool results (native, markdown, or auto)",
     "default_provider": "Default LLM provider name",
     "provider_order": "Ordered LLM provider failover list",
+    "model_settings_version": "Canonical model settings schema version",
+    "models.chat.mode": "Chat task mode",
+    "models.embedding.mode": "Embedding task mode",
+    "models.rerank.mode": "Reranking task mode",
+    "models.rerank.enabled": "Whether the reranking task is enabled",
+    "models.ocr.mode": "OCR task mode",
+    "models.metadata.mode": "Metadata extraction task mode",
+    "models.cleanup.mode": "Text cleanup task mode",
     "cache.sql_ttl": "SQL cache time-to-live in seconds",
     "logging.level": "Global logging level",
     "logging.file.enabled": "Enable logging to file",
@@ -365,6 +388,7 @@ class Config:
 
         if not config_file.exists():
             default_config = {
+                **cls._model_settings_defaults(),
                 "api_url": cls.BASE_API_URL_V2,
                 "api": {"verify_ssl": True},
                 "database_path": str(cls._default_db_file()),
@@ -385,7 +409,11 @@ class Config:
                 "semantic_search": {
                     "embedding_batch_size": 100,  # Number of embeddings per batch (10-500)  # noqa: E501
                 },
-                "corpus": dict(cls.CORPUS_DEFAULTS),
+                "corpus": {
+                    key: value
+                    for key, value in cls.CORPUS_DEFAULTS.items()
+                    if key not in LEGACY_MODEL_CORPUS_KEYS
+                },
                 "phoenix": {
                     "enabled": False,
                     "collector_endpoint": "http://localhost:4317",
@@ -572,6 +600,142 @@ class Config:
             raise
 
         cls._config_cache = config
+
+    @classmethod
+    def _model_settings_defaults(cls) -> dict[str, Any]:
+        """Return fresh canonical model settings for a new configuration."""
+        return {
+            "model_settings_version": MODEL_SETTINGS_VERSION,
+            "connections": {},
+            "models": default_model_settings(),
+        }
+
+    @classmethod
+    def _model_config_for_read(cls) -> dict[str, Any]:
+        """Return canonical model settings, or fresh defaults for a new file.
+
+        A file with recognized pre-canonical model keys is never converted or
+        interpreted here: asking for model configuration raises
+        ``ModelConfigurationRequired`` while unrelated application settings stay
+        readable. A file with a canonical fragment but no version marker is
+        malformed and is rejected rather than silently replaced.
+        """
+        config = cls._load_config()
+        if not config:
+            return cls._model_settings_defaults()
+        if "model_settings_version" not in config:
+            if has_legacy_model_settings(config):
+                raise ModelConfigurationRequired(MODEL_SETTINGS_REQUIRED_MESSAGE)
+            if "connections" in config or "models" in config:
+                raise ValueError(
+                    "`model_settings_version` is missing from model settings."
+                )
+            return cls._model_settings_defaults()
+        validate_model_settings(config)
+        return config
+
+    @classmethod
+    def _require_task_role(cls, role: str) -> TaskRole:
+        if role not in TASK_ROLES:
+            expected = ", ".join(TASK_ROLES)
+            raise ValueError(
+                f"Unknown model task: {role!r}. Expected one of: {expected}."
+            )
+        return cast(TaskRole, role)
+
+    @classmethod
+    def get_connections(cls) -> dict[str, dict[str, Any]]:
+        """Return a detached copy of the canonical connection registry."""
+        return copy.deepcopy(dict(cls._model_config_for_read()["connections"]))
+
+    @classmethod
+    def get_connection(cls, name: str) -> dict[str, Any]:
+        """Return a detached copy of one canonical connection.
+
+        Raises:
+            ValueError: the name is empty or unknown.
+        """
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("Connection name must be a non-empty string.")
+        connections = cls.get_connections()
+        if name not in connections:
+            raise ValueError(f"Unknown connection: {name!r}")
+        return connections[name]
+
+    @classmethod
+    def get_model_assignment(cls, role: TaskRole) -> TaskAssignment:
+        """Return one task's canonical assignment, detached from the cache."""
+        task = cls._require_task_role(role)
+        config = cls._model_config_for_read()
+        return parse_task_assignment(task, config["models"][task])
+
+    @classmethod
+    def save_model_assignment(
+        cls,
+        role: TaskRole,
+        assignment: TaskAssignment,
+        *,
+        new_connections: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
+        """Save one task assignment and optional new connections in one write.
+
+        The candidate is built on a deep copy, so a rejected write leaves the
+        file and the pre-save cache intact. Incoming connection mappings and
+        model options are copied, so a caller can keep editing its draft after
+        the call without reaching the saved structure.
+
+        Raises:
+            ModelConfigurationRequired: the file predates canonical settings.
+            ValueError: the role, assignment, connection or complete candidate
+                is invalid, or a new connection name already exists.
+        """
+        task = cls._require_task_role(role)
+        serialized = serialize_task_assignment(task, assignment)
+
+        supplied_connections: Mapping[str, Mapping[str, Any]] = (
+            new_connections if new_connections is not None else {}
+        )
+        if not isinstance(supplied_connections, Mapping):
+            raise ValueError("`new_connections` must be a mapping.")
+
+        raw_config = cls._load_config() or {}
+        if "model_settings_version" not in raw_config:
+            if has_legacy_model_settings(raw_config):
+                raise ModelConfigurationRequired(MODEL_SETTINGS_REQUIRED_MESSAGE)
+            if "connections" in raw_config or "models" in raw_config:
+                raise ValueError(
+                    "`model_settings_version` is missing from model settings."
+                )
+            candidate = copy.deepcopy(raw_config)
+            candidate.update(cls._model_settings_defaults())
+        else:
+            candidate = copy.deepcopy(raw_config)
+
+        connections = candidate.get("connections")
+        if not isinstance(connections, dict):
+            raise ValueError("`connections` must be a mapping of named connections.")
+        models = candidate.get("models")
+        if not isinstance(models, dict):
+            raise ValueError("`models` must be a mapping of task assignments.")
+
+        for name, entry in supplied_connections.items():
+            if not isinstance(name, str) or not name.strip() or name != name.strip():
+                raise ValueError(
+                    "Connection names must be non-empty strings without "
+                    "surrounding whitespace."
+                )
+            if name in connections:
+                raise ValueError(f"Connection name already exists: {name!r}")
+            if not isinstance(entry, Mapping):
+                raise ValueError(f"Connection {name!r} must be a mapping.")
+            connections[name] = copy.deepcopy(dict(entry))
+
+        models[task] = serialized
+        candidate["model_settings_version"] = MODEL_SETTINGS_VERSION
+        candidate["connections"] = connections
+        candidate["models"] = models
+        validate_model_settings(candidate)
+        cls._save_config(candidate)
 
     @classmethod
     def get_providers(cls) -> dict:
@@ -1669,6 +1833,7 @@ class Config:
         """Return the default configuration dict."""
         config_dir = cls.get_config_dir()
         return {
+            **cls._model_settings_defaults(),
             "api_url": cls.BASE_API_URL_V2,
             "api": {"verify_ssl": True},
             "database_path": str(config_dir / cls.DB_FILENAME),
@@ -1829,6 +1994,7 @@ class Config:
         {
             "api.verify_ssl",
             "logging.file.enabled",
+            "models.rerank.enabled",
             "corpus.rerank",
             "corpus.query_instruct",
             "phoenix.enabled",
@@ -1839,6 +2005,7 @@ class Config:
         {
             "cache.sql_ttl",
             "logging.file.backup_count",
+            "model_settings_version",
             "semantic_search.embedding_batch_size",
             "corpus.rerank_pool",
             "corpus.max_chunks_per_doc",

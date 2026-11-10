@@ -244,6 +244,11 @@ class TestWizardSectionCoverage:
     # Keys the wizard no longer offers, while config still keeps them.
     _RETIRED_KEYS = {"corpus.n_gpu_layers"}
 
+    # Canonical model settings are edited by the task pickers, not by the flat
+    # model/settings sections this guard covers.
+    _CANONICAL_MODEL_KEYS = {"model_settings_version"}
+    _CANONICAL_MODEL_PREFIX = "models."
+
     def _editable_flat_keys(self) -> set[str]:
         flat_defaults = Config._flatten(Config.get_defaults())
         editable = set(flat_defaults.keys())
@@ -256,6 +261,12 @@ class TestWizardSectionCoverage:
         # default_provider / provider_order are edited only via the
         # provider CRUD flows, never via the flat key sections.
         editable -= {"default_provider", "provider_order"}
+        editable = {
+            key
+            for key in editable
+            if key not in self._CANONICAL_MODEL_KEYS
+            and not key.startswith(self._CANONICAL_MODEL_PREFIX)
+        }
         return editable
 
     def test_union_matches_editable_keys(self):
