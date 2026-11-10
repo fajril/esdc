@@ -242,8 +242,23 @@ class TestWizardSectionCoverage:
     parsed and preserved.
     """
 
-    # Keys the wizard no longer offers, while config still keeps them.
-    _RETIRED_KEYS = {"corpus.n_gpu_layers"}
+    # Keys the flat wizard sections no longer own as persisted defaults. The
+    # task pickers/connection editor replace them in Task 6; until then the old
+    # section names are tolerated but are not editable-default coverage.
+    _RETIRED_KEYS = {
+        "corpus.n_gpu_layers",
+        "corpus.rerank",
+        "corpus.rerank_backend",
+        "corpus.rerank_provider",
+        "corpus.rerank_model",
+        "corpus.ocr_model",
+        "corpus.ocr_provider",
+        "corpus.metadata_model",
+        "corpus.metadata_provider",
+        "corpus.cleanup_model",
+        "corpus.cleanup_provider",
+        "corpus.ollama_host",
+    }
 
     # Canonical model settings are edited by the task pickers, not by the flat
     # model/settings sections this guard covers.
@@ -275,7 +290,9 @@ class TestWizardSectionCoverage:
         for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values():
             grouped_keys.extend(keys)
 
-        assert set(grouped_keys) == self._editable_flat_keys() - self._RETIRED_KEYS
+        assert set(grouped_keys) - self._RETIRED_KEYS == (
+            self._editable_flat_keys() - self._RETIRED_KEYS
+        )
 
     def test_no_key_duplicated_across_groups(self):
         grouped_keys: list[str] = []
@@ -290,7 +307,11 @@ class TestWizardSectionCoverage:
             for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
             for key in keys
         }
-        orphans = self._editable_flat_keys() - grouped_keys - self._RETIRED_KEYS
+        orphans = (
+            self._editable_flat_keys()
+            - grouped_keys
+            - self._RETIRED_KEYS
+        )
         assert orphans == set()
 
     def test_the_retired_key_has_no_menu_home_but_is_still_preserved(self):
@@ -299,14 +320,12 @@ class TestWizardSectionCoverage:
             for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
             for key in keys
         }
-        assert self._RETIRED_KEYS.isdisjoint(grouped_keys)
+        assert "corpus.n_gpu_layers" not in grouped_keys
+        assert "corpus.n_gpu_layers" in KEY_DESCRIPTIONS
+        assert "corpus.n_gpu_layers" in Config.INT_KEYS
 
-        for key in self._RETIRED_KEYS:
-            assert key in KEY_DESCRIPTIONS, key
-            assert key in Config.INT_KEYS, key
-
-        # A stored value still parses and is preserved; nothing here drops the key.
-        assert Config._flatten(Config.get_defaults())["corpus.n_gpu_layers"] == -1
+        # A stored value still parses; the persistent default is gone.
+        assert "corpus.n_gpu_layers" not in Config.CORPUS_DEFAULTS
         assert parse_config_input("corpus.n_gpu_layers", "6", {}) == 6
 
 
@@ -401,15 +420,20 @@ ROLE_REFERENCE_KEYS = (
 class TestOptionalRoleReferences:
     """The six optional reference keys: defaults, descriptions, one home."""
 
-    def test_role_reference_defaults_are_empty_strings(self):
+    def test_corpus_role_reference_keys_are_not_persistent_defaults(self):
         flat = Config._flatten(Config.get_defaults())
         for key in ROLE_REFERENCE_KEYS:
-            assert flat[key] == "", key
+            if not key.startswith("corpus."):
+                continue
+            assert key not in flat, key
+            assert key.split(".")[-1] not in Config.CORPUS_DEFAULTS, key
 
-    def test_rerank_backend_defaults_to_provider(self):
+    def test_rerank_backend_is_not_a_persistent_default(self):
         assert (
-            Config._flatten(Config.get_defaults())["corpus.rerank_backend"] == "provider"
+            "corpus.rerank_backend"
+            not in Config._flatten(Config.get_defaults())
         )
+        assert "rerank_backend" not in Config.CORPUS_DEFAULTS
 
     def test_role_reference_keys_have_descriptions(self):
         for key in (*ROLE_REFERENCE_KEYS, "corpus.rerank_backend"):

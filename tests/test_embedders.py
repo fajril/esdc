@@ -14,6 +14,43 @@ import duckdb
 import pytest
 
 import esdc.embedders as emb
+from esdc.configs import Config
+from esdc.model_runtime import ResolvedTarget, ResolvedTask
+
+
+def _install_embedding_task(
+    monkeypatch,
+    *,
+    backend: str = "openai",
+    host: str | None = "http://h:1/v1",
+    model: str = "M",
+    api_key: str = "",
+) -> None:
+    provider_type = "openai_compatible" if backend == "openai" else "ollama"
+    target = ResolvedTarget(
+        connection="embed",
+        provider={
+            "name": "embed",
+            "provider_type": provider_type,
+            "type": provider_type,
+            "base_url": host or "",
+            "api_key": api_key,
+            "model": model,
+        },
+        model=model,
+        options={},
+    )
+    task = ResolvedTask(
+        role="embedding",
+        mode="model",
+        enabled=True,
+        primary=target,
+    )
+    monkeypatch.setattr(
+        Config,
+        "resolve_model_task",
+        classmethod(lambda cls, role, apply_overrides=True: task),
+    )
 
 
 def test_model_id_is_backend_neutral():
@@ -290,29 +327,23 @@ def test_openai_reports_model_id(monkeypatch):
 
 
 def test_factory_local_is_a_config_error(monkeypatch):
-    from esdc.configs import Config
-
-    monkeypatch.setattr(
-        Config, "get_embedding_backend", classmethod(lambda cls: "local")
-    )
+    _install_embedding_task(monkeypatch, backend="openai")
     with pytest.raises(emb.EmbeddingConfigError) as exc:
         emb.get_embedder("local")
     msg = str(exc.value)
     assert "in-process" in msg
-    assert "Ollama" in msg or "llama-server" in msg
-    assert "embedding_backend" in msg
+    assert "Ollama" in msg or "OpenAI-compatible" in msg
+    assert "Embeddings task" in msg
 
 
-def test_factory_ollama_uses_configured_host(monkeypatch):
+def test_factory_ollama_uses_assigned_host_and_model(monkeypatch):
     mgr = MagicMock()
     _patched_manager(monkeypatch, mgr)
-    from esdc.configs import Config
-
-    monkeypatch.setattr(
-        Config, "get_embedding_host", classmethod(lambda cls: "http://box:11434")
-    )
-    monkeypatch.setattr(
-        Config, "get_embedding_model", classmethod(lambda cls: "Qwen3-Embedding-0.6B")
+    _install_embedding_task(
+        monkeypatch,
+        backend="ollama",
+        host="http://box:11434",
+        model="Qwen3-Embedding-0.6B",
     )
     e = emb.get_embedder("ollama")
     assert isinstance(e, emb.OllamaEmbedder)
@@ -320,51 +351,38 @@ def test_factory_ollama_uses_configured_host(monkeypatch):
     assert e.wire_model == "Qwen3-Embedding-0.6B"
 
 
-def test_factory_openai_passes_model_and_key(monkeypatch):
-    from esdc.configs import Config
-
-    monkeypatch.setattr(
-        Config, "get_embedding_host", classmethod(lambda cls: "http://h:8889/v1")
+def test_factory_openai_passes_assigned_model_and_key(monkeypatch):
+    _install_embedding_task(
+        monkeypatch,
+        backend="openai",
+        host="http://h:8889/v1",
+        model="M",
+        api_key="K",
     )
-    monkeypatch.setattr(Config, "get_embedding_model", classmethod(lambda cls: "M"))
-    monkeypatch.setattr(Config, "get_embedding_api_key", classmethod(lambda cls: "K"))
     e = emb.get_embedder("openai")
     assert isinstance(e, emb.OpenAIEmbedder)
     assert e.wire_model == "M"
     assert e.url == "http://h:8889/v1/embeddings"
 
 
-def test_factory_none_resolves_through_config(monkeypatch):
-    from esdc.configs import Config
-
-    monkeypatch.setattr(
-        Config, "get_embedding_backend", classmethod(lambda cls: "openai")
-    )
-    monkeypatch.setattr(Config, "get_embedding_model", classmethod(lambda cls: "M"))
+def test_factory_none_infers_backend_from_connection_type(monkeypatch):
+    _install_embedding_task(monkeypatch, backend="openai", model="M")
     assert isinstance(emb.get_embedder(None), emb.OpenAIEmbedder)
 
 
-def test_factory_explicit_arg_beats_config(monkeypatch):
-    from esdc.configs import Config
-
-    monkeypatch.setattr(
-        Config, "get_embedding_backend", classmethod(lambda cls: "ollama")
-    )
+def test_factory_explicit_backend_must_match_the_assignment(monkeypatch):
+    _install_embedding_task(monkeypatch, backend="ollama")
     # D6: the compatibility wrapper behaves like the factory, including for the
     # retired value.
     with pytest.raises(emb.EmbeddingConfigError):
         emb.get_build_embedder("local")
-    # Pinned so the assertion does not depend on the machine's own config.
-    monkeypatch.setattr(
-        Config, "get_embedding_host", classmethod(lambda cls: "http://h:1/v1")
-    )
-    monkeypatch.setattr(Config, "get_embedding_model", classmethod(lambda cls: "M"))
-    mgr = MagicMock()
-    _patched_manager(monkeypatch, mgr)
-    assert isinstance(emb.get_build_embedder("openai"), emb.OpenAIEmbedder)
+    with pytest.raises(ValueError, match="does not match"):
+        emb.get_build_embedder("openai")
+    assert isinstance(emb.get_build_embedder("ollama"), emb.OllamaEmbedder)
 
 
-def test_factory_unknown_backend_lists_valid_ones():
+def test_factory_unknown_backend_lists_valid_ones(monkeypatch):
+    _install_embedding_task(monkeypatch, backend="openai", model="M")
     with pytest.raises(ValueError) as exc:
         emb.get_embedder("lmstudio")
     msg = str(exc.value)

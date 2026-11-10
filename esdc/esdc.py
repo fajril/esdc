@@ -4030,8 +4030,8 @@ def corpus_meta(
             "--regenerate",
             help=(
                 "Re-run LLM metadata analysis on each sidecar's existing body "
-                "(requires a reachable metadata_model); resets reviewed to "
-                "false unless --reviewed/--no-reviewed is also passed."
+                "(requires a reachable text Metadata extraction task); resets "
+                "reviewed to false unless --reviewed/--no-reviewed is also passed."
             ),
         ),
     ] = False,
@@ -4089,7 +4089,7 @@ def corpus_meta(
             regenerate=regenerate,
         )
     except ValueError as e:  # e.g. --wk-name value not in canonical tables, or
-        # --regenerate with no reachable metadata_model
+        # --regenerate with no reachable text Metadata extraction task
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None
     _print_corpus_report(report)

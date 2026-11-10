@@ -10,6 +10,26 @@ import typer
 
 from esdc import esdc as cli
 from esdc.configs import Config
+from esdc.model_runtime import ResolvedTarget, ResolvedTask
+
+
+def _embedding_task() -> ResolvedTask:
+    return ResolvedTask(
+        role="embedding",
+        mode="model",
+        enabled=True,
+        primary=ResolvedTarget(
+            connection="local-box",
+            provider={
+                "name": "local-box",
+                "provider_type": "ollama",
+                "type": "ollama",
+                "base_url": "http://localhost:11434",
+            },
+            model="qwen3-embedding-0.6b-q8_0",
+            options={},
+        ),
+    )
 
 
 def test_generate_embeddings_accepts_backend():
@@ -17,10 +37,15 @@ def test_generate_embeddings_accepts_backend():
 
 
 def test_retired_value_is_reported_without_a_traceback(tmp_path, monkeypatch, capsys):
-    """A stored `local` value stops the run with its message, not an exception."""
+    """An explicit `local` backend stops the run with its message, not a raise."""
     db = tmp_path / "esdc.duckdb"
     db.write_bytes(b"")
     monkeypatch.setattr(Config, "get_db_file", classmethod(lambda cls: db))
+    monkeypatch.setattr(
+        Config,
+        "resolve_model_task",
+        classmethod(lambda cls, role, apply_overrides=True: _embedding_task()),
+    )
 
     with patch("esdc.search.semantic_resolver.SemanticResolver") as res_cls:
         try:
@@ -31,8 +56,8 @@ def test_retired_value_is_reported_without_a_traceback(tmp_path, monkeypatch, ca
             raise AssertionError("a retired value must stop the run")
 
     out = capsys.readouterr().out
-    assert "in-process" in out.lower()
-    assert "embedding_backend" in out
+    assert "retired" in out.lower()
+    assert "Embeddings task" in out
     # Nothing was written, and no client was built from the retired value.
     res_cls.assert_not_called()
 

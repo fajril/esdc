@@ -13,6 +13,23 @@ from esdc.corpus.store import CorpusNotReadyError, CorpusStore
 from esdc.embedders import MODEL_ID, EmbeddingError
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _module_embedding_signature():
+    """Module-scoped fixtures seed stores before function autouse fixtures run."""
+    from unittest.mock import patch
+
+    with patch(
+        "esdc.embedders.config_signature",
+        return_value=(
+            "ollama",
+            "http://localhost:11434",
+            "qwen3-embedding-0.6b-q8_0",
+            "",
+        ),
+    ):
+        yield
+
+
 def _fake_vector(text: str) -> list[float]:
     """Deterministic text-dependent 3-dim vector, normalized.
 
@@ -1118,7 +1135,7 @@ def test_search_rerank_reorders_top_pool(store_with_doc_factory, monkeypatch):
             # Later candidates win, so the RRF order must visibly reverse.
             return [float(i) for i in range(len(texts))]
 
-    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: ReverseReranker())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda **kwargs: ReverseReranker())
 
     # chunk_size=20 forces the two sections into separate chunks so the
     # reranker has something to reorder.
@@ -1154,7 +1171,7 @@ def test_maybe_rerank_uses_get_reranker_and_maps_scores_to_input_positions(
             # input order, lowest first: a remote rank order must not leak here
             return [0.2, 0.9]
 
-    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: RemoteScores())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda **kwargs: RemoteScores())
 
     store, _ = store_with_doc_factory(
         chunk_size=20,
@@ -1187,7 +1204,7 @@ def test_maybe_rerank_shape_failure_keeps_rrf_order_and_no_partial_scores(
         def rerank(self, query, texts):
             return [0.9, float("nan")]
 
-    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: BadScores())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda **kwargs: BadScores())
 
     store, _ = store_with_doc_factory(
         chunk_size=20,
@@ -1211,7 +1228,7 @@ def test_maybe_rerank_failure_keeps_rrf_order(store_with_doc_factory, monkeypatc
         def rerank(self, query, texts):
             raise RuntimeError("connection error")
 
-    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: Unreachable())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda **kwargs: Unreachable())
 
     store, _ = store_with_doc_factory(
         chunk_size=20,
@@ -1233,7 +1250,7 @@ def test_rerank_off_makes_no_client_call(store_with_doc_factory, monkeypatch):
     import esdc.corpus.reranker as reranker_mod
 
     calls = []
-    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: calls.append("called"))
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda **kwargs: calls.append("called"))
 
     store, doc = store_with_doc_factory(
         chunk_size=20,
@@ -1300,7 +1317,7 @@ def test_search_surfaces_rerank_score(store_with_doc_factory, monkeypatch):
         def rerank(self, query, texts):
             return [0.42 for _ in texts]
 
-    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: FixedReranker())
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda **kwargs: FixedReranker())
 
     # chunk_size=20 forces two chunks; _maybe_rerank is a no-op below two.
     store, _ = store_with_doc_factory(
@@ -1326,7 +1343,7 @@ def test_search_rerank_unavailable_falls_back(store_with_doc_factory, monkeypatc
     """A reranker that cannot serve leaves search in RRF order, never an error."""
     import esdc.corpus.reranker as reranker_mod
 
-    monkeypatch.setattr(reranker_mod, "get_reranker", lambda: None)
+    monkeypatch.setattr(reranker_mod, "get_reranker", lambda **kwargs: None)
 
     store, _ = store_with_doc_factory(subject="Pengembangan Merak")
     store.rebuild_indexes()
@@ -1486,15 +1503,15 @@ def test_query_instruct_does_not_affect_chunk_embedding(
 def test_corpus_config_isolated_in_tests():
     """Config isolation: search() must not read the real ~/.esdc config.
 
-    search()'s _maybe_rerank calls Config.get_corpus_config(); the
-    autouse _isolated_db_dirs fixture in conftest.py must also patch
-    _load_config so tests never read the real ~/.esdc/config.yaml. If a
-    dev machine has corpus.rerank: true set, an un-isolated test would
-    trigger a real cross-encoder download and reorder search results.
+    search()'s _maybe_rerank resolves the Reranking task; the autouse
+    _isolated_db_dirs fixture in conftest.py must also patch _load_config so
+    tests never read the real ~/.esdc/config.yaml. With no config, the task is
+    unset and no service is resolved.
     """
     from esdc.configs import Config
 
-    assert Config.get_corpus_config()["rerank"] is False
+    assert "rerank" not in Config.get_corpus_config()
+    assert Config.resolve_model_task("rerank").mode == "unset"
 
 
 # --------------------------------------------------------------------------

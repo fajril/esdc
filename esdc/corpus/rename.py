@@ -33,10 +33,10 @@ from esdc.corpus.pipeline import (
     CorpusReport,
     _collect_sources,
     _progress_with_status,
-    _resolve_text_caller,
 )
 from esdc.corpus.sidecar import read_sidecar, sidecar_path
 from esdc.corpus.store import CorpusStore
+from esdc.corpus.task_models import text_caller_for_task
 
 _FIELDS = ("doc_type", "doc_date", "subject")
 
@@ -98,13 +98,9 @@ class _LlmContext:
             return
         self._built = True
         cfg = self._cfg
-        host = cfg.get("ollama_host") or None
         ocr = create_ocr_client(cfg)
         self.ocr_client = ocr if ocr.health_check() else None
-        metadata_provider = cfg.get("metadata_provider") or None
-        self.metadata_caller = _resolve_text_caller(
-            cfg.get("metadata_model"), host, provider_name=metadata_provider
-        )
+        self.metadata_caller = text_caller_for_task("metadata")
 
     def infer(
         self, src: Path, status: Callable[[str], None] | None = None

@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 import fitz
-import ollama
 from rich.console import Group
 from rich.live import Live
 from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
@@ -58,7 +57,7 @@ from esdc.corpus.metadata import (
     remap_legacy_doc_type,
     seed_topic_from_legacy,
 )
-from esdc.corpus.ocr import DEFAULT_TIMEOUT, create_ocr_client
+from esdc.corpus.ocr import create_ocr_client
 from esdc.corpus.pod_matcher import PodMatcher
 from esdc.corpus.sidecar import (
     read_sidecar,
@@ -67,6 +66,11 @@ from esdc.corpus.sidecar import (
     write_sidecar_file,
 )
 from esdc.corpus.store import CorpusStore
+from esdc.corpus.task_models import (
+    resolve_text_task,
+    task_target_label,
+    text_caller_for_resolved_task,
+)
 from esdc.embedders import get_embedder
 
 logger = logging.getLogger(__name__)
@@ -120,139 +124,6 @@ def _collect_sidecars(paths: list[Path]) -> list[Path]:
         elif p.is_dir():
             found.update(p.rglob("*.corpus.md"))
     return sorted(found)
-
-
-def _text_llm_caller(model: str, host: str | None = None) -> Any:
-    """A prompt->text callable backed by a text-only Ollama chat model."""
-    client = ollama.Client(host=host, timeout=DEFAULT_TIMEOUT)
-
-    def call(prompt: str) -> str:
-        response = client.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0},
-        )
-        return response["message"]["content"]
-
-    return call
-
-
-def _text_model_label(role: str, model: str, provider: str | None) -> str:
-    """One corpus text-model setting as text for a warning, naming its reference."""
-    if provider:
-        if model:
-            return f"{role}_provider '{provider}' model '{model}'"
-        return f"{role}_provider '{provider}' with no {role}_model"
-    return f"{role}_model '{model}'"
-
-
-def _caller_from_reference(provider_name: str, model_spec: str | None) -> Any | None:
-    """Prompt->text callable for a saved provider and its explicit role model.
-
-    The saved provider entry is already a copy, so replacing `model` here never
-    touches the provider's chat model or the cached config. An empty model is
-    not answered by the provider's chat model: it is reported as unavailable.
-    """
-    model = str(model_spec or "").strip()
-    if not model:
-        logger.warning(
-            "[Corpus] provider '%s' referenced with no model — its chat model "
-            "is not used",
-            provider_name,
-        )
-        return None
-
-    try:
-        provider_config = Config.get_referenced_provider(provider_name)
-    except ValueError as e:
-        logger.warning("[Corpus] %s", e)
-        return None
-
-    provider_config["model"] = model
-    provider_config.setdefault(
-        "provider_type", provider_config.get("type") or provider_name
-    )
-
-    try:
-        import esdc.providers as providers
-
-        llm = providers.create_llm_from_config(provider_config)
-    except Exception as e:
-        logger.warning(
-            "[Corpus] provider '%s' model '%s' caller unavailable: %s",
-            provider_name,
-            model,
-            e,
-        )
-        return None
-
-    def call(prompt: str) -> str:
-        return str(llm.invoke(prompt).content)
-
-    return call
-
-
-def _resolve_text_caller(
-    model_spec: str | None,
-    host: str | None = None,
-    *,
-    provider_name: str | None = None,
-) -> Any | None:
-    """Turn a corpus model config string into a prompt->text callable.
-
-    With a `provider_name` reference, `model_spec` is that provider's explicit
-    wire model and the provider's saved chat model is never consulted: an empty
-    `model_spec` means unavailable.
-
-    Without a reference: "" / None -> None (feature off). "main" -> the default
-    chat provider (may be a cloud API — sends document text off-machine; user
-    opt-in). "provider:<name>" -> the named provider from config.yaml's providers
-    section; the prefix is explicit because provider names can collide
-    with Ollama model names (e.g. "mistral"), so bare names stay Ollama.
-    Anything else -> an Ollama model on `host` (default local daemon).
-    Returns None when a provider is requested but no such provider is
-    configured, no model is given, or construction fails.
-    """
-    reference = str(provider_name or "").strip()
-    if reference:
-        return _caller_from_reference(reference, model_spec)
-
-    if not model_spec:
-        return None
-
-    if model_spec.startswith("provider:"):
-        name = model_spec[len("provider:") :]
-        named_config = Config.get_provider_config_by_name(name)
-        if not isinstance(named_config, dict):
-            logger.warning(
-                "[Corpus] unknown provider '%s' in corpus model spec %r",
-                name,
-                model_spec,
-            )
-            return None
-        # Same shape get_provider_configs_by_priority produces for "main".
-        provider_config = dict(named_config)
-        provider_config.setdefault("name", name)
-        provider_config.setdefault("provider_type", provider_config.get("type") or name)
-    elif model_spec != "main":
-        return _text_llm_caller(model_spec, host)
-    else:
-        provider_config = Config.get_provider_config()
-        if not provider_config:
-            return None
-
-    try:
-        import esdc.providers as providers
-
-        llm = providers.create_llm_from_config(provider_config)
-    except Exception as e:
-        logger.warning("[Corpus] %s-model caller unavailable: %s", model_spec, e)
-        return None
-
-    def call(prompt: str) -> str:
-        return str(llm.invoke(prompt).content)
-
-    return call
 
 
 def _prefill_metadata(
@@ -619,30 +490,31 @@ def run_extract(
         "project_name": project_name,
     }
 
-    ollama_host = cfg.get("ollama_host") or None
     ocr = create_ocr_client(cfg)
     ocr_client = ocr if ocr.health_check() else None
 
-    metadata_provider = cfg.get("metadata_provider") or None
-    metadata_model = cfg.get("metadata_model") or ""
-    metadata_caller = _resolve_text_caller(
-        metadata_model, ollama_host, provider_name=metadata_provider
-    )
-    if (metadata_model or metadata_provider) and metadata_caller is None:
+    metadata_task = resolve_text_task("metadata")
+    metadata_caller = text_caller_for_resolved_task(metadata_task)
+    if (
+        metadata_task is not None
+        and metadata_task.mode in {"model", "chat"}
+        and metadata_caller is None
+    ):
         report.warnings.append(
-            f"{_text_model_label('metadata', metadata_model, metadata_provider)} "
+            f"Metadata extraction task ({task_target_label(metadata_task)}) "
             "unavailable — falling back to image-based metadata prefill"
         )
 
-    cleanup_provider = cfg.get("cleanup_provider") or None
-    cleanup_model = cfg.get("cleanup_model") or ""
-    cleanup_caller = _resolve_text_caller(
-        cleanup_model, ollama_host, provider_name=cleanup_provider
-    )
-    if (cleanup_model or cleanup_provider) and cleanup_caller is None:
+    cleanup_task = resolve_text_task("cleanup")
+    cleanup_caller = text_caller_for_resolved_task(cleanup_task)
+    if (
+        cleanup_task is not None
+        and cleanup_task.mode in {"model", "chat"}
+        and cleanup_caller is None
+    ):
         report.warnings.append(
-            f"{_text_model_label('cleanup', cleanup_model, cleanup_provider)} "
-            "unavailable — formatting cleanup skipped"
+            f"Text cleanup task ({task_target_label(cleanup_task)}) unavailable "
+            "— formatting cleanup skipped"
         )
 
     matcher: PodMatcher | None = None
@@ -1347,8 +1219,8 @@ def run_meta(
     ``regenerate=True`` re-runs the LLM metadata analysis on each sidecar's
     existing markdown body (no re-parse/OCR) and replaces the LLM-owned
     fields with the fresh result before overrides/rules apply — explicit
-    flags in the same invocation still win. Requires a reachable
-    ``metadata_model``; raises before touching any file otherwise.
+    flags in the same invocation still win. Requires a reachable text
+    Metadata extraction task; raises before touching any file otherwise.
     """
     report = CorpusReport()
     sidecars = _collect_sidecars(paths)
@@ -1368,24 +1240,18 @@ def run_meta(
 
     regen_caller = None
     if regenerate:
-        cfg = Config.get_corpus_config()
-        ollama_host = cfg.get("ollama_host") or None
-        metadata_provider = cfg.get("metadata_provider") or None
-        regen_caller = _resolve_text_caller(
-            cfg.get("metadata_model"), ollama_host, provider_name=metadata_provider
-        )
+        metadata_task = resolve_text_task("metadata")
+        regen_caller = text_caller_for_resolved_task(metadata_task)
         if regen_caller is None:
-            if metadata_provider:
-                setting = _text_model_label(
-                    "metadata", cfg.get("metadata_model") or "", metadata_provider
-                )
-                raise ValueError(
-                    f"--regenerate requires a reachable metadata_model for {setting} "
-                    "(set corpus.metadata_model in config)"
-                )
+            label = (
+                task_target_label(metadata_task)
+                if metadata_task is not None
+                else "no resolvable Metadata extraction task"
+            )
             raise ValueError(
-                "--regenerate requires a reachable metadata_model "
-                "(set corpus.metadata_model in config)"
+                f"--regenerate requires a reachable text Metadata extraction "
+                f"task ({label}). Set a connection and model in Models by task "
+                "> Metadata extraction."
             )
 
     store: CorpusStore | None = None

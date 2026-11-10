@@ -64,6 +64,16 @@ def _embedding_config(**overrides):
         "embedding_api_key": "other-source-key",
     }
     data.update(overrides)
+
+    provider_name = str(data.get("embedding_provider") or "")
+    backend = str(data.get("embedding_backend") or "")
+    model = str(data.get("embedding_model") or "")
+    if backend != "local" and provider_name in connections and model:
+        data["models"]["embedding"] = {
+            "mode": "model",
+            "connection": provider_name,
+            "model": model,
+        }
     return data
 
 
@@ -288,9 +298,8 @@ class TestEmbeddingProviderReference:
         # repin corpus_meta.
         assert embedder.model == emb.MODEL_ID
 
-    def test_ollama_reference_with_no_configured_model_uses_the_legacy_tag(
-        self, monkeypatch
-    ):
+    def test_ollama_reference_requires_an_explicit_model(self, monkeypatch):
+        """Canonical mode model does not fall back to an implicit Ollama tag."""
         ollama_provider = {
             "provider_type": "ollama",
             "base_url": "http://ollama-box:11434",
@@ -304,15 +313,8 @@ class TestEmbeddingProviderReference:
                 providers={"engine": ollama_provider},
             ),
         )
-        manager = MagicMock()
-        import esdc.search.embedding_manager as em
-
-        factory = MagicMock(return_value=manager)
-        monkeypatch.setattr(em, "EmbeddingManager", factory)
-        embedder = emb.get_build_embedder()
-        # The tag the current index was built against is the fallback.
-        assert factory.call_args.kwargs["model"] == emb.OllamaEmbedder.OLLAMA_TAG
-        assert embedder.model == emb.MODEL_ID
+        with pytest.raises(emb.EmbeddingConfigError, match="not configured"):
+            emb.get_build_embedder()
 
     def test_get_build_embedder_uses_referenced_provider(self, monkeypatch):
         """Integration: the constructed embedder carries the reference values."""

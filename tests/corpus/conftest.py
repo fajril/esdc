@@ -3,6 +3,27 @@
 import pytest
 
 import esdc.configs as configs
+import esdc.embedders as embedders
+
+
+@pytest.fixture(autouse=True)
+def _default_embedding_signature(monkeypatch):
+    """Corpus units run against one explicit effective embedding config.
+
+    The real factory now requires a configured Embeddings task; these tests
+    inject their own embedder and only need a stable probe-memo signature.
+    Probe/effective-config tests override this fixture locally.
+    """
+    monkeypatch.setattr(
+        embedders,
+        "config_signature",
+        lambda backend=None: (
+            "ollama",
+            "http://localhost:11434",
+            "qwen3-embedding-0.6b-q8_0",
+            "",
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)

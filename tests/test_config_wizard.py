@@ -2519,7 +2519,7 @@ class TestMenuKeyCoverage:
             assert "corpus.n_gpu_layers" not in keys
 
         assert "corpus.n_gpu_layers" in Config.INT_KEYS
-        assert "n_gpu_layers" in Config.CORPUS_DEFAULTS
+        assert "n_gpu_layers" not in Config.CORPUS_DEFAULTS
         assert "corpus.n_gpu_layers" in KEY_DESCRIPTIONS
         # Reading it is a pure parse: the stored value comes back unchanged.
         assert Config._coerce_value("corpus.n_gpu_layers", "6") == 6

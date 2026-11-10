@@ -1,6 +1,5 @@
 """Tests for the corpus ingestion pipeline."""
 
-import copy
 import json
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,6 +15,7 @@ from esdc.corpus.chunker import Chunk
 from esdc.corpus.extractor import ExtractionResult
 from esdc.corpus.sidecar import read_sidecar, sidecar_path, write_sidecar
 from esdc.corpus.store import CorpusStore
+from esdc.model_runtime import ResolvedTarget, ResolvedTask
 
 
 class FakeEntityResolver:
@@ -61,8 +61,6 @@ class FakeEntityResolver:
 DEFAULT_CFG = {
     "chunk_size": 500,
     "chunk_overlap": 50,
-    "ocr_model": "glm-ocr",
-    "metadata_model": "fake-text-model",
     "ocr_dpi": 200,
     "num_ctx": 16384,
     "min_chars_per_page": 50,
@@ -110,6 +108,42 @@ class FakeEmbedder2:
         return [[1.0, 0.0] for _ in texts]
 
 
+def _fake_text_task(role: str) -> ResolvedTask:
+    if role == "cleanup":
+        return ResolvedTask(
+            role="cleanup",
+            mode="off",
+            enabled=True,
+        )
+    return ResolvedTask(
+        role=role,  # type: ignore[arg-type]
+        mode="model",
+        enabled=True,
+        primary=ResolvedTarget(
+            connection="fake",
+            provider={
+                "name": "fake",
+                "provider_type": "openai_compatible",
+                "type": "openai_compatible",
+                "base_url": "http://fake",
+            },
+            model=f"{role}-model",
+            options={},
+        ),
+    )
+
+
+def _patch_metadata_mode(monkeypatch, mode: str) -> None:
+    def resolve(role):
+        if role == "metadata":
+            return ResolvedTask(
+                role="metadata", mode=mode, enabled=True  # type: ignore[arg-type]
+            )
+        return _fake_text_task(role)
+
+    monkeypatch.setattr(pipeline, "resolve_text_task", resolve)
+
+
 @pytest.fixture(autouse=True)
 def patch_seams(tmp_path, monkeypatch):
     """Default seam patches every test starts from; tests override as needed.
@@ -121,6 +155,23 @@ def patch_seams(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: dict(DEFAULT_CFG))
     monkeypatch.setattr(pipeline, "create_ocr_client", lambda cfg: FakeOcr(True))
+    monkeypatch.setattr(pipeline, "get_embedder", lambda backend=None: FakeEmbedder())
+    monkeypatch.setattr(
+        "esdc.embedders.config_signature",
+        lambda backend=None: ("ollama", "http://test", "fake-embed-v1", "digest"),
+    )
+    monkeypatch.setattr(
+        pipeline, "resolve_text_task", lambda role: _fake_text_task(role)
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "text_caller_for_resolved_task",
+        lambda task: (
+            (lambda prompt: "{}")
+            if task is not None and task.mode in {"model", "chat"}
+            else None
+        ),
+    )
     monkeypatch.setattr(
         pipeline,
         "llm_extract",
@@ -585,9 +636,9 @@ def test_extract_metadata_prefill_failure_still_writes_sidecar(tmp_path, monkeyp
 
 
 def test_extract_no_metadata_model_falls_back_to_ocr_image(tmp_path, monkeypatch):
-    """metadata_model="" -> page-1 image sent to the (healthy) OCR client."""
+    """Metadata mode ocr -> page-1 image sent to the (healthy) OCR client."""
+    _patch_metadata_mode(monkeypatch, "ocr")
     cfg = dict(DEFAULT_CFG)
-    cfg["metadata_model"] = ""
     monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
 
     pdf = make_pdf(tmp_path, "surat.pdf")
@@ -605,8 +656,8 @@ def test_extract_no_metadata_model_falls_back_to_ocr_image(tmp_path, monkeypatch
 
 
 def test_extract_no_metadata_model_no_ocr_skips_with_warning(tmp_path, monkeypatch):
+    _patch_metadata_mode(monkeypatch, "ocr")
     cfg = dict(DEFAULT_CFG)
-    cfg["metadata_model"] = ""
     monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
     monkeypatch.setattr(pipeline, "create_ocr_client", lambda cfg: FakeOcr(False))
 
@@ -626,6 +677,7 @@ def test_extract_no_metadata_model_no_ocr_skips_with_warning(tmp_path, monkeypat
 
 def test_extract_builds_ocr_through_the_factory(tmp_path, monkeypatch):
     """run_extract calls create_ocr_client(cfg) and keeps a healthy client."""
+    _patch_metadata_mode(monkeypatch, "ocr")
     seen = {}
     client = FakeOcr(True)
     monkeypatch.setattr(
@@ -643,7 +695,6 @@ def test_extract_builds_ocr_through_the_factory(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
 
     cfg = dict(DEFAULT_CFG)
-    cfg["metadata_model"] = ""
     cfg["ocr_dpi"] = 220
     monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
 
@@ -657,6 +708,8 @@ def test_extract_builds_ocr_through_the_factory(tmp_path, monkeypatch):
 
 
 def test_extract_keeps_ocr_none_when_the_factory_client_is_unhealthy(tmp_path, monkeypatch):
+    _patch_metadata_mode(monkeypatch, "ocr")
+
     class Unhealthy:
         def health_check(self):
             return False
@@ -678,7 +731,6 @@ def test_extract_keeps_ocr_none_when_the_factory_client_is_unhealthy(tmp_path, m
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
 
     cfg = dict(DEFAULT_CFG)
-    cfg["metadata_model"] = ""
     monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
 
     report = pipeline.run_extract([pdf])
@@ -689,277 +741,15 @@ def test_extract_keeps_ocr_none_when_the_factory_client_is_unhealthy(tmp_path, m
     assert any("pre-fill skipped" in w for w in report.warnings)
 
 
-# --------------------------------------------------------------------------
-# _resolve_text_caller
-# --------------------------------------------------------------------------
-
-
-class FakeLLM:
-    def invoke(self, prompt):
-        class R:
-            content = '{"doc_type": "mom"}'
-
-        return R()
-
-
-def test_resolve_text_caller_empty_returns_none():
-    assert pipeline._resolve_text_caller("") is None
-    assert pipeline._resolve_text_caller(None) is None
-
-
-def test_resolve_text_caller_main_uses_provider(monkeypatch):
-    import esdc.providers as providers
-
-    monkeypatch.setattr(
-        pipeline.Config, "get_provider_config", lambda: {"provider_type": "openai"}
-    )
-    monkeypatch.setattr(providers, "create_llm_from_config", lambda cfg: FakeLLM())
-
-    caller = pipeline._resolve_text_caller("main")
-    assert caller is not None
-    assert caller("extract metadata") == '{"doc_type": "mom"}'
-
-
-def test_resolve_text_caller_main_without_provider_returns_none(monkeypatch):
-    monkeypatch.setattr(pipeline.Config, "get_provider_config", lambda: None)
-    assert pipeline._resolve_text_caller("main") is None
-
-
-def test_resolve_text_caller_ollama_name(monkeypatch):
-    sentinel = object()
-    monkeypatch.setattr(pipeline, "_text_llm_caller", lambda model, host=None: sentinel)
-    assert pipeline._resolve_text_caller("qwen3:8b") is sentinel
-
-
-def test_text_llm_caller_client_has_timeout(monkeypatch):
-    captured = {}
-
-    class FakeClient:
-        def __init__(self, host=None, **kwargs):
-            captured["host"] = host
-            captured["kwargs"] = kwargs
-
-        def chat(self, model, messages, options):
-            return {"message": {"content": "ok"}}
-
-    monkeypatch.setattr(pipeline.ollama, "Client", FakeClient)
-    caller = pipeline._text_llm_caller("qwen3:8b", host="http://gpu-box:11434")
-    assert captured["host"] == "http://gpu-box:11434"
-    assert captured["kwargs"]["timeout"] is not None
-    assert captured["kwargs"]["timeout"].connect < captured["kwargs"]["timeout"].read
-    assert caller("prompt") == "ok"
-
-
-def test_resolve_text_caller_named_provider(monkeypatch):
-    import esdc.providers as providers
-
-    monkeypatch.setattr(
-        pipeline.Config,
-        "get_referenced_provider",
-        classmethod(
-            lambda cls, name: {
-                "name": name,
-                "provider_type": "openai",
-                "type": "openai",
-            }
-        ),
-    )
-    captured = {}
-
-    def fake_create(cfg):
-        captured.update(cfg)
-        return FakeLLM()
-
-    monkeypatch.setattr(providers, "create_llm_from_config", fake_create)
-
-    caller = pipeline._resolve_text_caller("gpt-x", None, provider_name="foo")
-    assert caller is not None
-    assert caller("extract metadata") == '{"doc_type": "mom"}'
-    # The canonical connection supplies transport only; the explicit task model
-    # is the wire model sent to the provider.
-    assert captured["provider_type"] == "openai"
-    assert captured["model"] == "gpt-x"
-    assert captured["name"] == "foo"
-
-
-def test_resolve_text_caller_unknown_provider_returns_none(monkeypatch, caplog):
-    monkeypatch.setattr(
-        pipeline.Config,
-        "get_provider_config_by_name",
-        classmethod(lambda cls, name: None),
-    )
-    with caplog.at_level("WARNING"):
-        assert pipeline._resolve_text_caller("provider:nope", None) is None
-    assert any("nope" in r.message for r in caplog.records)
-
-
-def test_resolve_text_caller_provider_construction_failure_returns_none(monkeypatch):
-    import esdc.providers as providers
-
-    monkeypatch.setattr(
-        pipeline.Config,
-        "get_providers",
-        classmethod(lambda cls: {"foo": {"provider_type": "openai"}}),
-    )
-
-    def raise_create(cfg):
-        raise RuntimeError("no api key")
-
-    monkeypatch.setattr(providers, "create_llm_from_config", raise_create)
-    assert pipeline._resolve_text_caller("provider:foo", None) is None
-
-
-# --------------------------------------------------------------------------
-# _resolve_text_caller with a provider reference (corpus.role_provider)
-# --------------------------------------------------------------------------
-
-# Synthetic saved provider. Its `model` is the Chat selection and must never be
-# used as the wire model for a role that has its own model.
-REFERENCE_PROVIDERS = {
-    "engine": {
-        "name": "engine",
-        "provider_type": "openai",
-        "base_url": "http://engine.invalid/v1",
-        "model": "chat-a",
-    }
-}
-
-
-def _stub_reference_provider(monkeypatch, created):
-    """Deep-copied get_referenced_provider plus recorded LLM construction."""
-    import esdc.providers as providers
-
-    def fake_get(cls, name):
-        entry = REFERENCE_PROVIDERS.get(name)
-        if entry is None:
-            raise ValueError(f"Unknown provider reference: {name!r}")
-        return copy.deepcopy(entry)
-
-    monkeypatch.setattr(
-        pipeline.Config, "get_referenced_provider", classmethod(fake_get)
-    )
-
-    def fake_create(cfg):
-        created.append(dict(cfg))
-        return FakeLLM()
-
-    monkeypatch.setattr(providers, "create_llm_from_config", fake_create)
-
-
-def test_resolve_text_caller_reference_uses_the_role_models(monkeypatch):
-    """The reference uses role models meta-b and clean-c, never chat-a."""
-    created = []
-    _stub_reference_provider(monkeypatch, created)
-
-    metadata_caller = pipeline._resolve_text_caller(
-        "meta-b", None, provider_name="engine"
-    )
-    cleanup_caller = pipeline._resolve_text_caller(
-        "clean-c", None, provider_name="engine"
-    )
-
-    assert metadata_caller is not None and cleanup_caller is not None
-    assert metadata_caller("extract metadata") == '{"doc_type": "mom"}'
-    assert [cfg["model"] for cfg in created] == ["meta-b", "clean-c"]
-    assert all(cfg["provider_type"] == "openai" for cfg in created)
-    assert all(cfg["name"] == "engine" for cfg in created)
-    # the constructed config is a copy, and the saved provider keeps chat-a
-    assert created[0] is not REFERENCE_PROVIDERS["engine"]
-    assert REFERENCE_PROVIDERS["engine"]["model"] == "chat-a"
-
-
-def test_resolve_text_caller_reference_with_empty_model_returns_none(
-    monkeypatch, caplog
-):
-    """A reference alone never uses the provider's chat model."""
-    created = []
-    _stub_reference_provider(monkeypatch, created)
-
-    with caplog.at_level("WARNING"):
-        assert pipeline._resolve_text_caller("", None, provider_name="engine") is None
-
-    assert created == []  # no LLM constructed
-    assert any("engine" in r.message for r in caplog.records)
-    assert REFERENCE_PROVIDERS["engine"]["model"] == "chat-a"
-
-
-def test_resolve_text_caller_reference_keeps_the_spec_a_plain_model_id(monkeypatch):
-    """With a reference active, "main" is the wire model, not the chat default."""
-    created = []
-    _stub_reference_provider(monkeypatch, created)
-
-    assert pipeline._resolve_text_caller("main", None, provider_name="engine") is not None
-    assert created[0]["model"] == "main"
-
-
-def test_resolve_text_caller_reference_unknown_provider_returns_none(monkeypatch, caplog):
-    created = []
-    _stub_reference_provider(monkeypatch, created)
-
-    with caplog.at_level("WARNING"):
-        assert pipeline._resolve_text_caller("meta-b", None, provider_name="nope") is None
-
-    assert created == []
-    assert any("nope" in r.message for r in caplog.records)
-
-
-def test_resolve_text_caller_reference_construction_failure_returns_none(
-    monkeypatch, caplog
-):
-    import esdc.providers as providers
-
-    _stub_reference_provider(monkeypatch, [])
-
-    def raise_create(cfg):
-        raise RuntimeError("no api key")
-
-    monkeypatch.setattr(providers, "create_llm_from_config", raise_create)
-
-    with caplog.at_level("WARNING"):
-        assert pipeline._resolve_text_caller("meta-b", None, provider_name="engine") is None
-    assert any("engine" in r.message and "meta-b" in r.message for r in caplog.records)
-
-
-def test_resolve_text_caller_empty_reference_keeps_legacy_meanings(monkeypatch):
-    """provider_name "" / None keeps main, provider:<name>, and bare Ollama."""
-    import esdc.providers as providers
-
-    captured = []
-    monkeypatch.setattr(
-        pipeline.Config,
-        "get_provider_config",
-        lambda: {"provider_type": "openai", "model": "chat-a"},
-    )
-    monkeypatch.setattr(
-        providers,
-        "create_llm_from_config",
-        lambda cfg: captured.append(dict(cfg)) or FakeLLM(),
-    )
-
-    caller = pipeline._resolve_text_caller("main", None, provider_name="")
-    assert caller is not None
-    assert captured[0]["model"] == "chat-a"
-
-    sentinel = object()
-    monkeypatch.setattr(pipeline, "_text_llm_caller", lambda model, host=None: sentinel)
-    assert pipeline._resolve_text_caller("qwen3:8b", None, provider_name="") is sentinel
-    assert pipeline._resolve_text_caller("", None, provider_name="engine") is None
-
-
 def test_prefill_metadata_main_model(monkeypatch, tmp_path):
-    """metadata_model='main' routes prefill through the provider LLM."""
-    import esdc.providers as providers
-
+    """The resolved metadata task routes prefill through its text caller."""
     monkeypatch.setattr(
-        pipeline.Config, "get_provider_config", lambda: {"provider_type": "openai"}
+        pipeline,
+        "text_caller_for_resolved_task",
+        lambda task: (lambda prompt: '{"doc_type": "mom"}') if task is not None else None,
     )
-    monkeypatch.setattr(providers, "create_llm_from_config", lambda cfg: FakeLLM())
-
-    cfg = dict(DEFAULT_CFG)
-    cfg["metadata_model"] = "main"
-    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
     # patch_seams stubs llm_extract; restore the real one to prove the
-    # provider caller's JSON flows through parsing.
+    # resolved caller's JSON flows through parsing.
     from esdc.corpus.metadata import llm_extract as real_llm_extract
 
     monkeypatch.setattr(pipeline, "llm_extract", real_llm_extract)
@@ -998,21 +788,45 @@ def _extract_body(tmp_path, monkeypatch, cfg_overrides, markdown):
     return report, body
 
 
+def _patch_cleanup_caller(monkeypatch, caller):
+    cleanup_task = ResolvedTask(
+        role="cleanup",
+        mode="model",
+        enabled=True,
+        primary=ResolvedTarget(
+            connection="fake",
+            provider={
+                "name": "fake",
+                "provider_type": "openai_compatible",
+                "type": "openai_compatible",
+                "base_url": "http://fake",
+            },
+            model="cleanup-model",
+            options={},
+        ),
+    )
+
+    def resolve(role):
+        return cleanup_task if role == "cleanup" else _fake_text_task(role)
+
+    def caller_for(task):
+        if task is not None and task.role == "cleanup":
+            return caller
+        return (lambda prompt: "{}") if task is not None else None
+
+    monkeypatch.setattr(pipeline, "resolve_text_task", resolve)
+    monkeypatch.setattr(pipeline, "text_caller_for_resolved_task", caller_for)
+
+
 def test_extract_cleanup_applied_and_warned(tmp_path, monkeypatch):
     def fake_caller(prompt):
         return "# Judul\nbaris rapi"
 
-    monkeypatch.setattr(
-        pipeline,
-        "_resolve_text_caller",
-        lambda spec, host=None, provider_name=None: (
-            fake_caller if spec == "main" else None
-        ),
-    )
+    _patch_cleanup_caller(monkeypatch, fake_caller)
     report, body = _extract_body(
         tmp_path,
         monkeypatch,
-        {"cleanup_model": "main", "metadata_model": ""},
+        {},
         "<!-- page 1: native -->\n# **Judul**\nbaris jelek",
     )
     assert "baris rapi" in body
@@ -1024,7 +838,7 @@ def test_extract_cleanup_off_by_default(tmp_path, monkeypatch):
     report, body = _extract_body(
         tmp_path,
         monkeypatch,
-        {"cleanup_model": "", "metadata_model": ""},
+        {},
         "<!-- page 1: native -->\n# **Judul**\nbaris jelek",
     )
     assert "baris jelek" in body
@@ -1035,53 +849,50 @@ def test_extract_cleanup_guard_rejection_warned(tmp_path, monkeypatch):
     def bad_caller(prompt):
         return "angka palsu 12345"
 
-    monkeypatch.setattr(
-        pipeline,
-        "_resolve_text_caller",
-        lambda spec, host=None, provider_name=None: (
-            bad_caller if spec == "main" else None
-        ),
-    )
+    _patch_cleanup_caller(monkeypatch, bad_caller)
     report, body = _extract_body(
         tmp_path,
         monkeypatch,
-        {"cleanup_model": "main", "metadata_model": ""},
+        {},
         "<!-- page 1: native -->\n# **Judul**\nbaris asli tanpa angka",
     )
     assert "baris asli tanpa angka" in body  # original kept
     assert any("failed cleanup guard" in w for w in report.warnings)
 
 
-def test_extract_passes_provider_references_to_the_caller(tmp_path, monkeypatch):
-    """metadata_provider and cleanup_provider reach the resolver as keywords."""
+def test_extract_resolves_metadata_and_cleanup_tasks_separately(
+    tmp_path, monkeypatch
+):
     seen = []
 
-    def fake_caller(spec, host=None, provider_name=None):
-        seen.append((spec, provider_name))
-        return lambda p: '{"doc_type": "note"}'
+    def resolve(role):
+        seen.append(role)
+        return _fake_text_task(role)
 
-    monkeypatch.setattr(pipeline, "_resolve_text_caller", fake_caller)
+    def caller_for(task):
+        return lambda prompt: '{"doc_type": "note"}'
+
+    monkeypatch.setattr(pipeline, "resolve_text_task", resolve)
+    monkeypatch.setattr(pipeline, "text_caller_for_resolved_task", caller_for)
 
     _extract_body(
         tmp_path,
         monkeypatch,
-        {
-            "metadata_model": "meta-b",
-            "metadata_provider": "engine",
-            "cleanup_model": "clean-c",
-            "cleanup_provider": "engine",
-        },
+        {},
         "<!-- page 1: native -->\n# **Judul**\nbaris jelek",
     )
 
-    assert seen == [("meta-b", "engine"), ("clean-c", "engine")]
+    assert seen == ["metadata", "cleanup"]
 
 
-def test_extract_reference_with_empty_model_warns_without_the_chat_model(
-    tmp_path, monkeypatch
-):
-    """A reference with no model warns clearly and still uses the image fallback."""
-    monkeypatch.setattr(pipeline, "_resolve_text_caller", lambda *a, **k: None)
+def test_extract_unavailable_text_tasks_warn(tmp_path, monkeypatch):
+    """A chat-relationship task with no Chat target warns and uses OCR prefill."""
+
+    def resolve(role):
+        return ResolvedTask(role=role, mode="chat", enabled=True)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pipeline, "resolve_text_task", resolve)
+    monkeypatch.setattr(pipeline, "text_caller_for_resolved_task", lambda task: None)
 
     pdf = make_pdf(tmp_path, "surat.pdf")
 
@@ -1090,27 +901,15 @@ def test_extract_reference_with_empty_model_warns_without_the_chat_model(
 
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
 
-    cfg = dict(DEFAULT_CFG)
-    cfg.update(
-        {
-            "metadata_model": "",
-            "metadata_provider": "engine",
-            "cleanup_model": "",
-            "cleanup_provider": "engine",
-        }
-    )
-    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
-
     report = pipeline.run_extract([pdf])
     unavailable = [w for w in report.warnings if "unavailable" in w]
 
     assert any(
-        "metadata_provider 'engine'" in w and "image-based metadata prefill" in w
+        "Metadata extraction task" in w and "image-based metadata prefill" in w
         for w in unavailable
     )
     assert any(
-        "cleanup_provider 'engine'" in w and "cleanup skipped" in w
-        for w in unavailable
+        "Text cleanup task" in w and "cleanup skipped" in w for w in unavailable
     )
     # the "pre-fill skipped" message belongs to a run with no setting at all
     assert not any("pre-fill skipped" in w for w in report.warnings)
@@ -2654,65 +2453,55 @@ def test_meta_regenerate_explicit_reviewed_true_preserved(tmp_path, monkeypatch)
 
 
 def test_meta_regenerate_no_model_raises_before_touching_files(tmp_path, monkeypatch):
-    cfg = dict(DEFAULT_CFG)
-    cfg["metadata_model"] = ""
-    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
+    _patch_metadata_mode(monkeypatch, "unset")
+    monkeypatch.setattr(pipeline, "text_caller_for_resolved_task", lambda task: None)
 
     sc = make_sidecar(tmp_path, "a.pdf", reviewed=True, file_hash="a4" * 32)
     before = sc.read_bytes()
 
-    with pytest.raises(
-        ValueError, match="--regenerate requires a reachable metadata_model"
-    ):
+    with pytest.raises(ValueError, match="Metadata extraction task"):
         pipeline.run_meta([tmp_path], regenerate=True)
 
     assert sc.read_bytes() == before
 
 
-def test_meta_regenerate_uses_the_provider_reference(tmp_path, monkeypatch):
+def test_meta_regenerate_uses_the_resolved_metadata_task(tmp_path, monkeypatch):
     seen = []
+
+    def resolve(role):
+        seen.append(role)
+        return _fake_text_task(role)
+
+    monkeypatch.setattr(pipeline, "resolve_text_task", resolve)
     monkeypatch.setattr(
         pipeline,
-        "_resolve_text_caller",
-        lambda spec, host=None, provider_name=None: (
-            seen.append((spec, provider_name)) or (lambda p: '{"doc_type": "mom"}')
-        ),
+        "text_caller_for_resolved_task",
+        lambda task: (lambda prompt: '{"doc_type": "mom"}'),
     )
     monkeypatch.setattr(
         pipeline, "llm_extract", lambda markdown, caller: {"doc_type": "mom"}
     )
 
-    cfg = dict(DEFAULT_CFG)
-    cfg.update({"metadata_model": "meta-b", "metadata_provider": "engine"})
-    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
-
     sc = make_sidecar(tmp_path, "a.pdf", reviewed=True, file_hash="a5" * 32)
     report = pipeline.run_meta([tmp_path], regenerate=True)
 
-    assert seen == [("meta-b", "engine")]
+    assert seen == ["metadata"]
     assert report.processed == ["a.corpus.md"]
     assert read_sidecar(sc)[0]["doc_type"] == "mom"
 
 
-def test_meta_regenerate_reference_with_empty_model_raises_clearly(tmp_path, monkeypatch):
-    """A reference alone cannot satisfy --regenerate; nothing is rewritten.
-
-    The reference is unknown to the config-free test config, so the resolver
-    reports it unavailable and the error names it.
-    """
-    cfg = dict(DEFAULT_CFG)
-    cfg.update({"metadata_model": "", "metadata_provider": "engine"})
-    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
+def test_meta_regenerate_unavailable_task_raises_clearly(tmp_path, monkeypatch):
+    """A chat relationship with no Chat target cannot satisfy --regenerate."""
+    _patch_metadata_mode(monkeypatch, "chat")
+    monkeypatch.setattr(pipeline, "text_caller_for_resolved_task", lambda task: None)
 
     sc = make_sidecar(tmp_path, "a.pdf", reviewed=True, file_hash="a6" * 32)
     before = sc.read_bytes()
 
-    with pytest.raises(
-        ValueError, match="--regenerate requires a reachable metadata_model"
-    ) as exc_info:
+    with pytest.raises(ValueError, match="Metadata extraction task") as exc_info:
         pipeline.run_meta([tmp_path], regenerate=True)
 
-    assert "engine" in str(exc_info.value)
+    assert "chat" in str(exc_info.value)
     assert sc.read_bytes() == before
 
 
@@ -3278,40 +3067,28 @@ def test_commit_shows_progress_bar(tmp_path, monkeypatch):
     store.close()
 
 
-def test_extract_passes_ollama_host_to_ocr_and_text_caller(tmp_path, monkeypatch):
-    cfg = dict(DEFAULT_CFG)
-    cfg["ollama_host"] = "http://gpu-box:11434"
-    cfg["metadata_model"] = "qwen3:8b"
-    monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
-
-    import esdc.corpus.ocr as ocr_mod
-
-    # The factory is the seam now, so the real construction runs against a fake
-    # transport: the config is recorded, and the host reaches the Ollama client.
+def test_extract_resolves_ocr_and_text_roles_separately(tmp_path, monkeypatch):
     factory_configs = []
     monkeypatch.setattr(
         pipeline,
         "create_ocr_client",
-        lambda seen_cfg: factory_configs.append(seen_cfg) or ocr_mod.create_ocr_client(seen_cfg),
+        lambda seen_cfg: factory_configs.append(seen_cfg) or FakeOcr(True),
     )
+    roles = []
 
-    ocr_kwargs = {}
+    def resolve(role):
+        roles.append(role)
+        return _fake_text_task(role)
 
-    class FakeClient:
-        def __init__(self, host=None, **kwargs):
-            ocr_kwargs["host"] = host
-            ocr_kwargs["kwargs"] = kwargs
-
-        def show(self, model):
-            return {"details": {}}
-
-    monkeypatch.setattr(ocr_mod.ollama, "Client", FakeClient)
-
-    caller_hosts = []
+    monkeypatch.setattr(pipeline, "resolve_text_task", resolve)
     monkeypatch.setattr(
         pipeline,
-        "_text_llm_caller",
-        lambda model, host=None: caller_hosts.append(host) or (lambda p: "{}"),
+        "text_caller_for_resolved_task",
+        lambda task: (
+            (lambda prompt: "{}")
+            if task is not None and task.mode in {"model", "chat"}
+            else None
+        ),
     )
 
     pdf = make_pdf(tmp_path, "surat.pdf")
@@ -3322,9 +3099,10 @@ def test_extract_passes_ollama_host_to_ocr_and_text_caller(tmp_path, monkeypatch
     monkeypatch.setattr(pipeline, "extract_pdf", fake_extract)
 
     pipeline.run_extract([pdf])
-    assert factory_configs == [cfg]
-    assert ocr_kwargs.get("host") == "http://gpu-box:11434"
-    assert caller_hosts == ["http://gpu-box:11434"]
+    assert factory_configs
+    # OCR came from its own resolved task; metadata/cleanup used their own
+    # assignments, never a shared corpus host/model.
+    assert roles == ["metadata", "cleanup"]
 
 
 # --------------------------------------------------------------------------

@@ -19,6 +19,7 @@ from esdc.corpus.extractor import ExtractionResult
 from esdc.corpus.ocr import OCR_PROMPT
 from esdc.corpus.provider_ocr import OpenAICompatibleOcr
 from esdc.corpus.sidecar import read_sidecar
+from esdc.model_runtime import ResolvedTarget, ResolvedTask
 
 BASE = "http://engine:4000/v1"
 CHAT_URL = "http://engine:4000/v1/chat/completions"
@@ -285,19 +286,36 @@ def test_gateway_without_model_listing_is_not_disabled_by_the_pipeline_gate(
     cfg = {
         "chunk_size": 500,
         "chunk_overlap": 50,
-        "ocr_model": "ocr-model",
-        "ocr_provider": "engine",
-        # No text model: the image pre-fill is the path that needs the OCR client.
-        "metadata_model": "",
-        "metadata_provider": "",
         "ocr_dpi": 200,
         "num_ctx": 16384,
         "min_chars_per_page": 50,
         "min_image_area": 0.05,
     }
     monkeypatch.setattr(pipeline.Config, "get_corpus_config", lambda: cfg)
+
+    ocr_task = ResolvedTask(
+        role="ocr",
+        mode="model",
+        enabled=True,
+        primary=ResolvedTarget(
+            connection="engine",
+            provider={**PROVIDER, "model": "ocr-model"},
+            model="ocr-model",
+            options={},
+        ),
+    )
+
+    def resolve(role):
+        if role == "ocr":
+            return ocr_task
+        if role == "metadata":
+            return ResolvedTask(role="metadata", mode="ocr", enabled=True)
+        return ResolvedTask(role=role, mode="off", enabled=True)  # type: ignore[arg-type]
+
     monkeypatch.setattr(
-        pipeline.Config, "get_providers", classmethod(lambda cls: {"engine": PROVIDER})
+        pipeline.Config,
+        "resolve_model_task",
+        classmethod(lambda cls, role: resolve(role)),
     )
 
     doc = fitz.open()

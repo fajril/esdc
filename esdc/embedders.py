@@ -76,10 +76,9 @@ class EmbeddingClient(Protocol):
 def _service_required(backend: str) -> str:
     """Actionable message for a retired in-process backend."""
     return (
-        f"[Embedding] backend '{backend}' needs an HTTP embedding service. "
-        "Run Ollama, omlx, or llama-server and set `embedding_backend` and "
-        "`embedding_host`/`embedding_provider` to that service. The in-process "
-        "backend was removed in this version."
+        f"[Embedding] backend '{backend}' is retired and has no in-process "
+        "implementation. Choose an Ollama or OpenAI-compatible connection in "
+        "the Embeddings task."
     )
 
 
@@ -483,17 +482,85 @@ class OpenAIEmbedder:
         return None
 
 
+def _resolve_embedding_runtime(
+    backend: str | None = None,
+) -> tuple[str, str | None, str, str]:
+    """Resolve ``(backend, host, wire_model, api_key)`` from the Embeddings task.
+
+    The connection type decides the backend. An explicit per-run backend must
+    match that type; it never switches destination silently. An unset embedding
+    task is an error rather than an implicit localhost service.
+    """
+    from esdc.configs import Config
+    from esdc.model_settings import ModelConfigurationRequired
+
+    try:
+        task = Config.resolve_model_task("embedding")
+    except ModelConfigurationRequired as exc:
+        raise EmbeddingConfigError(str(exc)) from exc
+
+    if task.mode != "model" or task.primary is None:
+        raise EmbeddingConfigError(
+            "[Embedding] Embeddings is not configured. Choose a connection and "
+            "model in the Embeddings task."
+        )
+
+    provider = task.primary.provider
+    provider_type = str(provider.get("provider_type") or "").strip().lower()
+    inferred = {
+        "ollama": "ollama",
+        "openai_compatible": "openai",
+    }.get(provider_type)
+    if inferred is None:
+        raise EmbeddingConfigError(
+            f"[Embedding] connection {task.primary.connection!r} has type "
+            f"{provider_type or 'unknown'!r}, which cannot serve Embeddings."
+        )
+
+    requested = (backend or inferred).strip().lower()
+    if requested == "local":
+        raise EmbeddingConfigError(_service_required("local"))
+    if requested not in {"ollama", "openai"}:
+        raise ValueError(
+            f"[Embedding] unknown embedding_backend {requested!r}; expected one "
+            "of: ollama, openai. 'local' is retired: it needs an HTTP service."
+        )
+    if requested != inferred:
+        raise ValueError(
+            f"[Embedding] embedding_backend {requested!r} does not match the "
+            f"assigned connection {task.primary.connection!r} "
+            f"(type {provider_type!r}, backend {inferred!r})."
+        )
+
+    host = str(provider.get("base_url") or "").strip() or None
+    if requested == "openai" and host is None:
+        raise EmbeddingConfigError(
+            f"[Embedding] connection {task.primary.connection!r} has no base "
+            "URL. Set its endpoint in the Embeddings task."
+        )
+
+    model = task.primary.model
+    if not model:
+        raise EmbeddingConfigError(
+            f"[Embedding] the Embeddings task has no model assigned to "
+            f"connection {task.primary.connection!r}."
+        )
+
+    return requested, host, model, str(provider.get("api_key") or "")
+
+
 def get_embedder(backend: str | None = None) -> EmbeddingClient:
-    """Construct the client for the configured HTTP embedding service.
+    """Construct the client for the assigned HTTP embedding service.
 
     Query-time similarity and bulk generation resolve through the same
     factory: there is no in-process backend to fall back to. Construction
-    makes no request — a client is built from config shape, and connectivity
-    is only proven when a vector is asked for or `check_available()` runs.
+    makes no request — a client is built from the canonical assignment, and
+    connectivity is only proven when a vector is asked for or
+    `check_available()` runs.
 
     Args:
-        backend: "ollama" or "openai". None reads the `embedding_backend`
-            config key (default "ollama").
+        backend: Optional per-run "ollama" or "openai" override. It must match
+            the assigned connection type and never redirects the task.
 
     Returns:
         An EmbeddingClient exposing generate_embedding,
@@ -501,31 +568,15 @@ def get_embedder(backend: str | None = None) -> EmbeddingClient:
         equal to MODEL_ID.
 
     Raises:
-        EmbeddingConfigError: the stored value has no implementation any more
-            ("local"). A stored value is reported, never rewritten.
-        ValueError: the backend name is not a known one.
+        EmbeddingConfigError: Embeddings is unset or the assigned connection
+            cannot serve it.
+        ValueError: an explicit backend is unknown or disagrees with the
+            assigned connection.
     """
-    from esdc.configs import Config
-
-    name = (backend or Config.get_embedding_backend()).strip().lower()
-
-    if name == "local":
-        raise EmbeddingConfigError(_service_required(name))
+    name, host, model, api_key = _resolve_embedding_runtime(backend)
     if name == "ollama":
-        return OllamaEmbedder(
-            host=Config.get_embedding_host(),
-            model=Config.get_embedding_model(),
-        )
-    if name == "openai":
-        return OpenAIEmbedder(
-            host=Config.get_embedding_host(),
-            model=Config.get_embedding_model(),
-            api_key=Config.get_embedding_api_key(),
-        )
-    raise ValueError(
-        f"[Embedding] unknown embedding_backend {name!r}; expected one of: "
-        "ollama, openai. 'local' is retired: it needs an HTTP service."
-    )
+        return OllamaEmbedder(host=host, model=model)
+    return OpenAIEmbedder(host=host, model=model, api_key=api_key)
 
 
 def get_build_embedder(backend: str | None = None) -> EmbeddingClient:
@@ -590,15 +641,9 @@ def config_signature(backend: str | None = None) -> tuple[str, str, str, str]:
     The credential is carried as a digest, never in the clear, so a signature can be
     compared or logged without exposing it.
     """
-    from esdc.configs import Config
-
-    name = (backend or Config.get_embedding_backend()).strip().lower()
-    host = str(Config.get_embedding_host() or "").strip()
-    wire = str(Config.get_embedding_model() or "").strip()
-    credential = hashlib.sha256(
-        str(Config.get_embedding_api_key() or "").encode()
-    ).hexdigest()
-    return (name, host, wire, credential)
+    name, host, wire, api_key = _resolve_embedding_runtime(backend)
+    credential = hashlib.sha256(api_key.encode()).hexdigest()
+    return (name, host or "", wire, credential)
 
 
 def db_signature(path: Any) -> int | None:

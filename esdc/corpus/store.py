@@ -1717,13 +1717,23 @@ class CorpusStore:
         RRF order with no partial rerank_score fields.
         """
         cfg = Config.get_corpus_config()
-        enabled = cfg.get("rerank", False) if rerank is None else rerank
+        if rerank is None:
+            from esdc.model_settings import ModelConfigurationRequired
+
+            try:
+                rerank_task = Config.resolve_model_task("rerank")
+            except ModelConfigurationRequired as exc:
+                logger.warning("[Corpus] %s", exc)
+                return merged
+            enabled = rerank_task.mode == "model" and rerank_task.enabled
+        else:
+            enabled = rerank
         if not enabled or len(merged) <= 1:
             return merged
 
         from esdc.corpus.reranker import get_reranker
 
-        rr = get_reranker()
+        rr = get_reranker(force=bool(rerank))
         if rr is None:
             return merged
 

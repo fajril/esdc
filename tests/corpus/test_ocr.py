@@ -7,6 +7,7 @@ import pytest
 
 from esdc.corpus.ocr import OCR_PROMPT, OllamaVisionOcr
 from esdc.corpus.provider_ocr import OpenAICompatibleOcr
+from esdc.model_runtime import ResolvedTarget, ResolvedTask
 
 
 class FakeOllamaClient:
@@ -160,9 +161,37 @@ SAVED_PROVIDERS = {
 
 
 def _factory_config(**overrides) -> dict:
-    cfg = {"ocr_model": "glm-ocr", "ocr_provider": "", "ollama_host": None}
+    cfg = {"extract_timeout_seconds": None, "num_ctx": 16384}
     cfg.update(overrides)
     return cfg
+
+
+def _resolved_ocr(
+    provider_name: str | None = "gpu-box", model: str = "glm-ocr"
+) -> ResolvedTask:
+    if provider_name is None:
+        return ResolvedTask(role="ocr", mode="unset", enabled=True)
+    entry = SAVED_PROVIDERS[provider_name]
+    provider_type = str(entry.get("provider_type") or entry.get("type") or "")
+    provider = {
+        "name": provider_name,
+        "provider_type": provider_type,
+        "type": provider_type,
+        "base_url": entry.get("base_url", ""),
+        "api_key": entry.get("api_key", ""),
+        "model": model,
+    }
+    return ResolvedTask(
+        role="ocr",
+        mode="model",
+        enabled=True,
+        primary=ResolvedTarget(
+            connection=provider_name,
+            provider=provider,
+            model=model,
+            options={},
+        ),
+    )
 
 
 def _fake_ollama_transport(monkeypatch):
@@ -187,13 +216,12 @@ def _fake_ollama_transport(monkeypatch):
     return inits, chats
 
 
-def test_factory_empty_reference_keeps_the_ollama_client(monkeypatch):
+def test_factory_ollama_connection_uses_its_assigned_host(monkeypatch):
     import esdc.corpus.ocr as ocr_mod
 
     inits, chats = _fake_ollama_transport(monkeypatch)
     client = ocr_mod.create_ocr_client(
-        _factory_config(ollama_host="http://gpu-box:11434"),
-        providers=SAVED_PROVIDERS,
+        _factory_config(), resolved=_resolved_ocr("gpu-box")
     )
 
     assert isinstance(client, OllamaVisionOcr)
@@ -209,17 +237,13 @@ def test_factory_empty_reference_keeps_the_ollama_client(monkeypatch):
     assert chats[0][1] == {"temperature": 0, "num_ctx": 16384}
 
 
-def test_factory_named_ollama_provider_uses_its_own_host(monkeypatch):
+def test_factory_uses_processing_limits_with_the_assigned_connection(monkeypatch):
     import esdc.corpus.ocr as ocr_mod
 
     inits, chats = _fake_ollama_transport(monkeypatch)
     client = ocr_mod.create_ocr_client(
-        _factory_config(
-            ocr_provider="gpu-box",
-            num_ctx=20000,
-            extract_timeout_seconds=120,
-        ),
-        providers=SAVED_PROVIDERS,
+        _factory_config(num_ctx=20000, extract_timeout_seconds=120),
+        resolved=_resolved_ocr("gpu-box"),
     )
 
     assert isinstance(client, OllamaVisionOcr)
@@ -227,84 +251,76 @@ def test_factory_named_ollama_provider_uses_its_own_host(monkeypatch):
     assert inits[0]["host"] == "http://gpu-box:11434"
     timeout = inits[0]["kwargs"]["timeout"]
     assert (timeout.connect, timeout.read) == (10.0, 120.0)
-    # the explicit corpus.ocr_model wins over the provider's chat model
     assert chats[0][0] == "glm-ocr"
     assert chats[0][1] == {"temperature": 0, "num_ctx": 20000}
 
 
-def test_factory_named_ollama_provider_prefers_its_own_address(monkeypatch):
+def test_factory_does_not_borrow_another_source_address(monkeypatch):
     import esdc.corpus.ocr as ocr_mod
 
-    legacy = "http://legacy-remote:11434"
     inits, chats = _fake_ollama_transport(monkeypatch)
-    client = ocr_mod.create_ocr_client(
-        _factory_config(ocr_provider="gpu-box", ollama_host=legacy),
-        providers=SAVED_PROVIDERS,
+    first = ocr_mod.create_ocr_client(
+        _factory_config(), resolved=_resolved_ocr("gpu-box")
     )
+    assert isinstance(first, OllamaVisionOcr)
+    first.ocr_page(b"\x89PNG")
 
-    assert isinstance(client, OllamaVisionOcr)
-    client.ocr_page(b"\x89PNG")
+    second = ocr_mod.create_ocr_client(
+        _factory_config(), resolved=_resolved_ocr("local-daemon")
+    )
+    assert isinstance(second, OllamaVisionOcr)
+    second.ocr_page(b"\x89PNG")
+
     assert inits[0]["host"] == "http://gpu-box:11434"
-    assert chats[0][0] == "glm-ocr"
+    # The second connection has no address; the first connection's host is
+    # never substituted.
+    assert inits[1]["host"] is None
+    assert [chat[0] for chat in chats] == ["glm-ocr", "glm-ocr"]
 
 
 @pytest.mark.parametrize("blank_address", ["", "   "])
-def test_factory_named_ollama_provider_without_an_address_uses_the_client_default(
+def test_factory_ollama_connection_without_address_uses_client_default(
     monkeypatch, blank_address
 ):
-    """A named provider with no saved address is never sent to `corpus.ollama_host`."""
     import esdc.corpus.ocr as ocr_mod
 
     providers = {
         **SAVED_PROVIDERS,
         "local-daemon": {**SAVED_PROVIDERS["local-daemon"], "base_url": blank_address},
     }
-    legacy = "http://legacy-remote:11434"
-    inits, chats = _fake_ollama_transport(monkeypatch)
-    client = ocr_mod.create_ocr_client(
-        _factory_config(ocr_provider="local-daemon", ollama_host=legacy),
-        providers=providers,
+    entry = providers["local-daemon"]
+    resolved = ResolvedTask(
+        role="ocr",
+        mode="model",
+        enabled=True,
+        primary=ResolvedTarget(
+            connection="local-daemon",
+            provider={
+                "name": "local-daemon",
+                "provider_type": "ollama",
+                "type": "ollama",
+                "base_url": entry.get("base_url", ""),
+            },
+            model="glm-ocr",
+            options={},
+        ),
     )
+    inits, chats = _fake_ollama_transport(monkeypatch)
+    client = ocr_mod.create_ocr_client(_factory_config(), resolved=resolved)
 
     assert isinstance(client, OllamaVisionOcr)
     assert client.health_check() is True
     client.ocr_page(b"\x89PNG")
-    # host=None is the Ollama client default, never the legacy corpus URL.
     assert inits[0]["host"] is None
     assert chats[0][0] == "glm-ocr"
-
-
-def test_factory_legacy_host_still_applies_to_the_un_referenced_source(monkeypatch):
-    """Only an empty `ocr_provider` uses `corpus.ollama_host`."""
-    import esdc.corpus.ocr as ocr_mod
-
-    inits, chats = _fake_ollama_transport(monkeypatch)
-    legacy = "http://legacy-remote:11434"
-
-    un_referenced = ocr_mod.create_ocr_client(
-        _factory_config(ollama_host=legacy), providers=SAVED_PROVIDERS
-    )
-    assert isinstance(un_referenced, OllamaVisionOcr)
-    un_referenced.ocr_page(b"\x89PNG")
-    assert inits[0]["host"] == legacy
-
-    named = ocr_mod.create_ocr_client(
-        _factory_config(ocr_provider="local-daemon", ollama_host=legacy),
-        providers=SAVED_PROVIDERS,
-    )
-    assert isinstance(named, OllamaVisionOcr)
-    named.ocr_page(b"\x89PNG")
-    # The named provider names no address, so it uses the client default instead.
-    assert inits[1]["host"] is None
-    assert [chat[0] for chat in chats] == ["glm-ocr", "glm-ocr"]
 
 
 def test_factory_openai_compatible_provider_gets_its_own_adapter(monkeypatch):
     import esdc.corpus.ocr as ocr_mod
 
     client = ocr_mod.create_ocr_client(
-        _factory_config(ocr_provider="engine", extract_timeout_seconds=45),
-        providers=SAVED_PROVIDERS,
+        _factory_config(extract_timeout_seconds=45),
+        resolved=_resolved_ocr("engine"),
     )
 
     assert isinstance(client, OpenAICompatibleOcr)
@@ -314,43 +330,56 @@ def test_factory_openai_compatible_provider_gets_its_own_adapter(monkeypatch):
     assert client.model != SAVED_PROVIDERS["engine"]["model"]
 
 
-def test_factory_uses_config_when_no_providers_are_injected(monkeypatch):
+def test_factory_reads_resolved_config_when_not_injected(monkeypatch):
     import esdc.corpus.ocr as ocr_mod
 
     monkeypatch.setattr(
-        ocr_mod.Config, "get_providers", classmethod(lambda cls: SAVED_PROVIDERS)
+        ocr_mod.Config,
+        "resolve_model_task",
+        classmethod(lambda cls, role: _resolved_ocr("engine")),
     )
-    client = ocr_mod.create_ocr_client(_factory_config(ocr_provider="engine"))
+    client = ocr_mod.create_ocr_client(_factory_config())
     assert isinstance(client, OpenAICompatibleOcr)
 
 
-def test_factory_injected_providers_do_not_read_config(monkeypatch):
+def test_factory_injected_task_does_not_read_global_config(monkeypatch):
     import esdc.corpus.ocr as ocr_mod
 
-    def forbidden(cls):
+    def forbidden(cls, role):
         raise AssertionError("the factory must not read global config")
 
-    monkeypatch.setattr(ocr_mod.Config, "get_providers", classmethod(forbidden))
+    monkeypatch.setattr(ocr_mod.Config, "resolve_model_task", classmethod(forbidden))
     client = ocr_mod.create_ocr_client(
-        _factory_config(ocr_provider="engine"), providers=SAVED_PROVIDERS
+        _factory_config(), resolved=_resolved_ocr("engine")
     )
     assert isinstance(client, OpenAICompatibleOcr)
 
 
 @pytest.mark.parametrize(
-    ("provider_name", "phrase"),
+    ("resolved", "phrase"),
     [
-        ("nope", "not configured"),
-        ("other", "not supported for provider type anthropic"),
-        ("no-address", "has no base URL"),
+        (_resolved_ocr(None), "not configured"),
+        (
+            ResolvedTask(
+                role="ocr",
+                mode="model",
+                enabled=True,
+                primary=ResolvedTarget(
+                    connection="other",
+                    provider={"name": "other", "provider_type": "anthropic", "type": "anthropic"},
+                    model="glm-ocr",
+                    options={},
+                ),
+            ),
+            "not supported for provider type anthropic",
+        ),
+        (_resolved_ocr("no-address"), "has no base URL"),
     ],
 )
-def test_factory_returns_the_unavailable_sentinel(monkeypatch, provider_name, phrase):
+def test_factory_returns_the_unavailable_sentinel(resolved, phrase):
     import esdc.corpus.ocr as ocr_mod
 
-    client = ocr_mod.create_ocr_client(
-        _factory_config(ocr_provider=provider_name), providers=SAVED_PROVIDERS
-    )
+    client = ocr_mod.create_ocr_client(_factory_config(), resolved=resolved)
 
     assert isinstance(client, ocr_mod.UnavailableOcr)
     assert phrase in client.reason
@@ -361,11 +390,11 @@ def test_factory_returns_the_unavailable_sentinel(monkeypatch, provider_name, ph
         client.ocr_page(b"\x89PNG")
 
 
-def test_factory_empty_model_returns_the_sentinel(monkeypatch):
+def test_factory_empty_model_returns_the_sentinel():
     import esdc.corpus.ocr as ocr_mod
 
     client = ocr_mod.create_ocr_client(
-        _factory_config(ocr_model="", ocr_provider="engine"), providers=SAVED_PROVIDERS
+        _factory_config(), resolved=_resolved_ocr("engine", model="")
     )
 
     assert isinstance(client, ocr_mod.UnavailableOcr)

@@ -93,7 +93,7 @@ def extract_pdf(
         bad = [i + 1 for i, ok in enumerate(native_ok) if not ok]
         raise ValueError(
             f"{path.name}: scanned page(s) {bad} have no text layer and no OCR "
-            "model is available. Check `ollama list` for the corpus.ocr_model."
+            "model is available. Check the OCR task's connection and model."
         )
 
     doc = fitz.open(str(path))

@@ -13,9 +13,23 @@ import duckdb
 import pytest
 
 from esdc import embedders
-from esdc.configs import Config
 from esdc.embedders import EmbeddingError
 from esdc.search.semantic_resolver import SemanticResolver
+
+
+@pytest.fixture(autouse=True)
+def _default_embedding_signature(monkeypatch):
+    """Probe tests run against one explicit effective embedding config."""
+    monkeypatch.setattr(
+        embedders,
+        "config_signature",
+        lambda backend=None: (
+            "ollama",
+            "http://localhost:11434",
+            "qwen3-embedding-0.6b-q8_0",
+            "",
+        ),
+    )
 
 
 class _FixedEmbedder:
@@ -382,16 +396,14 @@ class _FailingBatchClient(_CountingEmbedder):
 def _patch_config(monkeypatch, model, api_key=""):
     state = {"model": model, "api_key": api_key}
     monkeypatch.setattr(
-        Config, "get_embedding_backend", classmethod(lambda cls: "ollama")
-    )
-    monkeypatch.setattr(
-        Config, "get_embedding_host", classmethod(lambda cls: "http://localhost:11434")
-    )
-    monkeypatch.setattr(
-        Config, "get_embedding_model", classmethod(lambda cls: state["model"])
-    )
-    monkeypatch.setattr(
-        Config, "get_embedding_api_key", classmethod(lambda cls: state["api_key"])
+        embedders,
+        "config_signature",
+        lambda backend=None: (
+            "ollama",
+            "http://localhost:11434",
+            state["model"],
+            state["api_key"],
+        ),
     )
     return state
 

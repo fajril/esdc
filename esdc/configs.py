@@ -1650,15 +1650,9 @@ class Config:
     CORPUS_DEFAULTS = {
         "chunk_size": 3000,  # max chars per chunk (~750 tokens)
         "chunk_overlap": 300,  # chars carried over between chunks
-        # rerank: second-stage cross-encoder over the RRF top pool. Off by
-        # default, and `esdc corpus eval` has now argued against turning it
-        # on: measured 2026-08-06 it left lookup Pass@1 unchanged (78.3%),
-        # cost cross_reference 10pp of Pass@1, and raised mean latency from
-        # 69 ms to 41 s per query WITH full GPU offload. It also scores
-        # near-1.0 on queries the corpus cannot answer. Read the reranker
-        # module docstring before enabling this.
-        "rerank": False,
-        "rerank_pool": 30,  # candidates scored per query when rerank is on
+        # rerank_pool: candidates scored per query when the Reranking task is
+        # enabled. The task's own model/enabled switch lives in models.rerank.
+        "rerank_pool": 30,
         # max_chunks_per_doc: cap on chunks of the same document kept in
         # search() results, applied after rerank so the surviving chunk per
         # document is the best-scoring one. Measured 2026-08-05: top-10 held
@@ -1677,33 +1671,6 @@ class Config:
         # 81.7% -> 83.3%, Recall@10 85.0% -> 90.0%; the cost is roughly one
         # query at lookup Pass@5/Pass@10. Set False to A/B it back.
         "query_instruct": True,
-        # rerank_model: model id sent to the rerank service. A stored legacy GGUF
-        # id is kept as it is and passed through unchanged. Runtime-only (output
-        # not stored), so safe to change without reembedding.
-        "rerank_model": "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF",
-        # rerank_backend: "provider" calls /v1/rerank on the saved connection
-        # named by rerank_provider. A stored "local" value is retired: it warns
-        # once per process and search keeps RRF order.
-        "rerank_backend": "provider",
-        # rerank_provider: saved openai_compatible provider used when
-        # rerank_backend is "provider"; "" = none. An inactive reference is
-        # kept as stored, never repaired.
-        "rerank_provider": "",
-        "ocr_model": "glm-ocr",  # Ollama OCR model (zai-org/GLM-OCR, 0.9B)
-        # ocr_provider: saved provider reused for OCR; "" = Ollama daemon at
-        # corpus.ollama_host. The provider's chat model is never the OCR model.
-        "ocr_provider": "",
-        # metadata_model: text LLM for metadata extraction; "main" = default
-        # chat provider, "" = use ocr_model on the rendered first page
-        "metadata_model": "main",
-        # metadata_provider: saved provider whose connection is reused while
-        # metadata_model names the wire model; "" = current string behavior.
-        "metadata_provider": "",
-        # cleanup_model: reformats native-extracted pages before review;
-        # "main" = default chat provider, "" = off
-        "cleanup_model": "main",
-        # cleanup_provider: same rule as metadata_provider for the cleanup call.
-        "cleanup_provider": "",
         "ocr_dpi": 200,  # page render resolution; raise to 300 if OCR quality poor
         "num_ctx": 16384,  # Ollama context window; glm-ocr crashes on images below this
         # extract_max_tokens / extract_timeout_seconds: bounds applied ONLY to
@@ -1714,13 +1681,6 @@ class Config:
         "extract_timeout_seconds": 300,
         "min_chars_per_page": 50,  # text-layer chars below which a page counts as scanned  # noqa: E501
         "min_image_area": 0.05,  # embedded-image area (fraction of page) below which images are ignored  # noqa: E501
-        # ollama_host: Ollama server for corpus OCR + Ollama-named text
-        # models; "" = local daemon (http://127.0.0.1:11434)
-        "ollama_host": "",
-        # n_gpu_layers: retired llama.cpp GPU offload key, kept so a stored value
-        # parses without error. Nothing consumes it now that embedding and rerank
-        # go through a service. Runtime-only, never stored.
-        "n_gpu_layers": -1,
     }
 
     @classmethod
@@ -1736,7 +1696,18 @@ class Config:
         """
         merged = dict(cls.CORPUS_DEFAULTS)
         config = cls._load_config()
-        merged.update((config or {}).get("corpus", {}))
+        corpus_config = (config or {}).get("corpus", {})
+        if isinstance(corpus_config, Mapping):
+            # Recognized pre-canonical model keys are conversion-only data.
+            # They never become runtime corpus settings, even before a user
+            # replaces the old file.
+            merged.update(
+                {
+                    key: value
+                    for key, value in corpus_config.items()
+                    if key not in LEGACY_MODEL_CORPUS_KEYS
+                }
+            )
         return merged
 
     @classmethod

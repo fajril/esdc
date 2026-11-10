@@ -62,7 +62,7 @@ def _stub_no_llm(monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr(rename_mod, "_resolve_text_caller", lambda *a, **k: None)
+    monkeypatch.setattr(rename_mod, "text_caller_for_task", lambda role: None)
 
     class _DeadOcr:
         def __init__(self, *a, **k):
@@ -200,7 +200,7 @@ def test_run_rename_llm_tier_receives_filename(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        rename_mod, "_resolve_text_caller", lambda *a, **k: lambda p: "{}"
+        rename_mod, "text_caller_for_task", lambda role: lambda p: "{}"
     )
 
     class _DeadOcr:
@@ -273,87 +273,37 @@ def _dead_ocr(monkeypatch) -> None:
     monkeypatch.setattr(rename_mod, "create_ocr_client", lambda cfg: _DeadOcr())
 
 
-def test_llm_context_build_passes_the_metadata_provider_reference(monkeypatch):
-    seen = {}
+def test_llm_context_build_uses_the_metadata_task(monkeypatch):
+    seen = []
 
-    def fake_caller(spec, host=None, provider_name=None):
-        seen["spec"] = spec
-        seen["provider_name"] = provider_name
+    def fake_caller(role):
+        seen.append(role)
         return None
 
-    monkeypatch.setattr(rename_mod, "_resolve_text_caller", fake_caller)
+    monkeypatch.setattr(rename_mod, "text_caller_for_task", fake_caller)
     _dead_ocr(monkeypatch)
 
-    ctx = rename_mod._LlmContext(
-        _rename_cfg(metadata_model="meta-b", metadata_provider="engine")
-    )
+    ctx = rename_mod._LlmContext(_rename_cfg())
     ctx._build()
 
-    assert seen == {"spec": "meta-b", "provider_name": "engine"}
+    assert seen == ["metadata"]
     # best effort: an unavailable caller leaves rename working, never a raise
     assert ctx.metadata_caller is None
 
 
-def test_llm_context_reference_model_is_the_wire_model(monkeypatch):
-    import esdc.providers as providers
-
-    saved = {"engine": {"name": "engine", "provider_type": "openai", "model": "chat-a"}}
-    created = []
+def test_llm_context_metadata_caller_comes_from_the_resolved_task(monkeypatch):
+    def caller(prompt: str) -> str:
+        return "{}"
 
     monkeypatch.setattr(
-        rename_mod.Config,
-        "get_referenced_provider",
-        classmethod(lambda cls, name: dict(saved[name])),
-    )
-
-    class FakeLLM:
-        def invoke(self, prompt):
-            return type("R", (), {"content": "{}"})()
-
-    monkeypatch.setattr(
-        providers,
-        "create_llm_from_config",
-        lambda cfg: created.append(dict(cfg)) or FakeLLM(),
+        rename_mod, "text_caller_for_task", lambda role: caller
     )
     _dead_ocr(monkeypatch)
 
-    ctx = rename_mod._LlmContext(
-        _rename_cfg(metadata_model="meta-b", metadata_provider="engine")
-    )
+    ctx = rename_mod._LlmContext(_rename_cfg())
     ctx._build()
 
-    assert ctx.metadata_caller is not None
-    assert created[0]["model"] == "meta-b"
-    # the saved provider keeps its chat model
-    assert saved["engine"]["model"] == "chat-a"
-
-
-def test_llm_context_reference_with_empty_model_keeps_the_saved_chat_model(monkeypatch):
-    import esdc.providers as providers
-
-    saved = {"engine": {"name": "engine", "provider_type": "openai", "model": "chat-a"}}
-    created = []
-
-    monkeypatch.setattr(
-        rename_mod.Config,
-        "get_referenced_provider",
-        classmethod(lambda cls, name: dict(saved[name])),
-    )
-    monkeypatch.setattr(
-        providers,
-        "create_llm_from_config",
-        lambda cfg: created.append(dict(cfg)) or object(),
-    )
-    _dead_ocr(monkeypatch)
-
-    ctx = rename_mod._LlmContext(
-        _rename_cfg(metadata_model="", metadata_provider="engine")
-    )
-    ctx._build()
-
-    assert ctx.metadata_caller is None
-    assert created == []  # no chat-model substitution, no LLM constructed
-    assert saved["engine"]["model"] == "chat-a"
+    assert ctx.metadata_caller is caller
 
 
 def test_llm_context_build_uses_the_ocr_factory_and_keeps_the_health_gate(monkeypatch):
@@ -369,7 +319,7 @@ def test_llm_context_build_uses_the_ocr_factory_and_keeps_the_health_gate(monkey
         "create_ocr_client",
         lambda cfg: seen.update({"cfg": cfg, "client": healthy}) or healthy,
     )
-    monkeypatch.setattr(rename_mod, "_resolve_text_caller", lambda *a, **k: None)
+    monkeypatch.setattr(rename_mod, "text_caller_for_task", lambda role: None)
 
     cfg = _rename_cfg()
     ctx = rename_mod._LlmContext(cfg)
@@ -503,7 +453,7 @@ def test_run_rename_progress_reports_llm_and_apply(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        rename_mod, "_resolve_text_caller", lambda *a, **k: lambda p: "{}"
+        rename_mod, "text_caller_for_task", lambda role: lambda p: "{}"
     )
 
     class _DeadOcr:

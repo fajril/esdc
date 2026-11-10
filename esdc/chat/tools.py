@@ -1748,9 +1748,12 @@ def semantic_search(
     try:
         from esdc.corpus.store import CorpusStore
 
-        store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
+        store = CorpusStore(read_only=True)
         try:
             store.validate_readiness("search")
+            # The client is resolved lazily, only when a vector is actually
+            # needed: an unready corpus must report not_available even when the
+            # Embeddings task is unset, instead of surfacing a config error.
             documents_result = store.search(
                 query=query,
                 limit=5,

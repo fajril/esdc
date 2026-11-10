@@ -11,9 +11,23 @@ import duckdb
 import pytest
 
 from esdc import embedders
-from esdc.configs import Config
 from esdc.corpus.chunker import Chunk
 from esdc.corpus.store import CorpusStore
+
+
+@pytest.fixture(autouse=True)
+def _default_embedding_signature(monkeypatch):
+    """Probe-memo tests run against one explicit effective embedding config."""
+    monkeypatch.setattr(
+        embedders,
+        "config_signature",
+        lambda backend=None: (
+            "ollama",
+            "http://localhost:11434",
+            "qwen3-embedding-0.6b-q8_0",
+            "",
+        ),
+    )
 
 
 class _FixedEmbedder:
@@ -420,15 +434,15 @@ def test_validation_runs_once_per_config_signature_and_db_signature(
     """Probe validation is memoized per (config signature, db signature)."""
     state = {"model": "service-a"}
     monkeypatch.setattr(
-        Config, "get_embedding_backend", classmethod(lambda cls: "ollama")
+        embedders,
+        "config_signature",
+        lambda backend=None: (
+            "ollama",
+            "http://localhost:11434",
+            state["model"],
+            "",
+        ),
     )
-    monkeypatch.setattr(
-        Config, "get_embedding_host", classmethod(lambda cls: "http://localhost:11434")
-    )
-    monkeypatch.setattr(
-        Config, "get_embedding_model", classmethod(lambda cls: state["model"])
-    )
-    monkeypatch.setattr(Config, "get_embedding_api_key", classmethod(lambda cls: ""))
 
     client = _CountingEmbedder([1.0, 0.0, 0.0], "service-a")
     store = _writer(tmp_path, client, "memo.duckdb")
@@ -532,16 +546,14 @@ def test_client_replaced_when_effective_config_changes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(embedders, "get_embedder", fake_get_embedder)
     monkeypatch.setattr(
-        Config, "get_embedding_backend", classmethod(lambda cls: "ollama")
-    )
-    monkeypatch.setattr(
-        Config, "get_embedding_host", classmethod(lambda cls: state["host"])
-    )
-    monkeypatch.setattr(
-        Config, "get_embedding_model", classmethod(lambda cls: state["model"])
-    )
-    monkeypatch.setattr(
-        Config, "get_embedding_api_key", classmethod(lambda cls: state["api_key"])
+        embedders,
+        "config_signature",
+        lambda backend=None: (
+            "ollama",
+            state["host"],
+            state["model"],
+            state["api_key"],
+        ),
     )
 
     store = CorpusStore(db_path=tmp_path / "swap.duckdb", read_only=True)

@@ -1,5 +1,5 @@
 # tests/corpus/test_reranker.py
-"""get_reranker: the service factory, and what it does with a retired `local`."""
+"""get_reranker: the canonical Reranking task factory."""
 
 from __future__ import annotations
 
@@ -8,6 +8,27 @@ import pytest
 import esdc.corpus.provider_reranker as provider_reranker
 from esdc.corpus import reranker as rr_mod
 from esdc.corpus.provider_reranker import ProviderReranker
+from esdc.model_runtime import ResolvedTarget, ResolvedTask
+
+RERANK_PROVIDERS = {
+    "engine": {
+        "name": "engine",
+        "provider_type": "openai_compatible",
+        "type": "openai_compatible",
+        "base_url": "http://engine:4000/v1",
+        "api_key": "fixture-key",
+        "model": "chat-a",
+    },
+    "gpu-box": {
+        "type": "ollama",
+        "provider_type": "ollama",
+        "base_url": "http://gpu-box:11434",
+    },
+    "no-address": {
+        "type": "openai_compatible",
+        "provider_type": "openai_compatible",
+    },
+}
 
 
 def _no_request(monkeypatch) -> None:
@@ -17,8 +38,41 @@ def _no_request(monkeypatch) -> None:
     monkeypatch.setattr(provider_reranker.requests, "post", forbidden)
 
 
+def _resolved(
+    provider_name: str = "engine",
+    *,
+    model: str = "d1-2b",
+    enabled: bool = True,
+    mode: str = "model",
+) -> ResolvedTask:
+    if mode != "model":
+        return ResolvedTask(
+            role="rerank", mode=mode, enabled=False  # type: ignore[arg-type]
+        )
+    provider = dict(RERANK_PROVIDERS[provider_name])
+    return ResolvedTask(
+        role="rerank",
+        mode="model",
+        enabled=enabled,
+        primary=ResolvedTarget(
+            connection=provider_name,
+            provider={**provider, "model": model},
+            model=model,
+            options={},
+        ),
+    )
+
+
+def _install(monkeypatch, task: ResolvedTask) -> None:
+    monkeypatch.setattr(
+        rr_mod.Config,
+        "resolve_model_task",
+        classmethod(lambda cls, role: task),
+    )
+
+
 def test_no_in_process_reranker_remains():
-    """The loader, registry, singleton and teardown are gone, not hidden."""
+    """The loader, registry, singleton and retired-local memo are gone."""
     for name in (
         "Reranker",
         "_load_reranker",
@@ -28,152 +82,78 @@ def test_no_in_process_reranker_remains():
         "_rerank_prompt",
         "_load_lock",
         "_infer_lock",
+        "_warn_retired_local",
+        "_WARNED_RERANK_SIGNATURES",
+        "_warn_lock",
         "atexit",
     ):
         assert not hasattr(rr_mod, name), name
-    assert hasattr(rr_mod, "_warn_lock")
-    assert hasattr(rr_mod, "_WARNED_RERANK_SIGNATURES")
 
 
-RERANK_PROVIDERS = {
-    "engine": {
-        "name": "engine",
-        "provider_type": "openai_compatible",
-        "base_url": "http://engine:4000/v1",
-        "api_key": "fixture-key",
-        "model": "chat-a",  # the saved Chat model, never the rerank model
-    },
-    "gpu-box": {"provider_type": "ollama", "base_url": "http://gpu-box:11434"},
-    "no-address": {"provider_type": "openai_compatible", "model": "chat-a"},
-}
-
-
-def _factory_cfg(**overrides) -> dict:
-    cfg = {
-        "rerank_backend": "provider",
-        "rerank_provider": "engine",
-        "rerank_model": "d1-2b",
-    }
-    cfg.update(overrides)
-    return cfg
-
-
-def _stub_provider(monkeypatch, name: str):
-    monkeypatch.setattr(
-        rr_mod.Config,
-        "get_referenced_provider",
-        classmethod(lambda cls, n: RERANK_PROVIDERS[n]),
-    )
-
-
-def test_default_config_is_provider_and_off():
-    """The service backend is the default; nothing here enables reranking."""
-    cfg = rr_mod.Config.get_corpus_config()
-    assert cfg.get("rerank") is False
-    assert cfg.get("rerank_backend") == "provider"
-    assert cfg.get("rerank_provider") == ""
-
-
-def test_legacy_local_backend_warns_once_and_falls_back_to_rrf(monkeypatch, caplog):
-    """D8: one warning per process per config signature, then RRF order."""
-    monkeypatch.setattr(rr_mod, "_WARNED_RERANK_SIGNATURES", set())
+def test_disabled_rerank_returns_none(monkeypatch):
     _no_request(monkeypatch)
-    cfg = _factory_cfg(rerank_backend="local")
-    monkeypatch.setattr(
-        rr_mod.Config,
-        "get_corpus_config",
-        classmethod(lambda cls: cfg),
-    )
-
-    with caplog.at_level("WARNING"):
-        assert rr_mod.get_reranker() is None
-        assert rr_mod.get_reranker() is None
-
-    warnings = [r.message for r in caplog.records if "retired" in r.message]
-    assert len(warnings) == 1
-    assert "provider" in warnings[0]
-    # A stored value is reported, never repaired.
-    assert cfg == _factory_cfg(rerank_backend="local")
+    _install(monkeypatch, _resolved(enabled=False))
+    assert rr_mod.get_reranker() is None
 
 
-def test_get_reranker_backend_defaults_to_provider(monkeypatch, caplog):
-    """An absent backend means the service path, not the retired local path."""
-    monkeypatch.setattr(rr_mod, "_WARNED_RERANK_SIGNATURES", set())
+def test_unset_rerank_returns_none(monkeypatch):
     _no_request(monkeypatch)
-    monkeypatch.setattr(
-        rr_mod.Config,
-        "get_corpus_config",
-        classmethod(lambda cls: {"rerank_model": "x"}),
-    )
-    with caplog.at_level("WARNING"):
-        assert rr_mod.get_reranker() is None
-    assert any("provider is not configured" in r.message for r in caplog.records)
-    assert not any("retired" in r.message for r in caplog.records)
+    _install(monkeypatch, _resolved(mode="unset"))
+    assert rr_mod.get_reranker() is None
 
 
-def test_get_reranker_provider_builds_the_http_client_with_the_explicit_model(
-    monkeypatch,
-):
+def test_enabled_rerank_builds_the_client_with_its_assigned_model(monkeypatch):
     _no_request(monkeypatch)
-    monkeypatch.setattr(
-        rr_mod.Config,
-        "get_corpus_config",
-        classmethod(lambda cls: _factory_cfg()),
-    )
-    _stub_provider(monkeypatch, "engine")
+    _install(monkeypatch, _resolved(model="d1-2b"))
 
     client = rr_mod.get_reranker()
 
     assert isinstance(client, ProviderReranker)
-    assert client.model == "d1-2b"  # the explicit choice, not the provider chat model
+    assert client.model == "d1-2b"
     assert client.base_url == "http://engine:4000/v1"
     assert RERANK_PROVIDERS["engine"]["model"] == "chat-a"
 
 
-def test_legacy_gguf_model_id_is_passed_through_unchanged(monkeypatch):
-    """D5: a stored GGUF-shaped id is not reinterpreted; it is sent as the model."""
+def test_force_builds_the_client_even_when_the_task_is_disabled(monkeypatch):
     _no_request(monkeypatch)
-    legacy = _factory_cfg(rerank_model="ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF")
-    monkeypatch.setattr(
-        rr_mod.Config, "get_corpus_config", classmethod(lambda cls: legacy)
-    )
-    _stub_provider(monkeypatch, "engine")
+    _install(monkeypatch, _resolved(enabled=False))
+
+    client = rr_mod.get_reranker(force=True)
+
+    assert isinstance(client, ProviderReranker)
+    assert client.model == "d1-2b"
+
+
+def test_legacy_gguf_model_id_is_passed_through_unchanged(monkeypatch):
+    _no_request(monkeypatch)
+    legacy = "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+    _install(monkeypatch, _resolved(model=legacy))
 
     client = rr_mod.get_reranker()
     assert isinstance(client, ProviderReranker)
-    assert client.model == legacy["rerank_model"]
-    # The stored value itself is unchanged.
-    assert legacy == _factory_cfg(rerank_model="ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF")
+    assert client.model == legacy
 
 
-@pytest.mark.parametrize(
-    ("cfg", "phrase"),
-    [
-        (_factory_cfg(rerank_provider=""), "provider is not configured"),
-        (_factory_cfg(rerank_model=""), "model is not configured"),
-        (_factory_cfg(rerank_provider="nope"), "not configured"),
-        (
-            _factory_cfg(rerank_provider="gpu-box"),
-            "not supported for provider type ollama",
-        ),
-        (_factory_cfg(rerank_provider="no-address"), "has no base URL"),
-        (_factory_cfg(rerank_backend="gateway"), "not supported"),
-    ],
-)
-def test_get_reranker_invalid_selection_warns_and_returns_none(
-    monkeypatch, caplog, cfg, phrase
-):
+def test_unsupported_connection_type_warns_and_returns_none(monkeypatch, caplog):
     _no_request(monkeypatch)
-
-    def referenced(cls, name):
-        if name not in RERANK_PROVIDERS:
-            raise ValueError(f"unknown provider {name}")
-        return RERANK_PROVIDERS[name]
-
-    monkeypatch.setattr(rr_mod.Config, "get_corpus_config", classmethod(lambda cls: cfg))
-    monkeypatch.setattr(rr_mod.Config, "get_referenced_provider", classmethod(referenced))
+    _install(monkeypatch, _resolved("gpu-box"))
 
     with caplog.at_level("WARNING"):
         assert rr_mod.get_reranker() is None
+    assert any("not OpenAI-compatible" in r.message for r in caplog.records)
 
-    assert any(phrase in r.message for r in caplog.records)
+
+def test_connection_without_base_url_warns_and_returns_none(monkeypatch, caplog):
+    _no_request(monkeypatch)
+    _install(monkeypatch, _resolved("no-address"))
+
+    with caplog.at_level("WARNING"):
+        assert rr_mod.get_reranker() is None
+    assert any("has no base URL" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("mode", ["chat", "ocr", "off", "unset"])
+def test_non_model_modes_are_not_rerankable(monkeypatch, mode):
+    _no_request(monkeypatch)
+    _install(monkeypatch, _resolved(mode=mode))
+    assert rr_mod.get_reranker(force=True) is None

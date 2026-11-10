@@ -7,8 +7,17 @@ from pathlib import Path
 
 import pytest
 
+import esdc.corpus.pipeline as pipeline
 from esdc.corpus.chunker import Chunk
 from esdc.corpus.store import CorpusStore
+
+
+@pytest.fixture(autouse=True)
+def _pipeline_embedder(monkeypatch):
+    def fake(backend=None):
+        return FakeEmbedder()
+
+    monkeypatch.setattr(pipeline, "get_embedder", fake)
 
 
 class FakeEmbedder:

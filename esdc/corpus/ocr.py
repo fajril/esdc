@@ -1,16 +1,14 @@
-"""Scanned-page OCR via a local Ollama model (default: glm-ocr).
+"""Scanned-page OCR via the assigned image-chat connection.
 
-Same local-only stack as EmbeddingManager — document content never
-leaves the machine. temperature=0 and a verbatim-numbers prompt to
-minimize hallucination on official documents. num_ctx must be large
-(16384): glm-ocr fails on page images at Ollama's default 2048.
-The ollama python client talks to Ollama's native API — required,
-because Ollama's OpenAI-compatible API is limited for vision requests.
+temperature=0 and a verbatim-numbers prompt minimize hallucination on official
+documents. num_ctx must be large (16384): glm-ocr fails on page images at
+Ollama's default 2048. Ollama speaks its native API for vision requests;
+OpenAI-compatible connections use the existing provider image adapter.
 
-`create_ocr_client()` is the single factory the pipeline and rename use: an
-empty `corpus.ocr_provider` keeps this Ollama client, a saved provider selects
-its own adapter, and an unusable selection comes back as `UnavailableOcr`
-rather than an exception at construction.
+`create_ocr_client()` is the single factory the pipeline and rename use. It
+reads the resolved OCR task only: the assigned connection and explicit OCR
+model. An unusable or unset selection comes back as `UnavailableOcr` rather
+than an exception at construction.
 """
 
 import logging
@@ -21,6 +19,8 @@ import httpx
 import ollama
 
 from esdc.configs import Config
+from esdc.model_runtime import ResolvedTask
+from esdc.model_settings import ModelConfigurationRequired
 
 logger = logging.getLogger(__name__)
 
@@ -110,19 +110,18 @@ class UnavailableOcr:
 def create_ocr_client(
     config: Mapping[str, Any],
     *,
-    providers: Mapping[str, Mapping[str, Any]] | None = None,
+    resolved: ResolvedTask | None = None,
     timeout_seconds: float | None = None,
 ) -> OcrClient:
-    """Build the OCR client for one corpus config, best effort.
+    """Build the OCR client from the resolved OCR task, best effort.
 
-    An empty `ocr_provider` keeps the existing local Ollama client and its
-    `corpus.ollama_host`. A named provider uses its saved address, credential, and
-    the explicit `ocr_model`; the provider's chat model is never used. A named Ollama
-    provider with no saved address uses the Ollama client default, not
-    `corpus.ollama_host`: that value belongs to the un-referenced source, so reusing
-    it could send document images to a different endpoint. A missing provider, an
-    unsupported type, or an empty model comes back as `UnavailableOcr`: this factory
-    never raises for an invalid or inactive selection.
+    Processing limits (``extract_timeout_seconds``, ``num_ctx``) still come
+    from the corpus config. The connection address, credential and wire model
+    come only from ``models.ocr``; old ``ocr_model``/``ocr_provider``/
+    ``ollama_host`` keys are never interpreted here. An unset task, a missing
+    connection, an unsupported type or an empty model comes back as
+    `UnavailableOcr`: this factory never raises for an invalid or inactive
+    selection.
     """
     read_timeout = float(
         timeout_seconds
@@ -131,35 +130,30 @@ def create_ocr_client(
     )
     timeout = httpx.Timeout(read_timeout, connect=10.0)
     num_ctx = config.get("num_ctx", 16384)
-    model = str(config.get("ocr_model") or "").strip()
-    reference = str(config.get("ocr_provider") or "").strip()
 
-    if not model:
-        return UnavailableOcr("OCR model is not configured")
+    if resolved is None:
+        try:
+            resolved = Config.resolve_model_task("ocr")
+        except ModelConfigurationRequired as exc:
+            return UnavailableOcr(str(exc))
 
-    if not reference:
-        return OllamaVisionOcr(
-            model,
-            num_ctx=num_ctx,
-            host=config.get("ollama_host") or None,
-            timeout=timeout,
+    if resolved.mode != "model" or resolved.primary is None:
+        return UnavailableOcr(
+            "OCR is not configured. Choose a connection and model in the OCR task."
         )
 
-    provider_map = providers if providers is not None else Config.get_providers()
-    provider = (
-        provider_map.get(reference) if isinstance(provider_map, Mapping) else None
-    )
-    if not isinstance(provider, Mapping):
-        return UnavailableOcr(f"OCR provider '{reference}' is not configured")
+    provider = resolved.primary.provider
+    model = resolved.primary.model
+    if not model:
+        return UnavailableOcr("OCR model is not configured")
 
     provider_type = str(
         provider.get("provider_type") or provider.get("type") or ""
     ).strip().lower()
 
     if provider_type == "ollama":
-        # A named provider is only its own saved address. With no saved address, the
-        # Ollama client default is used; `corpus.ollama_host` is never reused here,
-        # because it belongs to the un-referenced source.
+        # Only the assigned connection's own address is used. An empty address
+        # means the Ollama client default, never a stale corpus host.
         host = str(provider.get("base_url") or "").strip() or None
         return OllamaVisionOcr(
             model,
@@ -171,7 +165,9 @@ def create_ocr_client(
     if provider_type == "openai_compatible":
         base_url = str(provider.get("base_url") or "").strip()
         if not base_url:
-            return UnavailableOcr(f"OCR provider '{reference}' has no base URL")
+            return UnavailableOcr(
+                f"OCR connection {resolved.primary.connection!r} has no base URL"
+            )
 
         # Imported here so the two modules can share OCR_PROMPT without a cycle.
         from esdc.corpus.provider_ocr import OpenAICompatibleOcr

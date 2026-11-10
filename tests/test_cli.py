@@ -246,11 +246,24 @@ class TestStatusCorpus:
         assert result.exit_code == 0
         assert "not initialized" in result.stdout
 
-    def test_shows_counts_and_breakdown_for_committed_docs(self, isolated_config):
+    def test_shows_counts_and_breakdown_for_committed_docs(
+        self, isolated_config, monkeypatch
+    ):
         """Corpus section shows doc/chunk counts, doc_type breakdown, model."""
         from esdc.corpus.chunker import Chunk
         from esdc.corpus.store import CorpusStore
 
+        # The probe memo key resolves the effective Embeddings assignment; pin
+        # one so this direct-store test never depends on a machine's config.
+        monkeypatch.setattr(
+            "esdc.embedders.config_signature",
+            lambda backend=None: (
+                "ollama",
+                "http://localhost:11434",
+                "fake-embed",
+                "",
+            ),
+        )
         db_file = isolated_config / ".esdc" / "esdc.duckdb"
         store = CorpusStore(
             db_path=db_file, embedder=_FakeEmbedder(), read_only=False

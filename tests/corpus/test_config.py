@@ -3,27 +3,48 @@
 from esdc.configs import Config
 
 
-def test_corpus_config_defaults(monkeypatch):
+def test_corpus_config_defaults_are_processing_only(monkeypatch):
     monkeypatch.setattr(Config, "_load_config", classmethod(lambda cls: None))
     cfg = Config.get_corpus_config()
     assert cfg["chunk_size"] == 3000
     assert cfg["chunk_overlap"] == 300
-    assert cfg["ocr_model"] == "glm-ocr"
-    assert cfg["metadata_model"] == "main"  # default chat provider
-    assert cfg["cleanup_model"] == "main"  # default chat provider
     assert cfg["ocr_dpi"] == 200
     assert cfg["num_ctx"] == 16384
     assert cfg["min_chars_per_page"] == 50
     assert cfg["min_image_area"] == 0.05
+    for key in (
+        "rerank",
+        "rerank_backend",
+        "rerank_provider",
+        "rerank_model",
+        "ocr_model",
+        "ocr_provider",
+        "metadata_model",
+        "metadata_provider",
+        "cleanup_model",
+        "cleanup_provider",
+        "ollama_host",
+        "n_gpu_layers",
+    ):
+        assert key not in cfg, key
 
 
-def test_corpus_config_from_yaml(monkeypatch):
-    yaml_cfg = {"corpus": {"chunk_size": 2000, "ocr_model": "qwen2.5vl:7b"}}
+def test_corpus_config_reads_processing_and_ignores_old_model_fields(monkeypatch):
+    yaml_cfg = {
+        "corpus": {
+            "chunk_size": 2000,
+            "ocr_model": "qwen2.5vl:7b",
+            "metadata_model": "main",
+            "ollama_host": "http://old:11434",
+        }
+    }
     monkeypatch.setattr(Config, "_load_config", classmethod(lambda cls: yaml_cfg))
     cfg = Config.get_corpus_config()
     assert cfg["chunk_size"] == 2000
     assert cfg["chunk_overlap"] == 300  # default survives partial override
-    assert cfg["ocr_model"] == "qwen2.5vl:7b"
+    assert "ocr_model" not in cfg
+    assert "metadata_model" not in cfg
+    assert "ollama_host" not in cfg
 
 
 def test_corpus_keys_documented():
@@ -35,31 +56,29 @@ def test_corpus_keys_documented():
     assert "corpus.min_image_area" in KEY_DESCRIPTIONS
 
 
-def test_corpus_ollama_host_default_and_documented(monkeypatch):
-    from esdc.configs import KEY_DESCRIPTIONS
+def test_corpus_model_keys_leave_the_persistent_defaults():
+    for key in (
+        "ocr_model",
+        "ocr_provider",
+        "metadata_model",
+        "metadata_provider",
+        "cleanup_model",
+        "cleanup_provider",
+        "ollama_host",
+        "rerank",
+        "rerank_backend",
+        "rerank_provider",
+        "rerank_model",
+        "n_gpu_layers",
+    ):
+        assert key not in Config.CORPUS_DEFAULTS, key
 
-    monkeypatch.setattr(Config, "_load_config", classmethod(lambda cls: None))
-    assert Config.get_corpus_config()["ollama_host"] == ""
-    assert "corpus.ollama_host" in KEY_DESCRIPTIONS
 
-
-def test_corpus_defaults_gpu_layers_auto():
-    # Retired key: the stored default stays -1 so a legacy config still parses,
-    # but no inference library consumes it any more.
-    assert Config.CORPUS_DEFAULTS["n_gpu_layers"] == -1
-
-
-def test_corpus_n_gpu_layers_registered_as_int_key():
-    # test_all_bool_and_int_defaults_are_registered enforces this globally;
-    # this pins it locally with a readable failure.
+def test_corpus_n_gpu_layers_remains_registered_until_cleanup():
+    # The key is retired from persisted defaults; keeping it in the coercion
+    # set means an old stored value still parses until the documentation and
+    # wizard cleanup task removes it entirely.
     assert "corpus.n_gpu_layers" in Config.INT_KEYS
-
-
-def test_corpus_default_reranker_is_qwen3_gguf():
-    assert (
-        Config.CORPUS_DEFAULTS["rerank_model"]
-        == "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
-    )
 
 
 def test_corpus_queries_path_under_config_dir(monkeypatch, tmp_path):
