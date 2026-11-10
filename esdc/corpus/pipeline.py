@@ -898,8 +898,8 @@ def run_commit(
 ) -> CorpusReport:
     """Ingest reviewed ``.corpus.md`` sidecars into the corpus store.
 
-    ``embed_backend`` overrides the ``embedding_backend`` config key for
-    this run only; None uses the configured default.
+    ``embed_backend`` overrides the Embeddings connection backend for this
+    run only; None uses the assigned connection.
     """
     report = CorpusReport()
     cfg = Config.get_corpus_config()
@@ -1386,8 +1386,8 @@ def run_reembed(embed_backend: str | None = None) -> CorpusReport:
     document_chunks if the dimension changed, and every document's chunks
     are regenerated from its stored markdown.
 
-    ``embed_backend`` overrides the ``embedding_backend`` config key for
-    this run only; None uses the configured default.
+    ``embed_backend`` overrides the Embeddings connection backend for this
+    run only; None uses the assigned connection.
     """
     report = CorpusReport()
     store = CorpusStore(embedder=get_embedder(embed_backend), read_only=False)

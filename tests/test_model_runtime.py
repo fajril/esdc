@@ -405,38 +405,10 @@ class TestCanonicalAdapters:
         assert provider_config["api_key"] == SECRET_API_KEY
         assert len(provider_config["fallback_configs"]) == 1
         assert provider_config["fallback_configs"][0]["model"] == "chat-fallback"
-        assert Config.get_provider_order() == ["gateway", "desktop"]
-        assert Config.get_default_provider() == "gateway"
         assert Config.get_provider_model() == "chat-main"
         assert Config.get_provider_base_url() == "http://gateway.example/v1"
         assert Config.get_provider_api_key() == SECRET_API_KEY
         assert Config.has_chat_config() is True
-
-    def test_referenced_provider_and_connection_adapters(
-        self, isolated_config_dir: Path
-    ) -> None:
-        write_config(isolated_config_dir, canonical_config())
-
-        provider = Config.get_referenced_provider("gateway")
-        assert provider["name"] == "gateway"
-        assert provider["provider_type"] == "openai_compatible"
-        assert provider["type"] == "openai_compatible"
-        assert provider["base_url"] == "http://gateway.example/v1"
-        assert provider["api_key"] == SECRET_API_KEY
-        assert "model" not in provider
-        assert "reasoning_effort" not in provider
-
-        provider["api_key"] = "changed"
-        assert Config.get_referenced_provider("gateway")["api_key"] == SECRET_API_KEY
-        assert Config.get_provider_config_by_name("gateway") == provider | {
-            "api_key": SECRET_API_KEY
-        }
-        assert Config.get_provider_config_by_name("missing") is None
-
-        providers = Config.get_providers()
-        assert set(providers) == {"gateway", "desktop", "embed"}
-        assert providers["gateway"]["provider_type"] == "openai_compatible"
-        assert "model" not in providers["gateway"]
 
     def test_no_legacy_provider_fields_are_read_by_runtime_adapters(
         self, isolated_config_dir: Path
@@ -457,9 +429,6 @@ provider_order:
 
         for getter in (
             lambda: Config.get_provider_config(),
-            lambda: Config.get_providers(),
-            lambda: Config.get_referenced_provider("engine"),
-            lambda: Config.get_default_provider(),
             lambda: Config.get_provider_model(),
         ):
             with pytest.raises(ModelConfigurationRequired):
@@ -471,8 +440,6 @@ provider_order:
         Config.init_config()
 
         assert Config.get_provider_config() is None
-        assert Config.get_provider_order() == []
-        assert Config.get_default_provider() == ""
         assert Config.get_provider_model() == ""
         assert Config.get_provider_base_url() == ""
         assert Config.has_chat_config() is False

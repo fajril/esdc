@@ -9,19 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Change
 
-- Removed the in-process inference backend; point
-  `embedding_backend`/`corpus.rerank_backend` at an HTTP service (Ollama, omlx,
-  llama-server, LM Studio, TEI), including on localhost. Semantic search now
-  requires a reachable service.
+- Model configuration is now one connection registry (`connections`) plus six
+  per-task assignments (`models.chat`, `models.embedding`, `models.rerank`,
+  `models.ocr`, `models.metadata`, `models.cleanup`). A connection owns transport
+  and authentication only; each task owns its model and options.
+- Old model fields (`providers`, `default_provider`, `provider_order`, direct
+  `embedding_*`, corpus task models/references, `corpus.ollama_host` and retired
+  `n_gpu_layers`) are no longer interpreted at runtime. Convert them explicitly
+  with `esdc configs convert-model-settings --input PATH`; preview is masked and
+  apply requires `--apply --backup NEW_PATH`.
+- `--set-default-provider` and `--set-provider-order` are retired. Use
+  `--set-chat-primary CONNECTION:MODEL` and
+  `--set-chat-fallbacks CONNECTION:MODEL,...`.
+- Removed the in-process inference backend; Embeddings and Reranking use the
+  HTTP service assigned to their task. A cold model load on that service can add
+  seconds to a query.
 - `llama-cpp-python` and `huggingface-hub` are no longer dependencies, and the
-  prebuilt native-wheel indexes are gone from `pyproject.toml`. A cold model load
-  on the service can add seconds to a query.
-- A stored `embedding_backend: local` or `corpus.rerank_backend: local` value is
-  reported as retired when a client is asked for and is never rewritten:
-  query-time similarity and bulk generation share the service factory, and a
-  legacy rerank `local` value warns once per process and keeps RRF order.
+  prebuilt native-wheel indexes are gone from `pyproject.toml`.
 - `esdc corpus warmup` checks each role's service with synthetic input; it no
   longer downloads or loads a model.
+
+### Added
+
+- `esdc configs convert-model-settings` preview/apply service with a masked
+  summary, private complete backup, source-freshness check and atomic replace.
+- One searchable Connection/Model picker for all six tasks, including manual
+  model entry, nested connection drafts, Chat fallbacks, role-specific Test and
+  explicit Save/Cancel.
+- Canonical Connections management with reference-safe rename and deletion
+  refusal, `--reset-key models.<role>`, and masked nested OAuth/API/URL values
+  in `configs --show`.
 
 ### Changed
 

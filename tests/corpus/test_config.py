@@ -1,6 +1,6 @@
 """Tests for corpus configuration."""
 
-from esdc.configs import Config
+from esdc.configs import KEY_DESCRIPTIONS, Config
 
 
 def test_corpus_config_defaults_are_processing_only(monkeypatch):
@@ -48,12 +48,15 @@ def test_corpus_config_reads_processing_and_ignores_old_model_fields(monkeypatch
 
 
 def test_corpus_keys_documented():
-    from esdc.configs import KEY_DESCRIPTIONS
-
-    assert "corpus.ocr_model" in KEY_DESCRIPTIONS
-    assert "corpus.metadata_model" in KEY_DESCRIPTIONS
-    assert "corpus.cleanup_model" in KEY_DESCRIPTIONS
+    assert "corpus.chunk_size" in KEY_DESCRIPTIONS
     assert "corpus.min_image_area" in KEY_DESCRIPTIONS
+    for legacy in (
+        "corpus.ocr_model",
+        "corpus.metadata_model",
+        "corpus.cleanup_model",
+        "corpus.ollama_host",
+    ):
+        assert legacy not in KEY_DESCRIPTIONS, legacy
 
 
 def test_corpus_model_keys_leave_the_persistent_defaults():
@@ -74,11 +77,10 @@ def test_corpus_model_keys_leave_the_persistent_defaults():
         assert key not in Config.CORPUS_DEFAULTS, key
 
 
-def test_corpus_n_gpu_layers_remains_registered_until_cleanup():
-    # The key is retired from persisted defaults; keeping it in the coercion
-    # set means an old stored value still parses until the documentation and
-    # wizard cleanup task removes it entirely.
-    assert "corpus.n_gpu_layers" in Config.INT_KEYS
+def test_corpus_n_gpu_layers_is_conversion_only():
+    # The retired llama.cpp key is interpreted only by the one-time converter.
+    assert "corpus.n_gpu_layers" not in Config.INT_KEYS
+    assert "corpus.n_gpu_layers" not in KEY_DESCRIPTIONS
 
 
 def test_corpus_queries_path_under_config_dir(monkeypatch, tmp_path):

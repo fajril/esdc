@@ -21,10 +21,8 @@ from prompt_toolkit.output import DummyOutput
 from esdc.config_wizard import (
     WizardCancelledError,
     _ask,
-    _edit_provider_flow,
     _escape,
     _prompt_for_config_value,
-    _remove_provider_flow,
     _select_with_back,
     run_wizard,
 )
@@ -314,181 +312,12 @@ class TestEditSectionCancel:
         mock_set.assert_called_once_with("cache.sql_ttl", 300)
 
 
-class TestProviderFlowCancel:
-    """A cancel discards a draft or a pending action, without writing."""
-
-    @patch("esdc.config_wizard.Config.save_provider")
-    @patch("esdc.config_wizard._fetch_models")
-    @patch("esdc.config_wizard.questionary.password")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_escape_at_api_key_discards_the_draft(
-        self, mock_select, mock_password, mock_fetch, mock_save
-    ):
-        from esdc.config_wizard import _add_provider_flow
-
-        mock_select.return_value.unsafe_ask.return_value = "openai"
-        mock_password.return_value.unsafe_ask.return_value = None
-
-        _add_provider_flow()
-
-        mock_save.assert_not_called()
-
-    @patch("esdc.config_wizard.Config.remove_provider")
-    @patch("esdc.config_wizard.Config.save_provider")
-    @patch("esdc.config_wizard.Config.get_providers", return_value={"openai": {}})
-    @patch("esdc.config_wizard._fetch_models", return_value=["gpt-4"])
-    @patch("esdc.config_wizard.questionary.confirm")
-    @patch("esdc.config_wizard.questionary.password")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_escape_at_overwrite_confirm_keeps_the_existing_provider(
-        self,
-        mock_select,
-        mock_password,
-        mock_confirm,
-        mock_fetch,
-        mock_get,
-        mock_save,
-        mock_remove,
-    ):
-        from esdc.config_wizard import _add_provider_flow
-
-        mock_get.return_value = {"openai": {"provider_type": "openai"}}
-        # Provider type, reasoning effort (openai has that field), model, then Save on
-        # the draft action menu, where the overwrite confirm now happens.
-        mock_select.return_value.unsafe_ask.side_effect = [
-            "openai",
-            "(none)",
-            "gpt-4",
-            "save",
-        ]
-        mock_password.return_value.unsafe_ask.return_value = "sk-test"
-        mock_confirm.return_value.unsafe_ask.return_value = None
-
-        _add_provider_flow()
-
-        mock_remove.assert_not_called()
-        mock_save.assert_not_called()
-
-    @patch("esdc.config_wizard.Config.save_provider")
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.questionary.password")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_field_cancel_does_not_write(
-        self, mock_select, mock_password, mock_get, mock_save
-    ):
-        mock_get.return_value = {
-            "openai": {"provider_type": "openai", "model": "gpt-4", "api_key": "old"}
-        }
-        # Field cancel, then Back from the field menu.
-        mock_select.return_value.unsafe_ask.side_effect = [
-            "openai",
-            "api_key",
-            "__back__",
-        ]
-        mock_password.return_value.unsafe_ask.return_value = None
-
-        _edit_provider_flow()
-
-        mock_save.assert_not_called()
-
-    @patch("esdc.config_wizard.Config.save_provider")
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.questionary.text")
-    @patch("esdc.config_wizard.questionary.password")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_field_edit_survives_a_field_cancel_and_save_writes_once(
-        self, mock_select, mock_password, mock_text, mock_get, mock_save
-    ):
-        """A field edit stays in the draft until Save; a Cancel writes nothing at all."""
-        saved = {
-            "openai": {
-                "provider_type": "openai",
-                "model": "gpt-4",
-                "api_key": "old",
-                "base_url": "http://old-box:1234/v1",
-            }
-        }
-        mock_get.return_value = saved
-        mock_password.return_value.unsafe_ask.return_value = "new-key"
-        mock_text.return_value.unsafe_ask.return_value = None
-
-        # api_key edit, base_url cancelled at its prompt, Done editing, then Save.
-        mock_select.return_value.unsafe_ask.side_effect = [
-            "openai",
-            "api_key",
-            "base_url",
-            "__done__",
-            "save",
-        ]
-
-        _edit_provider_flow()
-
-        assert mock_save.call_count == 1
-        draft = mock_save.call_args.args[1]
-        assert draft["api_key"] == "new-key"
-        # The cancelled field keeps the value the provider already had.
-        assert draft["base_url"] == "http://old-box:1234/v1"
-        # Nothing was written field by field: the saved entry is untouched until Save.
-        assert saved["openai"]["api_key"] == "old"
-
-        # Companion: the same kind of draft edit is discarded by a full Cancel.
-        mock_select.return_value.unsafe_ask.side_effect = [
-            "openai",
-            "api_key",
-            "__done__",
-            "cancel",
-        ]
-
-        _edit_provider_flow()
-
-        assert mock_save.call_count == 1
-        assert saved["openai"]["api_key"] == "old"
-
-    @patch("esdc.config_wizard.Config.remove_provider")
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.questionary.confirm")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_confirm_cancel_does_not_remove(
-        self, mock_select, mock_confirm, mock_get, mock_remove
-    ):
-        mock_get.return_value = {"openai": {"provider_type": "openai"}}
-        mock_select.return_value.unsafe_ask.return_value = "openai"
-        mock_confirm.return_value.unsafe_ask.return_value = None
-
-        _remove_provider_flow()
-
-        mock_remove.assert_not_called()
-
-    @patch("esdc.config_wizard.Config.set_provider_order")
-    @patch("esdc.config_wizard.Config.get_providers")
-    @patch("esdc.config_wizard.Config.get_provider_order")
-    @patch("esdc.config_wizard.questionary.confirm")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_order_cancel_writes_nothing(
-        self, mock_select, mock_confirm, mock_get, mock_current, mock_order
-    ):
-        mock_get.return_value = {
-            "a": {"provider_type": "openai"},
-            "b": {"provider_type": "groq"},
-        }
-        mock_current.return_value = []
-        # First provider, then Done, then cancel at the "append the rest" confirm.
-        mock_select.return_value.unsafe_ask.side_effect = ["a", "__done__"]
-        mock_confirm.return_value.unsafe_ask.return_value = None
-
-        from esdc.config_wizard import _set_provider_order_flow
-
-        _set_provider_order_flow()
-
-        mock_order.assert_not_called()
-
 
 class TestRunWizardCancel:
     """Control+C ends the run cleanly, and earlier saves remain written."""
 
     @patch("esdc.config_wizard.Config.init_config")
     @patch("esdc.config_wizard.Config.get_all_config_flat")
-    @patch("esdc.config_wizard.Config.get_providers", return_value={})
     @patch("esdc.config_wizard.traceback.print_exc")
     @patch("esdc.config_wizard.rich_print")
     @patch("esdc.config_wizard.Config.set_config_value")
@@ -499,7 +328,6 @@ class TestRunWizardCancel:
         mock_set,
         mock_print,
         mock_traceback,
-        mock_get,
         mock_flat,
         mock_init,
     ):

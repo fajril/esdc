@@ -119,9 +119,9 @@ def _patched_manager(monkeypatch, mgr) -> MagicMock:
 def test_ollama_reports_model_id_not_wire_tag(monkeypatch):
     mgr = MagicMock()
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="wire-x")
     assert e.model == emb.MODEL_ID
-    assert e.model != e.OLLAMA_TAG
+    assert e.wire_model == "wire-x"
 
 
 def test_ollama_uses_the_configured_wire_model(monkeypatch):
@@ -134,18 +134,18 @@ def test_ollama_uses_the_configured_wire_model(monkeypatch):
     assert e.model == emb.MODEL_ID
 
 
-def test_ollama_falls_back_to_the_legacy_tag_when_model_is_empty(monkeypatch):
-    mgr = MagicMock()
-    factory = _patched_manager(monkeypatch, mgr)
-    emb.OllamaEmbedder(host=None, model="")
-    assert factory.call_args.kwargs["model"] == emb.OllamaEmbedder.OLLAMA_TAG
+def test_ollama_requires_an_explicit_wire_model(monkeypatch):
+    factory = _patched_manager(monkeypatch, MagicMock())
+    with pytest.raises(ValueError, match="explicit wire model"):
+        emb.OllamaEmbedder(host=None, model="")
+    factory.assert_not_called()
 
 
 def test_ollama_delegates_batch(monkeypatch):
     mgr = MagicMock()
     mgr.generate_embeddings_batch.return_value = [[1.0], [2.0]]
     _patched_manager(monkeypatch, mgr)
-    assert emb.OllamaEmbedder(host=None).generate_embeddings_batch(["a", "b"]) == [
+    assert emb.OllamaEmbedder(host=None, model="m").generate_embeddings_batch(["a", "b"]) == [
         [1.0],
         [2.0],
     ]
@@ -154,7 +154,7 @@ def test_ollama_delegates_batch(monkeypatch):
 def test_ollama_batch_empty_short_circuits(monkeypatch):
     mgr = MagicMock()
     _patched_manager(monkeypatch, mgr)
-    assert emb.OllamaEmbedder(host=None).generate_embeddings_batch([]) == []
+    assert emb.OllamaEmbedder(host=None, model="m").generate_embeddings_batch([]) == []
     mgr.generate_embeddings_batch.assert_not_called()
 
 
@@ -162,7 +162,7 @@ def test_ollama_error_names_host_and_the_service_requirement(monkeypatch):
     mgr = MagicMock()
     mgr.generate_embedding.side_effect = ConnectionError("refused")
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     try:
         e.generate_embedding("x")
     except RuntimeError as err:
@@ -191,7 +191,7 @@ def test_openai_url_normalization(host, expected):
 
 
 def test_openai_requires_a_wire_model():
-    with pytest.raises(ValueError, match="embedding_model"):
+    with pytest.raises(ValueError, match="explicit model"):
         emb.OpenAIEmbedder(host="http://h:1/v1", model="")
 
 
@@ -595,7 +595,7 @@ def test_ollama_path_rejects_a_bad_response_as_a_response(monkeypatch):
     mgr = MagicMock()
     mgr.generate_embedding.return_value = [1.0, float("nan")]
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     with pytest.raises(emb.EmbeddingResponseError) as exc:
         e.generate_embedding("x")
     msg = str(exc.value)
@@ -608,7 +608,7 @@ def test_ollama_check_available_reports_a_bad_response_as_a_response(monkeypatch
     mgr = MagicMock()
     mgr.generate_embedding.return_value = []
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     message = e.check_available()
     assert message is not None
     # A response that answers but is not a vector is not an unreachable service.
@@ -655,7 +655,7 @@ def test_ollama_valid_response_passes_shape_validation(monkeypatch):
     mgr = MagicMock()
     mgr.generate_embedding.return_value = [1.0, 0.5]
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     assert e.generate_embedding("x") == [1.0, 0.5]
 
 
@@ -664,7 +664,7 @@ def test_ollama_check_available_returns_none_when_the_service_answers(monkeypatc
     mgr = MagicMock()
     mgr.generate_embedding.return_value = [1.0, 0.5]
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     assert e.check_available() is None
 
 
@@ -681,7 +681,7 @@ def test_service_error_reports_status_without_the_body(monkeypatch):
     mgr = MagicMock()
     mgr.generate_embedding.side_effect = _StatusError("Bearer sk-secret rejected", 401)
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     with pytest.raises(RuntimeError) as exc:
         e.generate_embedding("x")
     msg = str(exc.value)
@@ -699,7 +699,7 @@ def test_transport_error_is_reported_as_unreachable(monkeypatch):
     failure = ConnectionError("connection refused")
     mgr.generate_embedding.side_effect = failure
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     with pytest.raises(RuntimeError) as exc:
         e.generate_embedding("x")
     msg = str(exc.value)
@@ -741,7 +741,7 @@ def test_an_answer_that_is_not_a_known_failure_kind_stays_undiagnosed(monkeypatc
     mgr = MagicMock()
     mgr.generate_embedding.side_effect = _StatusError("sk-secret in the body", -1)
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     with pytest.raises(RuntimeError) as exc:
         e.generate_embedding("x")
     msg = str(exc.value)
@@ -761,7 +761,7 @@ def test_httpx_timeout_is_not_reported_as_a_bad_answer(monkeypatch):
     mgr = MagicMock()
     mgr.generate_embedding.side_effect = httpx.ReadTimeout("timed out")
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     with pytest.raises(RuntimeError) as exc:
         e.generate_embedding("x")
     msg = str(exc.value)
@@ -783,7 +783,7 @@ def test_check_available_returns_a_message_for_any_failure(
     mgr = MagicMock()
     mgr.generate_embedding.side_effect = failure
     _patched_manager(monkeypatch, mgr)
-    e = emb.OllamaEmbedder(host="http://box:11434")
+    e = emb.OllamaEmbedder(host="http://box:11434", model="m")
     message = e.check_available()
     assert message is not None
     assert "http://box:11434" in message
@@ -835,11 +835,10 @@ def test_legacy_local_config_is_read_without_writing_and_cli_still_imports(
     config_file.write_text(original)
     Config._config_cache = None
 
-    assert Config.get_embedding_backend() == "local"
+    import esdc.esdc  # noqa: F401  - importing the CLI must not need a service
+
     assert config_file.read_text() == original
     assert not [p for p in tmp_path.iterdir() if p.name != "config.yaml"]
-
-    import esdc.esdc  # noqa: F401  - importing the CLI must not need a service
 
 
 def test_probe_memo_distinguishes_metadata_tables(tmp_path):

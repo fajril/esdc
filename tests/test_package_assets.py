@@ -43,6 +43,12 @@ def test_wheel_contains_and_loads_contract_and_sql_resources(tmp_path: Path) -> 
     assert any(name.startswith("esdc/sql/") and name.endswith(".sql") for name in names)
 
     required_paths = [
+        "esdc/model_settings.py",
+        "esdc/model_runtime.py",
+        "esdc/model_catalog.py",
+        "esdc/model_config_conversion.py",
+        "esdc/model_config_apply.py",
+        "esdc/model_wizard.py",
         "esdc/portal/templates/base.html",
         "esdc/portal/templates/grid.html",
         "esdc/portal/static/portal.js",
@@ -76,6 +82,10 @@ def test_wheel_contains_and_loads_contract_and_sql_resources(tmp_path: Path) -> 
         "from importlib.resources import files; "
         "from esdc.pod_registry.contract import load_pod_contract; "
         "from esdc.pod_registry.migrations import initialize_registry_v2; "
+        "from esdc.model_settings import default_model_settings; "
+        "from esdc.model_config_conversion import convert_model_settings; "
+        "assert default_model_settings()['rerank']['enabled'] is False; "
+        "assert convert_model_settings({}).config['model_settings_version'] == 1; "
         "contract = load_pod_contract(); "
         "db = sqlite3.connect(':memory:'); "
         "db.execute('PRAGMA foreign_keys = ON'); "

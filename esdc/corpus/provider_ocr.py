@@ -1,8 +1,8 @@
-"""OCR through a saved OpenAI-compatible provider connection.
+"""OCR through an assigned OpenAI-compatible connection.
 
-One chat request per page image: the text prompt plus a PNG data URL, the
-selected `corpus.ocr_model`, and the saved connection credential. Ollama-only
-options (`num_ctx`, `options`) are not sent to a gateway.
+One chat request per page image: the text prompt plus a PNG data URL, the OCR
+task's model, and the connection credential. Ollama-only options (`num_ctx`,
+`options`) are not sent to a gateway.
 
 Vision support is never assumed from a model name: a gateway without reliable
 metadata is still used as selected, and a failed request reports OCR

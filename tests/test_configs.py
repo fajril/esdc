@@ -8,15 +8,12 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from esdc.config_fields import parse_config_input
 from esdc.configs import (
-    ENUM_CHOICES,
     KEY_DESCRIPTIONS,
     MODEL_SECTIONS,
     SETTINGS_SECTIONS,
     Config,
 )
-from esdc.model_settings import ModelConfigurationRequired
 
 
 class TestConfigDir:
@@ -230,38 +227,8 @@ class TestDbFile:
 
 
 class TestWizardSectionCoverage:
-    """MODEL_SECTIONS + SETTINGS_SECTIONS must cover every editable key once.
+    """MODEL_SECTIONS + SETTINGS_SECTIONS cover every generic editable key once."""
 
-    The wizard redesign groups flat config keys into a domain tree. This
-    invariant guards against a new key silently falling out of the tree
-    (no home) or landing in two groups at once.
-
-    `corpus.n_gpu_layers` is the one deliberate exception: a value it has no
-    implementation for any more is no longer offered for editing, but the key
-    stays in defaults, descriptions and the int set so a stored value is still
-    parsed and preserved.
-    """
-
-    # Keys the flat wizard sections no longer own as persisted defaults. The
-    # task pickers/connection editor replace them in Task 6; until then the old
-    # section names are tolerated but are not editable-default coverage.
-    _RETIRED_KEYS = {
-        "corpus.n_gpu_layers",
-        "corpus.rerank",
-        "corpus.rerank_backend",
-        "corpus.rerank_provider",
-        "corpus.rerank_model",
-        "corpus.ocr_model",
-        "corpus.ocr_provider",
-        "corpus.metadata_model",
-        "corpus.metadata_provider",
-        "corpus.cleanup_model",
-        "corpus.cleanup_provider",
-        "corpus.ollama_host",
-    }
-
-    # Canonical model settings are edited by the task pickers, not by the flat
-    # model/settings sections this guard covers.
     _CANONICAL_MODEL_KEYS = {"model_settings_version"}
     _CANONICAL_MODEL_PREFIX = "models."
 
@@ -274,31 +241,23 @@ class TestWizardSectionCoverage:
             "phoenix.collector_endpoint",
             "phoenix.project_name",
         }
-        # default_provider / provider_order are edited only via the
-        # provider CRUD flows, never via the flat key sections.
-        editable -= {"default_provider", "provider_order"}
-        editable = {
+        return {
             key
             for key in editable
             if key not in self._CANONICAL_MODEL_KEYS
             and not key.startswith(self._CANONICAL_MODEL_PREFIX)
         }
-        return editable
 
     def test_union_matches_editable_keys(self):
         grouped_keys: list[str] = []
         for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values():
             grouped_keys.extend(keys)
-
-        assert set(grouped_keys) - self._RETIRED_KEYS == (
-            self._editable_flat_keys() - self._RETIRED_KEYS
-        )
+        assert set(grouped_keys) == self._editable_flat_keys()
 
     def test_no_key_duplicated_across_groups(self):
         grouped_keys: list[str] = []
         for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values():
             grouped_keys.extend(keys)
-
         assert len(grouped_keys) == len(set(grouped_keys))
 
     def test_no_orphan_keys(self):
@@ -307,26 +266,29 @@ class TestWizardSectionCoverage:
             for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
             for key in keys
         }
-        orphans = (
-            self._editable_flat_keys()
-            - grouped_keys
-            - self._RETIRED_KEYS
-        )
-        assert orphans == set()
+        assert self._editable_flat_keys() - grouped_keys == set()
 
-    def test_the_retired_key_has_no_menu_home_but_is_still_preserved(self):
+    def test_no_legacy_model_key_has_a_menu_home(self):
         grouped_keys = {
             key
             for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
             for key in keys
         }
-        assert "corpus.n_gpu_layers" not in grouped_keys
-        assert "corpus.n_gpu_layers" in KEY_DESCRIPTIONS
-        assert "corpus.n_gpu_layers" in Config.INT_KEYS
-
-        # A stored value still parses; the persistent default is gone.
-        assert "corpus.n_gpu_layers" not in Config.CORPUS_DEFAULTS
-        assert parse_config_input("corpus.n_gpu_layers", "6", {}) == 6
+        for key in (
+            "embedding_backend",
+            "embedding_host",
+            "embedding_model",
+            "embedding_api_key",
+            "embedding_provider",
+            "default_provider",
+            "provider_order",
+            "corpus.ollama_host",
+            "corpus.rerank_backend",
+            "corpus.ocr_model",
+            "corpus.metadata_model",
+            "corpus.cleanup_model",
+        ):
+            assert key not in grouped_keys, key
 
 
 class TestBooleanAndIntKeyCoercion:
@@ -377,6 +339,8 @@ class TestBooleanAndIntKeyCoercion:
             {f"corpus.{k}": v for k, v in Config.CORPUS_DEFAULTS.items()}
         )
         for key, value in flat_defaults.items():
+            if key.startswith("models.") or key == "model_settings_version":
+                continue
             if isinstance(value, bool):
                 assert key in Config.BOOLEAN_KEYS, f"{key} missing from BOOLEAN_KEYS"
             elif isinstance(value, int):
@@ -408,116 +372,6 @@ class TestCorpusExtractionBounds:
         assert Config._coerce_value("corpus.extract_timeout_seconds", "0") == 0
 
 
-ROLE_REFERENCE_KEYS = (
-    "embedding_provider",
-    "corpus.metadata_provider",
-    "corpus.cleanup_provider",
-    "corpus.ocr_provider",
-    "corpus.rerank_provider",
-)
-
-
-class TestOptionalRoleReferences:
-    """The six optional reference keys: defaults, descriptions, one home."""
-
-    def test_corpus_role_reference_keys_are_not_persistent_defaults(self):
-        flat = Config._flatten(Config.get_defaults())
-        for key in ROLE_REFERENCE_KEYS:
-            if not key.startswith("corpus."):
-                continue
-            assert key not in flat, key
-            assert key.split(".")[-1] not in Config.CORPUS_DEFAULTS, key
-
-    def test_rerank_backend_is_not_a_persistent_default(self):
-        assert (
-            "corpus.rerank_backend"
-            not in Config._flatten(Config.get_defaults())
-        )
-        assert "rerank_backend" not in Config.CORPUS_DEFAULTS
-
-    def test_role_reference_keys_have_descriptions(self):
-        for key in (*ROLE_REFERENCE_KEYS, "corpus.rerank_backend"):
-            assert key in KEY_DESCRIPTIONS, key
-
-    def test_rerank_backend_enum_registered_with_its_default(self):
-        assert ENUM_CHOICES["corpus.rerank_backend"] == ["local", "provider"]
-
-    def test_role_reference_keys_have_exactly_one_menu_location(self):
-        grouped = [
-            key
-            for keys in {**MODEL_SECTIONS, **SETTINGS_SECTIONS}.values()
-            for key in keys
-        ]
-        for key in (*ROLE_REFERENCE_KEYS, "corpus.rerank_backend"):
-            assert grouped.count(key) == 1, key
-
-
-class TestExistingConfigWithoutRoleReferences:
-    """A saved config with none of the new keys behaves exactly as before."""
-
-    _CONFIG_TEXT = """
-api_url: https://config.example.com/
-logging:
-  level: INFO
-embedding_host: http://legacy-embed:1234/v1
-embedding_model: legacy-model
-embedding_api_key: legacy-key
-default_provider: opencode
-provider_order:
-  - opencode
-  - engine
-providers:
-  opencode:
-    provider_type: openai_compatible
-    base_url: http://gateway.example:4000/v1
-    model: chat-a
-  engine:
-    provider_type: openai_compatible
-    base_url: http://engine:4000/v1
-    api_key: fixture-key
-    model: chat-a
-unknown_user_key: kept
-"""
-
-    def test_existing_getters_and_saved_values_are_unchanged(self, tmp_path, monkeypatch):
-        for name in (
-            "ESDC_EMBEDDING_BACKEND",
-            "ESDC_EMBEDDING_HOST",
-            "ESDC_EMBEDDING_API_KEY",
-            "ESDC_EMBEDDING_MODEL",
-        ):
-            monkeypatch.delenv(name, raising=False)
-
-        with patch.object(Config, "get_config_dir", return_value=tmp_path):
-            config_file = tmp_path / "config.yaml"
-            original = self._CONFIG_TEXT
-            config_file.write_text(original)
-            Config._config_cache = None
-
-            assert Config.get_embedding_backend() == "ollama"
-            assert Config.get_embedding_host() == "http://legacy-embed:1234/v1"
-            assert Config.get_embedding_model() == "legacy-model"
-            assert Config.get_embedding_api_key() == "legacy-key"
-
-            # Chat runtime adapters read canonical settings only: a file with
-            # legacy providers but no model-settings marker is not converted
-            # or interpreted here.
-            with pytest.raises(ModelConfigurationRequired):
-                Config.get_default_provider()
-            with pytest.raises(ModelConfigurationRequired):
-                Config.get_provider_order()
-
-            config = Config._load_config()
-            assert config is not None
-            assert config["unknown_user_key"] == "kept"
-            for key in ROLE_REFERENCE_KEYS:
-                assert key not in config, key
-
-            # Reading a config must not rewrite it.
-            assert config_file.read_text() == original
-            assert not [p for p in tmp_path.iterdir() if p.name != "config.yaml"]
-
-
 class TestAtomicConfigSave:
     """One write per save, cache updated only when the file actually changed."""
 
@@ -539,18 +393,14 @@ class TestAtomicConfigSave:
                 Config.set_config_values(
                     {
                         "logging.level": "DEBUG",
-                        "corpus.rerank_backend": "provider",
-                        "corpus.rerank_provider": "engine",
+                        "cache.sql_ttl": 120,
                     }
                 )
 
             assert len(replaces) == 1
             config = yaml.safe_load(config_file.read_text())
             assert config["logging"]["level"] == "DEBUG"
-            assert config["corpus"]["rerank_backend"] == "provider"
-            assert config["corpus"]["rerank_provider"] == "engine"
-            assert config["cache"]["sql_ttl"] == 604800
-            # Only its own temporary file existed, and it is gone after success.
+            assert config["cache"]["sql_ttl"] == 120
             assert [p.name for p in tmp_path.iterdir()] == ["config.yaml"]
 
     def test_failed_replace_preserves_file_and_cache(self, tmp_path):
@@ -594,18 +444,28 @@ class TestAtomicConfigSave:
             "set_config_values",
             classmethod(lambda cls, values: calls.append(values)),
         )
-        Config.set_config_value("corpus.rerank_backend", "provider")
-        assert calls == [{"corpus.rerank_backend": "provider"}]
+        Config.set_config_value("logging.level", "DEBUG")
+        assert calls == [{"logging.level": "DEBUG"}]
 
-    def test_provider_fields_are_not_saved_through_dotted_keys(self, tmp_path):
-        """Provider entries keep their own saves; a dotted path must not reach them."""
+    def test_connection_fields_are_not_saved_through_dotted_keys(self, tmp_path):
+        """Connection entries keep their own saves; a dotted path must not reach them."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             config_file = tmp_path / "config.yaml"
-            config_file.write_text("providers:\n  engine:\n    model: chat-a\n")
+            config_file.write_text(
+                "model_settings_version: 1\n"
+                "connections:\n  engine:\n    type: openai\n"
+                "models:\n"
+                "  chat: {mode: unset}\n"
+                "  embedding: {mode: unset}\n"
+                "  rerank: {mode: unset, enabled: false}\n"
+                "  ocr: {mode: unset}\n"
+                "  metadata: {mode: chat}\n"
+                "  cleanup: {mode: chat}\n"
+            )
             Config._config_cache = None
 
             with pytest.raises(ValueError, match="dotted keys"):
-                Config.set_config_values({"providers.engine.model": "chat-b"})
+                Config.set_config_values({"connections.engine.api_key": "changed"})
 
             config = yaml.safe_load(config_file.read_text())
-            assert config["providers"]["engine"]["model"] == "chat-a"
+            assert "api_key" not in config["connections"]["engine"]

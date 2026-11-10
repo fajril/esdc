@@ -860,7 +860,10 @@ def reload(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: ollama or openai.",
+            help=(
+                "Override the Embeddings connection backend for this run: "
+                "ollama or openai."
+            ),
         ),
     ] = None,
 ) -> None:
@@ -876,7 +879,7 @@ def reload(
         only rebuild FTS and B-tree indexes without reloading data.
         no_embeddings: If True, skip semantic embeddings generation.
         embeddings_only: If True, only regenerate embeddings without reloading data.
-        embed_backend: Override embedding_backend for this run
+        embed_backend: Override the Embeddings connection backend for this run
         (ollama or openai).
 
     Returns:
@@ -1008,9 +1011,9 @@ def _reload_files(filetype: str | None) -> None:
 def _generate_embeddings(embed_backend: str | None = None) -> None:
     """Generate semantic embeddings for project_remarks with progress bar.
 
-    ``embed_backend`` overrides the ``embedding_backend`` config key for
-    this run only. A value with no implementation, the retired in-process
-    backend, is reported as an error rather than repaired.
+    ``embed_backend`` overrides the Embeddings connection backend for this
+    run only. A value with no implementation, the retired in-process backend,
+    is reported as an error rather than repaired.
     """
     from esdc.configs import Config
     from esdc.embedders import get_embedder
@@ -3797,7 +3800,10 @@ def commit(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: ollama or openai.",
+            help=(
+                "Override the Embeddings connection backend for this run: "
+                "ollama or openai."
+            ),
         ),
     ] = None,
 ) -> None:
@@ -4348,7 +4354,10 @@ def reembed(
         str | None,
         typer.Option(
             "--embed-backend",
-            help="Override embedding_backend for this run: ollama or openai.",
+            help=(
+                "Override the Embeddings connection backend for this run: "
+                "ollama or openai."
+            ),
         ),
     ] = None,
     stale: Annotated[

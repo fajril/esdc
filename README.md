@@ -129,35 +129,29 @@ seconds to a query, and `esdc corpus warmup` is a service check rather than a
 download: it asks each role's endpoint with a synthetic input and reports what
 answered. Credentials and document text are never printed.
 
-### Embedding backends
+### Embeddings
 
-Query-time similarity and bulk generation resolve through the same factory, so
-both use the service.
+Embeddings are assigned to a connection and model like every other task. The
+connection type decides the transport: an Ollama connection uses Ollama's native
+embedding API, and an `openai_compatible` connection uses any
+`/v1/embeddings` server (LM Studio, llama-server, vLLM, TEI). The wire model id
+is explicit; there is no implicit localhost service or pinned UI tag.
 
-| key | values | default |
-|---|---|---|
-| `embedding_backend` | `ollama`, `openai` | `ollama` |
-| `embedding_host` | URL, `""` = the local Ollama service | `""` |
-| `embedding_model` | wire model id | `""` |
-| `embedding_api_key` | bearer token, `openai` only | `""` |
-
-`local` is retired: a stored value has no implementation any more, is reported
-when a client is asked for, and is never rewritten from reading the config.
-
-An explicit `embedding_host` or `embedding_api_key` overrides the saved provider
-named by `embedding_provider`; the provider is used when the explicit value is
-empty. An empty `embedding_model` on `ollama` falls back to the legacy
-`qwen3-embedding:0.6b` tag the current index was built against.
+Configure it under `models.embedding` in `config.yaml`, or choose
+`Models by task > Embeddings` in `esdc configs`:
 
 ```yaml
-embedding_backend: openai
-embedding_host: http://localhost:8889/v1
-embedding_model: Qwen3-Embedding-0.6B-8bit
+connections:
+  embed-server:
+    type: openai_compatible
+    base_url: http://localhost:8889/v1
+    api_key: ""
+models:
+  embedding:
+    mode: model
+    connection: embed-server
+    model: Qwen3-Embedding-0.6B-8bit
 ```
-
-`openai` works with any OpenAI-compatible `/v1/embeddings` server — LM Studio,
-llama-server, vLLM, TEI — and needs `embedding_model` set to whatever that
-server calls the model.
 
 Each vector space stores a probe vector. If a service produces vectors that
 disagree with the stored ones by more than a small tolerance — a different
@@ -167,10 +161,8 @@ running the same weights (Ollama `qwen3-embedding:0.6b` and an MLX 8-bit build)
 is ≥ 0.9986, so the probe, not the model name, is what proves the space.
 
 Per-run override: `--embed-backend ollama|openai` on
-`esdc corpus commit`, `esdc corpus reembed` and `esdc reload`.
-
-`corpus.ollama_host` is unrelated — it points corpus OCR and text models at
-a host, not embeddings.
+`esdc corpus commit`, `esdc corpus reembed` and `esdc reload`. The override must
+match the assigned connection type; it never switches destination silently.
 
 ## Quick Start
 
@@ -210,57 +202,110 @@ Configuration is stored in `~/.esdc/`:
 └── esdc.duckdb        # DuckDB database
 ```
 
-### Provider Configuration
+### Connections and models by task
 
-Configure your AI provider in `~/.esdc/config.yaml`:
+One connection registry owns transport and authentication. Six task assignments
+own their own model: Chat, Embeddings, Reranking, OCR, Metadata extraction and
+Text cleanup. A connection does not own a hidden chat model.
 
 ```yaml
-default_provider: ollama
-providers:
-  ollama:
-    model: kimi-k2.5:cloud
+model_settings_version: 1
+connections:
+  gateway:
+    type: openai_compatible
+    base_url: https://gateway.example/v1
+    api_key: sk-...
+  desktop:
+    type: ollama
     base_url: http://localhost:11434
-```
-
-DeepSeek can be configured as a first-class provider:
-
-```yaml
-default_provider: deepseek
-provider_order:
-  - deepseek
-  - openai
-providers:
-  deepseek:
-    provider_type: deepseek
-    api_key: sk-...
-    model: deepseek-v4-flash
-    reasoning_effort: high
-  openai:
-    provider_type: openai
-    api_key: sk-...
+models:
+  chat:
+    mode: model
+    connection: gateway
     model: gpt-4o-mini
+    options:
+      reasoning_effort: low
+    fallbacks:
+      - connection: desktop
+        model: llama3.2
+  embedding:
+    mode: model
+    connection: desktop
+    model: qwen3-embedding:0.6b
+  rerank:
+    mode: unset
+    enabled: false
+  ocr:
+    mode: model
+    connection: desktop
+    model: glm-ocr
+  metadata:
+    mode: chat
+  cleanup:
+    mode: chat
 ```
 
-Use `reasoning_effort: none` for non-thinking mode, or `high` / `max`
-for DeepSeek thinking mode. `provider_order` controls failover priority; ESDC
-uses `default_provider` first, then tries the remaining providers in order if
-the current provider fails.
+Task modes are `model`, `chat`, `ocr`, `off` and `unset`:
 
-OpenCode Go can be configured as a first-class provider:
+| Task | Permitted modes / controls |
+|---|---|
+| Chat | explicit connection/model, ordered fallbacks, per-target reasoning options |
+| Embeddings | explicit connection/model; changing vector space may require rebuilding embeddings |
+| Reranking | explicit connection/model and a separate Enabled switch |
+| OCR | explicit connection/model; positively non-vision models are refused |
+| Metadata extraction | explicit model, `chat`, or `ocr` (use the OCR result) |
+| Text cleanup | explicit model, `chat`, or `off` |
 
-```yaml
-default_provider: opencode
-providers:
-  opencode:
-    provider_type: opencode
-    api_key: sk-...
-    model: deepseek-v4-flash
+`unset` means not configured; it is never an implicit localhost service. Fresh
+settings have no connections, Chat/Embeddings/OCR unset, Reranking unset and
+disabled, and Metadata/Cleanup following Chat.
+
+`esdc configs` provides one searchable `Connection / Model` list for every task.
+It includes discovered models, the current model when listing cannot verify it,
+`Enter model ID…`, `Add connection…`, `Refresh models` and `Back`. A connection
+added from a task picker stays in that draft until Save; Cancel discards it.
+Chat fallbacks are managed inside the Chat task. Connections themselves never
+store a model or reasoning effort.
+
+Reranking keeps choosing/testing separate from enabling: a successful test never
+turns the task on. OCR uses the same image request as runtime and refuses only a
+model positively reported as non-vision; unknown capability remains testable.
+
+### Converting existing model settings
+
+Older files with `providers`, `default_provider`, `provider_order`, direct
+embedding fields or `corpus.*_model/provider` keys are not interpreted at
+runtime. Convert them once, explicitly:
+
+```bash
+# Masked preview; no writes, no network.
+esdc configs convert-model-settings --input ~/.esdc/config.yaml
+
+# Apply after reviewing the preview; the backup must not exist yet.
+esdc configs convert-model-settings \
+  --input ~/.esdc/config.yaml \
+  --apply \
+  --backup ~/.esdc/config.pre-unified.yaml
 ```
 
-`base_url` defaults to `https://opencode.ai/zen/go/v1`; set it to
-`https://opencode.ai/zen/v1` for OpenCode Zen. Requests carry a
-process-stable `x-opencode-session` header, overridable with the
-`ESDC_OPENCODE_SESSION` environment variable.
+The apply creates a private complete backup, rechecks the source, and replaces
+it atomically. An already-canonical file is a no-op. The interactive wizard also
+shows `Update model settings…` while the saved file lacks the canonical marker;
+Cancel writes nothing.
+
+Non-interactive Chat changes use connection/model pairs:
+
+```bash
+esdc configs --set-chat-primary gateway:gpt-4o-mini
+esdc configs --set-chat-fallbacks desktop:llama3.2,backup:gpt-4o-mini
+```
+
+`--set-default-provider` and `--set-provider-order` are retired; they print the
+replacement syntax and write nothing.
+
+`esdc configs --reset-key models.chat` resets only that task assignment;
+connections and other tasks are untouched. `--show` prints canonical nested
+settings with API/OAuth secrets and URL credentials masked.
 
 ### Environment Variables
 
@@ -460,62 +505,49 @@ Interactive configuration wizard.
 esdc configs
 ```
 
-The home menu is Models by task, Providers, Application settings, Advanced,
+The home menu is Models by task, Connections, Application settings, Advanced,
 View settings, and Exit. Back returns one level, Escape at the top level
 exits, and Control+C ends the run without losing an earlier explicit save.
+When the saved file still needs the one-time model-settings conversion, an
+`Update model settings…` row appears before Exit.
 
 Models by task holds the six tasks — Chat, Embeddings, Reranking, OCR,
 Metadata extraction, Text cleanup — and each one opens a single searchable
-`provider / model` list built from the saved providers that support that task.
-Choosing a row selects both values, so there is no separate provider level.
-Custom, Retry, and Back are always offered, and the saved pair stays listed
-even when discovery does not return it, marked `saved, unverified`. Custom
-chooses an existing provider and types a model id; it is resolved before Save
-and is never stored as a row label.
+`connection / model` list. It includes discovered models, the current model
+marked `saved, unverified` when listing cannot confirm it, `Enter model ID…`,
+`Add connection…`, `Refresh models`, and `Back`. Manual entry asks for an
+eligible saved or draft connection and a model ID, then returns to the same
+draft. Selecting a model never writes; Save is explicit.
 
-Each task keeps its own pair through a saved provider reference:
-`embedding_provider`, `corpus.metadata_provider`, `corpus.cleanup_provider`,
-`corpus.ocr_provider`, `corpus.rerank_provider`. A task edit writes only that
-task's keys; only Chat writes a provider's chat model, and a task that chooses
-to follow the chat model shows that link rather than pretending to be
-independent.
+Connections owns only transport and authentication: type, endpoint, API key,
+API version and transport-specific fields. Every connection can have a custom
+name, including multiple Ollama or OpenAI-compatible entries. It has no model,
+reasoning, default-provider or failover control. Editing a shared endpoint or
+key lists the tasks that use it before Save. Renaming updates every task
+reference in one write. Removal is refused while a task or Chat fallback still
+uses the connection, with those uses listed.
 
-Embeddings is service-only: an Ollama provider, an OpenAI-compatible provider
-reference, and a direct endpoint with no reference. An empty model on the Ollama
-row falls back to the legacy `qwen3-embedding:0.6b` tag. A stored `local` value
-is shown as needing configuration and is never rewritten.
+Chat owns its ordered fallbacks. Each fallback has its own connection, model and
+options; changing the primary preserves distinct fallbacks. Reranking keeps
+Enabled as its own switch: choosing or testing a model never turns it on.
+Metadata extraction offers explicit model, `Use chat model`, or `Use OCR
+result`. Text cleanup offers explicit model, `Use chat model`, or `Off`.
+Embeddings warns that changing the vector space may require rebuilding
+embeddings. OCR refuses a model only when metadata positively says it is not
+vision-capable; an unknown capability remains selectable and testable.
 
-Reranking keeps Enabled as its own yes/no field, separate from Source and
-model: disabling writes only `corpus.rerank = false`, enabling validates the
-saved source and model first, and a connection test never turns it on. Source is
-`provider`, which calls `/v1/rerank` on the connection named by
-`corpus.rerank_provider`. A stored `local` value is shown as needing
-configuration, is never rewritten, and leaves search in RRF order. A legacy
-`repo_id:filename.gguf` model id is preserved and sent to the service as the
-model name.
+A task draft has Save, Test, model options where relevant, and Cancel. Test
+resolves the draft through the same resolver as runtime and calls the role's own
+protocol — embedding request, rerank scores, image OCR, or text inference. It
+never saves, enables reranking, rebuilds an index, refreshes OAuth, or changes
+another task. An expired credential is reported for reauthentication. Secrets
+are masked in the wizard and in `configs --show`, including URL userinfo/query
+credentials.
 
-OCR is either the local Ollama model or a saved OpenAI-compatible provider
-used for image chat. Vision support comes from reported model metadata only: a
-model is filtered out only when metadata explicitly says it is not vision-
-capable, and an unknown capability stays selectable.
-
-Providers, Application settings, and Advanced keep the fields they already
-own, and every editable key has exactly one menu location.
-
-A task pair or a provider edit is a draft with Save, Test connection, and
-Cancel. Test resolves the draft the same way runtime does and never writes; a
-blank API key keeps the stored key, which is cleared only by the explicit
-Clear API key action. Single fields save on Enter.
-
-Renaming a provider moves every reference to it in one write:
-`default_provider`, `provider_order`, `embedding_provider`, the four corpus
-references, and any legacy `provider:<name>` metadata or cleanup string. Every
-name is checked before anything is written, so a rejected rename leaves the
-file unchanged. A rename that carries the draft writes the key move, the
-references, and the draft fields in that same single write. Removal is blocked
-while a setting still refers to the provider, and the dependent keys are listed
-by name only. Editing an address or key other tasks share warns first and names
-the affected tasks. Secrets are masked in the wizard and in `configs --show`.
+Application settings and Advanced edit only non-model application, logging,
+cache, tracing and corpus-processing controls. View settings prints the flat,
+masked view. `--reset-key models.<role>` resets only that task assignment;
+connections and other tasks are untouched.
 
 Running ESDC services may need restart to read the saved config; the wizard
 states this after a save.
@@ -533,6 +565,9 @@ esdc serve --host 0.0.0.0 --port 3334
 
 ### Prerequisites
 
+Configure an OCR connection and model in `esdc configs` → Models by task → OCR.
+For a local Ollama connection, pull the model first:
+
 ```bash
 ollama pull glm-ocr
 ```
@@ -541,31 +576,28 @@ ollama pull glm-ocr
 
 ### Configuration
 
-`corpus.*` in `~/.esdc/config.yaml`, merged over these defaults:
+Corpus processing controls live under `corpus.*` in `~/.esdc/config.yaml`,
+merged over these defaults. Task models, connections and rerank enablement are
+canonical `models.*` settings and are edited by `esdc configs`, not here.
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `chunk_size` | `3000` | Max characters per chunk (~750 tokens) |
 | `chunk_overlap` | `300` | Characters carried over between consecutive chunks |
-| `rerank_backend` | `provider` | Where the rerank stage runs: `provider` = `/v1/rerank` through `rerank_provider`. A stored `local` value is retired: it warns once per process per config and search keeps its RRF order |
-| `rerank_provider` | `""` | Saved OpenAI-compatible connection used when `rerank_backend` is `provider`; `""` = none |
-| `rerank_model` | `ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF` | Model id sent to the rerank service; the default is the legacy id kept for stored configs, and a stored `repo_id:filename.gguf` value is preserved and passed through unchanged |
-| `ocr_model` | `glm-ocr` | Ollama vision model used to OCR scanned pages |
-| `ocr_provider` | `""` | Saved provider reused for OCR while `ocr_model` stays the model id; `""` = the Ollama daemon at `corpus.ollama_host` |
-| `metadata_model` | `"main"` | Text LLM for metadata extraction: `main` (default chat provider), `provider:<name>` (a configured provider from config.yaml), an Ollama model name, or `""` (image-based prefill via `ocr_model`) |
-| `metadata_provider` | `""` | Saved provider whose connection is reused while `metadata_model` names the wire model; `""` = the `metadata_model` string itself (`main` / `provider:<name>` / Ollama name) |
-| `cleanup_model` | `"main"` | LLM for formatting cleanup of native-extracted pages: `main`, `provider:<name>`, an Ollama model name, or `""` (off) |
-| `cleanup_provider` | `""` | Same rule as `metadata_provider`, applied to the cleanup call |
+| `rerank_pool` | `30` | Candidates scored when the Reranking task is enabled |
+| `max_chunks_per_doc` | `2` | Max chunks of one document in search results (`0` = no cap) |
+| `query_instruct` | `true` | Prefix queries with Qwen3-Embedding's instruction template |
 | `ocr_dpi` | `200` | Page render resolution for OCR; raise to 300 if OCR quality is poor |
 | `num_ctx` | `16384` | Ollama context window; `glm-ocr` fails on page images below this |
 | `min_chars_per_page` | `50` | Text-layer character threshold below which a page counts as scanned |
+| `min_image_area` | `0.05` | Embedded-image area below which images are ignored |
+| `extract_max_tokens` | `8192` | Bound on corpus-knowledge extraction output tokens (`0` = no cap) |
+| `extract_timeout_seconds` | `300` | Bound on corpus-knowledge extraction calls (`0` = no timeout) |
 
-These keys are what the wizard writes: `esdc configs` → Models by task owns
-the `provider / model` choice for each task, including the reference columns
-above, so this table documents the stored values rather than a place to edit
-them by hand. `embedding_provider` sits with the embedding fields in Embedding
-backends above. An empty reference keeps the behaviour the model string alone
-describes, and saving a source or testing a connection never enables reranking.
+Embeddings, OCR, reranking, metadata and cleanup models live under `models.*`
+as shown in Connections and models by task. A task change never enables
+reranking or rebuilds an index; re-embed separately when the vector space
+changes.
 
 ### doc_type vs doc_topic, and doc_level rules
 
@@ -594,7 +626,7 @@ Ingestion is two steps with a human review gate in between — nothing reaches t
    esdc corpus meta path/to/folder/                     # no flags: show current metadata
    esdc corpus meta path/to/folder/ --regenerate        # re-run LLM metadata analysis on the existing body
    ```
-   `--regenerate` re-runs metadata extraction over each sidecar's already-extracted markdown (no re-parse/OCR) using `corpus.metadata_model` — useful after improving the prompt or model. It requires a reachable `metadata_model`, replaces the LLM-owned fields (doc_type, doc_topic, dates, entities, ...), resets `reviewed: false` unless `--reviewed`/`--no-reviewed` is also passed, and any explicit flag in the same invocation wins over the regenerated value.
+   `--regenerate` re-runs metadata extraction over each sidecar's already-extracted markdown (no re-parse/OCR) using the Metadata extraction task — useful after improving the prompt or model. It requires a reachable text Metadata extraction task, replaces the LLM-owned fields (doc_type, doc_topic, dates, entities, ...), resets `reviewed: false` unless `--reviewed`/`--no-reviewed` is also passed, and any explicit flag in the same invocation wins over the regenerated value.
 
 3. **Commit** — ingest reviewed sidecars into the DuckDB-backed corpus (chunked, embedded, hybrid-indexed):
    ```bash

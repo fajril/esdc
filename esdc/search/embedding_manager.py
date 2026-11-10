@@ -18,14 +18,11 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingManager:
-    """Generate embeddings using Ollama API.
+    """Generate embeddings through one Ollama connection.
 
-    Default: qwen3-embedding:0.6b (639MB, 32K context, 4096 dimensions)
-    Supports configurable model via config.yaml embedding_model key.
+    The wire model and endpoint are supplied by the canonical runtime; this
+    manager never reads a model or host from legacy config.
     """
-
-    DEFAULT_MODEL = "qwen3-embedding:0.6b"
-    DEFAULT_BATCH_SIZE = 100
 
     def __init__(
         self,
@@ -45,22 +42,14 @@ class EmbeddingManager:
                 caller that wants a different bound for query and for batch
                 holds one manager per bound.
         """
-        if model is None:
-            config = Config._load_config()
-            resolved_model = (
-                config.get("embedding_model", self.DEFAULT_MODEL)
-                if config
-                else self.DEFAULT_MODEL
-            )
-        else:
-            resolved_model = model
+        if not model:
+            raise ValueError("EmbeddingManager needs an explicit wire model.")
+        resolved_model = model
 
         if batch_size is None:
             batch_size = Config.get_embedding_batch_size()
         self.batch_size: int = max(1, int(batch_size))
 
-        if host is None:
-            host = Config.get_embedding_host()
         self._host = host or "local Ollama service"
         self.model: str = resolved_model
         client_kwargs: dict[str, Any] = {}

@@ -181,9 +181,9 @@ def _status_message(backend: str, target: str, status: int) -> str:
     """
     return (
         f"[Embedding] backend '{backend}' service at {target} returned "
-        f"HTTP {status}. Check that `embedding_model` matches a model the "
-        "service has loaded, that the endpoint is an embeddings endpoint, and "
-        "that the credential is accepted."
+        f"HTTP {status}. Check that the Embeddings task's model matches a model "
+        "the service has loaded, that the endpoint is an embeddings endpoint, "
+        "and that the connection credential is accepted."
     )
 
 
@@ -218,17 +218,16 @@ def _service_error(backend: str, target: str, err: Exception) -> str:
     if isinstance(err, _TRANSPORT_ERRORS):
         return (
             f"[Embedding] backend '{backend}' could not reach the embedding "
-            f"service at {target}: {error_text(err)}. Check the service is "
-            "running and reachable, and that "
-            "`embedding_host`/`embedding_provider` point at it."
+            f"service at {target}: {error_text(err)}. Check the assigned "
+            "Embeddings connection endpoint is running and reachable."
         )
     # The request completed or failed for a reason this module cannot name. The
     # checks for both readings are listed instead of picking one.
     return (
         f"[Embedding] backend '{backend}' service at {target} did not return "
         f"an embedding ({error_text(err)}). Check that the service is running "
-        "and reachable, that `embedding_model` matches a model it has loaded, "
-        "and that the endpoint is an embeddings endpoint."
+        "and reachable, that the Embeddings task's model matches a model it "
+        "has loaded, and that the endpoint is an embeddings endpoint."
     )
 
 
@@ -267,16 +266,17 @@ class OllamaEmbedder:
     so the query path and the batch path hold separate clients.
     """
 
-    OLLAMA_TAG = "qwen3-embedding:0.6b"
-
     def __init__(self, host: str | None = None, model: str | None = None) -> None:
         # Lazy import: esdc/search/__init__.py imports semantic_resolver,
         # which imports this module. A module-level import here would be a
         # circular import.
         from esdc.search.embedding_manager import EmbeddingManager
 
+        wire_model = str(model or "").strip()
+        if not wire_model:
+            raise ValueError("OllamaEmbedder needs an explicit wire model.")
         self.host = host or "local Ollama service"
-        self.wire_model = str(model or "").strip() or self.OLLAMA_TAG
+        self.wire_model = wire_model
         self.model = MODEL_ID
         # Two clients built from the same connection are interchangeable for
         # memoization, so the probe cache can span store/resolver instances.
@@ -365,9 +365,8 @@ class OpenAIEmbedder:
         model = str(model or "").strip()
         if not model:
             raise ValueError(
-                "[Embedding] backend 'openai' requires the `embedding_model` "
-                "config key set to the id the server uses for the embedding "
-                "model (e.g. 'Qwen3-Embedding-0.6B-8bit'); run "
+                "[Embedding] the Embeddings task needs an explicit model id for this "
+                "connection (for example 'Qwen3-Embedding-0.6B-8bit'); run "
                 "`esdc configs` or query the server's /v1/models."
             )
         from esdc.configs import Config
@@ -522,12 +521,12 @@ def _resolve_embedding_runtime(
         raise EmbeddingConfigError(_service_required("local"))
     if requested not in {"ollama", "openai"}:
         raise ValueError(
-            f"[Embedding] unknown embedding_backend {requested!r}; expected one "
+            f"[Embedding] unknown embedding backend {requested!r}; expected one "
             "of: ollama, openai. 'local' is retired: it needs an HTTP service."
         )
     if requested != inferred:
         raise ValueError(
-            f"[Embedding] embedding_backend {requested!r} does not match the "
+            f"[Embedding] embedding backend {requested!r} does not match the "
             f"assigned connection {task.primary.connection!r} "
             f"(type {provider_type!r}, backend {inferred!r})."
         )

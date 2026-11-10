@@ -15,15 +15,13 @@ def test_embedding_manager_initialization():
         assert manager.model == "qwen3-embedding:0.6b"
 
 
-def test_embedding_manager_default_model():
-    """Test EmbeddingManager uses default model."""
+def test_embedding_manager_requires_an_explicit_wire_model():
+    """The manager never reads a model from legacy config."""
     with (
         patch("esdc.search.embedding_manager.ollama.Client"),
-        patch("esdc.search.embedding_manager.Config._load_config") as mock_config,
+        pytest.raises(ValueError, match="explicit wire model"),
     ):
-        mock_config.return_value = None
-        manager = EmbeddingManager()
-        assert manager.model == EmbeddingManager.DEFAULT_MODEL
+        EmbeddingManager()
 
 
 def test_generate_embedding_single():
@@ -105,35 +103,22 @@ def test_generate_embeddings_batch_respects_batch_size():
         assert calls == [2, 2, 1]
 
 
-def test_embedding_manager_reads_host_from_config():
-    """EmbeddingManager should read host from config when not passed explicitly."""
-    with (
-        patch("esdc.search.embedding_manager.ollama.Client") as client_cls,
-        patch("esdc.search.embedding_manager.Config.get_embedding_host") as mock_host,
-        patch("esdc.search.embedding_manager.Config._load_config") as mock_config,
-    ):
-        mock_host.return_value = "http://remote:11434"
-        mock_config.return_value = None
-
+def test_embedding_manager_does_not_read_a_host_from_config():
+    """An omitted host stays the Ollama client default; no legacy key is read."""
+    with patch("esdc.search.embedding_manager.ollama.Client") as client_cls:
         EmbeddingManager(model="test")
 
-        client_cls.assert_called_with(host="http://remote:11434")
+        client_cls.assert_called_with(host=None)
 
 
 def test_timeout_is_passed_to_the_client():
     """The ollama SDK binds a timeout per client, so the caller supplies it."""
-    with (
-        patch("esdc.search.embedding_manager.ollama.Client") as client_cls,
-        patch("esdc.search.embedding_manager.Config.get_embedding_host") as mock_host,
-        patch("esdc.search.embedding_manager.Config._load_config") as mock_config,
-    ):
-        mock_host.return_value = "http://remote:11434"
-        mock_config.return_value = None
+    with patch("esdc.search.embedding_manager.ollama.Client") as client_cls:
         client_cls.return_value = Mock()
 
         EmbeddingManager(model="test", timeout=20.0)
 
-        client_cls.assert_called_with(host="http://remote:11434", timeout=20.0)
+        client_cls.assert_called_with(host=None, timeout=20.0)
 
 
 def test_failure_logs_and_raises_without_the_response_body(caplog):
@@ -165,16 +150,9 @@ def test_failure_logs_and_raises_without_the_response_body(caplog):
     assert exc.value.__cause__ is None
 
 
-def test_embedding_manager_explicit_host_overrides_config():
-    """Explicit host param should override config."""
-    with (
-        patch("esdc.search.embedding_manager.ollama.Client") as client_cls,
-        patch("esdc.search.embedding_manager.Config.get_embedding_host") as mock_host,
-        patch("esdc.search.embedding_manager.Config._load_config") as mock_config,
-    ):
-        mock_host.return_value = "http://config-host:11434"
-        mock_config.return_value = None
-
+def test_embedding_manager_explicit_host_is_used():
+    """An explicit host param is passed to the Ollama client."""
+    with patch("esdc.search.embedding_manager.ollama.Client") as client_cls:
         EmbeddingManager(model="test", host="http://explicit:11434")
 
         client_cls.assert_called_with(host="http://explicit:11434")
