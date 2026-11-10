@@ -149,11 +149,16 @@ class TestKeyDescriptions:
             assert not missing, f"Missing descriptions for: {missing}"
 
     def test_enum_values_include_defaults(self, tmp_path):
-        """ENUM_CHOICES must include the default value for each key."""
+        """Every persistent ENUM_CHOICES key includes its default value."""
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             Config._config_cache = None
             flat = Config.get_all_config_flat()
             for key, choices in ENUM_CHOICES.items():
+                if key == "corpus.rerank_backend":
+                    # Retired from persistent defaults: the Reranking task owns
+                    # its connection/model and enabled switch.
+                    assert key not in flat
+                    continue
                 assert key in flat, f"ENUM_CHOICES key {key!r} not in config"
                 assert str(flat[key]) in choices, (
                     f"Default value {flat[key]!r} for {key!r} "
@@ -165,10 +170,11 @@ class TestKeyDescriptions:
         overlap = Config.BOOLEAN_KEYS & set(ENUM_CHOICES.keys())
         assert not overlap, f"Boolean keys should not be in ENUM_CHOICES: {overlap}"
 
-    def test_six_optional_role_keys_are_described(self, tmp_path):
-        """The six new keys default empty/local, are described, and show in --show."""
-        optional = (
-            "embedding_provider",
+    def test_legacy_role_keys_are_described_but_not_persistent_defaults(
+        self, tmp_path
+    ):
+        """Corpus model settings live in canonical tasks, not flat defaults."""
+        corpus_legacy = (
             "corpus.metadata_provider",
             "corpus.cleanup_provider",
             "corpus.ocr_provider",
@@ -178,13 +184,11 @@ class TestKeyDescriptions:
         with patch.object(Config, "get_config_dir", return_value=tmp_path):
             Config._config_cache = None
             flat = Config.get_all_config_flat()
-            for key in optional:
-                assert key in flat, key
+            assert "models" in Config.get_defaults()
+            for key in corpus_legacy:
+                assert key not in flat, key
+                # Conversion-only documentation remains until the cleanup task.
                 assert key in KEY_DESCRIPTIONS, key
-            assert flat["corpus.rerank_backend"] == "provider"
-            for key in optional:
-                if key != "corpus.rerank_backend":
-                    assert flat[key] == "", key
 
     def test_reading_flat_config_does_not_rewrite_the_file(self, tmp_path):
         """Opening the config (here: --show) must not write defaults into it."""

@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
@@ -469,10 +469,165 @@ class TestProviderTypeRouting:
         assert catalog.entries == ()
         assert "no base URL" in (catalog.warning or "")
 
-    def test_other_provider_types_are_not_guessed(self, monkeypatch):
-        catalog = discover_models({"provider_type": "anthropic", "model": "claude"})
+    def test_unknown_provider_types_are_not_guessed(self, monkeypatch):
+        catalog = discover_models({"provider_type": "mystery", "model": "unknown"})
         assert catalog.entries == ()
         assert "not supported" in (catalog.warning or "")
+
+
+class TestProviderSDKDiscovery:
+    """Other supported text providers reuse their own list_models method."""
+
+    @pytest.mark.parametrize(
+        ("provider_type", "connection", "expected_kwargs"),
+        [
+            ("anthropic", {"api_key": "fixture-key"}, {"api_key": "fixture-key"}),
+            ("google", {"api_key": "fixture-key"}, {"api_key": "fixture-key"}),
+            (
+                "azure_openai",
+                {"base_url": "https://azure.example", "api_key": "fixture-key"},
+                {"api_key": "fixture-key", "base_url": "https://azure.example"},
+            ),
+            ("groq", {"api_key": "fixture-key"}, {"api_key": "fixture-key"}),
+            ("deepseek", {"api_key": "fixture-key"}, {"api_key": "fixture-key"}),
+            (
+                "ollama_cloud",
+                {"base_url": "https://ollama.example", "api_key": "fixture-key"},
+                {"api_key": "fixture-key", "base_url": "https://ollama.example"},
+            ),
+            (
+                "opencode",
+                {"base_url": "https://opencode.example/v1", "api_key": "fixture-key"},
+                {
+                    "api_key": "fixture-key",
+                    "base_url": "https://opencode.example/v1",
+                },
+            ),
+        ],
+    )
+    def test_supported_text_provider_reuses_its_list_models(
+        self, monkeypatch, provider_type, connection, expected_kwargs
+    ):
+        from esdc.providers import PROVIDER_CLASSES
+
+        provider_class = PROVIDER_CLASSES[provider_type]
+        listed = MagicMock(return_value=["model-a", "model-b", "model-a"])
+        monkeypatch.setattr(provider_class, "list_models", listed)
+
+        catalog = discover_models({"type": provider_type, **connection})
+
+        listed.assert_called_once_with(**expected_kwargs)
+        assert [entry.model_id for entry in catalog.entries] == [
+            "model-a",
+            "model-b",
+        ]
+        for entry in catalog.entries:
+            assert entry.roles == frozenset()
+            assert entry.supports_vision is None
+        assert catalog.warning is None
+
+    def test_an_sdk_failure_is_an_unverified_warning_without_the_error_text(
+        self, monkeypatch
+    ):
+        from esdc.providers import PROVIDER_CLASSES
+
+        provider_class = PROVIDER_CLASSES["anthropic"]
+        monkeypatch.setattr(
+            provider_class,
+            "list_models",
+            MagicMock(side_effect=RuntimeError("rejected secret sk-synthetic")),
+        )
+
+        catalog = discover_models({"type": "anthropic", "api_key": "fixture-key"})
+
+        assert catalog.entries == ()
+        warning = catalog.warning or ""
+        assert "unavailable" in warning
+        assert "unverified" in warning
+        assert "secret" not in warning
+        assert "sk-synthetic" not in warning
+        assert "cannot serve" not in warning
+
+    def test_an_empty_sdk_list_is_an_unverified_warning(self, monkeypatch):
+        from esdc.providers import PROVIDER_CLASSES
+
+        monkeypatch.setattr(
+            PROVIDER_CLASSES["deepseek"], "list_models", MagicMock(return_value=[])
+        )
+
+        catalog = discover_models({"type": "deepseek", "api_key": "fixture-key"})
+
+        assert catalog.entries == ()
+        assert "unverified" in (catalog.warning or "")
+
+    def test_an_expired_oauth_token_is_passed_as_a_snapshot(self, monkeypatch):
+        from esdc.providers import PROVIDER_CLASSES
+
+        listed = MagicMock(return_value=["claude-test"])
+        monkeypatch.setattr(PROVIDER_CLASSES["anthropic"], "list_models", listed)
+        provider = {
+            "type": "anthropic",
+            "oauth": {
+                "access_token": "expired-synthetic-token",
+                "expires_at": "2000-01-01T00:00:00Z",
+            },
+        }
+
+        catalog = discover_models(provider)
+
+        listed.assert_called_once_with(api_key="expired-synthetic-token")
+        assert [entry.model_id for entry in catalog.entries] == ["claude-test"]
+
+    def test_same_connection_name_with_a_new_url_is_not_cached(self, monkeypatch):
+        calls = _fake_http(
+            monkeypatch,
+            {
+                "http://first.example/v1/models": (
+                    200,
+                    {"data": [{"id": "first-model"}]},
+                ),
+                "http://second.example/v1/models": (
+                    200,
+                    {"data": [{"id": "second-model"}]},
+                ),
+                "http://first.example/model/info": (200, {"data": []}),
+                "http://second.example/model/info": (200, {"data": []}),
+            },
+        )
+        provider = {
+            "name": "engine",
+            "type": "openai_compatible",
+            "base_url": "http://first.example/v1",
+        }
+
+        first = discover_models(provider)
+        provider["base_url"] = "http://second.example/v1"
+        second = discover_models(provider)
+
+        assert [entry.model_id for entry in first.entries] == ["first-model"]
+        assert [entry.model_id for entry in second.entries] == ["second-model"]
+        assert calls[0]["url"] == "http://first.example/v1/models"
+        assert calls[-2]["url"] == "http://second.example/v1/models"
+
+    def test_sdk_discovery_does_not_read_or_write_config(
+        self, monkeypatch, tmp_path
+    ):
+        from esdc.configs import Config
+        from esdc.providers import PROVIDER_CLASSES
+
+        monkeypatch.setenv("ESDC_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            PROVIDER_CLASSES["anthropic"],
+            "list_models",
+            MagicMock(return_value=["claude-test"]),
+        )
+        before = tmp_path.iterdir()
+        with patch.object(
+            Config, "_save_config", side_effect=AssertionError("must not write")
+        ):
+            discover_models({"type": "anthropic", "api_key": "fixture-key"})
+
+        assert list(tmp_path.iterdir()) == list(before)
 
 
 class TestStandardOpenAIDiscovery:

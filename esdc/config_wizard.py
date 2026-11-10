@@ -43,6 +43,7 @@ from esdc.corpus.ocr import create_ocr_client
 from esdc.corpus.provider_reranker import ProviderReranker
 from esdc.embedders import OllamaEmbedder, OpenAIEmbedder
 from esdc.model_catalog import CatalogRole, ModelCatalog, ModelEntry, discover_models
+from esdc.model_settings import ROLE_LABELS
 from esdc.providers import PROVIDER_CLASSES, PROVIDER_NAMES, get_provider
 from esdc.providers.base import ProviderConfig
 
@@ -87,6 +88,21 @@ _PROVIDER_FIELDS: dict[str, list[str]] = {
     "deepseek": ["api_key", "model", "reasoning_effort"],
     "ollama_cloud": ["base_url", "api_key", "model"],
     "opencode": ["api_key", "base_url", "model"],
+}
+
+# Connections own transport and authentication only. A task owns its model and
+# model options, so no connection editor asks for a model or reasoning effort.
+_CONNECTION_FIELDS: dict[str, list[str]] = {
+    "ollama": ["base_url"],
+    "openai": ["api_key"],
+    "openai_compatible": ["base_url", "api_key"],
+    "anthropic": ["api_key"],
+    "google": ["api_key"],
+    "azure_openai": ["base_url", "api_key", "api_version"],
+    "groq": ["api_key"],
+    "deepseek": ["api_key"],
+    "ollama_cloud": ["base_url", "api_key"],
+    "opencode": ["api_key", "base_url"],
 }
 
 
@@ -284,17 +300,23 @@ def _instruction_with_hint(
     return f"{instruction} {hint}".strip() if hint else instruction
 
 
-def _check_default_provider_warning() -> None:
-    """Show warning if no default provider is set but providers exist."""
-    providers = Config.get_providers()
-    if not providers:
-        return
+def _check_chat_assignment_warning() -> None:
+    """Warn when canonical Chat has no model assignment yet.
 
-    default = Config.get_default_provider()
-    if not default:
+    Connections can exist without any task using them, so a saved connection is
+    not evidence of a Chat setup. The message names the task, never a hidden
+    connection-level model.
+    """
+    try:
+        assignment = Config.get_model_assignment("chat")
+    except ValueError:
+        # A pre-canonical file is reported by the explicit conversion flow, not
+        # this informational banner.
+        return
+    if assignment.mode != "model":
         rich_print(
-            f"[{_WARNING_COLOR}]Warning: No default provider set. "
-            f"Chat will not work until you set a default provider.[/{_WARNING_COLOR}]"
+            f"[{_WARNING_COLOR}]Warning: Chat has no connection/model "
+            f"assigned. Choose one in Models by task > Chat.[/{_WARNING_COLOR}]"
         )
 
 
@@ -867,6 +889,381 @@ def _embedding_test_draft(draft: dict[str, Any]) -> dict[str, Any] | None:
             test_draft[target] = value
 
     return test_draft
+
+
+# ---------------------------------------------------------------------------
+# Canonical connection CRUD flows
+# ---------------------------------------------------------------------------
+def _connection_default_base_url(provider_type: str) -> str:
+    """The provider SDK's own saved default address, never a guessed host."""
+    provider_class = PROVIDER_CLASSES.get(provider_type)
+    if provider_class is None:
+        return ""
+    return str(
+        getattr(provider_class, "BASE_URL", "")
+        or getattr(provider_class, "DEFAULT_BASE_URL", "")
+    )
+
+
+def _format_connection_label(name: str, cfg: Mapping[str, Any]) -> str:
+    """One registry row: custom name plus its provider type."""
+    provider_type = str(cfg.get("type") or cfg.get("provider_type") or "")
+    type_label = PROVIDER_NAMES.get(provider_type, provider_type or "unknown")
+    return f"{name} ({type_label})"
+
+
+def _connection_reference_label(path: str) -> str:
+    """Human task/fallback label for one canonical reference path."""
+    if not path.startswith("models."):
+        return path
+    suffix = path[len("models.") :]
+    if ".fallbacks[" in suffix:
+        role, _, tail = suffix.partition(".fallbacks[")
+        index = tail.rstrip("]")
+        role_label = ROLE_LABELS.get(role, role)  # type: ignore[arg-type]
+        return f"{role_label} fallback {int(index) + 1}"
+    return ROLE_LABELS.get(suffix, suffix)  # type: ignore[arg-type]
+
+
+def _connection_reference_lines(references: list[str]) -> list[str]:
+    """Deduplicated labels, keeping the canonical reference order."""
+    labels: list[str] = []
+    for reference in references:
+        label = _connection_reference_label(reference)
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _prompt_connection_name(current: str) -> str | None:
+    """Prompt a connection name; None cancels this field only."""
+    value = _ask(
+        questionary.text("Connection name:", default=current, style=_WIZARD_STYLE)
+    )
+    if value is None:
+        return None
+
+    existing_names = Config.get_connections()
+    while not value:
+        value = _ask(
+            questionary.text(
+                "Name cannot be empty. Enter a connection name:",
+                default="",
+                style=_WIZARD_STYLE,
+            )
+        )
+        if value is None:
+            return None
+
+    while value != current and value in existing_names:
+        rich_print(
+            f"[{_WARNING_COLOR}]Name '[{_VALUE_COLOR}]{value}"
+            f"[/{_VALUE_COLOR}]' is already taken.[/{_WARNING_COLOR}]"
+        )
+        value = _ask(
+            questionary.text(
+                "Enter a different connection name:",
+                default="",
+                style=_WIZARD_STYLE,
+            )
+        )
+        if value is None:
+            return None
+
+    return value
+
+
+def _prompt_connection_field(
+    provider_type: str, field: str, current: Any
+) -> Any | None:
+    """Prompt one transport/auth field; None cancels this field only."""
+    if field == "api_key":
+        value = _ask(
+            questionary.password("API Key (blank keeps current):", style=_WIZARD_STYLE)
+        )
+        if value is None:
+            return None
+        return value or current
+
+    if field == "api_version":
+        default = current or "2024-02-01"
+        return _ask(
+            questionary.text("API Version:", default=default, style=_WIZARD_STYLE)
+        )
+
+    if field == "base_url":
+        default = current or _connection_default_base_url(provider_type)
+        return _ask(questionary.text("Base URL:", default=default, style=_WIZARD_STYLE))
+
+    return None
+
+
+def _connection_edit_choices(
+    draft: Mapping[str, Any], name: str
+) -> list[questionary.Choice]:
+    """Editable fields of one connection: name and transport/auth only."""
+    provider_type = str(draft.get("type") or "")
+
+    def field_choice(field: str) -> questionary.Choice:
+        return questionary.Choice(
+            f"{field} = {format_config_value(field, draft.get(field, '')) or '(none)'}",
+            value=field,
+        )
+
+    choices = [questionary.Choice(f"name = {name}", value="name")]
+
+    if "api_key" in draft:
+        choices.append(field_choice("api_key"))
+        choices.append(questionary.Choice("Clear API key", value="__clear_key__"))
+
+    for field in _CONNECTION_FIELDS.get(provider_type, []):
+        if field == "api_key":
+            continue
+        choices.append(field_choice(field))
+
+    if draft.get("base_url") and "base_url" not in _CONNECTION_FIELDS.get(
+        provider_type, []
+    ):
+        choices.append(field_choice("base_url"))
+
+    choices.append(questionary.Choice("Done editing", value="__done__"))
+    return choices
+
+
+def _test_connection(name: str, entry: Mapping[str, Any]) -> None:
+    """Read-only connection check through centralized model discovery."""
+    rich_print(
+        f"[{_SEP_COLOR}]Checking connection '[{_VALUE_COLOR}]{name}"
+        f"[/{_VALUE_COLOR}]'…[/{_SEP_COLOR}]"
+    )
+    catalog = discover_models(dict(entry))
+    if catalog.warning:
+        rich_print(f"[{_WARNING_COLOR}]{catalog.warning}[/{_WARNING_COLOR}]")
+    if catalog.entries:
+        shown = ", ".join(entry.model_id for entry in catalog.entries[:5])
+        suffix = "…" if len(catalog.entries) > 5 else ""
+        rich_print(
+            f"[{_SUCCESS_COLOR}]Discovered {len(catalog.entries)} model(s): "
+            f"{shown}{suffix}[/{_SUCCESS_COLOR}]"
+        )
+    elif catalog.warning is None:
+        rich_print(f"[{_WARNING_COLOR}]No models were reported.[/{_WARNING_COLOR}]")
+
+
+def _save_connection_draft(
+    name: str,
+    draft: dict[str, Any],
+    original_name: str | None = None,
+) -> None:
+    """List impacted tasks, then write one connection draft in one save.
+
+    A new connection is added; an edited same-name connection is updated in
+    place; an edited renamed connection moves its key and every task reference
+    in the same atomic write. Cancel/Back never reaches this function.
+    """
+    references = Config.get_connection_references(original_name or name)
+    if references:
+        uses = ", ".join(_connection_reference_lines(references))
+        rich_print(
+            f"[{_WARNING_COLOR}]Connection '[{_VALUE_COLOR}]{original_name or name}"
+            f"[/{_VALUE_COLOR}]' is used by: {uses}.[/{_WARNING_COLOR}]"
+        )
+
+    try:
+        if original_name is not None and name != original_name:
+            Config.rename_connection(original_name, name, values=draft)
+            rich_print(
+                f"[{_SUCCESS_COLOR}]Connection renamed to "
+                f"'[{_VALUE_COLOR}]{name}[/{_VALUE_COLOR}]'; task references were "
+                f"updated.[/{_SUCCESS_COLOR}]"
+            )
+        else:
+            Config.save_connection(name, draft)
+            action = "updated" if original_name is not None else "saved"
+            rich_print(
+                f"[{_SUCCESS_COLOR}]Connection '[{_VALUE_COLOR}]{name}"
+                f"[/{_VALUE_COLOR}]' {action}.[/{_SUCCESS_COLOR}]"
+            )
+    except ValueError as error:
+        rich_print(f"[{_ERROR_COLOR}]{error}[/{_ERROR_COLOR}]")
+        return
+
+    rich_print(f"[{_SEP_COLOR}]{_RESTART_NOTE}[/]")
+
+
+def _connection_draft_actions(
+    name: str,
+    draft: dict[str, Any],
+    original_name: str | None = None,
+) -> None:
+    """Save / Test / Cancel for one connection draft; only Save writes."""
+    while True:
+        action = _select_with_back(
+            f"Connection '{name}' — what to do",
+            choices=[
+                questionary.Choice("Save", value="save"),
+                questionary.Choice("Test connection", value="test"),
+                questionary.Choice("Cancel", value="cancel"),
+            ],
+        )
+        if action is None or action in ("cancel", "__back__"):
+            rich_print(f"[{_SEP_COLOR}]Draft discarded, nothing saved.[/{_SEP_COLOR}]")
+            return
+        if action == "test":
+            _test_connection(name, draft)
+            continue
+        _save_connection_draft(name, draft, original_name)
+        return
+
+
+def _add_connection_flow() -> None:
+    """Add a connection: type, custom name, transport/auth; Save writes once."""
+    provider_type = _select_with_back(
+        "Select connection type:",
+        choices=[
+            questionary.Choice(title, value=key)
+            for key, title in PROVIDER_NAMES.items()
+        ],
+    )
+    if provider_type == "__back__":
+        return
+
+    name = _prompt_connection_name("")
+    if name is None:
+        return
+
+    draft: dict[str, Any] = {"type": provider_type}
+    for field in _CONNECTION_FIELDS.get(provider_type, []):
+        value = _prompt_connection_field(provider_type, field, draft.get(field, ""))
+        if value is None:
+            return
+        draft[field] = value
+
+    _connection_draft_actions(name, draft)
+
+
+def _edit_connection_flow() -> None:
+    """Edit a connection's transport/auth only, then Save or cancel."""
+    connections = Config.get_connections()
+    if not connections:
+        rich_print(f"[{_WARNING_COLOR}]No connections configured.[/{_WARNING_COLOR}]")
+        return
+
+    choices = [
+        questionary.Choice(_format_connection_label(name, entry), value=name)
+        for name, entry in connections.items()
+    ]
+    original_name = _select_with_back("Select connection to edit:", choices=choices)
+    if original_name == "__back__":
+        return
+
+    draft: dict[str, Any] = dict(connections[original_name])
+    name = original_name
+
+    while True:
+        field = _select_with_back(
+            "Select field to edit:",
+            choices=_connection_edit_choices(draft, name),
+        )
+        if field == "__back__":
+            rich_print(f"[{_SEP_COLOR}]Draft discarded, nothing saved.[/{_SEP_COLOR}]")
+            return
+        if field == "__done__":
+            break
+
+        if field == "__clear_key__":
+            draft["api_key"] = ""
+            rich_print(
+                f"[{_SEP_COLOR}]API key cleared for the draft; Save writes it."
+                f"[/{_SEP_COLOR}]"
+            )
+            continue
+
+        if field == "name":
+            new_name = _prompt_connection_name(name)
+            if new_name is None:
+                rich_print(
+                    f"[{_SEP_COLOR}]Edit cancelled, no changes made.[/{_SEP_COLOR}]"
+                )
+                continue
+            name = new_name
+            continue
+
+        value = _prompt_connection_field(
+            str(draft.get("type") or ""), field, draft.get(field, "")
+        )
+        if value is None:
+            rich_print(f"[{_SEP_COLOR}]Edit cancelled, no changes made.[/{_SEP_COLOR}]")
+            continue
+        draft[field] = value
+
+    _connection_draft_actions(name, draft, original_name)
+
+
+def _remove_connection_flow() -> None:
+    """Remove an unreferenced connection; a referenced one is refused."""
+    connections = Config.get_connections()
+    if not connections:
+        rich_print(f"[{_WARNING_COLOR}]No connections configured.[/{_WARNING_COLOR}]")
+        return
+
+    choices = [
+        questionary.Choice(_format_connection_label(name, entry), value=name)
+        for name, entry in connections.items()
+    ]
+    selected = _select_with_back("Select connection to remove:", choices=choices)
+    if selected == "__back__":
+        return
+
+    references = Config.get_connection_references(selected)
+    if references:
+        uses = ", ".join(_connection_reference_lines(references))
+        rich_print(
+            f"[{_WARNING_COLOR}]Connection '[{_VALUE_COLOR}]{selected}"
+            f"[/{_VALUE_COLOR}]' is still used by: {uses}.[/{_WARNING_COLOR}]"
+        )
+        rich_print(
+            f"[{_SEP_COLOR}]Reassign those tasks first; nothing was removed."
+            f"[/{_SEP_COLOR}]"
+        )
+        return
+
+    confirm = _ask(
+        questionary.confirm(
+            f"Remove connection '{selected}'?", default=False, style=_WIZARD_STYLE
+        )
+    )
+    if confirm is None:
+        return
+    if not confirm:
+        return
+    if Config.remove_connection(selected):
+        rich_print(
+            f"[{_SUCCESS_COLOR}]Connection '[{_VALUE_COLOR}]{selected}"
+            f"[/{_VALUE_COLOR}]' removed.[/{_SUCCESS_COLOR}]"
+        )
+    else:
+        rich_print(
+            f"[{_ERROR_COLOR}]Connection '[{_VALUE_COLOR}]{selected}"
+            f"[/{_VALUE_COLOR}]' not found.[/{_ERROR_COLOR}]"
+        )
+
+
+def _test_connection_standalone() -> None:
+    """Pick any saved connection and check it through model discovery."""
+    connections = Config.get_connections()
+    if not connections:
+        rich_print(f"[{_WARNING_COLOR}]No connections configured.[/{_WARNING_COLOR}]")
+        return
+
+    choices = [
+        questionary.Choice(_format_connection_label(name, entry), value=name)
+        for name, entry in connections.items()
+    ]
+    selected = _select_with_back("Select connection to test:", choices=choices)
+    if selected == "__back__":
+        return
+    _test_connection(selected, connections[selected])
 
 
 # ---------------------------------------------------------------------------
@@ -2858,39 +3255,29 @@ def _edit_rerank_task() -> None:
 # ---------------------------------------------------------------------------
 # Submenus
 # ---------------------------------------------------------------------------
-def _providers_menu() -> None:
-    """Chat providers submenu — groups the existing provider CRUD flows."""
+def _connections_menu() -> None:
+    """Connections submenu: registry management only, no model/failover."""
     while True:
         selected = _select_with_back(
-            "Chat providers",
+            "Connections",
             choices=[
-                questionary.Choice("Add provider", value="Add provider"),
-                questionary.Choice("Edit provider", value="Edit provider"),
-                questionary.Choice("Remove provider", value="Remove provider"),
-                questionary.Choice(
-                    "Set default provider", value="Set default provider"
-                ),
-                questionary.Choice(
-                    "Set provider failover order", value="Set provider order"
-                ),
+                questionary.Choice("Add connection", value="Add connection"),
+                questionary.Choice("Edit connection", value="Edit connection"),
+                questionary.Choice("Remove connection", value="Remove connection"),
                 questionary.Choice("Test connection", value="Test connection"),
             ],
         )
         if selected == "__back__":
             break
 
-        if selected == "Add provider":
-            _add_provider_flow()
-        elif selected == "Edit provider":
-            _edit_provider_flow()
-        elif selected == "Remove provider":
-            _remove_provider_flow()
-        elif selected == "Set default provider":
-            _set_default_provider_flow()
-        elif selected == "Set provider order":
-            _set_provider_order_flow()
+        if selected == "Add connection":
+            _add_connection_flow()
+        elif selected == "Edit connection":
+            _edit_connection_flow()
+        elif selected == "Remove connection":
+            _remove_connection_flow()
         elif selected == "Test connection":
-            _test_provider_standalone()
+            _test_connection_standalone()
 
 
 def _models_by_task_menu() -> None:
@@ -3010,7 +3397,7 @@ def run_wizard() -> None:
     an earlier explicit action remain written.
     """
     Config.init_config()
-    _check_default_provider_warning()
+    _check_chat_assignment_warning()
 
     rich_print(
         Panel.fit(
@@ -3034,7 +3421,7 @@ def _run_wizard_loop() -> None:
                 "What would you like to do?",
                 choices=[
                     questionary.Choice("Models by task ▸", value="Models by task"),
-                    questionary.Choice("Providers ▸", value="Providers"),
+                    questionary.Choice("Connections ▸", value="Connections"),
                     questionary.Choice(
                         "Application settings ▸", value="Application settings"
                     ),
@@ -3056,8 +3443,8 @@ def _run_wizard_loop() -> None:
         try:
             if selected == "Models by task":
                 _models_by_task_menu()
-            elif selected == "Providers":
-                _providers_menu()
+            elif selected == "Connections":
+                _connections_menu()
             elif selected == "Application settings":
                 _edit_section(
                     "Application settings", APPLICATION_SECTIONS["Application settings"]

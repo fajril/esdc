@@ -758,6 +758,206 @@ class Config:
         cls._save_config(candidate)
 
     @classmethod
+    def _model_config_for_write(cls) -> dict[str, Any]:
+        """Return a detached canonical settings candidate for one write.
+
+        A new/empty file starts from fresh canonical defaults; an existing
+        canonical file is deep-copied; a pre-canonical file is refused rather
+        than converted implicitly. Nothing is written here.
+        """
+        raw_config = cls._load_config() or {}
+        if "model_settings_version" not in raw_config:
+            if has_legacy_model_settings(raw_config):
+                raise ModelConfigurationRequired(MODEL_SETTINGS_REQUIRED_MESSAGE)
+            if "connections" in raw_config or "models" in raw_config:
+                raise ValueError(
+                    "`model_settings_version` is missing from model settings."
+                )
+            candidate = copy.deepcopy(raw_config)
+            candidate.update(cls._model_settings_defaults())
+            return candidate
+        return copy.deepcopy(raw_config)
+
+    @staticmethod
+    def _connection_name_or_raise(name: object, *, label: str) -> str:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{label} must be a non-empty string.")
+        if name != name.strip():
+            raise ValueError(
+                f"{label} must not have leading or trailing whitespace."
+            )
+        return name
+
+    @staticmethod
+    def _connection_references_in_config(
+        config: Mapping[str, Any], name: str
+    ) -> list[str]:
+        """Reference paths for one canonical settings mapping."""
+        models = config.get("models")
+        if not isinstance(models, Mapping):
+            return []
+        references: list[str] = []
+        for role in TASK_ROLES:
+            value = models.get(role)
+            if not isinstance(value, Mapping):
+                continue
+            assignment = parse_task_assignment(role, value)
+            if (
+                assignment.target is not None
+                and assignment.target.connection == name
+            ):
+                references.append(f"models.{role}")
+            for index, fallback in enumerate(assignment.fallbacks):
+                if fallback.connection == name:
+                    references.append(f"models.{role}.fallbacks[{index}]")
+        return references
+
+    @classmethod
+    def get_connection_references(cls, name: str) -> list[str]:
+        """Reference paths that assign one connection to a task.
+
+        The order is the canonical task order (Chat, Embeddings, Reranking,
+        OCR, Metadata extraction, Text cleanup), with each Chat fallback after
+        its primary. ``mode: chat`` and ``mode: ocr`` relationships are not
+        references by themselves: they follow the Chat/OCR task. Dotted names
+        are literal mapping keys.
+
+        Returns:
+            Paths such as ``models.chat`` or ``models.chat.fallbacks[1]``;
+            ``[]`` for an empty or unknown name.
+        """
+        if not isinstance(name, str) or not name:
+            return []
+        return cls._connection_references_in_config(
+            cls._model_config_for_read(), name
+        )
+
+    @classmethod
+    def save_connection(cls, name: str, values: Mapping[str, Any]) -> None:
+        """Create or edit one canonical connection in a single atomic write.
+
+        A connection owns transport/authentication only. The candidate is built
+        on a deep copy and validated against every task reference before the
+        file is replaced, so an edit that would make a dependent task invalid
+        leaves the file and cache unchanged.
+
+        Raises:
+            ModelConfigurationRequired: the file predates canonical settings.
+            ValueError: the name, entry, or resulting task references are
+                invalid.
+        """
+        connection_name = cls._connection_name_or_raise(name, label="Connection name")
+        if not isinstance(values, Mapping):
+            raise ValueError(f"Connection {connection_name!r} must be a mapping.")
+
+        candidate = cls._model_config_for_write()
+        connections = candidate.get("connections")
+        if not isinstance(connections, dict):
+            raise ValueError("`connections` must be a mapping of named connections.")
+        connections[connection_name] = copy.deepcopy(dict(values))
+        candidate["model_settings_version"] = MODEL_SETTINGS_VERSION
+        candidate["connections"] = connections
+        validate_model_settings(candidate)
+        cls._save_config(candidate)
+
+    @classmethod
+    def rename_connection(
+        cls,
+        old_name: str,
+        new_name: str,
+        values: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Rename one connection and move every task reference in one write.
+
+        The saved entry keeps all its fields, including OAuth, API version and
+        unknown extension keys. ``values`` optionally replaces the moved entry
+        with an edited draft in the same write. Only connection references
+        change: task models, options and non-model application settings stay as
+        stored. A dotted connection name is a literal mapping key.
+
+        The candidate is validated before the file is replaced. A conflicting or
+        empty name, an unknown old name, or a resulting invalid task assignment
+        leaves the file and cache unchanged.
+
+        Raises:
+            ModelConfigurationRequired: the file predates canonical settings.
+            ValueError: the old name is unknown, a name is invalid, the new name
+                already exists, or the resulting settings are invalid.
+        """
+        old = cls._connection_name_or_raise(old_name, label="Connection name")
+        new = cls._connection_name_or_raise(new_name, label="Connection name")
+        if values is not None and not isinstance(values, Mapping):
+            raise ValueError(f"Connection {new!r} must be a mapping.")
+
+        candidate = cls._model_config_for_write()
+        connections = candidate.get("connections")
+        if not isinstance(connections, dict):
+            raise ValueError("`connections` must be a mapping of named connections.")
+        if old not in connections:
+            raise ValueError(f"Unknown connection: {old!r}")
+        if new != old and new in connections:
+            raise ValueError(f"Connection name already exists: {new!r}")
+        if new == old and values is None:
+            return
+
+        renamed: dict[str, Any] = {}
+        for key, entry in connections.items():
+            renamed[new if key == old else key] = entry
+        if values is not None:
+            renamed[new] = copy.deepcopy(dict(values))
+        candidate["connections"] = renamed
+
+        models = candidate.get("models")
+        if not isinstance(models, dict):
+            raise ValueError("`models` must be a mapping of task assignments.")
+        for assignment in models.values():
+            if not isinstance(assignment, dict) or assignment.get("mode") != "model":
+                continue
+            if assignment.get("connection") == old:
+                assignment["connection"] = new
+            fallbacks = assignment.get("fallbacks")
+            if isinstance(fallbacks, list):
+                for fallback in fallbacks:
+                    if (
+                        isinstance(fallback, dict)
+                        and fallback.get("connection") == old
+                    ):
+                        fallback["connection"] = new
+
+        candidate["model_settings_version"] = MODEL_SETTINGS_VERSION
+        validate_model_settings(candidate)
+        cls._save_config(candidate)
+
+    @classmethod
+    def remove_connection(cls, name: str) -> bool:
+        """Remove one unreferenced connection; never reassigns a task.
+
+        Returns ``False`` for an unknown name. A connection still used by any
+        task target or Chat fallback raises ``ValueError`` naming every use, and
+        nothing is written, so the user can reassign the tasks first.
+        """
+        connection_name = cls._connection_name_or_raise(name, label="Connection name")
+        candidate = cls._model_config_for_write()
+        connections = candidate.get("connections")
+        if not isinstance(connections, dict) or connection_name not in connections:
+            return False
+
+        references = cls._connection_references_in_config(candidate, connection_name)
+        if references:
+            raise ValueError(
+                f"Connection {connection_name!r} is still used by: "
+                f"{', '.join(references)}. Reassign those tasks first; nothing "
+                "was removed."
+            )
+
+        del connections[connection_name]
+        candidate["model_settings_version"] = MODEL_SETTINGS_VERSION
+        candidate["connections"] = connections
+        validate_model_settings(candidate)
+        cls._save_config(candidate)
+        return True
+
+    @classmethod
     def get_providers(cls) -> dict:
         """Return canonical connections shaped as runtime provider entries.
 

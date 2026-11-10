@@ -114,10 +114,7 @@ def discover_models(
                 warning="Provider has no base URL; model discovery was skipped."
             )
     else:
-        name = provider_type or "unknown"
-        return ModelCatalog(
-            warning=f"Model discovery is not supported for provider type {name}."
-        )
+        return _discover_provider_sdk(provider, provider_type, timeout_seconds)
 
     return _discover_openai_compatible(provider, base_url, timeout_seconds)
 
@@ -127,6 +124,71 @@ def _provider_type(provider: Mapping[str, Any]) -> str:
     return str(
         provider.get("provider_type") or provider.get("type") or ""
     ).strip().lower()
+
+
+def _discover_provider_sdk(
+    provider: Mapping[str, Any],
+    provider_type: str,
+    timeout_seconds: float,
+) -> ModelCatalog:
+    """Model IDs from another supported text provider's own list method.
+
+    The provider SDK's existing ``list_models`` is reused with this
+    connection's saved credentials and address; no chat model is constructed
+    just to enumerate the service. A missing SDK method, an authentication
+    failure or an empty answer is reported as unverified, never as proof that
+    the service cannot serve its assigned model. An entry discovered this way
+    keeps unknown role and vision metadata.
+    """
+    from esdc.providers import PROVIDER_CLASSES
+
+    provider_class = PROVIDER_CLASSES.get(provider_type)
+    if provider_class is None:
+        name = provider_type or "unknown"
+        return ModelCatalog(
+            warning=f"Model discovery is not supported for provider type {name}."
+        )
+
+    kwargs: dict[str, Any] = {}
+    credential = _credential(provider)
+    base_url = str(provider.get("base_url") or "").strip()
+    if credential:
+        kwargs["api_key"] = credential
+    if base_url:
+        kwargs["base_url"] = base_url
+
+    try:
+        raw_models = provider_class.list_models(**kwargs)
+    except Exception:
+        # The SDK may put an auth error body in its message; only the
+        # unavailable fact is surfaced. Manual entry remains available.
+        return ModelCatalog(
+            warning=(
+                f"Model discovery is unavailable for provider type "
+                f"{provider_type}; models are unverified. Enter a model ID "
+                "manually."
+            )
+        )
+
+    model_ids: list[str] = []
+    if isinstance(raw_models, (list, tuple)):
+        for item in raw_models:
+            model_id = str(item or "").strip()
+            if model_id and model_id not in model_ids:
+                model_ids.append(model_id)
+
+    if not model_ids:
+        return ModelCatalog(
+            warning=(
+                f"Model discovery is unavailable for provider type "
+                f"{provider_type}; models are unverified. Enter a model ID "
+                "manually."
+            )
+        )
+
+    return ModelCatalog(
+        entries=tuple(ModelEntry(model_id=model_id) for model_id in model_ids)
+    )
 
 
 def _credential(provider: Mapping[str, Any]) -> str:

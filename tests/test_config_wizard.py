@@ -163,11 +163,11 @@ class TestRunWizard:
 
     @patch("esdc.config_wizard.Config.init_config")
     @patch("esdc.config_wizard.questionary.select")
-    @patch("esdc.config_wizard._add_provider_flow")
-    def test_add_provider(self, mock_add, mock_select, mock_init):
+    @patch("esdc.config_wizard._add_connection_flow")
+    def test_add_connection(self, mock_add, mock_select, mock_init):
         mock_select.return_value.unsafe_ask.side_effect = [
-            "Providers",
-            "Add provider",
+            "Connections",
+            "Add connection",
             "__back__",
             "Exit",
         ]
@@ -184,11 +184,11 @@ class TestRunWizard:
 
     @patch("esdc.config_wizard.Config.init_config")
     @patch("esdc.config_wizard.questionary.select")
-    @patch("esdc.config_wizard._edit_provider_flow")
-    def test_edit_provider(self, mock_edit, mock_select, mock_init):
+    @patch("esdc.config_wizard._edit_connection_flow")
+    def test_edit_connection(self, mock_edit, mock_select, mock_init):
         mock_select.return_value.unsafe_ask.side_effect = [
-            "Providers",
-            "Edit provider",
+            "Connections",
+            "Edit connection",
             "__back__",
             "Exit",
         ]
@@ -201,7 +201,7 @@ class TestHomeMenuDispatch:
 
     HOME_ROWS = [
         "Models by task ▸",
-        "Providers ▸",
+        "Connections ▸",
         "Application settings ▸",
         "Advanced ▸",
         "View settings",
@@ -234,14 +234,14 @@ class TestHomeMenuDispatch:
 
     @patch("esdc.config_wizard.Config.init_config")
     @patch("esdc.config_wizard.questionary.select")
-    @patch("esdc.config_wizard._providers_menu")
+    @patch("esdc.config_wizard._connections_menu")
     @patch("esdc.config_wizard.rich_print")
-    def test_providers_route_to_the_provider_flow(
-        self, mock_print, mock_providers_menu, mock_select, mock_init
+    def test_connections_route_to_the_connection_flow(
+        self, mock_print, mock_connections_menu, mock_select, mock_init
     ):
-        mock_select.return_value.unsafe_ask.side_effect = ["Providers", "Exit"]
+        mock_select.return_value.unsafe_ask.side_effect = ["Connections", "Exit"]
         run_wizard()
-        mock_providers_menu.assert_called_once()
+        mock_connections_menu.assert_called_once()
 
     @patch("esdc.config_wizard.Config.init_config")
     @patch("esdc.config_wizard.questionary.select")
@@ -2384,8 +2384,8 @@ class TestTaskSummaryLine:
         )
 
 
-class TestProviderFlowKeepsDefaultsAndOrder:
-    """Provider default and failover order stay in the provider flow."""
+class TestConnectionMenuKeepsChatControlsOut:
+    """Connections has no default-provider or failover rows after unification."""
 
     def test_provider_fields_are_not_flat_section_keys(self):
         all_keys = {
@@ -2413,14 +2413,15 @@ class TestProviderFlowKeepsDefaultsAndOrder:
         assert "Set provider failover order" not in labels
 
     @patch("esdc.config_wizard.questionary.select")
-    def test_provider_menu_keeps_them(self, mock_select):
-        from esdc.config_wizard import _providers_menu
+    def test_connection_menu_has_no_default_or_order_rows(self, mock_select):
+        from esdc.config_wizard import _connections_menu
 
         mock_select.return_value.unsafe_ask.side_effect = ["__back__"]
-        _providers_menu()
+        _connections_menu()
         labels = [str(c.title) for c in mock_select.call_args.kwargs["choices"]]
-        assert "Set default provider" in labels
-        assert "Set provider failover order" in labels
+        assert "Set default provider" not in labels
+        assert "Set provider failover order" not in labels
+        assert "Chat fallback" not in " ".join(labels)
 
 
 class TestPlainQuestionaryMessages:
