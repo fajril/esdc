@@ -2013,8 +2013,15 @@ def search_documents(
     try:
         from esdc.corpus.store import CorpusStore
 
+        # Readiness first: a missing corpus must report not_available even when
+        # the Embeddings task is unset. The embedding client is resolved only
+        # after the schema proves a vector search can be served.
+        readiness = CorpusStore(read_only=True)
+        try:
+            readiness.validate_readiness("search")
+        finally:
+            readiness.close()
         store = CorpusStore(embedder=_get_corpus_embedder(), read_only=True)
-        store.validate_readiness("search")
         result = store.search(
             query=query,
             limit=limit,

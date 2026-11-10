@@ -29,6 +29,7 @@ import pytest
 import esdc
 from esdc.corpus.chunker import Chunk
 from esdc.corpus.store import CorpusNotReadyError, CorpusStore
+from esdc.model_settings import default_model_settings
 from esdc.search.semantic_resolver import SemanticResolver
 
 _DOC = {
@@ -72,6 +73,40 @@ class FixedEmbedder:
         return [list(self._vec) for _ in texts]
 
 
+@pytest.fixture(autouse=True)
+def _canonical_model_config(monkeypatch):
+    """Supply one synthetic canonical Embeddings assignment.
+
+    Probe memoization resolves the effective Embeddings task even when the
+    store uses an injected fake client. No test in this module talks to a real
+    service; this only gives the canonical resolver a valid connection/model.
+    """
+    configs = importlib.import_module("esdc.configs")
+    models = default_model_settings()
+    models["embedding"] = {
+        "mode": "model",
+        "connection": "fake-embed",
+        "model": "qwen3-embedding-0.6b-q8_0",
+    }
+    config = {
+        "model_settings_version": 1,
+        "connections": {
+            "fake-embed": {
+                "type": "openai_compatible",
+                "base_url": "http://fake-embed:1234/v1",
+                "api_key": "synthetic-test-key",
+            }
+        },
+        "models": models,
+    }
+    monkeypatch.setattr(
+        configs.Config, "_load_config", classmethod(lambda cls: config)
+    )
+    configs.Config._config_cache = None
+    yield
+    configs.Config._config_cache = None
+
+
 @pytest.fixture
 def ro_env(tmp_path: Path, monkeypatch):
     """Tool environment pinned to a tmp DB with fake embedders + tmp cache."""
@@ -86,7 +121,6 @@ def ro_env(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         configs.Config, "get_cache_dir", classmethod(lambda cls: tmp_path / "cache")
     )
-    monkeypatch.setattr(configs.Config, "_load_config", classmethod(lambda cls: None))
     # The clients are resolved through the factory, so this is where a fake is put in:
     # nothing here may open a real HTTP connection.
     embedders_mod = importlib.import_module("esdc.embedders")
@@ -453,8 +487,14 @@ def test_readonly_corpus_missing_db_creates_nothing(tmp_path):
     store.close()
 
 
-def test_missing_corpus_tool_reports_not_available_without_creating_db(ro_env):
+def test_missing_corpus_tool_reports_not_available_without_creating_db(
+    ro_env, monkeypatch
+):
     db_path, sqlite_path = ro_env
+    configs = importlib.import_module("esdc.configs")
+    # Even with Embeddings unset, a missing corpus must report not_available
+    # instead of resolving an embedding client first.
+    monkeypatch.setattr(configs.Config, "_load_config", classmethod(lambda cls: None))
     from esdc.chat.tools import search_documents
 
     result = json.loads(search_documents.invoke({"query": "apapun"}))
