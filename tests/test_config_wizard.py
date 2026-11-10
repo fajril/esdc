@@ -1075,15 +1075,15 @@ class TestGeneralConfigListsCorpusKeys:
         )
         values = [getattr(c, "value", None) for c in choices]
         assert "corpus.chunk_size" in values
-        assert "corpus.ollama_host" in values
+        assert "corpus.ollama_host" not in values
         assert "corpus.num_ctx" in values
 
     def test_model_keys_live_with_their_task_not_a_flat_section(self):
-        """Task screens own the model fields; Advanced owns the tuning keys."""
+        """Task screens own the model fields; Advanced owns tuning keys only."""
         assert "corpus.ocr_model" in TASK_SECTIONS["OCR"]
         assert "corpus.metadata_model" in TASK_SECTIONS["Metadata extraction"]
         assert "corpus.cleanup_model" in TASK_SECTIONS["Text cleanup"]
-        assert "corpus.ollama_host" in ADVANCED_SECTIONS["Corpus processing"]
+        assert "corpus.ollama_host" not in ADVANCED_SECTIONS["Corpus processing"]
         assert "corpus.num_ctx" in ADVANCED_SECTIONS["Corpus processing"]
         assert (
             "semantic_search.embedding_batch_size"
@@ -2051,274 +2051,6 @@ class TestSaveMappings:
             _save_task_selection("rerank", OffSelection())
 
 
-class TestRerankEnabledIsSeparate:
-    """The Enabled switch is its own field; a source/model save keeps it."""
-
-    _FLAT = {
-        "corpus.rerank": True,
-        "corpus.rerank_backend": "provider",
-        "corpus.rerank_provider": "engine",
-        "corpus.rerank_model": "rerank-model",
-    }
-
-    _RETIRED_FLAT = {
-        "corpus.rerank": False,
-        "corpus.rerank_backend": "local",
-        "corpus.rerank_provider": "",
-        "corpus.rerank_model": "gguf-x",
-    }
-
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.set_config_value")
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value=dict(_FLAT))
-    @patch(
-        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
-    )
-    @patch("esdc.config_wizard.questionary.confirm")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_disable_writes_only_the_switch(
-        self,
-        mock_select,
-        mock_confirm,
-        mock_providers,
-        mock_flat,
-        mock_values,
-        mock_single,
-        mock_print,
-    ):
-        # Row values are the menu keys, not the display labels.
-        mock_select.return_value.unsafe_ask.side_effect = ["enabled", "__back__"]
-        mock_confirm.return_value.unsafe_ask.return_value = False
-
-        _edit_task("rerank")
-
-        mock_single.assert_called_once_with("corpus.rerank", False)
-        mock_values.assert_not_called()
-
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.set_config_value")
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value=dict(_FLAT))
-    @patch(
-        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
-    )
-    @patch("esdc.config_wizard.questionary.confirm")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_enable_validates_the_saved_source_and_writes_only_true(
-        self,
-        mock_select,
-        mock_confirm,
-        mock_providers,
-        mock_flat,
-        mock_values,
-        mock_single,
-        mock_print,
-    ):
-        mock_select.return_value.unsafe_ask.side_effect = ["enabled", "__back__"]
-        mock_confirm.return_value.unsafe_ask.return_value = True
-
-        _edit_task("rerank")
-
-        mock_single.assert_called_once_with("corpus.rerank", True)
-        mock_values.assert_not_called()
-
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.set_config_value")
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch(
-        "esdc.config_wizard.Config.get_all_config_flat",
-        return_value={
-            "corpus.rerank": False,
-            "corpus.rerank_backend": "provider",
-            # An unknown provider name is the incomplete saved source: an empty
-            # model alone would resolve to the default service model id and validate.
-            "corpus.rerank_provider": "no-such-provider",
-            "corpus.rerank_model": "rerank-model",
-        },
-    )
-    @patch(
-        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
-    )
-    @patch("esdc.config_wizard.questionary.confirm")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_enable_refuses_an_incomplete_saved_source(
-        self,
-        mock_select,
-        mock_confirm,
-        mock_providers,
-        mock_flat,
-        mock_values,
-        mock_single,
-        mock_print,
-    ):
-        mock_select.return_value.unsafe_ask.side_effect = ["enabled", "__back__"]
-        mock_confirm.return_value.unsafe_ask.return_value = True
-
-        _edit_task("rerank")
-
-        mock_single.assert_not_called()
-        mock_values.assert_not_called()
-
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.set_config_value")
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch(
-        "esdc.config_wizard.Config.get_all_config_flat",
-        return_value=dict(_RETIRED_FLAT),
-    )
-    @patch(
-        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
-    )
-    @patch("esdc.config_wizard.questionary.confirm")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_enable_refuses_a_retired_local_backend_and_writes_nothing(
-        self,
-        mock_select,
-        mock_confirm,
-        mock_providers,
-        mock_flat,
-        mock_values,
-        mock_single,
-        mock_print,
-    ):
-        """The stored `local` is reported, not switched; the switch is not written."""
-        mock_select.return_value.unsafe_ask.side_effect = ["enabled", "__back__"]
-        mock_confirm.return_value.unsafe_ask.return_value = True
-
-        _edit_task("rerank")
-
-        mock_single.assert_not_called()
-        mock_values.assert_not_called()
-        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
-        assert "Needs configuring (retired local rerank backend" in printed
-        assert "Choose a rerank provider and model first" in printed
-        assert mock_flat.return_value["corpus.rerank_model"] == "gguf-x"
-
-    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.set_config_value")
-    @patch(
-        "esdc.config_wizard.Config.get_referenced_provider",
-        return_value=dict(_FAKE_PROVIDERS["engine"]),
-    )
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value=dict(_FLAT))
-    @patch(
-        "esdc.config_wizard.Config.get_providers", return_value=dict(_FAKE_PROVIDERS)
-    )
-    @patch("esdc.config_wizard.questionary.select")
-    def test_source_and_model_save_preserves_the_flag(
-        self,
-        mock_select,
-        mock_providers,
-        mock_flat,
-        mock_values,
-        mock_ref,
-        mock_single,
-        mock_print,
-        mock_discover,
-    ):
-        pair = PairSelection("engine", "rerank-model")
-        mock_select.return_value.unsafe_ask.side_effect = [
-            "source",
-            pair,
-            "save",
-            "__back__",
-        ]
-
-        _edit_task("rerank")
-
-        assert mock_values.call_args.args[0] == {
-            "corpus.rerank_backend": "provider",
-            "corpus.rerank_provider": "engine",
-            "corpus.rerank_model": "rerank-model",
-        }
-        mock_single.assert_not_called()
-
-
-class TestNoWriteOnCancel:
-    """Back or Escape at a task screen writes nothing."""
-
-    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch("esdc.config_wizard.Config.set_chat_selection")
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
-    @patch(
-        "esdc.config_wizard.Config.get_providers",
-        return_value={"engine": _FAKE_PROVIDERS["engine"]},
-    )
-    @patch("esdc.config_wizard.questionary.select")
-    def test_back_at_the_task_picker_writes_nothing(
-        self,
-        mock_select,
-        mock_providers,
-        mock_flat,
-        mock_chat,
-        mock_values,
-        mock_print,
-        mock_discover,
-    ):
-        mock_select.return_value.unsafe_ask.side_effect = [None]
-        _edit_task("chat")
-        mock_chat.assert_not_called()
-        mock_values.assert_not_called()
-
-    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
-    @patch(
-        "esdc.config_wizard.Config.get_providers",
-        return_value={"engine": _FAKE_PROVIDERS["engine"]},
-    )
-    @patch("esdc.config_wizard.questionary.select")
-    def test_cancel_at_the_action_menu_writes_nothing(
-        self,
-        mock_select,
-        mock_providers,
-        mock_flat,
-        mock_values,
-        mock_print,
-        mock_discover,
-    ):
-        pair = PairSelection("engine", "m1")
-        mock_select.return_value.unsafe_ask.side_effect = [pair, "cancel", None]
-
-        _edit_task("chat")
-
-        mock_values.assert_not_called()
-
-    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.set_chat_selection")
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
-    @patch(
-        "esdc.config_wizard.Config.get_providers",
-        return_value={"engine": _FAKE_PROVIDERS["engine"]},
-    )
-    @patch("esdc.config_wizard.questionary.select")
-    def test_save_states_the_restart_note(
-        self,
-        mock_select,
-        mock_providers,
-        mock_flat,
-        mock_chat,
-        mock_print,
-        mock_discover,
-    ):
-        pair = PairSelection("engine", "m1")
-        mock_select.return_value.unsafe_ask.side_effect = [pair, "save", None]
-
-        _edit_task("chat")
-
-        mock_chat.assert_called_once_with("engine", "m1")
-        printed = " ".join(str(call) for call in mock_print.call_args_list)
-        assert "restart" in printed
-        assert "m1" in printed
-
-
 class TestTaskSummaryLine:
     """The summary shows the provider/model string, status and env override."""
 
@@ -2506,8 +2238,8 @@ class TestMenuKeyCoverage:
         keys = [key for keys in sections.values() for key in keys]
         # `corpus.n_gpu_layers` is no longer offered: a legacy value still parses and
         # is preserved, but it is not part of the menu.
-        assert len(keys) == 44
-        assert len(set(keys)) == 44
+        assert len(keys) == 43
+        assert len(set(keys)) == 43
 
     def test_the_gpu_layers_key_is_not_offered_but_still_parses(self):
         """Config keeps a stored value; only the menu no longer offers the key."""
@@ -3048,10 +2780,10 @@ class TestCustomPairRoleFilter:
 
     @patch("esdc.config_wizard.Config.get_providers", return_value=dict(_PROVIDERS))
     @patch("esdc.config_wizard.questionary.select")
-    def test_embedding_custom_is_openai_compatible_only(
+    def test_embedding_custom_allows_ollama_and_openai_compatible(
         self, mock_select, mock_providers
     ):
-        assert self._custom_names(mock_select, "embedding") == ["engine"]
+        assert self._custom_names(mock_select, "embedding") == ["engine", "gpu"]
 
     @patch("esdc.config_wizard.Config.get_providers", return_value=dict(_PROVIDERS))
     @patch("esdc.config_wizard.questionary.select")
@@ -3436,42 +3168,6 @@ class TestTestActionKeepsTheActionMenu:
         assert mock_select.call_count == 2
         mock_test_provider.assert_called_once()
         mock_chat.assert_not_called()
-
-    @patch("esdc.config_wizard.discover_models", return_value=_catalog("m1"))
-    @patch("esdc.config_wizard._test_provider")
-    @patch("esdc.config_wizard.Config.set_chat_selection")
-    @patch("esdc.config_wizard.Config.get_referenced_provider")
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
-    @patch(
-        "esdc.config_wizard.Config.get_providers",
-        return_value=dict(_FAKE_PROVIDERS),
-    )
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.questionary.select")
-    def test_the_pair_is_not_reselected_between_test_and_save(
-        self,
-        mock_select,
-        mock_print,
-        mock_providers,
-        mock_flat,
-        mock_ref,
-        mock_chat,
-        mock_test_provider,
-        mock_discover,
-    ):
-        pair = PairSelection("engine", "m1")
-        mock_ref.return_value = dict(_FAKE_PROVIDERS["engine"])
-        # Picker once, then two turns of the action menu, then the picker at exit.
-        mock_select.return_value.unsafe_ask.side_effect = [pair, "test", "save", None]
-
-        _edit_task("chat")
-
-        assert mock_select.call_count == 4
-        assert all(
-            self._is_action_menu(call) for call in mock_select.call_args_list[1:3]
-        )
-        mock_test_provider.assert_called_once()
-        mock_chat.assert_called_once_with("engine", "m1")
 
 
 class TestAddProviderDraft:

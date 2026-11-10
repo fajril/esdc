@@ -1116,8 +1116,13 @@ def _connection_draft_actions(
         return
 
 
-def _add_connection_flow() -> None:
-    """Add a connection: type, custom name, transport/auth; Save writes once."""
+def collect_connection_draft() -> tuple[str, dict[str, Any]] | None:
+    """Collect one connection draft without saving it.
+
+    Used by standalone Connections Add and by the task picker's nested
+    ``Add connection…`` action. The returned name/entry can be assigned to a
+    task draft; cancel returns None and writes nothing.
+    """
     provider_type = _select_with_back(
         "Select connection type:",
         choices=[
@@ -1126,19 +1131,28 @@ def _add_connection_flow() -> None:
         ],
     )
     if provider_type == "__back__":
-        return
+        return None
 
     name = _prompt_connection_name("")
     if name is None:
-        return
+        return None
 
     draft: dict[str, Any] = {"type": provider_type}
     for field in _CONNECTION_FIELDS.get(provider_type, []):
         value = _prompt_connection_field(provider_type, field, draft.get(field, ""))
         if value is None:
-            return
+            return None
         draft[field] = value
 
+    return name, draft
+
+
+def _add_connection_flow() -> None:
+    """Add a connection: type, custom name, transport/auth; Save writes once."""
+    collected = collect_connection_draft()
+    if collected is None:
+        return
+    name, draft = collected
     _connection_draft_actions(name, draft)
 
 
@@ -1868,12 +1882,9 @@ _TASK_PROVIDER_TYPES: dict[TaskRole, frozenset[str]] = {
     "cleanup": frozenset(PROVIDER_NAMES),
 }
 
-# Custom pairs are limited to types where a typed model is meaningful: the Ollama
-# embedding backend pins its model, so a custom model there would be ignored.
-_CUSTOM_PROVIDER_TYPES: dict[TaskRole, frozenset[str]] = {
-    **_TASK_PROVIDER_TYPES,
-    "embedding": frozenset({"openai_compatible"}),
-}
+# Custom pairs use the same eligible provider types as their task. An explicit
+# Ollama embedding wire model is meaningful, so it is not excluded here.
+_CUSTOM_PROVIDER_TYPES: dict[TaskRole, frozenset[str]] = dict(_TASK_PROVIDER_TYPES)
 
 # Row sentinels. A real selection is a dataclass instance, so a row value is
 # never a display string.
@@ -3165,21 +3176,10 @@ def _run_task_action(role: TaskRole, selection: TaskSelection) -> None:
 
 
 def _edit_task(role: TaskRole) -> None:
-    """Task screen: current selection, the combined picker, then the action menu."""
-    if role == "rerank":
-        _edit_rerank_task()
-        return
+    """Open the one canonical task picker for a role."""
+    from esdc.model_wizard import edit_task
 
-    while True:
-        current = _current_task_selection(role)
-        rich_print(f"[{_KEY_COLOR}]{_task_summary(role, current)}[/]")
-
-        selection = _choose_provider_model(role, current)
-        if selection is None:
-            # Back or Escape: nothing is written.
-            return
-
-        _run_task_action(role, selection)
+    edit_task(role)
 
 
 def _rerank_saved_selection_is_valid(selection: TaskSelection | None) -> bool:

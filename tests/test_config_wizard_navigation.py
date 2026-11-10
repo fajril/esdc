@@ -199,37 +199,6 @@ class TestTaskMenuBackNavigation:
         mock_chat.assert_not_called()
         mock_values.assert_not_called()
 
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch("esdc.config_wizard.discover_models", return_value=_EMPTY_CATALOG)
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.get_providers", return_value=_NO_PROVIDERS)
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
-    @patch("esdc.config_wizard.questionary.select")
-    def test_back_at_the_action_menu_returns_to_the_task_screen(
-        self,
-        mock_select,
-        mock_flat,
-        mock_providers,
-        mock_print,
-        mock_discover,
-        mock_values,
-    ):
-        """Back after a selection returns to the task screen, then one more Back exits."""
-        pair = _pair("engine", "m1")
-        mock_select.return_value.unsafe_ask.side_effect = [
-            "embedding",
-            pair,
-            "__back__",
-            pair,
-            "cancel",
-            "__back__",
-            "__back__",
-        ]
-        _models_by_task_menu()
-
-        # Two screens were entered, and neither saved.
-        assert mock_select.call_count == 7
-        mock_values.assert_not_called()
 
     @patch("esdc.config_wizard.Config.set_config_value")
     @patch("esdc.config_wizard.Config.set_config_values")
@@ -257,38 +226,6 @@ class TestTaskMenuBackNavigation:
 
         mock_values.assert_not_called()
         mock_single.assert_not_called()
-
-    @patch("esdc.config_wizard.Config.set_config_values")
-    @patch("esdc.config_wizard.discover_models", return_value=_EMPTY_CATALOG)
-    @patch("esdc.config_wizard.rich_print")
-    @patch("esdc.config_wizard.Config.get_providers", return_value=_NO_PROVIDERS)
-    @patch("esdc.config_wizard.Config.get_all_config_flat", return_value={})
-    @patch("esdc.config_wizard.questionary.select")
-    def test_escape_at_the_custom_sub_prompts_returns_to_the_picker(
-        self,
-        mock_select,
-        mock_flat,
-        mock_providers,
-        mock_print,
-        mock_discover,
-        mock_values,
-    ):
-        """Escape inside Custom goes back to the picker, not straight out of the task."""
-        mock_providers.return_value = {"engine": {"provider_type": "openai"}}
-        pair = _pair("engine", "m1")
-        mock_select.return_value.unsafe_ask.side_effect = [
-            "chat",
-            "__custom__",
-            None,
-            pair,
-            "cancel",
-            "__back__",
-            "__back__",
-        ]
-        _models_by_task_menu()
-
-        mock_values.assert_not_called()
-        assert mock_select.call_count == 7
 
 
 class TestAdvancedBackNavigation:

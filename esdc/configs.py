@@ -256,7 +256,6 @@ ADVANCED_SECTIONS: dict[str, list[str]] = {
         "corpus.extract_timeout_seconds",
         "corpus.min_chars_per_page",
         "corpus.min_image_area",
-        "corpus.ollama_host",
     ],
     "Logging": [
         "logging.file.path",
