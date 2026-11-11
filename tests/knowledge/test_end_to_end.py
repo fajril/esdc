@@ -13,12 +13,19 @@ Config.get_cache_dir). Nothing here touches a real ~/.esdc.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from langchain_core.tools import StructuredTool
 
 from esdc.chat.domain_knowledge.instance_graph import InstanceGraphManager
+from esdc.knowledge.freshness import (
+    committed_marker_metadata,
+    knowledge_freshness,
+    knowledge_freshness_markers,
+)
 from esdc.knowledge.learn import run_learn
+from esdc.pod_registry.store import get_sqlite_readonly_connection
 from tests.knowledge.conftest import POD_DURI_REV1
 
 EXTRACTION = {
@@ -42,6 +49,55 @@ def _fake_llm(prompt: str) -> str:
     if "case file" in prompt:
         return "## Approval & Revisions\nStub dossier for smoke test."
     return json.dumps(EXTRACTION)
+
+
+def _refusal_context(graph: InstanceGraphManager, expected: Path) -> str:
+    """Describe why the graph refused to build, evaluated only on assertion failure.
+
+    Reports the path the graph itself resolved against the path expected from
+    the test's temporary database, plus the facts the reader checks: marker-only freshness,
+    recomputed basis freshness, marker metadata presence, and the projected edge
+    count. Fingerprints appear only as match/no-match; no rows, config, credentials
+    or environment are read.
+    """
+    resolved = getattr(graph, "_sqlite_path", None)
+    probe_path: Path = resolved if isinstance(resolved, Path) else expected
+    parts = [
+        f"resolved_path={resolved}",
+        f"expected_path={expected}",
+        f"file={probe_path.is_file()}",
+    ]
+    if probe_path != expected:
+        return " | ".join([*parts, "unexpected_source_not_opened"])
+    try:
+        conn = get_sqlite_readonly_connection(probe_path)
+        if conn is None:
+            return " | ".join([*parts, "readonly_connection=None"])
+        try:
+            markers = knowledge_freshness_markers(conn)
+            parts.append(
+                "marker_fresh="
+                f"{markers.fresh} source_generation={markers.source_generation} "
+                f"knowledge_generation={markers.knowledge_generation}"
+            )
+            full = knowledge_freshness(conn)
+            parts.append(f"full_fresh={full.fresh}")
+            parts.append(
+                f"marker_metadata_present={committed_marker_metadata(conn) is not None}"
+            )
+            edge_table = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='kg_edge'"
+            ).fetchone()
+            if edge_table is None:
+                parts.append("kg_edge_table=absent")
+            else:
+                edge_rows = conn.execute("SELECT COUNT(*) FROM kg_edge").fetchone()[0]
+                parts.append(f"kg_edge_rows={edge_rows}")
+        finally:
+            conn.close()
+    except Exception as exc:
+        parts.append(f"context_error={type(exc).__name__}")
+    return " | ".join(parts)
 
 
 @pytest.fixture(autouse=True)
@@ -100,7 +156,7 @@ def test_learn_to_explore_entity_pipeline(
     # Instance graph: built exactly as production does it, via the no-arg
     # singleton resolving its sqlite path through Config.get_db_dir().
     graph = InstanceGraphManager()
-    assert graph.is_available() is True
+    assert graph.is_available() is True, _refusal_context(graph, tmp_path / "esdc.sqlite")
     hits = graph.find("Duri", top_k=10)
     assert any(h["entity_type"] == "pod" for h in hits)
 
