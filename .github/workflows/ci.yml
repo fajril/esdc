@@ -46,7 +46,7 @@ jobs:
           tar -xzf "$archive" --strip-components=1 -C "$source_dir"
           (
             cd "$source_dir"
-            ./configure --prefix="$prefix" --enable-shared --disable-static
+            ./configure --prefix="$prefix" --enable-shared --disable-static --enable-rtree
             make -j2
             make install
           )
@@ -71,7 +71,11 @@ jobs:
           if sqlite3.sqlite_version != "3.54.1":
               raise SystemExit(f"Expected SQLite 3.54.1, got {sqlite3.sqlite_version}")
           require_wal_runtime()
-          print(f"SQLite {sqlite3.sqlite_version} WAL runtime verified")
+          with sqlite3.connect(":memory:") as probe:
+              probe.execute(
+                  "CREATE VIRTUAL TABLE rtree_probe USING rtree(id, min_x, max_x, min_y, max_y)"
+              )
+          print(f"SQLite {sqlite3.sqlite_version} WAL runtime and R*Tree verified")
           PY
 
       - name: Lint
