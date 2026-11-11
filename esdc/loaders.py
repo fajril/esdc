@@ -562,7 +562,7 @@ def _cypher_escape(value: Any) -> str:
 
 def build_loaded_schema_graph(rows: list[tuple[str, str, str, str]]) -> Any:
     """Build a LadybugDB metadata graph for loaded spreadsheet schemas."""
-    import real_ladybug as lb
+    import ladybug as lb
 
     db = lb.Database(":memory:")
     conn = lb.Connection(db)

@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import real_ladybug as lb
+import ladybug as lb
 import yaml
 
 logger = logging.getLogger(__name__)
