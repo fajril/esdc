@@ -6,10 +6,12 @@ wizard functions, but no terminal, network, database or live config is used.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterator, Sequence
 from typing import Any
 from unittest.mock import MagicMock
 
+import fitz
 import pytest
 import questionary
 
@@ -622,6 +624,185 @@ def test_ocr_test_uses_the_resolved_ocr_connection(monkeypatch):
     client.query_image.assert_called_once()
 
 
+def _fake_ocr_code_draw(monkeypatch, code: str) -> MagicMock:
+    """Record the random code draw that `_test_ocr` makes for one Test."""
+    draw = MagicMock(return_value=int(code))
+    monkeypatch.setattr(model_wizard.random, "randrange", draw)
+    return draw
+
+
+def _ocr_client(
+    monkeypatch,
+    reply: Any,
+    *,
+    healthy: bool = True,
+    code: str = "483901",
+) -> tuple[MagicMock, MagicMock]:
+    """A fake OCR endpoint that answers with `reply` for one Test, plus its code draw."""
+    draw = _fake_ocr_code_draw(monkeypatch, code)
+    client = MagicMock()
+    client.health_check.return_value = healthy
+    client.query_image.return_value = reply
+    create = MagicMock(return_value=client)
+    monkeypatch.setattr("esdc.corpus.ocr.create_ocr_client", create)
+    return client, draw
+
+
+def _record_ocr_drawn_text(monkeypatch) -> list[str]:
+    """Every text the OCR test draws on its in-memory page, in draw order."""
+    drawn: list[str] = []
+    original = fitz.Page.insert_text
+
+    def record(self: Any, point: Any, text: Any, *args: Any, **kwargs: Any) -> Any:
+        drawn.append(str(text))
+        return original(self, point, text, *args, **kwargs)
+
+    monkeypatch.setattr(fitz.Page, "insert_text", record)
+    return drawn
+
+
+def test_ocr_test_image_carries_the_fresh_code_and_the_prompt_stays_plain(
+    monkeypatch, capsys
+):
+    _connection()
+    _assign("ocr", connection="gateway", model="vision-model")
+    code = "483901"
+    drawn = _record_ocr_drawn_text(monkeypatch)
+    client, _ = _ocr_client(monkeypatch, code, code=code)
+
+    draft = model_wizard.TaskDraft(
+        role="ocr", assignment=Config.get_model_assignment("ocr")
+    )
+    model_wizard._test_draft(draft)
+
+    assert drawn == [f"{model_wizard._OCR_TEST_PREFIX} {code}"]
+    image, prompt = client.query_image.call_args.args
+    assert prompt == model_wizard._OCR_TEST_PROMPT
+    assert code not in prompt
+    assert image.startswith(b"\x89PNG")
+    output = capsys.readouterr().out
+    assert "OCR image test passed" in output
+    # Neither the code nor the raw reply is echoed back.
+    assert code not in output
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "ESDC OCR TEST 222222",  # a code from another run
+        "ESDC OCR TEST 12345",  # the fixed text this test used to carry
+        "48390",  # only part of this run's code
+        "",  # nothing read
+        None,
+    ],
+)
+def test_ocr_test_needs_the_full_code_drawn_this_run(monkeypatch, capsys, reply):
+    _connection()
+    _assign("ocr", connection="gateway", model="vision-model")
+    _, draw = _ocr_client(monkeypatch, reply)
+
+    draft = model_wizard.TaskDraft(
+        role="ocr", assignment=Config.get_model_assignment("ocr")
+    )
+    model_wizard._test_draft(draft)
+
+    output = capsys.readouterr().out
+    # The code is always drawn for this run, so a reply written earlier cannot pass.
+    draw.assert_called_once()
+    assert "did not read the test image" in output
+    assert "passed" not in output
+    assert "483901" not in output
+    if reply:
+        assert str(reply) not in output
+
+
+def test_ocr_test_draws_a_fresh_code_for_every_request(monkeypatch, capsys):
+    _connection()
+    _assign("ocr", connection="gateway", model="vision-model")
+    codes = iter(["111111", "222222"])
+    monkeypatch.setattr(
+        model_wizard.random, "randrange", lambda _span: int(next(codes))
+    )
+    drawn = _record_ocr_drawn_text(monkeypatch)
+    client = MagicMock()
+    client.health_check.return_value = True
+    create = MagicMock(return_value=client)
+    monkeypatch.setattr("esdc.corpus.ocr.create_ocr_client", create)
+
+    draft = model_wizard.TaskDraft(
+        role="ocr", assignment=Config.get_model_assignment("ocr")
+    )
+    client.query_image.return_value = "111111"
+    model_wizard._test_draft(draft)
+    assert "OCR image test passed" in capsys.readouterr().out
+
+    # The same answer is now an answer for an earlier run, so it cannot pass again.
+    model_wizard._test_draft(draft)
+    output = capsys.readouterr().out
+    assert "did not read the test image" in output
+    assert drawn == [
+        f"{model_wizard._OCR_TEST_PREFIX} 111111",
+        f"{model_wizard._OCR_TEST_PREFIX} 222222",
+    ]
+
+
+def test_unhealthy_ocr_endpoint_draws_no_code_and_sends_no_image(monkeypatch, capsys):
+    _connection()
+    _assign("ocr", connection="gateway", model="vision-model")
+    drawn = _record_ocr_drawn_text(monkeypatch)
+    client, draw = _ocr_client(monkeypatch, "483901", healthy=False)
+
+    draft = model_wizard.TaskDraft(
+        role="ocr", assignment=Config.get_model_assignment("ocr")
+    )
+    model_wizard._test_draft(draft)
+
+    client.health_check.assert_called_once()
+    client.query_image.assert_not_called()
+    draw.assert_not_called()
+    assert drawn == []
+    output = capsys.readouterr().out
+    assert "not available" in output
+    assert "483901" not in output
+
+
+def test_ocr_test_writes_and_enables_nothing(monkeypatch):
+    _connection()
+    assignment = TaskAssignment(
+        mode="model", target=ModelTarget("gateway", "vision-model", {})
+    )
+    save = MagicMock()
+    monkeypatch.setattr(Config, "save_model_assignment", save)
+    code = "483901"
+    monkeypatch.setattr(model_wizard.random, "randrange", lambda _span: int(code))
+    client = MagicMock()
+    client.health_check.return_value = True
+    client.query_image.return_value = code
+    create = MagicMock(return_value=client)
+    monkeypatch.setattr("esdc.corpus.ocr.create_ocr_client", create)
+
+    model_wizard._test_draft(model_wizard.TaskDraft(role="ocr", assignment=assignment))
+
+    save.assert_not_called()
+    create.assert_called_once()
+    assert create.call_args.kwargs["resolved"].primary.model == "vision-model"
+    assert Config.get_model_assignment("ocr").mode == "unset"
+
+
+def test_ocr_test_code_fits_the_test_page():
+    longest = model_wizard._ocr_test_text("9" * model_wizard._OCR_TEST_CODE_DIGITS)
+    size = model_wizard._ocr_test_fontsize(longest)
+    limit = model_wizard._OCR_TEST_PAGE_WIDTH - 2 * model_wizard._OCR_TEST_MARGIN
+    assert fitz.get_text_length(longest, fontsize=size) <= limit
+    # The guard is real: text that would overflow the page gets a smaller font.
+    overflow = model_wizard._OCR_TEST_PREFIX + " " + "9" * 40
+    assert model_wizard._ocr_test_fontsize(overflow) < model_wizard._OCR_TEST_FONT_SIZE
+    assert (
+        model_wizard._ocr_test_fontsize(overflow) >= model_wizard._OCR_TEST_MIN_FONT_SIZE
+    )
+    assert model_wizard._OCR_TEST_BASELINE_Y < model_wizard._OCR_TEST_PAGE_HEIGHT
+
+
 def test_rerank_test_uses_the_rerank_endpoint(monkeypatch):
     _connection()
     _assign("rerank", connection="gateway", model="rank-model")
@@ -1172,3 +1353,201 @@ def test_unexpected_save_exception_is_not_swallowed(monkeypatch, prompts):
 
     with pytest.raises(RuntimeError, match="synthetic programming error"):
         model_wizard._run_actions(draft)
+
+
+@pytest.mark.parametrize("role", ["metadata", "cleanup"])
+def test_relationship_test_inherits_a_configured_chat_primary(
+    monkeypatch, capsys, role
+):
+    """A relationship that uses the chat model can be tested through that primary."""
+    _connection()
+    _connection("backup", base_url="http://backup.example/v1")
+    _assign(
+        "chat",
+        connection="gateway",
+        model="chat-model",
+        fallbacks=(ModelTarget("backup", "chat-fallback", {}),),
+    )
+    _assign(role, mode="chat")
+    config_file = Config.get_config_file()
+    before_bytes = config_file.read_bytes()
+    before_cache = copy.deepcopy(Config._load_config())
+    fake_llm = MagicMock()
+    create = MagicMock(return_value=fake_llm)
+    saved_assignment = MagicMock()
+    saved_connection = MagicMock()
+    monkeypatch.setattr("esdc.providers.create_llm_from_resolved_task", create)
+    monkeypatch.setattr(Config, "save_model_assignment", saved_assignment)
+    monkeypatch.setattr(Config, "save_connection", saved_connection)
+
+    draft = model_wizard.TaskDraft(
+        role=role, assignment=Config.get_model_assignment(role)
+    )
+    model_wizard._test_draft(draft)
+
+    create.assert_called_once()
+    task = create.call_args.args[0]
+    assert task.role == role
+    assert task.mode == "chat"
+    assert task.primary is not None
+    assert task.primary.model == "chat-model"
+    assert task.fallbacks == ()
+    fake_llm.invoke.assert_called_once()
+    assert "Text inference responded" in capsys.readouterr().out
+    saved_assignment.assert_not_called()
+    saved_connection.assert_not_called()
+    assert config_file.read_bytes() == before_bytes
+    assert Config._load_config() == before_cache
+
+
+@pytest.mark.parametrize("role", ["metadata", "cleanup"])
+def test_relationship_test_still_explains_an_unset_chat(monkeypatch, capsys, role):
+    """An unset chat primary still explains the task is unavailable."""
+    _connection()
+    _assign(role, mode="chat")
+    config_file = Config.get_config_file()
+    before_bytes = config_file.read_bytes()
+    before_cache = copy.deepcopy(Config._load_config())
+
+    create = MagicMock()
+    saved_assignment = MagicMock()
+    monkeypatch.setattr("esdc.providers.create_llm_from_resolved_task", create)
+    monkeypatch.setattr(Config, "save_model_assignment", saved_assignment)
+
+    draft = model_wizard.TaskDraft(
+        role=role, assignment=Config.get_model_assignment(role)
+    )
+    model_wizard._test_draft(draft)
+
+    create.assert_not_called()
+    saved_assignment.assert_not_called()
+    assert "Chat is not configured" in capsys.readouterr().out
+    assert Config.get_model_assignment(role).mode == "chat"
+    assert config_file.read_bytes() == before_bytes
+    assert Config._load_config() == before_cache
+
+
+@pytest.mark.parametrize("failure", ["constructor", "invoke"])
+def test_chat_test_reports_the_primary_failure_without_building_a_backup(
+    monkeypatch, capsys, failure
+):
+    """Test must not let a saved fallback stand in for a failing primary."""
+    _connection()
+    _connection("backup", base_url="http://backup.example/v1")
+    _assign(
+        "chat",
+        connection="gateway",
+        model="primary-model",
+        fallbacks=(ModelTarget("backup", "backup-model", {}),),
+    )
+    configs: list[dict[str, Any]] = []
+
+    def create_from_config(config, **_kwargs):
+        configs.append(dict(config))
+        if failure == "constructor":
+            raise RuntimeError("primary model could not be constructed")
+        llm = MagicMock()
+        llm.invoke.side_effect = RuntimeError("primary inference failed")
+        return llm
+
+    monkeypatch.setattr("esdc.providers.create_llm_from_config", create_from_config)
+    saved_assignment = MagicMock()
+    monkeypatch.setattr(Config, "save_model_assignment", saved_assignment)
+    saved_connection = MagicMock()
+    monkeypatch.setattr(Config, "save_connection", saved_connection)
+    before_cache = copy.deepcopy(Config._load_config())
+
+    draft = model_wizard.TaskDraft(
+        role="chat", assignment=Config.get_model_assignment("chat")
+    )
+    model_wizard._test_draft(draft)
+
+    assert len(configs) == 1
+    assert configs[0]["model"] == "primary-model"
+    assert "fallback_configs" not in configs[0]
+    output = capsys.readouterr().out
+    assert "Failed: RuntimeError" in output
+    assert "primary model could not be constructed" not in output
+    saved_assignment.assert_not_called()
+    saved_connection.assert_not_called()
+    assert Config._load_config() == before_cache
+
+
+def test_chat_test_keeps_saved_fallbacks_but_tests_the_primary_alone(monkeypatch):
+    _connection()
+    _connection("backup", base_url="http://backup.example/v1")
+    saved_fallback = ModelTarget(
+        "backup", "backup-model", {"reasoning_effort": "low"}
+    )
+    _assign(
+        "chat",
+        connection="gateway",
+        model="primary-model",
+        fallbacks=(saved_fallback,),
+    )
+    fake_llm = MagicMock()
+    create = MagicMock(return_value=fake_llm)
+    before_cache = copy.deepcopy(Config._load_config())
+    saved_assignment = MagicMock()
+    monkeypatch.setattr("esdc.providers.create_llm_from_resolved_task", create)
+    monkeypatch.setattr(Config, "save_model_assignment", saved_assignment)
+
+    draft = model_wizard.TaskDraft(
+        role="chat", assignment=Config.get_model_assignment("chat")
+    )
+    model_wizard._test_draft(draft)
+
+    task = create.call_args.args[0]
+    assert task.fallbacks == ()
+    assert task.primary.model == "primary-model"
+    saved = Config.get_model_assignment("chat")
+    assert saved.mode == "model"
+    assert saved.fallbacks == (saved_fallback,)
+    saved_assignment.assert_not_called()
+    assert Config._load_config() == before_cache
+
+
+def test_expired_unused_fallback_does_not_block_the_primary_only_test(
+    monkeypatch, capsys
+):
+    _connection()
+    _connection(
+        "backup",
+        base_url="http://backup.example/v1",
+        oauth={
+            "access_token": "expired-token",
+            "refresh_token": "refresh-token",
+            "expires_at": 1,
+        },
+    )
+    _assign(
+        "chat",
+        connection="gateway",
+        model="primary-model",
+        fallbacks=(ModelTarget("backup", "backup-model", {}),),
+    )
+    fake_llm = MagicMock()
+    create = MagicMock(return_value=fake_llm)
+    config_file = Config.get_config_file()
+    before_bytes = config_file.read_bytes()
+    before_cache = copy.deepcopy(Config._load_config())
+    saved_assignment = MagicMock()
+    saved_connection = MagicMock()
+    monkeypatch.setattr("esdc.providers.create_llm_from_resolved_task", create)
+    monkeypatch.setattr(Config, "save_connection", saved_connection)
+    monkeypatch.setattr(Config, "save_model_assignment", saved_assignment)
+
+    draft = model_wizard.TaskDraft(
+        role="chat", assignment=Config.get_model_assignment("chat")
+    )
+    model_wizard._test_draft(draft)
+
+    create.assert_called_once()
+    assert create.call_args.args[0].fallbacks == ()
+    fake_llm.invoke.assert_called_once()
+    assert Config.get_connection("backup")["oauth"]["access_token"] == "expired-token"
+    assert "Text inference responded" in capsys.readouterr().out
+    saved_assignment.assert_not_called()
+    saved_connection.assert_not_called()
+    assert config_file.read_bytes() == before_bytes
+    assert Config._load_config() == before_cache

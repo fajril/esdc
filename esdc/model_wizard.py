@@ -9,6 +9,7 @@ and never persists credentials or enables a task.
 from __future__ import annotations
 
 import math
+import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -61,8 +62,18 @@ _EMBEDDING_TEST_TEXT = "esdc embedding connection test"
 _RERANK_TEST_QUERY = "esdc rerank connection test"
 _RERANK_TEST_DOCUMENTS = ("first test document", "second test document")
 _OCR_TEST_PROMPT = "Return the text in this image exactly."
-_OCR_TEST_TEXT = "ESDC OCR TEST 12345"
-_OCR_TEST_MARKER = "12345"
+# The OCR test draws a fresh code into its own image, so a reply that reads the code
+# back proves the endpoint took an image and looked at it. Answering with nothing, or
+# ignoring the image, fails, and so does an answer written for an earlier run: the code
+# changes every Test and is never printed back.
+_OCR_TEST_PREFIX = "ESDC OCR TEST"
+_OCR_TEST_CODE_DIGITS = 6
+_OCR_TEST_PAGE_WIDTH = 220
+_OCR_TEST_PAGE_HEIGHT = 120
+_OCR_TEST_MARGIN = 20
+_OCR_TEST_BASELINE_Y = 60
+_OCR_TEST_FONT_SIZE = 18
+_OCR_TEST_MIN_FONT_SIZE = 10
 _TEXT_TEST_PROMPT = "Reply with the single word OK."
 
 _BACK = "__back__"
@@ -309,13 +320,49 @@ def _test_rerank(task: ResolvedTask) -> None:
     )
 
 
-def _ocr_test_image() -> bytes:
+def _ocr_test_code() -> str:
+    """A fresh numeric code for one OCR Test, drawn only inside the test image.
+
+    Every Test draws its own code, so a reply written for an earlier run cannot pass:
+    the endpoint has to read back what the wizard drew this time. The code is never
+    printed.
+    """
+    return f"{random.randrange(10**_OCR_TEST_CODE_DIGITS):0{_OCR_TEST_CODE_DIGITS}d}"
+
+
+def _ocr_test_text(code: str) -> str:
+    """The text the test image carries: the wizard's own line plus this run's code."""
+    return f"{_OCR_TEST_PREFIX} {code}"
+
+
+def _ocr_test_fontsize(text: str) -> int:
+    """The largest test font size that keeps the whole text inside the page."""
     import fitz
 
+    size = _OCR_TEST_FONT_SIZE
+    limit = _OCR_TEST_PAGE_WIDTH - 2 * _OCR_TEST_MARGIN
+    while size > _OCR_TEST_MIN_FONT_SIZE:
+        if fitz.get_text_length(text, fontsize=size) <= limit:
+            break
+        size -= 1
+    return size
+
+
+def _ocr_test_image(code: str) -> bytes:
+    """One small in-memory PNG that carries the test text and this run's code.
+
+    Nothing is written to disk and no document image is submitted: the reply has to read
+    the code the wizard drew, so an endpoint that accepts an image and ignores it cannot
+    pass. The font is sized so the full code stays inside the page.
+    """
+    import fitz
+
+    text = _ocr_test_text(code)
+    size = _ocr_test_fontsize(text)
     doc = fitz.open()
     try:
-        page = doc.new_page(width=220, height=120)
-        page.insert_text((20, 60), _OCR_TEST_TEXT, fontsize=18)
+        page = doc.new_page(width=_OCR_TEST_PAGE_WIDTH, height=_OCR_TEST_PAGE_HEIGHT)
+        page.insert_text((_OCR_TEST_MARGIN, _OCR_TEST_BASELINE_Y), text, fontsize=size)
         return page.get_pixmap(dpi=150).tobytes("png")
     finally:
         doc.close()
@@ -327,18 +374,26 @@ def _test_ocr(task: ResolvedTask) -> None:
     try:
         client = create_ocr_client(Config.get_corpus_config(), resolved=task)
         if not client.health_check():
+            # Availability is checked first: an endpoint that does not answer is
+            # reported as before, and no code is drawn and no image is sent.
             rich_print(
                 f"[{_WARNING_COLOR}]OCR endpoint is not available.[/{_WARNING_COLOR}]"
             )
             return
-        answer = client.query_image(_ocr_test_image(), _OCR_TEST_PROMPT)
+
+        # The code is drawn only in the image, never in the prompt, so the reply can
+        # only be right if the endpoint actually looked at the page.
+        code = _ocr_test_code()
+        answer = client.query_image(_ocr_test_image(code), _OCR_TEST_PROMPT)
     except Exception as error:
+        # Construction, request, response, and image errors stop this test only:
+        # nothing is saved, nothing is enabled, and no other provider is tried.
         rich_print(
             f"[{_ERROR_COLOR}]Failed: {_short_test_message(error)}[/{_ERROR_COLOR}]"
         )
         return
     text = str(answer or "").strip()
-    if _OCR_TEST_MARKER in text or "esdc" in text.lower():
+    if code in text:
         rich_print(f"[{_SUCCESS_COLOR}]OCR image test passed.[/{_SUCCESS_COLOR}]")
     else:
         rich_print(
@@ -364,14 +419,20 @@ def _test_text(task: ResolvedTask) -> None:
 def _test_draft(draft: TaskDraft) -> None:
     """Test the proposed assignment through the shared resolver; never writes."""
     try:
-        task = _resolve_draft(draft)
+        resolved = _resolve_draft(draft)
     except ValueError as error:
         rich_print(f"[{_ERROR_COLOR}]{error}[/{_ERROR_COLOR}]")
         return
 
+    # Test exercises the primary target alone. Detach the saved fallbacks before
+    # the credential check and before any inference, so an unused backup can
+    # neither stand in for a failing primary nor stop the test for its own
+    # reauthentication. Runtime failover still uses the saved fallbacks.
+    task = replace(resolved, fallbacks=())
+
     if not _check_readonly_credentials(task):
         return
-    if task.mode != "model" or task.primary is None:
+    if task.primary is None:
         if task.mode == "ocr":
             rich_print(
                 f"[{_SEP_COLOR}]Metadata follows the OCR result; no model call is "
