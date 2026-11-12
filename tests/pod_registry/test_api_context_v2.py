@@ -1,8 +1,10 @@
 """Task5C1: read-only POD reconciliation context (one snapshot) regressions.
 
-Every fixture here is created under /private/tmp; the active operational database
-is never opened. The existing v2 initializer is used only as test setup, and the
-production reader must never create, initialize, migrate, or write anything.
+Every fixture here is created in a throwaway directory under the OS temporary
+directory, so the test is portable across platforms. The active operational
+database is never opened. The existing v2 initializer is used only as test
+setup, and the production reader must never create, initialize, migrate, or
+write anything.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ OUTPUT_TABLES = ("pod_monitoring_api", "pod_forecast_api")
 
 @pytest.fixture
 def fixture_root() -> Iterator[Path]:
-    with tempfile.TemporaryDirectory(prefix="esdc-pod-5c1-", dir="/private/tmp") as name:
+    with tempfile.TemporaryDirectory(prefix="esdc-pod-5c1-") as name:
         yield Path(name)
 
 
