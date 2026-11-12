@@ -1,6 +1,8 @@
 """Regression: SQLite import prepare -> load -> DuckDB publication current state."""
 
+import gzip
 import sqlite3
+import tempfile
 from contextlib import closing
 from pathlib import Path
 
@@ -246,6 +248,62 @@ def test_sqlite_import_rejects_stage_changed_between_hash_and_consumption(
         assert conn.execute("SELECT project_name FROM api_project_resources").fetchone() == ("Canonical",)
         assert conn.execute("SELECT source_generation FROM pod_registry_state").fetchone() == generation
     assert cache.read_bytes() == cache_before
+
+
+def test_prepare_stages_snapshots_in_the_platform_temp_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: staging resolves the platform temp directory, not a fixed path.
+
+    A fixed macOS-only staging directory made a public full-profile SQLite import
+    fail on Linux runners before any source row was read. A controlled temp root
+    stands in for the system temp directory so the real staging and cleanup paths
+    run without touching the actual system temp directory.
+    """
+    contract = load_pod_contract()
+    source = tmp_path / "source.sqlite"
+    target = tmp_path / "target.sqlite"
+    temp_root = tmp_path / "system-temp"
+    temp_root.mkdir()
+    _create_sqlite_source(source, contract)
+    with closing(sqlite3.connect(source)) as conn:
+        conn.execute(
+            "INSERT INTO project_resources (project_id, project_id_canonical, report_year, project_name, pd) "
+            "VALUES (?,?,?,?,?)",
+            ("P001459F01", "P-001459F-01", 2024, "Imported", 1.0),
+        )
+        conn.execute(
+            "INSERT INTO project_timeseries (project_id, project_id_canonical, report_year) VALUES (?,?,?)",
+            ("P001459F01", "P-001459F-01", 2024),
+        )
+        conn.commit()
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp_root))
+
+    # A stage created before the missing source is detected must not survive the
+    # failure path.
+    with pytest.raises(PodImportError, match="not found"):
+        prepare_pod_import(
+            tmp_path / "missing.sqlite", "sqlite", contract, target_path=target
+        )
+    assert list(temp_root.iterdir()) == []
+
+    batch = prepare_pod_import(source, "sqlite", contract, target_path=target)
+    stage = batch.staged_snapshots
+    assert stage is not None
+    assert stage.resources_path is not None
+    assert stage.timeseries_path is not None
+    stage_root = stage.resources_path.parent
+    assert stage_root.parent == temp_root
+    assert stage_root.name.startswith("esdc-pod-import-")
+    assert stage.resource_row_count == 1
+    assert stage.timeseries_row_count == 1
+    assert '"Imported"' in stage.resources_path.read_text(encoding="utf-8")
+    with gzip.open(stage.timeseries_path, "rt", encoding="utf-8") as staged:
+        assert "P-001459F-01" in staged.read()
+
+    batch.cleanup_staging()
+    assert list(temp_root.iterdir()) == []
 
 
 @pytest.fixture()

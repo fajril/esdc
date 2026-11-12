@@ -852,9 +852,7 @@ def prepare_pod_import(
     stage: ProjectSnapshotStage | None = None
     temporary_directory: TemporaryDirectory[str] | None = None
     if source == "sqlite" and stage_snapshots and profile == "full":
-        temporary_directory = TemporaryDirectory(
-            prefix="esdc-pod-import-", dir="/private/tmp"
-        )
+        temporary_directory = TemporaryDirectory(prefix="esdc-pod-import-")
         stage = ProjectSnapshotStage(_temporary_directory=temporary_directory)
     if source == "sqlite":
         if not source_path.is_file():
