@@ -83,6 +83,45 @@ jobs:
           print(f"SQLite {sqlite3.sqlite_version} WAL runtime and R*Tree verified")
           PY
 
+      # Offline analytics recovery forbids automatic extension downloads, so provision
+      # the extension cache once per runner before the suites read it.
+      - name: Provision DuckDB extension cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY'
+          """Provision the DuckDB extension cache required by offline analytics recovery."""
+
+          import duckdb
+
+          REQUIRED_EXTENSIONS = ("vss", "spatial", "fts")
+
+          connection = duckdb.connect(
+              ":memory:", config={"autoinstall_known_extensions": "false"}
+          )
+
+          try:
+              loaded: list[str] = []
+              for extension in REQUIRED_EXTENSIONS:
+                  connection.execute(f"INSTALL {extension}")
+                  connection.execute(f"LOAD {extension}")
+                  loaded.append(extension)
+
+              rows = connection.execute(
+                  "SELECT extension_name FROM duckdb_extensions() WHERE installed"
+              ).fetchall()
+              cached = {row[0] for row in rows}
+              missing = sorted(set(REQUIRED_EXTENSIONS) - cached)
+              if missing:
+                  raise SystemExit(
+                      f"DuckDB extension cache is incomplete: {', '.join(missing)}"
+                  )
+
+              print(f"DuckDB {duckdb.__version__} extension cache ready: {', '.join(loaded)}")
+          finally:
+              connection.close()
+          PY
+
       - name: Lint
         run: uv run ruff check esdc/ tests/
 
@@ -103,7 +142,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv run python - "${{ matrix.shard }}" <<'PY'
+          # Spawn-based tests re-run the launcher main module, so the shard runner
+          # needs a real file path rather than stdin.
+          shard_script="${RUNNER_TEMP}/test_shards.py"
+          cat > "$shard_script" <<'PY'
           """Run only the test modules assigned to this shard."""
 
           import hashlib
@@ -113,12 +155,8 @@ jobs:
           from pytest import hookimpl
 
           TOTAL_GROUPS = 6
-          SHARD = int(sys.argv[1])
+          BASE_ARGS = ["-v", "-x", "--tb=short"]
 
-          if not 0 <= SHARD < TOTAL_GROUPS:
-              raise SystemExit(f"Invalid shard index {SHARD}: expected 0-{TOTAL_GROUPS - 1}")
-
-          ARGS = ["-v", "-x", "--tb=short"]
 
           def module_group(nodeid: str) -> int:
               """Assign a test module to one shard with a stable SHA256 digest."""
@@ -126,19 +164,45 @@ jobs:
               digest = hashlib.sha256(module.encode("utf-8")).digest()
               return int.from_bytes(digest[:8], "big") % TOTAL_GROUPS
 
-          @hookimpl
-          def pytest_collection_modifyitems(
-              config: pytest.Config, items: list[pytest.Item]
-          ) -> None:
-              total = len(items)
-              selected = [item for item in items if module_group(item.nodeid) == SHARD]
-              deselected = [item for item in items if module_group(item.nodeid) != SHARD]
-              config.hook.pytest_deselected(items=deselected)
-              items[:] = selected
-              print(f"shard {SHARD}: selected {len(selected)} of {total} collected items")
 
-          raise SystemExit(pytest.main(ARGS, plugins=[sys.modules[__name__]]))
+          class ShardSelector:
+              """pytest plugin that keeps only the modules owned by one shard."""
+
+              def __init__(self, shard: int) -> None:
+                  if not 0 <= shard < TOTAL_GROUPS:
+                      raise SystemExit(
+                          f"Invalid shard index {shard}: expected 0-{TOTAL_GROUPS - 1}"
+                      )
+                  self.shard = shard
+
+              @hookimpl
+              def pytest_collection_modifyitems(
+                  self, config: pytest.Config, items: list[pytest.Item]
+              ) -> None:
+                  total = len(items)
+                  selected = [item for item in items if module_group(item.nodeid) == self.shard]
+                  deselected = [item for item in items if module_group(item.nodeid) != self.shard]
+                  config.hook.pytest_deselected(items=deselected)
+                  items[:] = selected
+                  print(
+                      f"shard {self.shard}: selected {len(selected)} of {total} collected items"
+                  )
+
+
+          def main(argv: list[str]) -> int:
+              """Run the shard, optionally narrowed by extra pytest selectors."""
+              if not argv:
+                  raise SystemExit("usage: test_shards.py <shard_index> [pytest selectors]")
+
+              shard, *selectors = argv
+              plugin = ShardSelector(int(shard))
+              return pytest.main(BASE_ARGS + selectors, plugins=[plugin])
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main(sys.argv[1:]))
           PY
+          uv run python "$shard_script" "${{ matrix.shard }}"
 
   # Aggregate gate that keeps the required check name 'test'.
   test:
