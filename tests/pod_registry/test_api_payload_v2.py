@@ -36,6 +36,14 @@ def _metadata_envelope() -> bytes:
     ).encode()
 
 
+def _deep_document(depth: int) -> object:
+    """Build an over-deep decoded document without recursing to build it."""
+    value: object = []
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
 def test_payload_error_is_a_value_error_with_the_table_name():
     assert issubclass(PodApiPayloadError, ValueError)
     with pytest.raises(PodApiPayloadError) as exc_info:
@@ -322,14 +330,37 @@ def test_exponent_overflow_token_rejects_at_the_decoder_boundary_without_echoing
     assert exc_info.value.__cause__ is None
 
 
-def test_deep_nesting_rejects_at_the_normalization_boundary_with_the_table_name():
+def test_deep_nesting_rejects_at_the_normalization_boundary_with_the_table_name(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Let the decoder accept the depth so the normalization walk owns the rejection."""
     depth = sys.getrecursionlimit() + 100
-    payload = b'[{"x":' + b"[" * depth + b"]" * depth + b"}]"
+    document = _deep_document(depth)
+
+    def accept_depth(self: json.JSONDecoder, text: str, *args: object) -> object:
+        return document
+
+    monkeypatch.setattr(json.JSONDecoder, "decode", accept_depth)
     with pytest.raises(PodApiPayloadError) as exc_info:
-        _parse(payload)
+        _parse(b'{"data": [{"x": []}]}')
     message = str(exc_info.value)
     assert exc_info.value.table_name == "m_pod"
     assert "normalization boundary" in message
+    assert "decoder boundary" not in message
+    assert "[" * depth not in message
+    assert len(message) < 200
+    assert exc_info.value.__cause__ is None
+
+
+def test_real_deep_json_input_rejects_at_a_boundary_and_keeps_the_table_name():
+    """A real over-deep document can reject at either stage and must stay contextual."""
+    depth = sys.getrecursionlimit() + 200
+    payload = b'[{"x":' + b"[" * depth + b"]" * depth + b"}]"
+    with pytest.raises(PodApiPayloadError) as exc_info:
+        _parse(payload, table_name="pod_project")
+    message = str(exc_info.value)
+    assert exc_info.value.table_name == "pod_project"
+    assert "boundary" in message
     assert "[" * depth not in message
     assert len(message) < 200
     assert exc_info.value.__cause__ is None
