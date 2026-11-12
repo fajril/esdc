@@ -7,9 +7,14 @@ on:
     branches: [main, develop]
 
 jobs:
-  test:
+  test_shards:
+    name: test_shards (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
 
@@ -94,5 +99,63 @@ jobs:
         shell: bash
         run: uv run pytest -v -x --tb=short tests/pod_registry/test_api_context_v2.py tests/pod_registry/test_api_payload_v2.py
 
-      - name: Test
-        run: uv run pytest -v -x --tb=short
+      - name: Test shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run python - "${{ matrix.shard }}" <<'PY'
+          """Run only the test modules assigned to this shard."""
+
+          import hashlib
+          import sys
+
+          import pytest
+          from pytest import hookimpl
+
+          TOTAL_GROUPS = 6
+          SHARD = int(sys.argv[1])
+
+          if not 0 <= SHARD < TOTAL_GROUPS:
+              raise SystemExit(f"Invalid shard index {SHARD}: expected 0-{TOTAL_GROUPS - 1}")
+
+          ARGS = ["-v", "-x", "--tb=short"]
+
+          def module_group(nodeid: str) -> int:
+              """Assign a test module to one shard with a stable SHA256 digest."""
+              module = nodeid.split("::", 1)[0]
+              digest = hashlib.sha256(module.encode("utf-8")).digest()
+              return int.from_bytes(digest[:8], "big") % TOTAL_GROUPS
+
+          @hookimpl
+          def pytest_collection_modifyitems(
+              config: pytest.Config, items: list[pytest.Item]
+          ) -> None:
+              total = len(items)
+              selected = [item for item in items if module_group(item.nodeid) == SHARD]
+              deselected = [item for item in items if module_group(item.nodeid) != SHARD]
+              config.hook.pytest_deselected(items=deselected)
+              items[:] = selected
+              print(f"shard {SHARD}: selected {len(selected)} of {total} collected items")
+
+          raise SystemExit(pytest.main(ARGS, plugins=[sys.modules[__name__]]))
+          PY
+
+  # Aggregate gate that keeps the required check name 'test'.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test_shards
+    if: always()
+    env:
+      SHARDS_RESULT: ${{ needs.test_shards.result }}
+    steps:
+      - name: Verify every shard succeeded
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${SHARDS_RESULT:-}" != "success" ]; then
+              echo "test gate failed: aggregate shard result=${SHARDS_RESULT:-empty}"
+              exit 1
+          fi
+          echo "test gate passed: aggregate shard result=success"
